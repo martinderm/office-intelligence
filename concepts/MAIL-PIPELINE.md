@@ -182,9 +182,12 @@ Bereits implementiert im Repository:
 - Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokalen Test
 
 Geplant als nächster Schritt:
-- LLM-Extraktion mit strengem JSON-Schema
 - Retry/Backoff und robustere Fehlermodi
-- Hybrid-Scoring (LLM-Kandidaten + deterministische Evidenz)
+- stärkere HTML/Newsletter-Bereinigung vor LLM (Token sparen, Signal erhöhen)
+
+Wichtige Betriebsnotiz:
+- Die Qualität des Routings steht und fällt mit `projects.json`.
+- Ohne gepflegte Projekte (id/title/aliases/domains/contacts/keywords) bleibt LLM-Klassifizierung semantisch, aber oft nicht zuverlässig routbar.
 
 Idee (Backlog):
 - Thread-Erkennung ergänzen über `Message-ID`, `In-Reply-To`, `References`

@@ -21,3 +21,6 @@
   - Idempotenz (`message_processed`)
   - Mock-Mode (`HIMALAYA_COMMAND=mock`)
 - README/SKILL/Konzept auf aktuellen Implementierungsstand aktualisiert.
+- LLM-Stufe ergänzt (OpenAI-kompatibel, modellwahlbar, Prompt-Datei konfigurierbar).
+- Preprocessing ergänzt: aktuelle Nachricht priorisiert, ältere Kontexte niedriger gewichtet.
+- Dokumentiert: Projektkatalog-Qualität (`projects.json`) ist kritischer Faktor für Routing-Qualität.

@@ -46,10 +46,24 @@ npm run run
 - ✅ Himalaya-Adapter für `envelope list`, `message read`, `message copy`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
-- ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`)
+- ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
 - ✅ Modell frei wählbar über `LLM_MODEL`
 - ✅ Prompt anpassbar über `LLM_PROMPT_PATH` (Fallback auf eingebauten Default)
+- ✅ Antwort-Preprocessing priorisiert aktuelle Nachricht und gewichtet ältere Thread-Blöcke niedriger
+- ⚠️ HTML-/Tracking-lastige Mails sollten noch stärker vorbereinigt werden (Tokeneffizienz)
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
+
+## Wichtige Qualitätsvoraussetzung: Projektkatalog
+
+Die Qualität der Klassifizierung hängt stark von `memory/references/projects/projects.json` ab.
+
+Wenn die Projektliste dünn/unscharf ist, wird Routing unzuverlässig (oder bleibt leer). Für gute Ergebnisse braucht der Katalog:
+- klare `id` + `title` pro Projekt
+- gepflegte `aliases`, `domains`, `contacts`
+- sinnvolle `keywords` (spezifisch statt generisch)
+- optional `reference_md` mit semantischem Kontext pro Projekt
+
+Kurz: **Gutes LLM + schwacher Projektkatalog = schwaches Routing**.
 
 ## Datenpfad & Retention
 
