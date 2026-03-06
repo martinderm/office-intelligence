@@ -46,7 +46,10 @@ npm run run
 - ✅ Himalaya-Adapter für `envelope list`, `message read`, `message copy`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
-- ⏳ LLM-Extraktion (striktes JSON-Schema + Retry/Backoff) folgt als nächster Schritt
+- ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`)
+- ✅ Modell frei wählbar über `LLM_MODEL`
+- ✅ Prompt anpassbar über `LLM_PROMPT_PATH` (Fallback auf eingebauten Default)
+- ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 
 ## Datenpfad & Retention
 

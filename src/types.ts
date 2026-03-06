@@ -32,4 +32,10 @@ export type EnvConfig = {
   NEEDS_REPLY_THRESHOLD: number;
   NEEDS_REPLY_NEGATIVE_HINTS: string[];
   MAIL_DEBUG_RETENTION_DAYS: number | null;
+  LLM_BASE_URL: string;
+  LLM_API_KEY: string;
+  LLM_MODEL: string;
+  LLM_ENABLED: boolean;
+  LLM_TIMEOUT_MS: number;
+  LLM_PROMPT_PATH?: string;
 };

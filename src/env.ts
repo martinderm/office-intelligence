@@ -75,5 +75,11 @@ export function getConfig(cwd: string): EnvConfig {
       .map((s) => s.trim())
       .filter(Boolean),
     MAIL_DEBUG_RETENTION_DAYS: parseRetentionDays(process.env.MAIL_DEBUG_RETENTION_DAYS, 30),
+    LLM_BASE_URL: process.env.LLM_BASE_URL ?? "",
+    LLM_API_KEY: process.env.LLM_API_KEY ?? "",
+    LLM_MODEL: process.env.LLM_MODEL ?? "",
+    LLM_ENABLED: parseBool(process.env.LLM_ENABLED, true),
+    LLM_TIMEOUT_MS: parseIntSafe(process.env.LLM_TIMEOUT_MS, 60000),
+    LLM_PROMPT_PATH: process.env.LLM_PROMPT_PATH || undefined,
   };
 }

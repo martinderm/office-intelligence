@@ -7,8 +7,10 @@ import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, listEnvelopes, readMessage } from "./mail-source.js";
 import { getProcessedIds } from "./idempotency.js";
-import { matchProject, needsReplyHeuristic } from "./matcher.js";
+import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
 import { cleanupDebugMessages } from "./retention.js";
+import { prepareMailText } from "./preprocess.js";
+import { extractWithLlm } from "./llm.js";
 
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
@@ -63,6 +65,8 @@ async function main(): Promise<void> {
       sourceFolder: cfg.MAIL_SOURCE_FOLDER,
       fetchLimit: cfg.MAIL_FETCH_LIMIT,
       projectCount: projects.length,
+      llmEnabled: cfg.LLM_ENABLED,
+      llmModel: cfg.LLM_MODEL || null,
     });
 
     const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
@@ -86,8 +90,35 @@ async function main(): Promise<void> {
                 raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
               }
             : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id);
-        const match = matchProject(msg.raw, projects);
-        const needsReply = needsReplyHeuristic(msg.raw, cfg.NEEDS_REPLY_NEGATIVE_HINTS);
+        const prepared = prepareMailText(msg.raw);
+        const heuristicMatch = matchProject(prepared.effectiveText, projects);
+
+        let llm: any = undefined;
+        if (
+          cfg.LLM_ENABLED &&
+          cfg.HIMALAYA_COMMAND !== "mock" &&
+          cfg.LLM_BASE_URL &&
+          cfg.LLM_API_KEY &&
+          cfg.LLM_MODEL
+        ) {
+          llm = await extractWithLlm({
+            cwd,
+            baseUrl: cfg.LLM_BASE_URL,
+            apiKey: cfg.LLM_API_KEY,
+            model: cfg.LLM_MODEL,
+            mailText: prepared.effectiveText,
+            promptPath: cfg.LLM_PROMPT_PATH,
+            timeoutMs: cfg.LLM_TIMEOUT_MS,
+          });
+        }
+
+        const match = mergeHeuristicAndLlm(heuristicMatch, llm, projects);
+        const needsReplyHeuristicFlag = needsReplyHeuristic(
+          prepared.effectiveText,
+          cfg.NEEDS_REPLY_NEGATIVE_HINTS,
+        );
+        const llmNeedsReplyScore = Number(llm?.needsReply?.score || 0);
+        const needsReply = Math.max(needsReplyHeuristicFlag ? 0.65 : 0, llmNeedsReplyScore) >= cfg.NEEDS_REPLY_THRESHOLD;
 
         const debugPath = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, `${env.id}.json`);
         fs.writeFileSync(
@@ -97,8 +128,15 @@ async function main(): Promise<void> {
               id: env.id,
               envelope: env.rawLine,
               match,
+              llm,
               needsReply,
-              preview: msg.raw.slice(0, 2000),
+              llmNeedsReplyScore,
+              preprocessing: {
+                truncated: prepared.truncated,
+                originalChars: prepared.originalChars,
+                keptChars: prepared.keptChars,
+              },
+              preview: prepared.effectiveText.slice(0, 2000),
             },
             null,
             2,

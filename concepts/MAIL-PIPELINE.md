@@ -185,3 +185,7 @@ Geplant als nächster Schritt:
 - LLM-Extraktion mit strengem JSON-Schema
 - Retry/Backoff und robustere Fehlermodi
 - Hybrid-Scoring (LLM-Kandidaten + deterministische Evidenz)
+
+Idee (Backlog):
+- Thread-Erkennung ergänzen über `Message-ID`, `In-Reply-To`, `References`
+- `thread_id` im State speichern und optional Thread-Kontext (letzte N Mails) für Klassifizierung nachladen
