@@ -25,4 +25,10 @@ export type EnvConfig = {
   PROJECTS_JSON_PATH: string;
   MAIL_ROUTING_ENABLED: boolean;
   LOG_LEVEL: string;
+  HIMALAYA_COMMAND: string;
+  MAIL_SOURCE_FOLDER: string;
+  MAIL_FETCH_LIMIT: number;
+  PROJECT_MATCH_THRESHOLD: number;
+  NEEDS_REPLY_THRESHOLD: number;
+  NEEDS_REPLY_NEGATIVE_HINTS: string[];
 };

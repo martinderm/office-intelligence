@@ -1,9 +1,13 @@
 #!/usr/bin/env node
+import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
 import { loadProjects } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
+import { copyMessage, listEnvelopes, readMessage } from "./mail-source.js";
+import { getProcessedIds } from "./idempotency.js";
+import { matchProject, needsReplyHeuristic } from "./matcher.js";
 
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
@@ -34,14 +38,6 @@ async function main(): Promise<void> {
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
 
-    appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
-      type: "run_started",
-      runId,
-      mode,
-      startedAt,
-      projectCount: projects.length,
-    });
-
     if (mode === "run" && !cfg.MAIL_ROUTING_ENABLED) {
       throw new Error(
         "Run mode requested, but MAIL_ROUTING_ENABLED is false. Use shadow mode or enable explicitly.",
@@ -56,6 +52,96 @@ async function main(): Promise<void> {
       errors: 0,
       projectsLoaded: projects.length,
     };
+
+    appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+      type: "run_started",
+      runId,
+      mode,
+      startedAt,
+      sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+      fetchLimit: cfg.MAIL_FETCH_LIMIT,
+      projectCount: projects.length,
+    });
+
+    const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
+    const envelopes =
+      cfg.HIMALAYA_COMMAND === "mock"
+        ? [{ id: "mock-1", rawLine: "mock-1 Example subject" }]
+        : listEnvelopes(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, cfg.MAIL_FETCH_LIMIT);
+
+    for (const env of envelopes) {
+      if (processed.has(env.id)) {
+        summary.skipped += 1;
+        continue;
+      }
+
+      summary.inspected += 1;
+      try {
+        const msg =
+          cfg.HIMALAYA_COMMAND === "mock"
+            ? {
+                id: env.id,
+                raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
+              }
+            : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id);
+        const match = matchProject(msg.raw, projects);
+        const needsReply = needsReplyHeuristic(msg.raw, cfg.NEEDS_REPLY_NEGATIVE_HINTS);
+
+        const debugPath = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, `${env.id}.json`);
+        fs.writeFileSync(
+          debugPath,
+          JSON.stringify(
+            {
+              id: env.id,
+              envelope: env.rawLine,
+              match,
+              needsReply,
+              preview: msg.raw.slice(0, 2000),
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+
+        if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
+          const project = projects.find((p) => p.id === match.projectId);
+          if (project) {
+            if (cfg.HIMALAYA_COMMAND !== "mock") {
+              copyMessage(cfg.HIMALAYA_COMMAND, project.mailbox_folder, env.id);
+            }
+            summary.copied += 1;
+            if (needsReply) {
+              if (cfg.HIMALAYA_COMMAND !== "mock") {
+                copyMessage(cfg.HIMALAYA_COMMAND, "Projekte/_Needs-Reply", env.id);
+              }
+              summary.replyCopied += 1;
+            }
+          }
+        }
+
+        appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+          type: "message_processed",
+          runId,
+          messageId: env.id,
+          mode,
+          matchedProjectId: match.projectId,
+          score: match.score,
+          needsReply,
+          copied: mode === "run" ? summary.copied : 0,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        summary.errors += 1;
+        appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+          type: "message_error",
+          runId,
+          messageId: env.id,
+          error: error instanceof Error ? error.message : String(error),
+          timestamp: new Date().toISOString(),
+        });
+      }
+    }
 
     console.log(JSON.stringify({ ok: true, runId, mode, summary }, null, 2));
 

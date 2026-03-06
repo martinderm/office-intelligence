@@ -28,6 +28,11 @@ export function loadDotEnv(cwd: string): void {
   }
 }
 
+function parseFloatSafe(value: string | undefined, fallback: number): number {
+  const n = Number.parseFloat(value ?? "");
+  return Number.isFinite(n) ? n : fallback;
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
 
@@ -49,5 +54,14 @@ export function getConfig(cwd: string): EnvConfig {
       process.env.PROJECTS_JSON_PATH ?? "./memory/references/projects/projects.json",
     MAIL_ROUTING_ENABLED: parseBool(process.env.MAIL_ROUTING_ENABLED, false),
     LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
+    HIMALAYA_COMMAND: process.env.HIMALAYA_COMMAND ?? "himalaya",
+    MAIL_SOURCE_FOLDER: process.env.MAIL_SOURCE_FOLDER ?? "INBOX",
+    MAIL_FETCH_LIMIT: parseIntSafe(process.env.MAIL_FETCH_LIMIT, 20),
+    PROJECT_MATCH_THRESHOLD: parseFloatSafe(process.env.PROJECT_MATCH_THRESHOLD, 0.65),
+    NEEDS_REPLY_THRESHOLD: parseFloatSafe(process.env.NEEDS_REPLY_THRESHOLD, 0.7),
+    NEEDS_REPLY_NEGATIVE_HINTS: (process.env.NEEDS_REPLY_NEGATIVE_HINTS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
   };
 }

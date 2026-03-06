@@ -21,7 +21,8 @@ npm run build
 
 1) `.env.example` nach `.env` kopieren und Werte setzen.
 2) `memory/references/projects/projects.json` anlegen.
-3) Shadow-Run starten:
+3) Optional für lokalen Trockenlauf ohne Mailbox: `HIMALAYA_COMMAND=mock` setzen.
+4) Shadow-Run starten:
 
 ```bash
 npm run shadow
