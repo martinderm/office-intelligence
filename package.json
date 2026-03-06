@@ -1,0 +1,30 @@
+{
+  "name": "mail-processor",
+  "version": "0.1.0",
+  "description": "Standalone Mail-Triage/Routing/Processing pipeline.",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "mail-processor": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/cli.js",
+    "shadow": "node dist/cli.js --mode=shadow",
+    "run": "node dist/cli.js --mode=run",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "mail",
+    "triage",
+    "routing",
+    "imap",
+    "openclaw"
+  ],
+  "author": "Martin Mayr",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "id": "example-project",
+    "title": "Example Project",
+    "mailbox_folder": "Projekte/Example-Project",
+    "reference_md": "memory/references/projects/example-project.md",
+    "aliases": ["Example"],
+    "keywords": ["example"],
+    "domains": ["example.org"],
+    "contacts": [{ "name": "Example Contact", "email": "contact@example.org" }],
+    "description": "Beispielprojekt für den initialen Setup.",
+    "typical_subject_patterns": ["[EXAMPLE]"],
+    "routing_priority": 10,
+    "do_not_route_if": ["newsletter", "no-reply"],
+    "updated_at": "2026-03-06",
+    "schema_version": 1
+  }
+]
