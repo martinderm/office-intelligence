@@ -23,10 +23,18 @@ function parseEnvelopeList(output: string): Envelope[] {
   const lines = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const items: Envelope[] = [];
   for (const line of lines) {
-    // Heuristic: first token is numeric message id in himalaya envelope list output
-    const m = line.match(/^(\d+)\b(.*)$/);
-    if (!m) continue;
-    items.push({ id: m[1], rawLine: line, subjectHint: m[2]?.trim() || undefined });
+    // Plain format: "7581 ..."
+    const plain = line.match(/^(\d+)\b(.*)$/);
+    if (plain) {
+      items.push({ id: plain[1], rawLine: line, subjectHint: plain[2]?.trim() || undefined });
+      continue;
+    }
+
+    // Table format: "| 7581 | * | Subject | From | Date |"
+    const table = line.match(/^\|\s*(\d+)\s*\|/);
+    if (table) {
+      items.push({ id: table[1], rawLine: line });
+    }
   }
   return items;
 }
