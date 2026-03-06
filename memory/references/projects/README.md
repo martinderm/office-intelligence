@@ -50,6 +50,7 @@ Beispiel:
     "id": "usage-ng",
     "title": "USAGE-NG",
     "mailbox_folder": "Projekte/USAGE-NG",
+    "reference_md": "memory/references/projects/usage-ng-USAGE-NG.md",
 
     "aliases": ["USAGE NG", "Usage NextGen"],
     "keywords": ["usage", "next gen"],
@@ -92,6 +93,29 @@ Governance/Steuerung (optional, aber nützlich):
 - `do_not_route_if`: Negativsignale (Substrings), die Routing verhindern sollen
 - `updated_at`: wann zuletzt gepflegt
 - `schema_version`: ermöglicht spätere Migration
+
+---
+
+## Projekt-Referenzen als Markdown (optional, empfohlen)
+
+Zusätzlich zu `projects.json` kann (und soll) pro Projekt eine **Markdown-Referenzdatei** existieren.
+Diese Dateien sind für „inhaltliche Details“ gedacht: Kontext, Ziele, typische Themen, Partner, typische Betreffmuster, No-Go-Regeln, Links.
+
+**Dateiname (Konvention):**
+- `memory/references/projects/<id>-<title>.md`
+
+Beispiel:
+- `memory/references/projects/usage-ng-USAGE-NG.md`
+
+Regeln:
+- `<id>` muss exakt der `id` in `projects.json` entsprechen
+- `<title>` ist frei, aber stabil halten (wenn du ihn änderst, ist es effektiv ein Rename)
+- Title-Teil darf Sonderzeichen enthalten, aber vermeide `/\\:*?"<>|` (Windows)
+
+Empfohlenes Feld in `projects.json`, um die Datei maschinenlesbar zu finden:
+- `reference_md`: z. B. `"memory/references/projects/usage-ng-USAGE-NG.md"`
+
+> Der Router darf auch ohne diese MDs funktionieren; sie verbessern aber die Klassifizierung (RAG-Kontext).
 
 ---
 
