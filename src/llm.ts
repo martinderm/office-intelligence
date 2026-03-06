@@ -58,46 +58,61 @@ export async function extractWithLlm(params: {
   const prompt = getPrompt(params.cwd, params.promptPath);
   const timeoutMs = params.timeoutMs ?? 60000;
 
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), timeoutMs);
+  const base = params.baseUrl.replace(/\/$/, "");
+  const endpoints = [`${base}/chat/completions`, `${base}/v1/chat/completions`];
 
-  try {
-    const res = await fetch(`${params.baseUrl.replace(/\/$/, "")}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${params.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: params.model,
-        temperature: 0,
-        messages: [
-          { role: "system", content: prompt },
-          { role: "user", content: params.mailText },
-        ],
-      }),
-      signal: controller.signal,
-    });
+  let lastErr = "";
+  for (const endpoint of endpoints) {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!res.ok) {
-      throw new Error(`LLM request failed: ${res.status} ${await res.text()}`);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: params.model,
+          temperature: 0,
+          messages: [
+            {
+              role: "user",
+              content: `${prompt}\n\nEMAIL_INPUT:\n${params.mailText}`,
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        lastErr = `LLM request failed (${endpoint}): ${res.status} ${text}`;
+        if (res.status === 404) {
+          continue;
+        }
+        throw new Error(lastErr);
+      }
+
+      const data = (await res.json()) as any;
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || !content.trim()) {
+        throw new Error("LLM response missing message content");
+      }
+
+      const parsed = safeJsonParse(content);
+      return {
+        projectCandidates: Array.isArray(parsed.projectCandidates) ? parsed.projectCandidates : [],
+        needsReply: parsed.needsReply && typeof parsed.needsReply === "object" ? parsed.needsReply : { score: 0 },
+        keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
+        entities: Array.isArray(parsed.entities) ? parsed.entities : [],
+        notes: typeof parsed.notes === "string" ? parsed.notes : "",
+      };
+    } finally {
+      clearTimeout(t);
     }
-
-    const data = await res.json() as any;
-    const content = data?.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || !content.trim()) {
-      throw new Error("LLM response missing message content");
-    }
-
-    const parsed = safeJsonParse(content);
-    return {
-      projectCandidates: Array.isArray(parsed.projectCandidates) ? parsed.projectCandidates : [],
-      needsReply: parsed.needsReply && typeof parsed.needsReply === "object" ? parsed.needsReply : { score: 0 },
-      keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
-      entities: Array.isArray(parsed.entities) ? parsed.entities : [],
-      notes: typeof parsed.notes === "string" ? parsed.notes : "",
-    };
-  } finally {
-    clearTimeout(t);
   }
+
+  throw new Error(lastErr || "LLM request failed: no endpoint succeeded");
 }

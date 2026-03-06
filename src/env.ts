@@ -44,6 +44,13 @@ function parseRetentionDays(value: string | undefined, fallback: number | null):
   return n;
 }
 
+function normalizeModelName(value: string | undefined): string {
+  const v = (value ?? "").trim();
+  if (!v) return "";
+  if (v.includes("/")) return v.split("/").pop() ?? v;
+  return v;
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
 
@@ -77,7 +84,7 @@ export function getConfig(cwd: string): EnvConfig {
     MAIL_DEBUG_RETENTION_DAYS: parseRetentionDays(process.env.MAIL_DEBUG_RETENTION_DAYS, 30),
     LLM_BASE_URL: process.env.LLM_BASE_URL ?? "",
     LLM_API_KEY: process.env.LLM_API_KEY ?? "",
-    LLM_MODEL: process.env.LLM_MODEL ?? "",
+    LLM_MODEL: normalizeModelName(process.env.LLM_MODEL),
     LLM_ENABLED: parseBool(process.env.LLM_ENABLED, true),
     LLM_TIMEOUT_MS: parseIntSafe(process.env.LLM_TIMEOUT_MS, 60000),
     LLM_PROMPT_PATH: process.env.LLM_PROMPT_PATH || undefined,
