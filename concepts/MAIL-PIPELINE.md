@@ -167,3 +167,21 @@ Fehlende RAG-/Audit-Felder:
 - Bei unsicheren/mehrdeutigen Mails bleibt die Inbox der Safe Default.
 - Kein blindes LLM-only Routing ohne Guardrails.
 - OpenClaw Memory-RAG ist Kern der Semantik; Deterministik bleibt Safety-Layer.
+
+## Implementierungsstatus (Stand jetzt)
+
+Bereits implementiert im Repository:
+- TypeScript-CLI (`shadow`/`run`)
+- `.env`-Loading und Defaults
+- Lockfile/Single-Runner (TTL)
+- `projects.json`-Validierung
+- Himalaya-Adapter (`envelope list`, `message read`, `message copy`)
+- Deterministisches Matching + needsReply-Heuristik
+- Idempotenz über `state.jsonl` (`message_processed`)
+- Debug-Artefakte pro Mail (`data/mail-routing/msgs/<id>.json`)
+- Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokalen Test
+
+Geplant als nächster Schritt:
+- LLM-Extraktion mit strengem JSON-Schema
+- Retry/Backoff und robustere Fehlermodi
+- Hybrid-Scoring (LLM-Kandidaten + deterministische Evidenz)

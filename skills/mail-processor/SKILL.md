@@ -40,22 +40,28 @@ Ziel: Mail-Triage (Extraktion/Klassifizierung) + sicheres Routing (COPY-only) vi
 
 ## Konfiguration (Env)
 
-Minimal:
-- `HIMALAYA_ACCOUNT=<account>`
-- `LLM_BASE_URL=<url>`
-- `LLM_API_KEY=<key>`
-- `LLM_MODEL=<model>`
+Minimal (aktueller Stand):
+- `HIMALAYA_COMMAND=<command-or-path>`
+- `MAIL_SOURCE_FOLDER=INBOX`
+- `MAIL_FETCH_LIMIT=20`
 - `PROJECTS_JSON_PATH=./memory/references/projects/projects.json`
+- `PROJECT_MATCH_THRESHOLD=0.65`
+- `NEEDS_REPLY_THRESHOLD=0.70`
+- `NEEDS_REPLY_NEGATIVE_HINTS=no-reply,newsletter,autoreply`
 
 Sicherer Start:
 - `MAIL_ROUTING_ENABLED=false`  (Shadow-Mode)
+
+Hinweis:
+- `LLM_*` Variablen werden für den nächsten Ausbauschritt (Extraktion via LLM) benötigt, sind aber im aktuellen Codepfad noch optional.
 
 Siehe vollständige Liste: `/.env.example` im Repo.
 
 ## Kommandos / Aktionen
 
 ### 1) Shadow Run (empfohlen zum Start)
-- liest Mails, extrahiert Signale, trifft Routing-Entscheidungen
+- liest Mails über Himalaya (`envelope list` + `message read`)
+- macht aktuell deterministisches Matching + needsReply-Heuristik
 - schreibt Logs/Debug-Artefakte
 - führt **keine COPY-Aktionen** aus
 

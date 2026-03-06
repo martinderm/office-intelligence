@@ -42,6 +42,22 @@ npm run run
 - ✅ `.env`-Loading + Config Defaults
 - ✅ Lockfile (Single-Runner, TTL)
 - ✅ `projects.json`-Validation (MVP-Felder + Slug-ID)
-- ✅ JSONL-State-Logging (`run_started`, `run_finished`)
-- ⏳ Mail-Fetch (Himalaya), LLM-Extraktion und COPY-Aktionen folgen als nächste Schritte
+- ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_error`, `run_finished`)
+- ✅ Himalaya-Adapter für `envelope list`, `message read`, `message copy`
+- ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
+- ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
+- ⏳ LLM-Extraktion (striktes JSON-Schema + Retry/Backoff) folgt als nächster Schritt
+
+## Himalaya Command Beispiele
+
+```bash
+# generisch
+HIMALAYA_COMMAND=himalaya
+
+# Agent-Gate (Beispiel aus boku-martin)
+HIMALAYA_COMMAND=skills/himalaya-account-main/scripts/himalaya-account-main-gate.exe
+
+# lokaler Test ohne Mailbox
+HIMALAYA_COMMAND=mock
+```
 
