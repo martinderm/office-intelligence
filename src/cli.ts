@@ -8,6 +8,7 @@ import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, listEnvelopes, readMessage } from "./mail-source.js";
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, needsReplyHeuristic } from "./matcher.js";
+import { cleanupDebugMessages } from "./retention.js";
 
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
@@ -51,6 +52,7 @@ async function main(): Promise<void> {
       skipped: 0,
       errors: 0,
       projectsLoaded: projects.length,
+      retentionDeleted: cleanupDebugMessages(cfg.MAIL_PROCESSOR_MSGS_DIR, cfg.MAIL_DEBUG_RETENTION_DAYS),
     };
 
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {

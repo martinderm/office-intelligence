@@ -31,4 +31,5 @@ export type EnvConfig = {
   PROJECT_MATCH_THRESHOLD: number;
   NEEDS_REPLY_THRESHOLD: number;
   NEEDS_REPLY_NEGATIVE_HINTS: string[];
+  MAIL_DEBUG_RETENTION_DAYS: number | null;
 };

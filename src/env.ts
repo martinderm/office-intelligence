@@ -33,6 +33,17 @@ function parseFloatSafe(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function parseRetentionDays(value: string | undefined, fallback: number | null): number | null {
+  const v = (value ?? "").trim().toLowerCase();
+  if (!v) return fallback;
+  if (["unlimited", "none", "off", "inf", "infinite", "unbestimmt"].includes(v)) {
+    return null;
+  }
+  const n = Number.parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return n;
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
 
@@ -63,5 +74,6 @@ export function getConfig(cwd: string): EnvConfig {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    MAIL_DEBUG_RETENTION_DAYS: parseRetentionDays(process.env.MAIL_DEBUG_RETENTION_DAYS, 30),
   };
 }

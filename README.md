@@ -48,6 +48,14 @@ npm run run
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ⏳ LLM-Extraktion (striktes JSON-Schema + Retry/Backoff) folgt als nächster Schritt
 
+## Datenpfad & Retention
+
+- Datenpfad frei konfigurierbar über `MAIL_PROCESSOR_DATA_DIR` (relativ oder absolut)
+- Empfehlung in Multi-Agent-Setups: **pro Agent eigener Pfad**, z. B. `<agent-workspace>/data/mail-routing`
+- Retention für Debug-Dateien (`msgs/*.json`) über `MAIL_DEBUG_RETENTION_DAYS`
+  - Zahl in Tagen (z. B. `30`)
+  - `unlimited` = keine automatische Löschung
+
 ## Himalaya Command Beispiele
 
 ```bash
