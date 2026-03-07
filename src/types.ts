@@ -38,4 +38,10 @@ export type EnvConfig = {
   LLM_ENABLED: boolean;
   LLM_TIMEOUT_MS: number;
   LLM_PROMPT_PATH?: string;
+  MAIL_SANITIZE_ENABLED: boolean;
+  MAIL_SANITIZE_MODE: "off" | "balanced" | "strict";
+  MAIL_STRIP_TRACKING_PARAMS: boolean;
+  MAIL_NEWSLETTER_FOOTER_TRIM: boolean;
+  MAIL_HTML_MAX_CURRENT: number;
+  MAIL_HTML_MAX_QUOTED: number;
 };

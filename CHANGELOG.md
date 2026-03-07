@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.1 - 2026-03-07
+
+- Sanitizing massiv erweitert für HTML-/Newsletter-Mails:
+  - aktive Inhalte entfernt
+  - Tracking-Parameter entfernt
+  - Footer-/Boilerplate-Trim
+  - Layout-Noise-Cleanup
+  - Dedupe wiederholter Links
+- Himalaya-Read-Pfad umgestellt:
+  - bevorzugt `message export --full` (raw MIME)
+  - `message read` als Fallback
+- MIME-aware Body-Extraktion ergänzt:
+  - multipart parsing
+  - bevorzugt `text/html`, fallback `text/plain`
+  - quoted-printable/base64-Dekodierung
+- Header-Extraktion in strukturiertes `mailMeta` ergänzt (u. a. From/Subject/Date/Message-ID/List/Auth-Signale).
+- Idempotenz auf stabile IDs umgestellt:
+  - primär normalisierte `Message-ID`
+  - fallback deterministischer Content-Hash
+  - envelope-lokale IDs nur noch für Live-Operationen
+- State-Logging erweitert:
+  - neues Event `message_skipped`
+  - `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
+- README auf neuen Stand gebracht.
+
 ## 0.1.0 - 2026-03-06
 
 - Projekt initialisiert (`mail-processor`) inkl. Git-Repository.

@@ -1,5 +1,6 @@
 node_modules/
 dist/
 .env
-data/mail-routing/
+# Runtime/state/debug artifacts (can contain sensitive mail content)
+data/
 *.log

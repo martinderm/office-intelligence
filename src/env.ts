@@ -51,6 +51,12 @@ function normalizeModelName(value: string | undefined): string {
   return v;
 }
 
+function parseSanitizeMode(value: string | undefined): "off" | "balanced" | "strict" {
+  const v = (value ?? "balanced").trim().toLowerCase();
+  if (v === "off" || v === "strict" || v === "balanced") return v;
+  return "balanced";
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
 
@@ -88,5 +94,11 @@ export function getConfig(cwd: string): EnvConfig {
     LLM_ENABLED: parseBool(process.env.LLM_ENABLED, true),
     LLM_TIMEOUT_MS: parseIntSafe(process.env.LLM_TIMEOUT_MS, 60000),
     LLM_PROMPT_PATH: process.env.LLM_PROMPT_PATH || undefined,
+    MAIL_SANITIZE_ENABLED: parseBool(process.env.MAIL_SANITIZE_ENABLED, true),
+    MAIL_SANITIZE_MODE: parseSanitizeMode(process.env.MAIL_SANITIZE_MODE),
+    MAIL_STRIP_TRACKING_PARAMS: parseBool(process.env.MAIL_STRIP_TRACKING_PARAMS, true),
+    MAIL_NEWSLETTER_FOOTER_TRIM: parseBool(process.env.MAIL_NEWSLETTER_FOOTER_TRIM, true),
+    MAIL_HTML_MAX_CURRENT: parseIntSafe(process.env.MAIL_HTML_MAX_CURRENT, 5000),
+    MAIL_HTML_MAX_QUOTED: parseIntSafe(process.env.MAIL_HTML_MAX_QUOTED, 1200),
   };
 }

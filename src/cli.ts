@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
@@ -20,6 +21,18 @@ function parseMode(args: string[]): "shadow" | "run" {
     throw new Error("--mode must be shadow or run");
   }
   return value;
+}
+
+function normalizeMessageId(value?: string): string | undefined {
+  if (!value) return undefined;
+  const v = value.trim().toLowerCase().replace(/^<+|>+$/g, "");
+  return v || undefined;
+}
+
+function fallbackStableId(meta: { from?: string; date?: string; subject?: string }, bodyText: string): string {
+  const basis = `${meta.from || ""}|${meta.date || ""}|${meta.subject || ""}|${bodyText.slice(0, 1200)}`;
+  const hash = crypto.createHash("sha256").update(basis, "utf8").digest("hex").slice(0, 20);
+  return `fallback:${hash}`;
 }
 
 async function main(): Promise<void> {
@@ -79,11 +92,6 @@ async function main(): Promise<void> {
         : listEnvelopes(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, cfg.MAIL_FETCH_LIMIT);
 
     for (const env of envelopes) {
-      if (processed.has(env.id)) {
-        summary.skipped += 1;
-        continue;
-      }
-
       summary.inspected += 1;
       try {
         const msg =
@@ -92,8 +100,35 @@ async function main(): Promise<void> {
                 id: env.id,
                 raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
               }
-            : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id);
-        const prepared = prepareMailText(msg.raw);
+            : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id, cfg.MAIL_PROCESSOR_DATA_DIR);
+        const prepared = prepareMailText(
+          msg.raw,
+          cfg.MAIL_HTML_MAX_CURRENT,
+          cfg.MAIL_HTML_MAX_QUOTED,
+          {
+            enabled: cfg.MAIL_SANITIZE_ENABLED,
+            mode: cfg.MAIL_SANITIZE_MODE,
+            stripTrackingParams: cfg.MAIL_STRIP_TRACKING_PARAMS,
+            trimNewsletterFooter: cfg.MAIL_NEWSLETTER_FOOTER_TRIM,
+          },
+        );
+        const normalizedMessageId = normalizeMessageId(prepared.meta.messageId);
+        const stableId = normalizedMessageId || fallbackStableId(prepared.meta, prepared.effectiveText);
+
+        if (processed.has(stableId)) {
+          summary.skipped += 1;
+          appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+            type: "message_skipped",
+            runId,
+            sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+            envelopeId: env.id,
+            stableId,
+            reason: "already_processed",
+            timestamp: new Date().toISOString(),
+          });
+          continue;
+        }
+
         const heuristicMatch = matchProject(prepared.effectiveText, projects);
 
         let llm: any = undefined;
@@ -130,6 +165,7 @@ async function main(): Promise<void> {
           JSON.stringify(
             {
               id: env.id,
+              stableId,
               envelope: env.rawLine,
               match,
               llm,
@@ -140,6 +176,8 @@ async function main(): Promise<void> {
                 originalChars: prepared.originalChars,
                 keptChars: prepared.keptChars,
               },
+              mailMeta: prepared.meta,
+              sanitizing: prepared.sanitizing,
               preview: prepared.effectiveText.slice(0, 2000),
             },
             null,
@@ -148,31 +186,44 @@ async function main(): Promise<void> {
           "utf8",
         );
 
+        const copyTargets: string[] = [];
+
         if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
           const project = projects.find((p) => p.id === match.projectId);
           if (project) {
             if (cfg.HIMALAYA_COMMAND !== "mock") {
               copyMessage(cfg.HIMALAYA_COMMAND, project.mailbox_folder, env.id);
             }
+            copyTargets.push(project.mailbox_folder);
             summary.copied += 1;
             if (needsReply) {
+              const replyFolder = "Projekte/_Needs-Reply";
               if (cfg.HIMALAYA_COMMAND !== "mock") {
-                copyMessage(cfg.HIMALAYA_COMMAND, "Projekte/_Needs-Reply", env.id);
+                copyMessage(cfg.HIMALAYA_COMMAND, replyFolder, env.id);
               }
+              copyTargets.push(replyFolder);
               summary.replyCopied += 1;
             }
           }
         }
 
+        processed.add(stableId);
+
         appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
           type: "message_processed",
           runId,
-          messageId: env.id,
+          sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+          envelopeId: env.id,
+          messageId: normalizedMessageId || prepared.meta.messageId || env.id,
+          stableId,
           mode,
           matchedProjectId: match.projectId,
           score: match.score,
           needsReply,
           copied: mode === "run" ? summary.copied : 0,
+          copyTargets,
+          lastKnownEnvelopeId: env.id,
+          lastKnownFolder: copyTargets.length ? copyTargets[copyTargets.length - 1] : cfg.MAIL_SOURCE_FOLDER,
           timestamp: new Date().toISOString(),
         });
       } catch (error) {
@@ -180,6 +231,8 @@ async function main(): Promise<void> {
         appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
           type: "message_error",
           runId,
+          sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+          envelopeId: env.id,
           messageId: env.id,
           error: error instanceof Error ? error.message : String(error),
           timestamp: new Date().toISOString(),

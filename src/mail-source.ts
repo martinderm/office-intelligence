@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 export type Envelope = {
@@ -45,7 +47,31 @@ export function listEnvelopes(command: string, sourceFolder: string, limit: numb
   return parseEnvelopeList(out);
 }
 
-export function readMessage(command: string, sourceFolder: string, id: string): MailMessage {
+export function readMessage(
+  command: string,
+  sourceFolder: string,
+  id: string,
+  exportBaseDir?: string,
+): MailMessage {
+  // Prefer raw MIME export to preserve HTML parts for sanitizing.
+  if (exportBaseDir) {
+    try {
+      const exportDir = path.resolve(exportBaseDir, "exports");
+      fs.mkdirSync(exportDir, { recursive: true });
+
+      const exportArgs = ["message", "export", "-f", sourceFolder, "--full", "-d", exportDir, id];
+      runCmd(command, exportArgs);
+
+      const emlPath = path.join(exportDir, `${id}.eml`);
+      if (fs.existsSync(emlPath)) {
+        const raw = fs.readFileSync(emlPath, "utf8");
+        return { id, raw };
+      }
+    } catch {
+      // fallback to human-friendly read below
+    }
+  }
+
   const args = ["message", "read", "-f", sourceFolder, id];
   const raw = runCmd(command, args);
   return { id, raw };

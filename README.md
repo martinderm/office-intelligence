@@ -42,15 +42,20 @@ npm run run
 - ✅ `.env`-Loading + Config Defaults
 - ✅ Lockfile (Single-Runner, TTL)
 - ✅ `projects.json`-Validation (MVP-Felder + Slug-ID)
-- ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_error`, `run_finished`)
-- ✅ Himalaya-Adapter für `envelope list`, `message read`, `message copy`
+- ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
+- ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
 - ✅ Modell frei wählbar über `LLM_MODEL`
 - ✅ Prompt anpassbar über `LLM_PROMPT_PATH` (Fallback auf eingebauten Default)
 - ✅ Antwort-Preprocessing priorisiert aktuelle Nachricht und gewichtet ältere Thread-Blöcke niedriger
-- ⚠️ HTML-/Tracking-lastige Mails sollten noch stärker vorbereinigt werden (Tokeneffizienz)
+- ✅ MIME-aware Body-Extraktion (multipart: bevorzugt `text/html`, fallback `text/plain`) inkl. quoted-printable/base64-Dekodierung
+- ✅ Header-Extraktion in strukturiertes `mailMeta` (u. a. From, Subject, Date, Message-ID, List-/Auth-Signale)
+- ✅ HTML-/Newsletter-Sanitizing (aktive Inhalte entfernen, Tracking-Parameter strippen, Footer-Trim)
+- ✅ Zusätzliche Tokenreduktion: Layout-Noise-Cleanup + Dedupe wiederholter Links
+- ✅ Idempotenz auf stabiler ID (primär normalisierte `Message-ID`, fallback Content-Hash) statt folder-lokaler Envelope-ID
+- ✅ State speichert `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 
 ## Wichtige Qualitätsvoraussetzung: Projektkatalog
@@ -64,6 +69,13 @@ Wenn die Projektliste dünn/unscharf ist, wird Routing unzuverlässig (oder blei
 - optional `reference_md` mit semantischem Kontext pro Projekt
 
 Kurz: **Gutes LLM + schwacher Projektkatalog = schwaches Routing**.
+
+## Idempotenz & Stable IDs
+
+- Primärer Idempotenz-Key: normalisierte `Message-ID` (global/stabil)
+- Fallback bei fehlender `Message-ID`: deterministischer Hash aus Header-/Body-Signal
+- Envelope-ID wird nur für Live-Operationen (`read`/`copy`) verwendet
+- Vorteil: Copy/Move in andere Ordner erzeugt neue Envelope-IDs, aber keine Doppelverarbeitung
 
 ## Datenpfad & Retention
 

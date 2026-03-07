@@ -10,8 +10,16 @@ export function getProcessedIds(statePathRaw: string): Set<string> {
     if (!line.trim()) continue;
     try {
       const obj = JSON.parse(line);
-      if (obj?.type === "message_processed" && typeof obj.messageId === "string") {
-        out.add(obj.messageId);
+      if (obj?.type !== "message_processed") continue;
+
+      // Preferred modern key.
+      if (typeof obj.stableId === "string" && obj.stableId.trim()) {
+        out.add(obj.stableId.trim());
+      }
+
+      // Backward compatibility with older runs.
+      if (typeof obj.messageId === "string" && obj.messageId.trim()) {
+        out.add(obj.messageId.trim());
       }
     } catch {
       // ignore malformed line
