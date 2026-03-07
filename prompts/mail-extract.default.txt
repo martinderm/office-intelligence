@@ -15,4 +15,5 @@ Rules:
 - confidence and score in [0,1]
 - Prefer precision over recall
 - If unsure, return low confidence
+- When matching to projects, prefer labels from PROJECT_CATALOG_HINTS (id or title)
 - Do not include markdown or code fences

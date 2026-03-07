@@ -26,6 +26,7 @@ Rules:
 - confidence and score in [0,1]
 - Prefer precision over recall
 - If unsure, return low confidence
+- When matching to projects, prefer labels from PROJECT_CATALOG_HINTS (id or title)
 - Do not include markdown or code fences`; 
 
 function getPrompt(cwd: string, promptPath?: string): string {
@@ -52,6 +53,7 @@ export async function extractWithLlm(params: {
   apiKey: string;
   model: string;
   mailText: string;
+  projectHints?: string;
   promptPath?: string;
   timeoutMs?: number;
 }): Promise<LlmExtraction> {
@@ -79,7 +81,7 @@ export async function extractWithLlm(params: {
           messages: [
             {
               role: "user",
-              content: `${prompt}\n\nEMAIL_INPUT:\n${params.mailText}`,
+              content: `${prompt}\n\nPROJECT_CATALOG_HINTS:\n${params.projectHints ?? ""}\n\nEMAIL_INPUT:\n${params.mailText}`,
             },
           ],
         }),

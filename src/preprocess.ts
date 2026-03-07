@@ -15,15 +15,19 @@ function splitCurrentAndQuoted(raw: string): { current: string; quoted: string }
   let inQuoted = false;
   for (const line of lines) {
     const trimmed = line.trim();
+
+    // Do not treat top-level headers as quoted context.
+    // Start quoted mode only on explicit reply markers.
     const startsQuoted =
       trimmed.startsWith(">") ||
       /^on .+wrote:$/i.test(trimmed) ||
-      /^from:\s/i.test(trimmed) ||
-      /^sent:\s/i.test(trimmed) ||
-      /^subject:\s/i.test(trimmed) ||
-      /^---+\s*original message\s*---+/i.test(trimmed);
+      /^---+\s*original message\s*---+/i.test(trimmed) ||
+      /^>>>\s*/.test(trimmed);
 
-    if (startsQuoted) inQuoted = true;
+    if (!inQuoted && startsQuoted) {
+      inQuoted = true;
+    }
+
     if (inQuoted) quoted.push(line);
     else current.push(line);
   }

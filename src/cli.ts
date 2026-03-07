@@ -40,6 +40,9 @@ async function main(): Promise<void> {
 
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
+    const projectHints = projects
+      .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}`)
+      .join("\n");
 
     if (mode === "run" && !cfg.MAIL_ROUTING_ENABLED) {
       throw new Error(
@@ -107,6 +110,7 @@ async function main(): Promise<void> {
             apiKey: cfg.LLM_API_KEY,
             model: cfg.LLM_MODEL,
             mailText: prepared.effectiveText,
+            projectHints,
             promptPath: cfg.LLM_PROMPT_PATH,
             timeoutMs: cfg.LLM_TIMEOUT_MS,
           });
