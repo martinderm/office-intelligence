@@ -12,6 +12,7 @@ import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./match
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { extractWithLlm } from "./llm.js";
+import { loadOrFetchCapabilities } from "./capabilities.js";
 
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
   ensureRuntimeDirs([
     cfg.MAIL_PROCESSOR_DATA_DIR,
     cfg.MAIL_PROCESSOR_MSGS_DIR,
+    cfg.MAIL_PROCESSOR_CAPABILITIES_DIR,
     path.dirname(cfg.MAIL_PROCESSOR_STATE_FILE),
   ]);
 
@@ -84,6 +86,28 @@ async function main(): Promise<void> {
       llmEnabled: cfg.LLM_ENABLED,
       llmModel: cfg.LLM_MODEL || null,
     });
+
+    if (cfg.HIMALAYA_COMMAND !== "mock") {
+      const capabilityRecord = loadOrFetchCapabilities({
+        command: cfg.HIMALAYA_COMMAND,
+        sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+        capabilitiesDir: cfg.MAIL_PROCESSOR_CAPABILITIES_DIR,
+        mailboxKey: process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || undefined,
+      });
+
+      appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+        type: "mailbox_capabilities_loaded",
+        runId,
+        mailboxKey: capabilityRecord.mailboxKey,
+        host: capabilityRecord.host || null,
+        fetchedAt: capabilityRecord.fetchedAt,
+        capabilityCount: capabilityRecord.capabilities.length,
+        capabilities: capabilityRecord.capabilities,
+        policy: capabilityRecord.policy,
+        sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
     const envelopes =

@@ -68,6 +68,8 @@ export function getConfig(cwd: string): EnvConfig {
       process.env.MAIL_PROCESSOR_MSGS_DIR ?? `${dataDir}/msgs`,
     MAIL_PROCESSOR_SUGGESTIONS_FILE:
       process.env.MAIL_PROCESSOR_SUGGESTIONS_FILE ?? `${dataDir}/memory_suggestions.jsonl`,
+    MAIL_PROCESSOR_CAPABILITIES_DIR:
+      process.env.MAIL_PROCESSOR_CAPABILITIES_DIR ?? `${dataDir}/capabilities`,
     MAIL_PROCESSOR_LOCK_FILE:
       process.env.MAIL_PROCESSOR_LOCK_FILE ?? `${dataDir}/router.lock`,
     MAIL_PROCESSOR_LOCK_TTL_SECONDS: parseIntSafe(

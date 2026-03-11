@@ -77,13 +77,52 @@ Kurz: **Gutes LLM + schwacher Projektkatalog = schwaches Routing**.
 - Envelope-ID wird nur für Live-Operationen (`read`/`copy`) verwendet
 - Vorteil: Copy/Move in andere Ordner erzeugt neue Envelope-IDs, aber keine Doppelverarbeitung
 
+### IMAP-Server-Spezialfall: COPY kann wie MOVE wirken
+
+Einige IMAP-Server/Backends verhalten sich so, dass ein `message copy <target> <id>` **effektiv einem Move entspricht** (beobachtet z. B. bei OpenText GroupWise 25.2.0.148299):
+- die Nachricht ist danach im Source-Ordner nicht mehr vorhanden
+- im Zielordner erscheint sie unter einer **neuen Envelope-ID**
+
+Konsequenzen für `mail-processor`:
+- Envelope-IDs sind **nicht stabil** und dürfen nicht als dauerhafter Verarbeitungsschlüssel verwendet werden (darum: `Message-ID`/Hash).
+- Multi-Target-Routing (mehrere `copyTargets`) kann auf solchen Systemen fehlschlagen oder nur den ersten Target erreichen.
+
+Empfehlung:
+- Wenn du so ein Backend hast: **Single-Target-Routing** erzwingen (oder klare Priorität: „best match wins“).
+- Nach dem Copy optional verifizieren (Source/Target envelope list), wenn Konsistenz kritisch ist.
+
 ## Datenpfad & Retention
 
 - Datenpfad frei konfigurierbar über `MAIL_PROCESSOR_DATA_DIR` (relativ oder absolut)
 - Empfehlung in Multi-Agent-Setups: **pro Agent eigener Pfad**, z. B. `<agent-workspace>/data/mail-routing`
+- Server-Capabilities werden mailbox-spezifisch unter `capabilities/*.json` gespeichert
+  - Standardpfad: `<MAIL_PROCESSOR_DATA_DIR>/capabilities`
+  - Override möglich über `MAIL_PROCESSOR_CAPABILITIES_DIR`
+  - Optionaler Key-Override: `MAILBOX_KEY` (oder `HIMALAYA_MAILBOX_KEY`)
+  - Zusätzlich wird ein kleiner **Capability-Policy-Layer** abgeleitet und mitgespeichert
 - Retention für Debug-Dateien (`msgs/*.json`) über `MAIL_DEBUG_RETENTION_DAYS`
   - Zahl in Tagen (z. B. `30`)
   - `unlimited` = keine automatische Löschung
+
+## Capability Policy Layer
+
+Aus den Capabilities wird eine kompakte Policy abgeleitet (`capabilities/<mailbox-key>.json`):
+
+- `supportsImap4Rev1`
+- `supportsUidPlus`
+- `supportsMove`
+- `supportsIdle`
+- `supportsCondstore`
+- `supportsQresync`
+- `supportsSpecialUse`
+- `supportsNamespace`
+- `supportsUtf8Accept`
+- `recommendedRoutingMode` (`normal` | `single-target`)
+- `rationale[]` (kurze Begründung)
+
+Der Run schreibt zusätzlich ein Event `mailbox_capabilities_loaded` nach `state.jsonl`, inkl. abgeleiteter `policy`.
+
+Hinweis: Der Policy-Layer ist bewusst klein und transparent. Er dient als Grundlage für Routing-Entscheidungen pro Backend, ohne hartcodierte server-spezifische Sonderfälle.
 
 ## Himalaya Command Beispiele
 
