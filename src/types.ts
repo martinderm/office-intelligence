@@ -29,6 +29,9 @@ export type EnvConfig = {
   HIMALAYA_COMMAND: string;
   MAIL_SOURCE_FOLDER: string;
   MAIL_FETCH_LIMIT: number;
+  MAIL_ROUTE_ACTION: "auto" | "copy" | "move";
+  MAIL_COPY_SEMANTICS: "normal" | "acts_like_move";
+  MAIL_ROUTE_STRICT: boolean;
   PROJECT_MATCH_THRESHOLD: number;
   NEEDS_REPLY_THRESHOLD: number;
   NEEDS_REPLY_NEGATIVE_HINTS: string[];

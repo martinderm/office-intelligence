@@ -81,3 +81,8 @@ export function copyMessage(command: string, targetFolder: string, id: string): 
   const args = ["message", "copy", targetFolder, id];
   runCmd(command, args);
 }
+
+export function moveMessage(command: string, targetFolder: string, id: string): void {
+  const args = ["message", "move", targetFolder, id];
+  runCmd(command, args);
+}

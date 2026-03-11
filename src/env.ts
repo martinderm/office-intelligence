@@ -57,6 +57,18 @@ function parseSanitizeMode(value: string | undefined): "off" | "balanced" | "str
   return "balanced";
 }
 
+function parseRouteAction(value: string | undefined): "auto" | "copy" | "move" {
+  const v = (value ?? "auto").trim().toLowerCase();
+  if (v === "auto" || v === "copy" || v === "move") return v;
+  return "auto";
+}
+
+function parseCopySemantics(value: string | undefined): "normal" | "acts_like_move" {
+  const v = (value ?? "normal").trim().toLowerCase();
+  if (v === "normal" || v === "acts_like_move") return v;
+  return "normal";
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
 
@@ -83,6 +95,9 @@ export function getConfig(cwd: string): EnvConfig {
     HIMALAYA_COMMAND: process.env.HIMALAYA_COMMAND ?? "himalaya",
     MAIL_SOURCE_FOLDER: process.env.MAIL_SOURCE_FOLDER ?? "INBOX",
     MAIL_FETCH_LIMIT: parseIntSafe(process.env.MAIL_FETCH_LIMIT, 20),
+    MAIL_ROUTE_ACTION: parseRouteAction(process.env.MAIL_ROUTE_ACTION),
+    MAIL_COPY_SEMANTICS: parseCopySemantics(process.env.MAIL_COPY_SEMANTICS),
+    MAIL_ROUTE_STRICT: parseBool(process.env.MAIL_ROUTE_STRICT, false),
     PROJECT_MATCH_THRESHOLD: parseFloatSafe(process.env.PROJECT_MATCH_THRESHOLD, 0.65),
     NEEDS_REPLY_THRESHOLD: parseFloatSafe(process.env.NEEDS_REPLY_THRESHOLD, 0.7),
     NEEDS_REPLY_NEGATIVE_HINTS: (process.env.NEEDS_REPLY_NEGATIVE_HINTS ?? "")

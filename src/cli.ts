@@ -6,7 +6,7 @@ import { loadDotEnv, getConfig } from "./env.js";
 import { loadProjects } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
-import { copyMessage, listEnvelopes, readMessage } from "./mail-source.js";
+import { copyMessage, listEnvelopes, moveMessage, readMessage } from "./mail-source.js";
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
 import { cleanupDebugMessages } from "./retention.js";
@@ -34,6 +34,46 @@ function fallbackStableId(meta: { from?: string; date?: string; subject?: string
   const basis = `${meta.from || ""}|${meta.date || ""}|${meta.subject || ""}|${bodyText.slice(0, 1200)}`;
   const hash = crypto.createHash("sha256").update(basis, "utf8").digest("hex").slice(0, 20);
   return `fallback:${hash}`;
+}
+
+type EffectiveRouting = {
+  requestedAction: "auto" | "copy" | "move";
+  effectiveAction: "copy" | "move";
+  copySemantics: "normal" | "acts_like_move";
+  effectiveMove: boolean;
+  supportsMove: boolean;
+  forcedSingleTarget: boolean;
+};
+
+function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean): EffectiveRouting {
+  const requestedAction = cfg.MAIL_ROUTE_ACTION;
+  let effectiveAction: "copy" | "move" = "copy";
+
+  if (requestedAction === "move") {
+    if (supportsMove) {
+      effectiveAction = "move";
+    } else if (cfg.MAIL_ROUTE_STRICT) {
+      throw new Error("MAIL_ROUTE_ACTION=move requested, but server does not advertise MOVE capability");
+    } else {
+      effectiveAction = "copy";
+    }
+  } else if (requestedAction === "copy") {
+    effectiveAction = "copy";
+  } else {
+    // auto
+    effectiveAction = supportsMove ? "move" : "copy";
+  }
+
+  const effectiveMove = effectiveAction === "move" || cfg.MAIL_COPY_SEMANTICS === "acts_like_move";
+
+  return {
+    requestedAction,
+    effectiveAction,
+    copySemantics: cfg.MAIL_COPY_SEMANTICS,
+    effectiveMove,
+    supportsMove,
+    forcedSingleTarget: effectiveMove,
+  };
 }
 
 async function main(): Promise<void> {
@@ -87,6 +127,8 @@ async function main(): Promise<void> {
       llmModel: cfg.LLM_MODEL || null,
     });
 
+    let supportsMove = false;
+
     if (cfg.HIMALAYA_COMMAND !== "mock") {
       const capabilityRecord = loadOrFetchCapabilities({
         command: cfg.HIMALAYA_COMMAND,
@@ -94,6 +136,7 @@ async function main(): Promise<void> {
         capabilitiesDir: cfg.MAIL_PROCESSOR_CAPABILITIES_DIR,
         mailboxKey: process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || undefined,
       });
+      supportsMove = capabilityRecord.policy.supportsMove;
 
       appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
         type: "mailbox_capabilities_loaded",
@@ -108,6 +151,21 @@ async function main(): Promise<void> {
         timestamp: new Date().toISOString(),
       });
     }
+
+    const routing = resolveEffectiveRouting(cfg, supportsMove);
+
+    appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+      type: "routing_policy_resolved",
+      runId,
+      requestedAction: routing.requestedAction,
+      effectiveAction: routing.effectiveAction,
+      copySemantics: routing.copySemantics,
+      supportsMove: routing.supportsMove,
+      effectiveMove: routing.effectiveMove,
+      forcedSingleTarget: routing.forcedSingleTarget,
+      strictMode: cfg.MAIL_ROUTE_STRICT,
+      timestamp: new Date().toISOString(),
+    });
 
     const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
     const envelopes =
@@ -215,18 +273,44 @@ async function main(): Promise<void> {
         if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
           const project = projects.find((p) => p.id === match.projectId);
           if (project) {
-            if (cfg.HIMALAYA_COMMAND !== "mock") {
-              copyMessage(cfg.HIMALAYA_COMMAND, project.mailbox_folder, env.id);
-            }
-            copyTargets.push(project.mailbox_folder);
-            summary.copied += 1;
+            const plannedTargets: string[] = [project.mailbox_folder];
             if (needsReply) {
-              const replyFolder = "Projekte/_Needs-Reply";
-              if (cfg.HIMALAYA_COMMAND !== "mock") {
-                copyMessage(cfg.HIMALAYA_COMMAND, replyFolder, env.id);
+              plannedTargets.push("Projekte/_Needs-Reply");
+            }
+
+            const executionTargets = routing.forcedSingleTarget ? plannedTargets.slice(0, 1) : plannedTargets;
+            const skippedTargets = plannedTargets.slice(executionTargets.length);
+
+            if (cfg.HIMALAYA_COMMAND !== "mock") {
+              for (const target of executionTargets) {
+                if (routing.effectiveAction === "move") {
+                  moveMessage(cfg.HIMALAYA_COMMAND, target, env.id);
+                } else {
+                  copyMessage(cfg.HIMALAYA_COMMAND, target, env.id);
+                }
+                copyTargets.push(target);
+
+                if (target === project.mailbox_folder) {
+                  summary.copied += 1;
+                }
+                if (target === "Projekte/_Needs-Reply") {
+                  summary.replyCopied += 1;
+                }
               }
-              copyTargets.push(replyFolder);
-              summary.replyCopied += 1;
+            } else {
+              copyTargets.push(...executionTargets);
+            }
+
+            if (skippedTargets.length) {
+              appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                type: "routing_targets_skipped",
+                runId,
+                envelopeId: env.id,
+                stableId,
+                skippedTargets,
+                reason: "effective_move_single_target",
+                timestamp: new Date().toISOString(),
+              });
             }
           }
         }
@@ -246,6 +330,12 @@ async function main(): Promise<void> {
           needsReply,
           copied: mode === "run" ? summary.copied : 0,
           copyTargets,
+          routeActionRequested: routing.requestedAction,
+          routeActionEffective: routing.effectiveAction,
+          copySemantics: routing.copySemantics,
+          supportsMove: routing.supportsMove,
+          effectiveMove: routing.effectiveMove,
+          forcedSingleTarget: routing.forcedSingleTarget,
           lastKnownEnvelopeId: env.id,
           lastKnownFolder: copyTargets.length ? copyTargets[copyTargets.length - 1] : cfg.MAIL_SOURCE_FOLDER,
           timestamp: new Date().toISOString(),

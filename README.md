@@ -43,7 +43,7 @@ npm run run
 - ✅ Lockfile (Single-Runner, TTL)
 - ✅ `projects.json`-Validation (MVP-Felder + Slug-ID)
 - ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
-- ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`
+- ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`/`message move`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
@@ -123,6 +123,21 @@ Aus den Capabilities wird eine kompakte Policy abgeleitet (`capabilities/<mailbo
 Der Run schreibt zusätzlich ein Event `mailbox_capabilities_loaded` nach `state.jsonl`, inkl. abgeleiteter `policy`.
 
 Hinweis: Der Policy-Layer ist bewusst klein und transparent. Er dient als Grundlage für Routing-Entscheidungen pro Backend, ohne hartcodierte server-spezifische Sonderfälle.
+
+### Routing-Strategie aus Policy + Konfiguration
+
+Zusätzlich zur Policy steuern diese Env-Variablen das operative Verhalten:
+
+- `MAIL_ROUTE_ACTION=auto|copy|move`
+- `MAIL_COPY_SEMANTICS=normal|acts_like_move`
+- `MAIL_ROUTE_STRICT=true|false`
+
+Logik:
+- `auto` nutzt `move`, wenn `supportsMove=true`, sonst `copy`.
+- `move` ohne Capability führt bei `MAIL_ROUTE_STRICT=true` zum Fehler, sonst Fallback auf `copy`.
+- `MAIL_COPY_SEMANTICS=acts_like_move` erzwingt **Single-Target-Routing** (auch bei `copy`), um serverseitige Copy→Move-Semantik sauber zu behandeln.
+
+Pro Run wird ein Event `routing_policy_resolved` geschrieben; pro Mail wird die effektive Routing-Entscheidung in `message_processed` mitgeloggt.
 
 ## Himalaya Command Beispiele
 
