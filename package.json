@@ -17,7 +17,8 @@
     "run:routing": "node scripts/run-run.mjs",
     "create:account-proxy": "node scripts/create-himalaya-account-proxy.mjs",
     "apply:suggestions": "node scripts/apply-project-suggestions.mjs",
-    "check": "tsc -p tsconfig.json --noEmit"
+    "check:skill-runners": "node scripts/check-skill-runners.mjs",
+    "check": "tsc -p tsconfig.json --noEmit && npm run check:skill-runners"
   },
   "keywords": [
     "mail",

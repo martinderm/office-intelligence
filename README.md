@@ -14,6 +14,11 @@ Memory-Update-Flow (kurz):
 3) `npm run apply:suggestions -- --input=<datei.json>`
 4) Konsolidierung durch den OpenClaw-Agenten (nicht per lokales Merge-Skript)
 
+Agent-Deploy-Konvention:
+- Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
+- Skill-Runner dürfen diese Werte nicht hardcoden.
+- Siehe `docs/INSTALL-INTO-AGENT.md`.
+
 ## Defaults & instanzspezifische Pflichtwerte
 
 Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.

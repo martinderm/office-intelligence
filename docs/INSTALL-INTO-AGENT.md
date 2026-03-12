@@ -24,15 +24,24 @@ Im Ziel-Agent-Workspace unter `skills/mail-processor/`:
 - `scripts/run-shadow.mjs`
 - `scripts/run-run.mjs`
 
-Die Run-Skripte müssen mindestens setzen:
+Run-Skript-Konvention (verbindlich):
 
+- Agent-spezifische Konfiguration liegt in `<agent-workspace>/.env`.
+- Die Runner laden diese `.env` und reichen sie an `npm run build/shadow/run` weiter.
+- Runner dürfen **keine** mailbox-/proxy-/pfadbezogenen Hardcodes enthalten.
+- Runner setzen nur Modus-Toggles:
+  - `MAIL_ROUTING_ENABLED=false` im Shadow-Skript
+  - `MAIL_ROUTING_ENABLED=true` im Run-Skript
+  - optional `MAIL_FETCH_LIMIT` via CLI-Flag
+
+Empfohlene `.env`-Felder im Agent-Workspace:
+- `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-mail-processor-projekt>`
 - `HIMALAYA_COMMAND=<agent-spezifischer command/gate oder node-wrapper>`
-- `MAILBOX_KEY=<kurzer stabiler key>` (z. B. `primary-mailbox`)
+- `MAILBOX_KEY=<kurzer stabiler key>`
 - `MAIL_SOURCE_FOLDER=INBOX` (oder Instanzwert)
-- `PROJECTS_JSON_PATH=./memory/references/projects/projects.json`
+- `PROJECTS_JSON_PATH=<agent-workspace>/memory/references/projects/projects.json`
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
-- `MAIL_ROUTING_ENABLED=false` im Shadow-Skript
-- `MAIL_ROUTING_ENABLED=true` im Run-Skript
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT_MS`
 
 ## 3) Projektkatalog sicherstellen
 

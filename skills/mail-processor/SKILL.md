@@ -59,6 +59,12 @@ Minimal (aktueller Stand):
 Sicherer Start:
 - `MAIL_ROUTING_ENABLED=false`  (Shadow-Mode)
 
+Runner-Konvention:
+- Agent-spezifische Konfiguration liegt in `<agent-workspace>/.env`.
+- `skills/mail-processor/scripts/run-shadow.mjs` und `run-run.mjs` laden nur diese `.env`.
+- In den Runnern sind keine mailbox-/proxy-/pfadbezogenen Hardcodes erlaubt.
+- Runner toggeln nur den Modus (`MAIL_ROUTING_ENABLED`) und optional `MAIL_FETCH_LIMIT`.
+
 Hinweis:
 - `LLM_*` Variablen sind im aktuellen Codepfad aktiv (Extraktion via LLM), bleiben aber optional konfigurierbar.
 
