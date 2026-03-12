@@ -86,6 +86,43 @@ function moveExportArtifact(dataDir: string, envelopeId: string, stableId: strin
   return targetPath;
 }
 
+function findMessageArtifactByStableId(msgsDir: string, stableId: string): string | undefined {
+  const wanted = `${stableId}.json`;
+  const stack = [path.resolve(msgsDir)];
+
+  while (stack.length) {
+    const dir = stack.pop();
+    if (!dir || !fs.existsSync(dir)) continue;
+
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name === wanted) {
+        return full;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function isCompleteMessageArtifact(raw: string, stableId: string, llmEnabled: boolean): boolean {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed.stableId !== stableId) return false;
+    if (!("match" in parsed)) return false;
+    if (typeof parsed.needsReply !== "boolean") return false;
+    if (!("mailMeta" in parsed)) return false;
+    if (llmEnabled && !("llm" in parsed)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean, supportsUidPlus: boolean): EffectiveRouting {
   const requestedAction = cfg.MAIL_ROUTE_ACTION;
   let effectiveAction: "copy" | "move" = "copy";
@@ -263,6 +300,26 @@ async function main(): Promise<void> {
             timestamp: new Date().toISOString(),
           });
           continue;
+        }
+
+        const existingArtifactPath = findMessageArtifactByStableId(cfg.MAIL_PROCESSOR_MSGS_DIR, stableId);
+        if (existingArtifactPath) {
+          const existingRaw = fs.readFileSync(existingArtifactPath, "utf8");
+          if (isCompleteMessageArtifact(existingRaw, stableId, cfg.LLM_ENABLED)) {
+            summary.skipped += 1;
+            processed.add(stableId);
+            appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+              type: "message_skipped",
+              runId,
+              sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+              envelopeId: env.id,
+              stableId,
+              reason: "existing_complete_artifact",
+              artifactPath: existingArtifactPath,
+              timestamp: new Date().toISOString(),
+            });
+            continue;
+          }
         }
 
         const heuristicMatch = matchProject(prepared.effectiveText, projects);

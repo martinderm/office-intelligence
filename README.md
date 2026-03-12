@@ -89,6 +89,7 @@ npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-p
   - `msgs/<folder-slug>/<stableId>.json`
   - inkl. `history[]` (wann/wohin geroutet)
 - ✅ Discovery-Mode: erkennt aus den letzten X Mails potenzielle neue Projekte + Kontaktvorschläge für bestehende Projekte (`--discover-projects`)
+- ✅ Guard gegen Doppelverarbeitung über bestehende vollständige Artefakte (`msgs/**/<stableId>.json` inkl. LLM-Feld)
 - ⚠️ Live-Routing-Mirroring ist implementiert, aber **noch nicht end-to-end im Produktivmodus getestet**.
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 
