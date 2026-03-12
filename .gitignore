@@ -5,3 +5,4 @@ dist/
 data/
 *.log
 gitleaks*.sarif
+docs/INSTALL_PATHS.local.md

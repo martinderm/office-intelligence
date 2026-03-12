@@ -96,6 +96,22 @@ Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discove
 
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
 
+## Sync-Check für ausgerollte Skill-Dateien
+
+Für Deployments in Agent-Workspaces gibt es einen generischen Datei-Sync-Check:
+
+```bash
+npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail-processor
+```
+
+Optional streng (meldet auch zusätzliche Dateien im Ziel):
+
+```bash
+npm run check:sync -- --strict --pair <source-dir> <target-dir>
+```
+
+Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Deploy-Pfade in `docs/INSTALL_PATHS.local.md` (Vorlage: `docs/INSTALL_PATHS.example.md`).
+
 ## Aktueller Implementierungsstand
 
 - ✅ TypeScript-CLI mit `shadow` / `run`

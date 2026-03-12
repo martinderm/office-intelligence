@@ -18,6 +18,7 @@
     "create:account-proxy": "node scripts/create-himalaya-account-proxy.mjs",
     "apply:suggestions": "node scripts/apply-project-suggestions.mjs",
     "check:skill-runners": "node scripts/check-skill-runners.mjs",
+    "check:sync": "node scripts/check-sync.mjs",
     "check": "tsc -p tsconfig.json --noEmit && npm run check:skill-runners"
   },
   "keywords": [

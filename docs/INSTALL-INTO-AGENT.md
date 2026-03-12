@@ -93,6 +93,18 @@ Danach Konsolidierung durch den Agenten ausführen lassen (OpenClaw-Task, nicht 
 
 - Wirkung: Managed-Bereiche in `index.md`/`signals.md` werden aus klar zugeordneten Mails aktualisiert; Evidenz landet monatlich in `evidence/YYYY-MM.md`.
 
+### Optional: Skill-Sync validieren
+
+Nach dem Kopieren der Skill-Dateien kann der Stand gegen das Repo geprüft werden:
+
+```bash
+npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail-processor
+```
+
+Mit `--strict` werden auch zusätzliche Dateien im Ziel als Drift markiert.
+
+Instanzspezifische Zielpfade bitte lokal in `docs/INSTALL_PATHS.local.md` dokumentieren (Vorlage: `docs/INSTALL_PATHS.example.md`).
+
 ## 6) Go-Live (erst nach Shadow-Validierung)
 
 ```bash
