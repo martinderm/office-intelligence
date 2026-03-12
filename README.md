@@ -94,6 +94,10 @@ node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
 Warum Discovery-Runner: Bei Agent-Setups liegen Gate-/Mailbox-Bindung und Pfade in `<agent-workspace>/.env`.
 Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discover-projects` im Projektkontext kann sonst auf ein ungebundenes `himalaya` zurückfallen.
 
+Wichtig für alle Runner (`run-shadow`, `run-run`, `run-discover-projects`):
+- `MAIL_PROCESSOR_PROJECT_DIR` im Agent-`.env` auf das echte Repo setzen (z. B. `<workspace>/projects/mail-processor`).
+- Ohne diesen Wert kann der Prozess im Skill-Ordner landen (`skills/mail-processor`) und dort fehlt erwartungsgemäß `package.json`.
+
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
 
 ## Sync-Check für ausgerollte Skill-Dateien
