@@ -4,3 +4,4 @@ dist/
 # Runtime/state/debug artifacts (can contain sensitive mail content)
 data/
 *.log
+gitleaks*.sarif
