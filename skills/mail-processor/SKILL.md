@@ -62,21 +62,17 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 
 ## Kommandos / Aktionen
 
-### 1) Shadow Run (empfohlen zum Start)
-- liest Mails über Himalaya (`envelope list` + `message read`)
-- macht aktuell deterministisches Matching + needsReply-Heuristik
-- schreibt Logs/Debug-Artefakte
-- führt **keine COPY-Aktionen** aus
-
-Command:
+### 1) Shadow Run
 - `npm run shadow`
 
 ### 2) Routing Run (COPY-only, gated)
-- führt COPY in Projektordner nur bei hoher Sicherheit aus
-- optional zusätzlich COPY nach `_Needs-Reply`
-
-Command:
 - `npm run run`
+
+### 3) Memory-Update aus Mails (reviewed)
+- Discovery: `npm run discover-projects`
+- Review-Queue: `memory/references/projects/inbox/*.json`
+- Apply: `npm run apply:suggestions -- --input=<datei.json>`
+- Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende `<id>.md`
 
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
 

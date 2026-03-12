@@ -8,6 +8,11 @@ Für die Installation in einen bestehenden Mail-Agent siehe:
 Geplante Weiterentwicklungen:
 - `docs/ROADMAP.md`
 
+Memory-Update-Flow (kurz):
+1) `npm run discover-projects`
+2) Vorschlag in `memory/references/projects/inbox/*.json` prüfen
+3) `npm run apply:suggestions -- --input=<datei.json>`
+
 ## Defaults & instanzspezifische Pflichtwerte
 
 Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.
@@ -67,7 +72,7 @@ npm run discover-projects -- --discover-last=200
 Optionaler Output-Pfad:
 
 ```bash
-npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-processor/project-candidates.json
+npm run discover-projects -- --discover-last=200 --discover-output=./memory/references/projects/inbox/project-candidates-manual.json
 ```
 
 ## Plattformübergreifende Runner-Skripte

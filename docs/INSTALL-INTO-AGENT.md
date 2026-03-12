@@ -63,14 +63,20 @@ Erwartung:
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` existiert
 - Shadow-Run ohne Routing-Aktionen
 
-## 5) Optional: Discovery-Lauf
+## 5) Optional: Discovery + reviewed Apply
 
 ```bash
 npm run discover-projects -- --discover-last=200
 ```
 
-- Ergebnis prüfen (`project-candidates.json`)
-- Kandidaten manuell nach `projects.json` übernehmen
+- Ergebnis liegt in `memory/references/projects/inbox/*.json`
+- Danach reviewed übernehmen:
+
+```bash
+npm run apply:suggestions -- --input=memory/references/projects/inbox/<datei>.json
+```
+
+- Wirkung: `projects.json` aktualisiert, `changelog.md` ergänzt, fehlende `<id>.md` erzeugt
 
 ## 6) Go-Live (erst nach Shadow-Validierung)
 

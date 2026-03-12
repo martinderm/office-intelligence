@@ -16,6 +16,7 @@
     "run:shadow": "node scripts/run-shadow.mjs",
     "run:routing": "node scripts/run-run.mjs",
     "create:account-proxy": "node scripts/create-himalaya-account-proxy.mjs",
+    "apply:suggestions": "node scripts/apply-project-suggestions.mjs",
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [

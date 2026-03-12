@@ -265,7 +265,9 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
     note: "Review required before merging into projects.json",
   };
 
-  const outputPath = path.resolve(cwd, options.outPath || path.join(cfg.MAIL_PROCESSOR_DATA_DIR, "project-candidates.json"));
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const defaultOut = path.join("memory", "references", "projects", "inbox", `project-candidates-${ts}.json`);
+  const outputPath = path.resolve(cwd, options.outPath || defaultOut);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, JSON.stringify(out, null, 2), "utf8");
 

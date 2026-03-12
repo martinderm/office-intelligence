@@ -17,6 +17,8 @@ Empfohlener Pfad im Agent-Workspace:
 
 - `memory/references/projects/projects.json`  (Katalog)
 - `memory/references/projects/README.md`      (diese Doku)
+- `memory/references/projects/inbox/`         (Review-Queue für Discovery-Vorschläge)
+- `memory/references/projects/changelog.md`   (Änderungsprotokoll)
 
 Im `.env` wird der Pfad referenziert:
 
@@ -131,6 +133,13 @@ Wichtig:
 - Unklare Mails bleiben in der Inbox (kein `_Unclassified`)
 
 ---
+
+## Reviewter Update-Flow aus Mails (empfohlen)
+
+1) Discovery ausführen (`npm run discover-projects`) → erzeugt JSON in `memory/references/projects/inbox/`.
+2) Vorschlag prüfen (keine Blindübernahme).
+3) Übernehmen mit `npm run apply:suggestions -- --input=<inbox-datei.json>`.
+4) Änderungen landen in `projects.json`; `changelog.md` wird ergänzt; fehlende `<id>.md` werden erstellt.
 
 ## Wie ein Agent das anlegt (Setup-Checklist)
 
