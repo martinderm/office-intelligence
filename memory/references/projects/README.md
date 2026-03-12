@@ -54,7 +54,7 @@ Beispiel:
 
     "aliases": ["USAGE NG", "Usage NextGen"],
     "keywords": ["usage", "next gen"],
-    "domains": ["usage-ng.boku.ac.at"],
+    "domains": ["usage-ng.example.org"],
     "contacts": [
       {"name": "Jane Doe", "email": "jane.doe@example.org"}
     ],

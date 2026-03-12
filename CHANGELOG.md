@@ -9,7 +9,7 @@
   - schreibt Ergebnis als Review-Artefakt (Default: `data/mail-routing/project-candidates.json`)
 - Schutz gegen Rauschen: list-/bulk-/auto-submitted Mails werden im Discovery-Mode übersprungen.
 - Himalaya-Proxy-Wrapper korrigiert: Argumente werden jetzt robust mit `%*` weitergereicht (Fix für fehlerhafte Tokens wie `--trace0`/`envelope0`).
-- Neues Script `scripts/create-himalaya-account-main-proxy.ps1` zum reproduzierbaren Erzeugen des Proxy-Wrappers.
+- Neues Script `scripts/create-himalaya-account-proxy.mjs` zum reproduzierbaren Erzeugen eines plattformübergreifenden Proxy-Wrappers mit fixer Account-Bindung.
 
 ## 0.1.1 - 2026-03-07
 

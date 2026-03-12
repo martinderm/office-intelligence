@@ -58,7 +58,7 @@ Ziel: E-Mails anhand von Projektdaten (projects.json) automatisch klassifizieren
   "entities": ["USAGE-NG", "ATAEL", "WEEK", "..."],
   "keywords": ["deadline", "proposal", "..."],
   "projectCandidates": [
-    {"label": "USAGE-NG", "confidence": 0.82, "evidence": ["domain usage-ng.boku.ac.at"]},
+    {"label": "USAGE-NG", "confidence": 0.82, "evidence": ["domain usage-ng.example.org"]},
     {"label": "ATAEL", "confidence": 0.44, "evidence": ["subject mention"]}
   ],
   "needsReply": {"score": 0.78, "reasons": ["direct question", "deadline tomorrow"]},

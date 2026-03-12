@@ -11,16 +11,22 @@ Ziel: Ein Main-Agent installiert/aktualisiert den `mail-processor` in einem best
 
 ## 2) Skill-Dateien im Ziel-Agent bereitstellen
 
+Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
+- Empfohlen ist ein Gate (fixe Account-/Command-Policy).
+- Alternativ kann ein `.mjs`-Wrapper genutzt werden.
+- Für allgemeine Wrapper-Erzeugung liegt ein Beispiel im Projekt: `scripts/create-himalaya-account-proxy.mjs`.
+
+
 Im Ziel-Agent-Workspace unter `skills/mail-processor/`:
 
 - `SKILL.md`
-- `scripts/run-shadow.ps1`
-- `scripts/run-run.ps1`
+- `scripts/run-shadow.mjs`
+- `scripts/run-run.mjs`
 
 Die Run-Skripte müssen mindestens setzen:
 
-- `HIMALAYA_COMMAND=<agent-spezifischer command/gate>`
-- `MAILBOX_KEY=<kurzer stabiler key>` (z. B. `boku-martin`)
+- `HIMALAYA_COMMAND=<agent-spezifischer command/gate oder node-wrapper>`
+- `MAILBOX_KEY=<kurzer stabiler key>` (z. B. `primary-mailbox`)
 - `MAIL_SOURCE_FOLDER=INBOX` (oder Instanzwert)
 - `PROJECTS_JSON_PATH=./memory/references/projects/projects.json`
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
@@ -47,8 +53,8 @@ npm run check
 
 Dann im Ziel-Agent:
 
-```powershell
-skills/mail-processor/scripts/run-shadow.ps1 -FetchLimit 1
+```bash
+node skills/mail-processor/scripts/run-shadow.mjs --fetch-limit=1
 ```
 
 Erwartung:
@@ -68,8 +74,8 @@ npm run discover-projects -- --discover-last=200
 
 ## 6) Go-Live (erst nach Shadow-Validierung)
 
-```powershell
-skills/mail-processor/scripts/run-run.ps1
+```bash
+node skills/mail-processor/scripts/run-run.mjs
 ```
 
 Empfehlung:

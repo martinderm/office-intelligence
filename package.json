@@ -13,6 +13,9 @@
     "shadow": "node dist/cli.js --mode=shadow",
     "run": "node dist/cli.js --mode=run",
     "discover-projects": "node dist/cli.js --discover-projects",
+    "run:shadow": "node scripts/run-shadow.mjs",
+    "run:routing": "node scripts/run-run.mjs",
+    "create:account-proxy": "node scripts/create-himalaya-account-proxy.mjs",
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [

@@ -67,6 +67,17 @@ Optionaler Output-Pfad:
 npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-processor/project-candidates.json
 ```
 
+## Plattformübergreifende Runner-Skripte
+
+Für Agent-Workspaces gibt es plattformneutrale Runner:
+
+```bash
+node scripts/run-shadow.mjs --fetch-limit=1
+node scripts/run-run.mjs
+```
+
+Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
+
 ## Aktueller Implementierungsstand
 
 - ✅ TypeScript-CLI mit `shadow` / `run`
@@ -185,11 +196,11 @@ Wichtig: `HIMALAYA_COMMAND` soll immer eine **explizit gebundene Mailbox** erzwi
 Empfohlen über ein Gate oder ein kleines Wrapper-Skript (`.mjs`), das den Account fest setzt.
 
 ```bash
-# EMPFOHLEN: Agent-Gate (Beispiel aus boku-martin)
-HIMALAYA_COMMAND=skills/himalaya-account-main/scripts/himalaya-account-main-gate.exe
+# EMPFOHLEN: Agent-Gate mit fixer Mailbox-Bindung
+HIMALAYA_COMMAND=./skills/himalaya-gate/scripts/himalaya-gate.exe
 
 # ALTERNATIVE: mjs-Wrapper mit festem Account
-HIMALAYA_COMMAND=node ./scripts/himalaya-account-main-proxy.mjs
+HIMALAYA_COMMAND=node ./scripts/himalaya-account-proxy.mjs
 
 # lokaler Test ohne Mailbox
 HIMALAYA_COMMAND=mock
@@ -197,5 +208,15 @@ HIMALAYA_COMMAND=mock
 
 Hinweis: Ein nacktes `HIMALAYA_COMMAND=himalaya` ist nur dann sinnvoll,
 wenn die Mailbox-Bindung an anderer Stelle technisch erzwungen wird.
+
+### Beispiel: generischer Proxy-Generator
+
+Für Umgebungen ohne Gate gibt es ein allgemeines Beispielskript, das einen `.mjs`-Wrapper mit fixer Account-Bindung erzeugt:
+
+```bash
+node scripts/create-himalaya-account-proxy.mjs --account=ACCOUNT_NAME --out=./scripts/himalaya-account-proxy.mjs
+```
+
+Danach kann der erzeugte Wrapper als `HIMALAYA_COMMAND` verwendet werden.
 
 
