@@ -61,7 +61,7 @@ Sicherer Start:
 
 Runner-Konvention:
 - Agent-spezifische Konfiguration liegt in `<agent-workspace>/.env`.
-- `skills/mail-processor/scripts/run-shadow.mjs` und `run-run.mjs` laden nur diese `.env`.
+- `skills/mail-processor/scripts/run-shadow.mjs`, `run-run.mjs` und `run-discover-projects.mjs` laden nur diese `.env`.
 - In den Runnern sind keine mailbox-/proxy-/pfadbezogenen Hardcodes erlaubt.
 - Runner toggeln nur den Modus (`MAIL_ROUTING_ENABLED`) und optional `MAIL_FETCH_LIMIT`.
 
@@ -79,7 +79,7 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - `npm run run`
 
 ### 3) Memory-Update aus Mails (reviewed)
-- Discovery: `npm run discover-projects`
+- Discovery: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
