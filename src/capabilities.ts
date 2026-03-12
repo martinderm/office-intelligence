@@ -108,6 +108,10 @@ function fetchCapabilitiesViaTrace(command: string, sourceFolder: string): {
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
 
   if (result.status !== 0) {
+    // Some account gates do not allow --trace; degrade gracefully.
+    if (output.includes("command not allowed") || output.includes("--trace")) {
+      return { capabilities: [] };
+    }
     throw new Error(`capability fetch failed: ${command} ${args.join(" ")}\n${output}`);
   }
 

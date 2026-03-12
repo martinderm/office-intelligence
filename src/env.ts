@@ -98,6 +98,7 @@ export function getConfig(cwd: string): EnvConfig {
     MAIL_ROUTE_ACTION: parseRouteAction(process.env.MAIL_ROUTE_ACTION),
     MAIL_COPY_SEMANTICS: parseCopySemantics(process.env.MAIL_COPY_SEMANTICS),
     MAIL_ROUTE_STRICT: parseBool(process.env.MAIL_ROUTE_STRICT, false),
+    MAIL_USE_UIDPLUS: parseBool(process.env.MAIL_USE_UIDPLUS, true),
     PROJECT_MATCH_THRESHOLD: parseFloatSafe(process.env.PROJECT_MATCH_THRESHOLD, 0.65),
     NEEDS_REPLY_THRESHOLD: parseFloatSafe(process.env.NEEDS_REPLY_THRESHOLD, 0.7),
     NEEDS_REPLY_NEGATIVE_HINTS: (process.env.NEEDS_REPLY_NEGATIVE_HINTS ?? "")

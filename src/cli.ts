@@ -6,7 +6,7 @@ import { loadDotEnv, getConfig } from "./env.js";
 import { loadProjects } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
-import { copyMessage, listEnvelopes, moveMessage, readMessage } from "./mail-source.js";
+import { copyMessage, copyMessageWithUidPlus, listEnvelopes, moveMessage, readMessage } from "./mail-source.js";
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
 import { cleanupDebugMessages } from "./retention.js";
@@ -42,10 +42,12 @@ type EffectiveRouting = {
   copySemantics: "normal" | "acts_like_move";
   effectiveMove: boolean;
   supportsMove: boolean;
+  supportsUidPlus: boolean;
+  useUidPlus: boolean;
   forcedSingleTarget: boolean;
 };
 
-function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean): EffectiveRouting {
+function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean, supportsUidPlus: boolean): EffectiveRouting {
   const requestedAction = cfg.MAIL_ROUTE_ACTION;
   let effectiveAction: "copy" | "move" = "copy";
 
@@ -72,6 +74,8 @@ function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove
     copySemantics: cfg.MAIL_COPY_SEMANTICS,
     effectiveMove,
     supportsMove,
+    supportsUidPlus,
+    useUidPlus: cfg.MAIL_USE_UIDPLUS && supportsUidPlus,
     forcedSingleTarget: effectiveMove,
   };
 }
@@ -128,6 +132,7 @@ async function main(): Promise<void> {
     });
 
     let supportsMove = false;
+    let supportsUidPlus = false;
 
     if (cfg.HIMALAYA_COMMAND !== "mock") {
       const capabilityRecord = loadOrFetchCapabilities({
@@ -137,6 +142,7 @@ async function main(): Promise<void> {
         mailboxKey: process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || undefined,
       });
       supportsMove = capabilityRecord.policy.supportsMove;
+      supportsUidPlus = capabilityRecord.policy.supportsUidPlus;
 
       appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
         type: "mailbox_capabilities_loaded",
@@ -152,7 +158,7 @@ async function main(): Promise<void> {
       });
     }
 
-    const routing = resolveEffectiveRouting(cfg, supportsMove);
+    const routing = resolveEffectiveRouting(cfg, supportsMove, supportsUidPlus);
 
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
       type: "routing_policy_resolved",
@@ -161,6 +167,8 @@ async function main(): Promise<void> {
       effectiveAction: routing.effectiveAction,
       copySemantics: routing.copySemantics,
       supportsMove: routing.supportsMove,
+      supportsUidPlus: routing.supportsUidPlus,
+      useUidPlus: routing.useUidPlus,
       effectiveMove: routing.effectiveMove,
       forcedSingleTarget: routing.forcedSingleTarget,
       strictMode: cfg.MAIL_ROUTE_STRICT,
@@ -283,12 +291,30 @@ async function main(): Promise<void> {
 
             if (cfg.HIMALAYA_COMMAND !== "mock") {
               for (const target of executionTargets) {
+                let uidPlusCopy: Record<string, unknown> | undefined;
                 if (routing.effectiveAction === "move") {
                   moveMessage(cfg.HIMALAYA_COMMAND, target, env.id);
+                } else if (routing.useUidPlus) {
+                  const routeResult = copyMessageWithUidPlus(cfg.HIMALAYA_COMMAND, target, env.id);
+                  if (routeResult.uidPlus) {
+                    uidPlusCopy = routeResult.uidPlus as unknown as Record<string, unknown>;
+                  }
                 } else {
                   copyMessage(cfg.HIMALAYA_COMMAND, target, env.id);
                 }
                 copyTargets.push(target);
+
+                if (uidPlusCopy) {
+                  appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                    type: "uidplus_copy_mapping",
+                    runId,
+                    envelopeId: env.id,
+                    stableId,
+                    targetFolder: target,
+                    mapping: uidPlusCopy,
+                    timestamp: new Date().toISOString(),
+                  });
+                }
 
                 if (target === project.mailbox_folder) {
                   summary.copied += 1;
@@ -334,6 +360,8 @@ async function main(): Promise<void> {
           routeActionEffective: routing.effectiveAction,
           copySemantics: routing.copySemantics,
           supportsMove: routing.supportsMove,
+          supportsUidPlus: routing.supportsUidPlus,
+          useUidPlus: routing.useUidPlus,
           effectiveMove: routing.effectiveMove,
           forcedSingleTarget: routing.forcedSingleTarget,
           lastKnownEnvelopeId: env.id,

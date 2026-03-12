@@ -32,6 +32,7 @@ export type EnvConfig = {
   MAIL_ROUTE_ACTION: "auto" | "copy" | "move";
   MAIL_COPY_SEMANTICS: "normal" | "acts_like_move";
   MAIL_ROUTE_STRICT: boolean;
+  MAIL_USE_UIDPLUS: boolean;
   PROJECT_MATCH_THRESHOLD: number;
   NEEDS_REPLY_THRESHOLD: number;
   NEEDS_REPLY_NEGATIVE_HINTS: string[];

@@ -131,6 +131,7 @@ Zusätzlich zur Policy steuern diese Env-Variablen das operative Verhalten:
 - `MAIL_ROUTE_ACTION=auto|copy|move`
 - `MAIL_COPY_SEMANTICS=normal|acts_like_move`
 - `MAIL_ROUTE_STRICT=true|false`
+- `MAIL_USE_UIDPLUS=true|false` (optional; nur wirksam wenn `supportsUidPlus=true`)
 
 Logik:
 - `auto` nutzt `move`, wenn `supportsMove=true`, sonst `copy`.
@@ -138,6 +139,7 @@ Logik:
 - `MAIL_COPY_SEMANTICS=acts_like_move` erzwingt **Single-Target-Routing** (auch bei `copy`), um serverseitige Copy→Move-Semantik sauber zu behandeln.
 
 Pro Run wird ein Event `routing_policy_resolved` geschrieben; pro Mail wird die effektive Routing-Entscheidung in `message_processed` mitgeloggt.
+Wenn `MAIL_USE_UIDPLUS=true` und der Server `UIDPLUS` anbietet, wird bei COPY zusätzlich ein Event `uidplus_copy_mapping` (COPYUID-Mapping) in `state.jsonl` geschrieben.
 
 ## Himalaya Command Beispiele
 
