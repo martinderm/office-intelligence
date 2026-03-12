@@ -12,6 +12,7 @@
     "start": "node dist/cli.js",
     "shadow": "node dist/cli.js --mode=shadow",
     "run": "node dist/cli.js --mode=run",
+    "discover-projects": "node dist/cli.js --discover-projects",
     "check": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [

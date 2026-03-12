@@ -36,6 +36,18 @@ npm run run
 
 > `run` bricht absichtlich ab, wenn `MAIL_ROUTING_ENABLED` nicht auf `true` gesetzt ist.
 
+Projektkandidaten aus den letzten Mails vorschlagen:
+
+```bash
+npm run discover-projects -- --discover-last=200
+```
+
+Optionaler Output-Pfad:
+
+```bash
+npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-routing/project-candidates.json
+```
+
 ## Aktueller Implementierungsstand
 
 - ✅ TypeScript-CLI mit `shadow` / `run`
@@ -56,6 +68,7 @@ npm run run
 - ✅ Zusätzliche Tokenreduktion: Layout-Noise-Cleanup + Dedupe wiederholter Links
 - ✅ Idempotenz auf stabiler ID (primär normalisierte `Message-ID`, fallback Content-Hash) statt folder-lokaler Envelope-ID
 - ✅ State speichert `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
+- ✅ Discovery-Mode: erkennt aus den letzten X Mails potenzielle neue Projekte + Kontaktvorschläge für bestehende Projekte (`--discover-projects`)
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 
 ## Wichtige Qualitätsvoraussetzung: Projektkatalog
@@ -153,4 +166,14 @@ HIMALAYA_COMMAND=skills/himalaya-account-main/scripts/himalaya-account-main-gate
 # lokaler Test ohne Mailbox
 HIMALAYA_COMMAND=mock
 ```
+
+### Wrapper für direkten Himalaya-Trace (MAIN-MAILBOX)
+
+Wenn der Gate-Wrapper `--trace` nicht durchreicht, kann ein Proxy-Wrapper erzeugt werden:
+
+```powershell
+pwsh ./scripts/create-himalaya-account-main-proxy.ps1
+```
+
+Der erzeugte Wrapper nutzt `%*` (statt `%1..%20`) und verhindert damit fehlerhafte Argumentexpansion wie `--trace0` / `envelope0`.
 

@@ -13,6 +13,7 @@ import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { extractWithLlm } from "./llm.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
+import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
 
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
@@ -83,8 +84,15 @@ function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove
 async function main(): Promise<void> {
   const cwd = process.cwd();
   loadDotEnv(cwd);
-  const mode = parseMode(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const mode = parseMode(args);
   const cfg = getConfig(cwd);
+  const discover = parseDiscoverOptions(args, cfg.MAIL_FETCH_LIMIT);
+
+  if (discover.enabled) {
+    runDiscoverProjects(cwd, cfg, discover);
+    return;
+  }
 
   ensureRuntimeDirs([
     cfg.MAIL_PROCESSOR_DATA_DIR,

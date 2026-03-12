@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Neues Discovery-Feature (`--discover-projects`):
+  - analysiert die letzten X Mails (`--discover-last`)
+  - schlägt potenzielle neue Projekte vor (`new_project_candidates`)
+  - erzeugt Kontakt-/Teilnehmer-Vorschläge für bestehende Projekte (`project_participant_suggestions`)
+  - schreibt Ergebnis als Review-Artefakt (Default: `data/mail-routing/project-candidates.json`)
+- Schutz gegen Rauschen: list-/bulk-/auto-submitted Mails werden im Discovery-Mode übersprungen.
+- Himalaya-Proxy-Wrapper korrigiert: Argumente werden jetzt robust mit `%*` weitergereicht (Fix für fehlerhafte Tokens wie `--trace0`/`envelope0`).
+- Neues Script `scripts/create-himalaya-account-main-proxy.ps1` zum reproduzierbaren Erzeugen des Proxy-Wrappers.
+
 ## 0.1.1 - 2026-03-07
 
 - Sanitizing massiv erweitert für HTML-/Newsletter-Mails:
