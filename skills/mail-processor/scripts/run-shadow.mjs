@@ -52,7 +52,10 @@ const env = {
   ...(fetchLimit ? { MAIL_FETCH_LIMIT: fetchLimit } : {}),
 };
 
-const projectDir = env.MAIL_PROCESSOR_PROJECT_DIR || process.cwd();
+const repoRootFromScript = path.resolve(scriptDir, "../../..");
+const projectDir =
+  env.MAIL_PROCESSOR_PROJECT_DIR ||
+  (fs.existsSync(path.join(repoRootFromScript, "package.json")) ? repoRootFromScript : process.cwd());
 if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }

@@ -79,7 +79,8 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - `npm run run`
 
 ### 3) Memory-Update aus Mails (reviewed)
-- Discovery: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
+- Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
+- Optional IMAP-Quelle: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-source=imap --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
@@ -100,13 +101,15 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Hard negative rules für needsReply (Newsletter/Auto-Reply/no-reply)
 - JSON-Schema-Validation für LLM-Extrakt; bei Fehlern skip+log
 - Retention für `data/mail-processor/msgs/**/*.json` (z.B. 30 Tage)
-- Guard gegen Doppelverarbeitung: wenn vollständiges `msgs/**/<stableId>.json` existiert (inkl. LLM-Feld, falls aktiv), dann skip
+- Guard gegen Doppelverarbeitung: wenn vollständiges `msgs/**/<fileId>.json` existiert (inkl. LLM-Feld, falls aktiv), dann skip (Legacy `<stableId>.json` wird weiterhin erkannt)
 
 ## Output / Artefakte
 
 - `data/mail-processor/state.jsonl` — Idempotenz-Log
-- `data/mail-processor/msgs/<folder-slug>/<stableId>.json` — Extrakte/Debug inkl. `history[]`
-- `data/mail-processor/exports/<folder-slug>/<stableId>.eml` — lokale EML-Ablage
+- `data/mail-processor/msgs/<folder-slug>/<fileId>.json` — Extrakte/Debug inkl. `history[]`
+- `data/mail-processor/exports/<folder-slug>/<fileId>.eml` — lokale EML-Ablage
+- `fileId` wird im Msg-Artefakt unter `local.fileId` mitgeführt
+- `fileId` wird deterministisch aus `stableId` abgeleitet: `sha256(stableId)` → `base64url` → auf 16 Zeichen gekürzt (kompakter Dateiname, minimales Kollisionsrisiko)
 - `data/mail-processor/memory_suggestions.jsonl` — Vorschläge zur Katalogpflege
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` — Capabilities + Policy-Cache
 

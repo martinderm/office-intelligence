@@ -7,10 +7,13 @@ import { loadProjects } from "./projects.js";
 import { matchProject } from "./matcher.js";
 import { Project } from "./types.js";
 
+type DiscoverSource = "local" | "imap";
+
 type DiscoverOptions = {
   enabled: boolean;
   last: number;
   outPath?: string;
+  source: DiscoverSource;
 };
 
 type CandidateCluster = {
@@ -68,7 +71,9 @@ export function parseDiscoverOptions(args: string[], defaultFetchLimit: number):
   const enabled = parseBoolFlag(args, "--discover-projects");
   const last = parseIntFlag(args, "--discover-last=", Math.max(defaultFetchLimit, 50));
   const outPath = parseStringFlag(args, "--discover-output=");
-  return { enabled, last, outPath };
+  const rawSource = (parseStringFlag(args, "--discover-source=") || "local").toLowerCase();
+  const source: DiscoverSource = rawSource === "imap" ? "imap" : "local";
+  return { enabled, last, outPath, source };
 }
 
 function extractEmails(input?: string): string[] {
@@ -135,6 +140,38 @@ function knownProjectDomains(projects: Project[]): Set<string> {
   return domains;
 }
 
+function listLocalEmlFiles(dataDir: string, limit: number): Array<{ id: string; rawLine: string; emlPath: string }> {
+  const exportsDir = path.resolve(dataDir, "exports");
+  if (!fs.existsSync(exportsDir)) return [];
+
+  const stack = [exportsDir];
+  const files: Array<{ path: string; mtimeMs: number }> = [];
+
+  while (stack.length) {
+    const dir = stack.pop();
+    if (!dir || !fs.existsSync(dir)) continue;
+
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name.toLowerCase().endsWith(".eml")) {
+        const stat = fs.statSync(full);
+        files.push({ path: full, mtimeMs: stat.mtimeMs });
+      }
+    }
+  }
+
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return files.slice(0, limit).map((f) => ({
+    id: path.basename(f.path, ".eml"),
+    rawLine: `local:${f.path}`,
+    emlPath: f.path,
+  }));
+}
+
 export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfig>, options: DiscoverOptions): void {
   const projectsPathAbs = path.resolve(cwd, cfg.PROJECTS_JSON_PATH);
   const hasProjects = fs.existsSync(projectsPathAbs);
@@ -142,9 +179,11 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
   const projectDomains = knownProjectDomains(projects);
 
   const envelopes =
-    cfg.HIMALAYA_COMMAND === "mock"
-      ? [{ id: "mock-1", rawLine: "mock-1 Example subject" }]
-      : listEnvelopes(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, options.last);
+    options.source === "local"
+      ? listLocalEmlFiles(cfg.MAIL_PROCESSOR_DATA_DIR, options.last)
+      : cfg.HIMALAYA_COMMAND === "mock"
+        ? [{ id: "mock-1", rawLine: "mock-1 Example subject" }]
+        : listEnvelopes(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, options.last);
 
   const clusters = new Map<string, CandidateCluster>();
   const participantUpdates = new Map<string, Set<string>>();
@@ -156,12 +195,17 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
     inspected += 1;
 
     const msg =
-      cfg.HIMALAYA_COMMAND === "mock"
+      options.source === "local" && "emlPath" in env
         ? {
             id: env.id,
-            raw: "Subject: [EXAMPLE] Project kickoff\nFrom: alice@example.org\nTo: bob@example.org\nBody: We should plan this project.",
+            raw: fs.readFileSync(env.emlPath, "utf8"),
           }
-        : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id, cfg.MAIL_PROCESSOR_DATA_DIR);
+        : cfg.HIMALAYA_COMMAND === "mock"
+          ? {
+              id: env.id,
+              raw: "Subject: [EXAMPLE] Project kickoff\nFrom: alice@example.org\nTo: bob@example.org\nBody: We should plan this project.",
+            }
+          : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id, cfg.MAIL_PROCESSOR_DATA_DIR);
 
     const prepared = prepareMailText(
       msg.raw,
@@ -256,6 +300,7 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
 
   const out = {
     generated_at: new Date().toISOString(),
+    source_mode: options.source,
     source_folder: cfg.MAIL_SOURCE_FOLDER,
     inspected,
     skipped_list_like: skippedListLike,
@@ -271,7 +316,7 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, JSON.stringify(out, null, 2), "utf8");
 
-  console.log(JSON.stringify({ ok: true, mode: "discover-projects", outputPath, summary: {
+  console.log(JSON.stringify({ ok: true, mode: "discover-projects", source: options.source, outputPath, summary: {
     inspected,
     skippedListLike,
     newCandidates: newProjectCandidates.length,

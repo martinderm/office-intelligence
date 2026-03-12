@@ -69,10 +69,16 @@ npm run run
 
 > `run` bricht absichtlich ab, wenn `MAIL_ROUTING_ENABLED` nicht auf `true` gesetzt ist.
 
-Projektkandidaten aus den letzten Mails vorschlagen:
+Projektkandidaten aus den letzten Mails vorschlagen (Default: lokale `exports/**/*.eml`):
 
 ```bash
 npm run discover-projects -- --discover-last=200
+```
+
+Optional IMAP als Quelle erzwingen:
+
+```bash
+npm run discover-projects -- --discover-source=imap --discover-last=200
 ```
 
 Optionaler Output-Pfad:
@@ -95,8 +101,14 @@ Warum Discovery-Runner: Bei Agent-Setups liegen Gate-/Mailbox-Bindung und Pfade 
 Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discover-projects` im Projektkontext kann sonst auf ein ungebundenes `himalaya` zurückfallen.
 
 Wichtig für alle Runner (`run-shadow`, `run-run`, `run-discover-projects`):
+- `AGENT_WORKSPACE_ROOT` als Umgebungsvariable setzen (Pfad zum Agent-Workspace, der die `.env` enthält).
 - `MAIL_PROCESSOR_PROJECT_DIR` im Agent-`.env` auf das echte Repo setzen (z. B. `<workspace>/projects/mail-processor`).
 - Ohne diesen Wert kann der Prozess im Skill-Ordner landen (`skills/mail-processor`) und dort fehlt erwartungsgemäß `package.json`.
+
+Beispiel:
+```bash
+AGENT_WORKSPACE_ROOT=/path/to/agent/workspace node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
+```
 
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
 
@@ -136,12 +148,33 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 - ✅ Zusätzliche Tokenreduktion: Layout-Noise-Cleanup + Dedupe wiederholter Links
 - ✅ Idempotenz auf stabiler ID (primär normalisierte `Message-ID`, fallback Content-Hash) statt folder-lokaler Envelope-ID
 - ✅ State speichert `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
-- ✅ Lokale Artefakte nutzen `stableId` und folder-basierte Struktur:
-  - `exports/<folder-slug>/<stableId>.eml`
-  - `msgs/<folder-slug>/<stableId>.json`
+- ✅ Lokale Artefakte nutzen `fileId` (aus `stableId` abgeleitet) und folder-basierte Struktur:
+  - `exports/<folder-slug>/<fileId>.eml`
+  - `msgs/<folder-slug>/<fileId>.json`
+  - `fileId` = `sha256(stableId)` → `base64url` → erste 16 Zeichen
   - inkl. `history[]` (wann/wohin geroutet)
 - ✅ Discovery-Mode: erkennt aus den letzten X Mails potenzielle neue Projekte + Kontaktvorschläge für bestehende Projekte (`--discover-projects`)
-- ✅ Guard gegen Doppelverarbeitung über bestehende vollständige Artefakte (`msgs/**/<stableId>.json` inkl. LLM-Feld)
+- ✅ Guard gegen Doppelverarbeitung über bestehende vollständige Artefakte (`msgs/**/<fileId>.json` inkl. LLM-Feld; Legacy `<stableId>.json` wird weiterhin erkannt)
+
+### Msg-Artefakt-Schema (Ausschnitt)
+
+`msgs/<folder-slug>/<fileId>.json` enthält u. a.:
+
+```json
+{
+  "stableId": "<normalized-message-id-or-fallback>",
+  "mailMeta": { "messageId": "<raw-message-id>" },
+  "local": {
+    "fileId": "<16-char-id>",
+    "msgPath": ".../msgs/<folder>/<fileId>.json",
+    "exportPath": ".../exports/<folder>/<fileId>.eml",
+    "folder": "INBOX"
+  }
+}
+```
+
+Hinweis: `stableId` bleibt der fachliche Idempotenz-Key; `fileId` ist der kompakte Dateiname für lokale Artefakte.
+
 - ⚠️ Live-Routing-Mirroring ist implementiert, aber **noch nicht end-to-end im Produktivmodus getestet**.
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 

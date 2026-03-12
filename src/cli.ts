@@ -67,27 +67,38 @@ function folderToSlug(folder: string): string {
   return parts.length ? parts.join("__") : "unknown-folder";
 }
 
-function moveExportArtifact(dataDir: string, envelopeId: string, stableId: string, folder: string): string {
+function fileIdFromStableId(stableId: string): string {
+  return crypto.createHash("sha256").update(stableId, "utf8").digest("base64url").slice(0, 16);
+}
+
+function moveExportArtifact(dataDir: string, envelopeId: string, fileId: string, folder: string): string {
   const exportsBaseDir = path.resolve(dataDir, "exports");
   const sourcePath = path.join(exportsBaseDir, `${envelopeId}.eml`);
   const targetDir = path.join(exportsBaseDir, folderToSlug(folder));
-  const targetPath = path.join(targetDir, `${stableId}.eml`);
+  const targetPath = path.join(targetDir, `${fileId}.eml`);
 
   fs.mkdirSync(targetDir, { recursive: true });
 
-  if (fs.existsSync(sourcePath)) {
-    if (fs.existsSync(targetPath)) {
-      fs.unlinkSync(sourcePath);
-    } else {
-      fs.renameSync(sourcePath, targetPath);
-    }
+  if (!fs.existsSync(sourcePath)) {
+    return targetPath;
   }
+
+  if (fs.existsSync(targetPath)) {
+    fs.unlinkSync(sourcePath);
+    return targetPath;
+  }
+
+  const tempPath = path.join(targetDir, `${fileId}.tmp-${process.pid}-${Date.now()}`);
+  fs.copyFileSync(sourcePath, tempPath);
+  fs.renameSync(tempPath, targetPath);
+  fs.unlinkSync(sourcePath);
 
   return targetPath;
 }
 
 function findMessageArtifactByStableId(msgsDir: string, stableId: string): string | undefined {
-  const wanted = `${stableId}.json`;
+  const wantedHashed = `${fileIdFromStableId(stableId)}.json`;
+  const wantedLegacy = `${stableId}.json`;
   const stack = [path.resolve(msgsDir)];
 
   while (stack.length) {
@@ -100,7 +111,7 @@ function findMessageArtifactByStableId(msgsDir: string, stableId: string): strin
         stack.push(full);
         continue;
       }
-      if (entry.isFile() && entry.name === wanted) {
+      if (entry.isFile() && (entry.name === wantedHashed || entry.name === wantedLegacy)) {
         return full;
       }
     }
@@ -180,6 +191,18 @@ async function main(): Promise<void> {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = new Date().toISOString();
 
+  let summary = {
+    inspected: 0,
+    copied: 0,
+    replyCopied: 0,
+    skipped: 0,
+    errors: 0,
+    projectsLoaded: 0,
+    retentionDeleted: 0,
+  };
+  let runStatus: "ok" | "failed" = "failed";
+  let fatalError: string | null = null;
+
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
     const projectHints = projects
@@ -192,7 +215,7 @@ async function main(): Promise<void> {
       );
     }
 
-    const summary = {
+    summary = {
       inspected: 0,
       copied: 0,
       replyCopied: 0,
@@ -287,6 +310,7 @@ async function main(): Promise<void> {
         );
         const normalizedMessageId = normalizeMessageId(prepared.meta.messageId);
         const stableId = normalizedMessageId || fallbackStableId(prepared.meta, prepared.effectiveText);
+        const fileId = fileIdFromStableId(stableId);
 
         if (processed.has(stableId)) {
           summary.skipped += 1;
@@ -442,9 +466,9 @@ async function main(): Promise<void> {
 
         const msgFolderDir = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToSlug(finalFolder));
         fs.mkdirSync(msgFolderDir, { recursive: true });
-        const debugPath = path.join(msgFolderDir, `${stableId}.json`);
+        const debugPath = path.join(msgFolderDir, `${fileId}.json`);
 
-        const localExportPath = moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, stableId, finalFolder);
+        const localExportPath = moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, fileId, finalFolder);
 
         fs.writeFileSync(
           debugPath,
@@ -465,6 +489,7 @@ async function main(): Promise<void> {
               mailMeta: prepared.meta,
               sanitizing: prepared.sanitizing,
               local: {
+                fileId,
                 msgPath: debugPath,
                 exportPath: localExportPath,
                 folder: finalFolder,
@@ -520,15 +545,20 @@ async function main(): Promise<void> {
     }
 
     console.log(JSON.stringify({ ok: true, runId, mode, summary }, null, 2));
-
+    runStatus = "ok";
+  } catch (error) {
+    fatalError = error instanceof Error ? error.message : String(error);
+    throw error;
+  } finally {
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
       type: "run_finished",
       runId,
       mode,
+      status: runStatus,
+      error: fatalError,
       finishedAt: new Date().toISOString(),
       summary,
     });
-  } finally {
     lock.release();
   }
 }

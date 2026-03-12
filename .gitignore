@@ -6,3 +6,4 @@ data/
 *.log
 gitleaks*.sarif
 docs/INSTALL_PATHS.local.md
+memory/references/projects/inbox/*.json

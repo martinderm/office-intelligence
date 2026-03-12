@@ -35,18 +35,45 @@ function run(command, args, env, cwd) {
 const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
 const workspaceRoot = path.resolve(scriptDir, "../../..");
-const envFromFile = loadDotEnv(path.join(workspaceRoot, ".env"));
+const envPath = path.join(workspaceRoot, ".env");
+if (!fs.existsSync(envPath)) {
+  throw new Error(`Missing .env in agent workspace: ${envPath}`);
+}
+const envFromFile = loadDotEnv(envPath);
+
+if (!envFromFile.AGENT_WORKSPACE_ROOT) {
+  throw new Error("AGENT_WORKSPACE_ROOT must be set in <agent-workspace>/.env");
+}
+const configuredWorkspaceRoot = path.resolve(envFromFile.AGENT_WORKSPACE_ROOT);
+if (configuredWorkspaceRoot !== workspaceRoot) {
+  throw new Error(
+    `AGENT_WORKSPACE_ROOT mismatch. .env=${configuredWorkspaceRoot}, inferred=${workspaceRoot}`
+  );
+}
 
 const env = {
   ...process.env,
   ...envFromFile,
+  AGENT_WORKSPACE_ROOT: workspaceRoot,
   MAIL_ROUTING_ENABLED: "false",
 };
 
-const projectDir = env.MAIL_PROCESSOR_PROJECT_DIR || process.cwd();
+const repoRootFromScript = path.resolve(scriptDir, "../../..");
+const projectDir =
+  env.MAIL_PROCESSOR_PROJECT_DIR ||
+  (fs.existsSync(path.join(repoRootFromScript, "package.json")) ? repoRootFromScript : process.cwd());
 if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }
 
+const cliArgs = process.argv.slice(2);
+const hasDiscoverOut = cliArgs.some((a) => a === "--discover-output" || a.startsWith("--discover-output="));
+if (!hasDiscoverOut) {
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const outDir = path.join(workspaceRoot, "memory", "references", "projects", "inbox");
+  fs.mkdirSync(outDir, { recursive: true });
+  cliArgs.push(`--discover-output=${path.join(outDir, `project-candidates-${ts}.json`)}`);
+}
+
 run("npm", ["run", "build"], env, projectDir);
-run("npm", ["run", "discover-projects", "--", ...process.argv.slice(2)], env, projectDir);
+run("npm", ["run", "discover-projects", "--", ...cliArgs], env, projectDir);
