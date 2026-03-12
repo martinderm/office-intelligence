@@ -2,6 +2,19 @@
 
 Standalone Mail-Triage/Routing/Processing pipeline (concept-first).
 
+## Defaults & instanzspezifische Pflichtwerte
+
+Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.
+
+Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
+- `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-Pfad deiner Instanz)
+- `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
+- `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
+- LLM-Zugang (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`), falls LLM-Extraktion genutzt wird
+- `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
+
+Alle übrigen Parameter können in der Regel auf Default bleiben und nur bei Bedarf nachgeschärft werden.
+
 ## Agent-Workspace Struktur
 
 `mail-processor` ist so gedacht, dass es in einem Agent-Workspace läuft. Der Agent soll dafür eine **Memory-Struktur unter `/memory`** anlegen (relativ zum Workspace-Root).
