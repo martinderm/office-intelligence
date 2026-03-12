@@ -17,7 +17,7 @@ Ziel: Mail-Triage (Extraktion/Klassifizierung) + sicheres Routing (COPY-only) vi
 3) Der Agent-Workspace enthält die Memory-Struktur:
 
 - `memory/references/projects/projects.json`
-- optional: `memory/references/projects/<id>.md`
+- optional: `memory/references/projects/<id>/index.md` (+ `signals.md`, `evidence/`, `topics/`)
 - `memory/references/projects/README.md` (Doku/Schema)
 
 ## Empfohlene Workspace-Struktur
@@ -29,7 +29,11 @@ Ziel: Mail-Triage (Extraktion/Klassifizierung) + sicheres Routing (COPY-only) vi
       projects/
         projects.json
         README.md
-        <id>.md           (optional, pro Projekt)
+        <id>/             (optional, pro Projekt)
+          index.md
+          signals.md
+          evidence/
+          topics/
   data/
     mail-processor/
       state.jsonl
@@ -72,7 +76,7 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Discovery: `npm run discover-projects`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
-- Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende `<id>.md`
+- Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
 
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
 

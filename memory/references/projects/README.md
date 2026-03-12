@@ -15,10 +15,14 @@ Diese Struktur ist die **Source of truth** für die inhaltliche Zuordnung von E-
 
 Empfohlener Pfad im Agent-Workspace:
 
-- `memory/references/projects/projects.json`  (Katalog)
-- `memory/references/projects/README.md`      (diese Doku)
-- `memory/references/projects/inbox/`         (Review-Queue für Discovery-Vorschläge)
-- `memory/references/projects/changelog.md`   (Änderungsprotokoll)
+- `memory/references/projects/projects.json`   (Katalog)
+- `memory/references/projects/README.md`       (diese Doku)
+- `memory/references/projects/inbox/`          (Review-Queue für Discovery-Vorschläge)
+- `memory/references/projects/changelog.md`    (Änderungsprotokoll)
+- `memory/references/projects/<id>/index.md`   (Projekt-Überblick)
+- `memory/references/projects/<id>/signals.md` (Routing/Konsolidierung)
+- `memory/references/projects/<id>/evidence/`  (append-only Evidenz, z. B. monatlich)
+- `memory/references/projects/<id>/topics/`    (optionale Sub-Themen)
 
 Im `.env` wird der Pfad referenziert:
 
@@ -52,7 +56,7 @@ Beispiel:
     "id": "usage-ng",
     "title": "USAGE-NG",
     "mailbox_folder": "Projekte/USAGE-NG",
-    "reference_md": "memory/references/projects/usage-ng.md",
+    "reference_md": "memory/references/projects/usage-ng/index.md",
 
     "aliases": ["USAGE NG", "Usage NextGen"],
     "keywords": ["usage", "next gen"],
@@ -100,21 +104,34 @@ Governance/Steuerung (optional, aber nützlich):
 
 ## Projekt-Referenzen als Markdown (optional, empfohlen)
 
-Zusätzlich zu `projects.json` kann (und soll) pro Projekt eine **Markdown-Referenzdatei** existieren.
-Diese Dateien sind für „inhaltliche Details“ gedacht: Kontext, Ziele, typische Themen, Partner, typische Betreffmuster, No-Go-Regeln, Links.
+Zusätzlich zu `projects.json` soll pro Projekt ein **Ordner** mit mehreren Markdown-Dateien existieren.
+Diese Dateien sind für konsolidierte Inhalte gedacht: Überblick, Signale, Evidenz, Sub-Themen.
 
-**Dateiname (Konvention):**
-- `memory/references/projects/<id>.md`
+**Ordner-Konvention:**
+- `memory/references/projects/<id>/index.md`
+- `memory/references/projects/<id>/signals.md`
+- `memory/references/projects/<id>/evidence/YYYY-MM.md`
+- `memory/references/projects/<id>/topics/*.md` (optional)
 
 Beispiel:
-- `memory/references/projects/usage-ng.md`
+- `memory/references/projects/usage-ng/index.md`
 
 Regeln:
 - `<id>` muss exakt der `id` in `projects.json` entsprechen
 - `<id>` ist ein String-Slug (z. B. `usage-ng`), kein Integer
+- Die Dateien verwenden einen Hybrid-Ansatz:
+  - **Managed Sections** für automatisch konsolidierte Inhalte
+  - **Freie Notizen** für manuelle Ergänzungen
 
-Empfohlenes Feld in `projects.json`, um die Datei maschinenlesbar zu finden:
-- `reference_md`: z. B. `"memory/references/projects/usage-ng.md"`
+Empfohlenes Feld in `projects.json`, um die Einstiegsdatei maschinenlesbar zu finden:
+- `reference_md`: z. B. `"memory/references/projects/usage-ng/index.md"`
+
+Konvention für Managed Sections:
+- `<!-- BEGIN:managed-summary --> ... <!-- END:managed-summary -->` (in `index.md`)
+- `<!-- BEGIN:managed-signals --> ... <!-- END:managed-signals -->` (in `signals.md`)
+- `<!-- BEGIN:managed-evidence --> ... <!-- END:managed-evidence -->` (in `evidence/YYYY-MM.md`)
+
+Nur Inhalte innerhalb dieser Marker dürfen von Skripten überschrieben/aktualisiert werden.
 
 > Der Router darf auch ohne diese MDs funktionieren; sie verbessern aber die Klassifizierung (RAG-Kontext).
 
@@ -139,7 +156,7 @@ Wichtig:
 1) Discovery ausführen (`npm run discover-projects`) → erzeugt JSON in `memory/references/projects/inbox/`.
 2) Vorschlag prüfen (keine Blindübernahme).
 3) Übernehmen mit `npm run apply:suggestions -- --input=<inbox-datei.json>`.
-4) Änderungen landen in `projects.json`; `changelog.md` wird ergänzt; fehlende `<id>.md` werden erstellt.
+4) Änderungen landen in `projects.json`; `changelog.md` wird ergänzt; fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`) werden erstellt.
 
 ## Wie ein Agent das anlegt (Setup-Checklist)
 

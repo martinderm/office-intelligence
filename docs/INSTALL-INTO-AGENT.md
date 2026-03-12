@@ -76,7 +76,7 @@ npm run discover-projects -- --discover-last=200
 npm run apply:suggestions -- --input=memory/references/projects/inbox/<datei>.json
 ```
 
-- Wirkung: `projects.json` aktualisiert, `changelog.md` ergänzt, fehlende `<id>.md` erzeugt
+- Wirkung: `projects.json` aktualisiert, `changelog.md` ergänzt, fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`) werden erzeugt
 
 ## 6) Go-Live (erst nach Shadow-Validierung)
 

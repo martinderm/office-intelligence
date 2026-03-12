@@ -3,6 +3,4 @@ dist/
 .env
 # Runtime/state/debug artifacts (can contain sensitive mail content)
 data/
-# Local agent memory/references (not part of public project code)
-memory/
 *.log

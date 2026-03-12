@@ -3,7 +3,7 @@
     "id": "example-project",
     "title": "Example Project",
     "mailbox_folder": "Projekte/Example-Project",
-    "reference_md": "memory/references/projects/example-project.md",
+    "reference_md": "memory/references/projects/example-project/index.md",
     "aliases": ["Example"],
     "keywords": ["example"],
     "domains": ["example.org"],

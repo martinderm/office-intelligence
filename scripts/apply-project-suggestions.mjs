@@ -60,7 +60,7 @@ for (const c of newCandidates) {
     id: c.id,
     title: c.title,
     mailbox_folder: c.mailbox_folder || "Archive",
-    reference_md: `memory/references/projects/${c.id}.md`,
+    reference_md: `memory/references/projects/${c.id}/index.md`,
     aliases: [],
     keywords: [],
     domains: Array.isArray(c.domains) ? c.domains.slice(0, 5) : [],
@@ -113,18 +113,37 @@ for (const c of newCandidates) {
 
 projects.sort((a, b) => a.id.localeCompare(b.id));
 
-function ensureReferenceMd(project) {
-  const rel = project.reference_md || `memory/references/projects/${project.id}.md`;
-  const abs = path.resolve(cwd, rel);
-  if (fs.existsSync(abs)) return;
-  const content = `# ${project.id} — ${project.title}\n\nKurzbeschreibung: auto-created from mail discovery suggestions.\n\n## Routing-Signale\n\n- Primäre Domains:\n${(project.domains || []).map((d) => `  - ${d}`).join("\n") || "  - "}\n- Kontakte:\n${(project.contacts || []).map((c) => `  - ${c.name ? `${c.name} <${c.email || ""}>` : c.email || ""}`).join("\n") || "  - "}\n- Betreffmuster:\n  - \n\n## Ausschlüsse\n\n- newsletter\n- no-reply\n- autoreply\n`;
-  fs.mkdirSync(path.dirname(abs), { recursive: true });
-  fs.writeFileSync(abs, content, "utf8");
+function ensureProjectDocs(project) {
+  const baseRel = `memory/references/projects/${project.id}`;
+  const baseAbs = path.resolve(cwd, baseRel);
+  const indexAbs = path.resolve(baseAbs, "index.md");
+  const signalsAbs = path.resolve(baseAbs, "signals.md");
+  const evidenceDirAbs = path.resolve(baseAbs, "evidence");
+  const topicsDirAbs = path.resolve(baseAbs, "topics");
+
+  fs.mkdirSync(baseAbs, { recursive: true });
+  fs.mkdirSync(evidenceDirAbs, { recursive: true });
+  fs.mkdirSync(topicsDirAbs, { recursive: true });
+
+  if (!fs.existsSync(indexAbs)) {
+    const indexContent = `# ${project.id} — ${project.title}\n\nKurzbeschreibung: auto-created from mail discovery suggestions.\n\n## Überblick\n\n- Status: aktiv\n- Owner: n/a\n- Mailbox-Ordner: ${project.mailbox_folder || "Archive"}\n- Letzte Aktivität: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n- Aktualisiert am: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n\n## Aktuelle Lage\n\n<!-- BEGIN:managed-summary -->\n- Zusammenfassung folgt nach den ersten klassifizierten Mails.\n<!-- END:managed-summary -->\n\n## Referenzen\n\n- Signale: ./signals.md\n- Evidenz-Log: ./evidence/\n- Topic-Notizen: ./topics/\n`;
+    fs.writeFileSync(indexAbs, indexContent, "utf8");
+  }
+
+  if (!fs.existsSync(signalsAbs)) {
+    const signalsContent = `# Signals — ${project.id}\n\n## Routing-Signale\n\n- Primäre Domains:\n${(project.domains || []).map((d) => `  - ${d}`).join("\n") || "  - "}\n- Schlüssel-Kontakte (Name <mail>):\n${(project.contacts || []).map((c) => `  - ${c.name ? `${c.name} <${c.email || ""}>` : c.email || ""}`).join("\n") || "  - "}\n- Typische Betreffmuster:\n  - \n- Typische Begriffe / Abkürzungen:\n  - \n\n## Do-not-route / Ausschlüsse\n\n- newsletter\n- no-reply\n- autoreply\n\n## Konsolidierte Signale (Managed)\n\n<!-- BEGIN:managed-signals -->\n- Letzter relevanter Mailkontakt: \n- Relevante Teilnehmer:innen:\n  - \n- Häufige Themen/Cluster:\n  - \n- Aktuelle nächste Schritte:\n  - \n- Risiken/Blocker:\n  - \n<!-- END:managed-signals -->\n`;
+    fs.writeFileSync(signalsAbs, signalsContent, "utf8");
+  }
+
+  const readmeKeepAbs = path.resolve(evidenceDirAbs, ".gitkeep");
+  if (!fs.existsSync(readmeKeepAbs)) fs.writeFileSync(readmeKeepAbs, "\n", "utf8");
+  const topicsKeepAbs = path.resolve(topicsDirAbs, ".gitkeep");
+  if (!fs.existsSync(topicsKeepAbs)) fs.writeFileSync(topicsKeepAbs, "\n", "utf8");
 }
 
 if (!dryRun) {
   fs.writeFileSync(projectsPath, JSON.stringify(projects, null, 2), "utf8");
-  for (const id of touched) ensureReferenceMd(byId.get(id));
+  for (const id of touched) ensureProjectDocs(byId.get(id));
 
   fs.mkdirSync(path.dirname(changelogPath), { recursive: true });
   if (!fs.existsSync(changelogPath)) {
