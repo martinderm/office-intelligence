@@ -1,3 +1,12 @@
+export type ProjectWorkpackage = {
+  id: string;
+  title: string;
+  aliases?: string[];
+  keywords?: string[];
+  contacts?: Array<{ name?: string; email?: string }>;
+  status?: "active" | "paused" | "done" | "unknown";
+};
+
 export type Project = {
   id: string;
   title: string;
@@ -7,6 +16,7 @@ export type Project = {
   keywords?: string[];
   domains?: string[];
   contacts?: Array<{ name?: string; email?: string }>;
+  workpackages?: ProjectWorkpackage[];
   description?: string;
   typical_subject_patterns?: string[];
   routing_priority?: number;

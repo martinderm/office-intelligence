@@ -8,6 +8,16 @@
     "keywords": ["example"],
     "domains": ["example.org"],
     "contacts": [{ "name": "Example Contact", "email": "contact@example.org" }],
+    "workpackages": [
+      {
+        "id": "wp1",
+        "title": "Coordination",
+        "aliases": ["WP1", "Workpackage 1"],
+        "keywords": ["coordination", "kickoff", "timeline"],
+        "contacts": [{ "email": "contact@example.org" }],
+        "status": "active"
+      }
+    ],
     "description": "Beispielprojekt für den initialen Setup.",
     "typical_subject_patterns": ["[EXAMPLE]"],
     "routing_priority": 10,

@@ -78,6 +78,13 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
 
+### 4) Konsolidierung in Projektordner (Agent-basiert)
+- Die Konsolidierung wird **vom OpenClaw-Agenten** durchgeführt, nicht durch ein lokales Merge-Skript.
+- Input: verarbeitete Mail-Artefakte unter `data/mail-processor/msgs/**/*.json`.
+- Ziel: Managed-Sections in `index.md`/`signals.md` aktualisieren und Evidenz in `evidence/YYYY-MM.md` ergänzen.
+- Regel: nur bei klarer Zuordnung/hoher Confidence; bei Ambiguität in Review-Queue statt Direkt-Write.
+- Referenz-Task: `skills/mail-processor/PROJECT_MEMORY_AGENT_TASK.md`
+
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
 
 - COPY-only (nie MOVE/DELETE)

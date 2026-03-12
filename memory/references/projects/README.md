@@ -64,6 +64,16 @@ Beispiel:
     "contacts": [
       {"name": "Jane Doe", "email": "jane.doe@example.org"}
     ],
+    "workpackages": [
+      {
+        "id": "wp1",
+        "title": "Curriculum Design",
+        "aliases": ["WP1", "Workpackage 1", "Curriculum"],
+        "keywords": ["syllabus", "learning outcomes"],
+        "contacts": [{"email": "jane.doe@example.org"}],
+        "status": "active"
+      }
+    ],
 
     "description": "Kurzbeschreibung, worum es in dem Projekt geht.",
     "typical_subject_patterns": ["USAGE", "[USAGE]"],
@@ -93,6 +103,9 @@ Starke Routing-Signale (empfohlen):
 RAG/Erklärbarkeit (empfohlen):
 - `description`: 1–2 Sätze Kontext für LLM-Extraktion
 - `keywords`: thematische Begriffe (vorsichtig dosieren, sonst False Positives)
+- `workpackages[]`: optionale Untergliederung für Sub-Themen/Workpackages (WP)
+  - `id`, `title` (Pflicht)
+  - `aliases`, `keywords`, `contacts`, `status` (optional)
 
 Governance/Steuerung (optional, aber nützlich):
 - `routing_priority`: bei Konflikten (höher = bevorzugt)
@@ -111,7 +124,9 @@ Diese Dateien sind für konsolidierte Inhalte gedacht: Überblick, Signale, Evid
 - `memory/references/projects/<id>/index.md`
 - `memory/references/projects/<id>/signals.md`
 - `memory/references/projects/<id>/evidence/YYYY-MM.md`
-- `memory/references/projects/<id>/topics/*.md` (optional)
+- `memory/references/projects/<id>/topics/_index.md`
+- `memory/references/projects/<id>/topics/<wp-id>-<slug>.md` (optional)
+- `memory/references/projects/<id>/topics/general.md` (Fallback ohne WP-Treffer)
 
 Beispiel:
 - `memory/references/projects/usage-ng/index.md`

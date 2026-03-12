@@ -5,7 +5,7 @@ Für jedes Projekt wird ein eigener Ordner angelegt:
 - `memory/references/projects/<id>/index.md`
 - `memory/references/projects/<id>/signals.md`
 - `memory/references/projects/<id>/evidence/` (monatliche Logs)
-- `memory/references/projects/<id>/topics/` (optionale Sub-Themen)
+- `memory/references/projects/<id>/topics/` (Sub-Themen / Workpackages)
 
 ---
 
@@ -82,4 +82,36 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 <!-- BEGIN:managed-evidence -->
 - YYYY-MM-DD — <subject/kurzer Titel> — messageId: <...>
 <!-- END:managed-evidence -->
+```
+
+## `topics/<wp-id>-<slug>.md` (Template)
+
+```md
+# <WP-ID> — <Title>
+
+## Scope
+
+- 
+
+## Kontakte
+
+- 
+
+## Aktueller Stand (Managed)
+
+<!-- BEGIN:managed-topic-summary -->
+- 
+<!-- END:managed-topic-summary -->
+
+## Offene Punkte (Managed)
+
+<!-- BEGIN:managed-topic-open-items -->
+- 
+<!-- END:managed-topic-open-items -->
+
+## Evidenz (Managed)
+
+<!-- BEGIN:managed-topic-evidence -->
+- 
+<!-- END:managed-topic-evidence -->
 ```

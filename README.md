@@ -12,6 +12,7 @@ Memory-Update-Flow (kurz):
 1) `npm run discover-projects`
 2) Vorschlag in `memory/references/projects/inbox/*.json` prüfen
 3) `npm run apply:suggestions -- --input=<datei.json>`
+4) Konsolidierung durch den OpenClaw-Agenten (nicht per lokales Merge-Skript)
 
 ## Defaults & instanzspezifische Pflichtwerte
 

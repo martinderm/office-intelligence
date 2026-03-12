@@ -20,6 +20,7 @@ Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
 Im Ziel-Agent-Workspace unter `skills/mail-processor/`:
 
 - `SKILL.md`
+- `PROJECT_MEMORY_AGENT_TASK.md`
 - `scripts/run-shadow.mjs`
 - `scripts/run-run.mjs`
 
@@ -77,6 +78,10 @@ npm run apply:suggestions -- --input=memory/references/projects/inbox/<datei>.js
 ```
 
 - Wirkung: `projects.json` aktualisiert, `changelog.md` ergänzt, fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`) werden erzeugt
+
+Danach Konsolidierung durch den Agenten ausführen lassen (OpenClaw-Task, nicht lokales Merge-Skript; siehe `skills/mail-processor/PROJECT_MEMORY_AGENT_TASK.md`).
+
+- Wirkung: Managed-Bereiche in `index.md`/`signals.md` werden aus klar zugeordneten Mails aktualisiert; Evidenz landet monatlich in `evidence/YYYY-MM.md`.
 
 ## 6) Go-Live (erst nach Shadow-Validierung)
 
