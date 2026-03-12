@@ -9,7 +9,7 @@ Geplante Weiterentwicklungen:
 - `docs/ROADMAP.md`
 
 Memory-Update-Flow (kurz):
-1) `npm run discover-projects`
+1) Discovery über Runner starten: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 2) Vorschlag in `memory/references/projects/inbox/*.json` prüfen
 3) `npm run apply:suggestions -- --input=<datei.json>`
 4) Konsolidierung durch den OpenClaw-Agenten (nicht per lokales Merge-Skript)
@@ -88,7 +88,11 @@ Für Agent-Workspaces gibt es plattformneutrale Runner:
 ```bash
 node scripts/run-shadow.mjs --fetch-limit=1
 node scripts/run-run.mjs
+node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
 ```
+
+Warum Discovery-Runner: Bei Agent-Setups liegen Gate-/Mailbox-Bindung und Pfade in `<agent-workspace>/.env`.
+Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discover-projects` im Projektkontext kann sonst auf ein ungebundenes `himalaya` zurückfallen.
 
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
 

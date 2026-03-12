@@ -23,6 +23,7 @@ Im Ziel-Agent-Workspace unter `skills/mail-processor/`:
 - `PROJECT_MEMORY_AGENT_TASK.md`
 - `scripts/run-shadow.mjs`
 - `scripts/run-run.mjs`
+- `scripts/run-discover-projects.mjs`
 
 Run-Skript-Konvention (verbindlich):
 
@@ -76,7 +77,7 @@ Erwartung:
 ## 5) Optional: Discovery + reviewed Apply
 
 ```bash
-npm run discover-projects -- --discover-last=200
+node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
 ```
 
 - Ergebnis liegt in `memory/references/projects/inbox/*.json`

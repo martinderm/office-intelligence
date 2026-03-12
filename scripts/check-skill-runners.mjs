@@ -6,6 +6,7 @@ const cwd = process.cwd();
 const targets = [
   "skills/mail-processor/scripts/run-shadow.mjs",
   "skills/mail-processor/scripts/run-run.mjs",
+  "skills/mail-processor/scripts/run-discover-projects.mjs",
 ];
 
 const forbiddenPatterns = [
