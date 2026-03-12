@@ -10,7 +10,7 @@ Für die Installation in einen bestehenden Mail-Agent siehe:
 Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.
 
 Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
-- `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-Pfad deiner Instanz)
+- `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-/Wrapper-Pfad deiner Instanz; **muss mailbox-gebunden sein**)
 - `MAILBOX_KEY` (stabiler, kurzer Mailbox-Schlüssel für capability cache-Dateien)
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
@@ -181,15 +181,21 @@ Wenn `MAIL_USE_UIDPLUS=true` und der Server `UIDPLUS` anbietet, wird bei COPY zu
 
 ## Himalaya Command Beispiele
 
-```bash
-# generisch
-HIMALAYA_COMMAND=himalaya
+Wichtig: `HIMALAYA_COMMAND` soll immer eine **explizit gebundene Mailbox** erzwingen.
+Empfohlen über ein Gate oder ein kleines Wrapper-Skript (`.mjs`), das den Account fest setzt.
 
-# Agent-Gate (Beispiel aus boku-martin)
+```bash
+# EMPFOHLEN: Agent-Gate (Beispiel aus boku-martin)
 HIMALAYA_COMMAND=skills/himalaya-account-main/scripts/himalaya-account-main-gate.exe
+
+# ALTERNATIVE: mjs-Wrapper mit festem Account
+HIMALAYA_COMMAND=node ./scripts/himalaya-account-main-proxy.mjs
 
 # lokaler Test ohne Mailbox
 HIMALAYA_COMMAND=mock
 ```
+
+Hinweis: Ein nacktes `HIMALAYA_COMMAND=himalaya` ist nur dann sinnvoll,
+wenn die Mailbox-Bindung an anderer Stelle technisch erzwungen wird.
 
 
