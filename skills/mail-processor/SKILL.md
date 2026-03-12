@@ -83,6 +83,8 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Input: verarbeitete Mail-Artefakte unter `data/mail-processor/msgs/**/*.json`.
 - Ziel: Managed-Sections in `index.md`/`signals.md` aktualisieren und Evidenz in `evidence/YYYY-MM.md` ergänzen.
 - Regel: nur bei klarer Zuordnung/hoher Confidence; bei Ambiguität in Review-Queue statt Direkt-Write.
+- Erweiterung: bei kritisch fehlenden Infos stellt der Agent kurze, gezielte Rückfragen (statt Annahmen zu treffen).
+- User-Trigger möglich: aktive Vervollständigung von Projekt-Metadaten (inkl. Workpackages).
 - Referenz-Task: `skills/mail-processor/PROJECT_MEMORY_AGENT_TASK.md`
 
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
