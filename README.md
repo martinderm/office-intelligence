@@ -2,6 +2,9 @@
 
 Standalone Mail-Triage/Routing/Processing pipeline (concept-first).
 
+Für die Installation in einen bestehenden Mail-Agent siehe:
+- `docs/INSTALL-INTO-AGENT.md`
+
 ## Defaults & instanzspezifische Pflichtwerte
 
 Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.
