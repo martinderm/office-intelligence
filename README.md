@@ -8,12 +8,15 @@ Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Ro
 
 Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
 - `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-Pfad deiner Instanz)
+- `MAILBOX_KEY` (stabiler, kurzer Mailbox-Schlüssel für capability cache-Dateien)
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
 - LLM-Zugang (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`), falls LLM-Extraktion genutzt wird
 - `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
 
 Alle übrigen Parameter können in der Regel auf Default bleiben und nur bei Bedarf nachgeschärft werden.
+
+**Wichtige Betriebsgrenze (aktuell):** Ein `mail-processor`-Run arbeitet derzeit immer gegen **genau eine Mailbox/Instanz** (ein `HIMALAYA_COMMAND` + ein `MAILBOX_KEY` pro Lauf). Mehrere Mailboxen parallel erfordern aktuell getrennte Instanzen/Runs mit jeweils eigenem Data-Dir.
 
 ## Agent-Workspace Struktur
 
@@ -58,7 +61,7 @@ npm run discover-projects -- --discover-last=200
 Optionaler Output-Pfad:
 
 ```bash
-npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-routing/project-candidates.json
+npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-processor/project-candidates.json
 ```
 
 ## Aktueller Implementierungsstand
@@ -69,7 +72,7 @@ npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-r
 - ✅ `projects.json`-Validation (MVP-Felder + Slug-ID)
 - ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
 - ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`/`message move`
-- ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-routing/msgs/*.json`)
+- ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-processor/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
 - ✅ Modell frei wählbar über `LLM_MODEL`
@@ -120,7 +123,7 @@ Empfehlung:
 ## Datenpfad & Retention
 
 - Datenpfad frei konfigurierbar über `MAIL_PROCESSOR_DATA_DIR` (relativ oder absolut)
-- Empfehlung in Multi-Agent-Setups: **pro Agent eigener Pfad**, z. B. `<agent-workspace>/data/mail-routing`
+- Empfehlung in Multi-Agent-Setups: **pro Agent eigener Pfad**, z. B. `<agent-workspace>/data/mail-processor`
 - Server-Capabilities werden mailbox-spezifisch unter `capabilities/*.json` gespeichert
   - Standardpfad: `<MAIL_PROCESSOR_DATA_DIR>/capabilities`
   - Override möglich über `MAIL_PROCESSOR_CAPABILITIES_DIR`
@@ -180,13 +183,4 @@ HIMALAYA_COMMAND=skills/himalaya-account-main/scripts/himalaya-account-main-gate
 HIMALAYA_COMMAND=mock
 ```
 
-### Wrapper für direkten Himalaya-Trace (MAIN-MAILBOX)
-
-Wenn der Gate-Wrapper `--trace` nicht durchreicht, kann ein Proxy-Wrapper erzeugt werden:
-
-```powershell
-pwsh ./scripts/create-himalaya-account-main-proxy.ps1
-```
-
-Der erzeugte Wrapper nutzt `%*` (statt `%1..%20`) und verhindert damit fehlerhafte Argumentexpansion wie `--trace0` / `envelope0`.
 

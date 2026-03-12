@@ -34,18 +34,23 @@ function sanitizeKey(value: string): string {
 function parseCapabilityLine(output: string): { caps: string[]; raw?: string } {
   const lines = output.split(/\r?\n/);
 
-  // Prefer explicit CAPABILITY response, fallback to greeting capability.
-  const explicit = lines.find((l) => l.includes("* CAPABILITY "));
-  if (explicit) {
-    const raw = explicit.slice(explicit.indexOf("* CAPABILITY ") + 13).trim();
-    return { caps: raw.split(/\s+/).filter(Boolean), raw };
-  }
-
+  // Prefer greeting capability (usually cleaner), fallback to explicit CAPABILITY trace line.
   const greeting = lines.find((l) => l.includes("OK [CAPABILITY "));
   if (greeting) {
     const m = greeting.match(/OK \[CAPABILITY\s+([^\]]+)\]/);
     const raw = m?.[1]?.trim();
     return { caps: (raw ?? "").split(/\s+/).filter(Boolean), raw };
+  }
+
+  const explicit = lines.find((l) => l.includes("* CAPABILITY "));
+  if (explicit) {
+    const raw = explicit.slice(explicit.indexOf("* CAPABILITY ") + 13).trim();
+    const clean = raw
+      .replace(/\x1b\[[0-9;]*m/g, "")
+      .replace(/\\r\\n.*/i, "")
+      .replace(/".*/i, "")
+      .trim();
+    return { caps: clean.split(/\s+/).filter(Boolean), raw: clean };
   }
 
   return { caps: [] };
@@ -97,6 +102,10 @@ export function buildCapabilityPolicy(caps: string[]): CapabilityPolicy {
   };
 }
 
+function shouldUseShell(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command.trim());
+}
+
 function fetchCapabilitiesViaTrace(command: string, sourceFolder: string): {
   capabilities: string[];
   rawCapabilityLine?: string;
@@ -104,7 +113,7 @@ function fetchCapabilitiesViaTrace(command: string, sourceFolder: string): {
   host?: string;
 } {
   const args = ["--trace", "envelope", "list", "-s", "1", "-f", sourceFolder];
-  const result = spawnSync(command, args, { encoding: "utf8" });
+  const result = spawnSync(command, args, { encoding: "utf8", shell: shouldUseShell(command) });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
 
   if (result.status !== 0) {

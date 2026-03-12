@@ -24,8 +24,12 @@ export type RouteCommandResult = {
   uidPlus?: UidPlusCopyInfo;
 };
 
+function shouldUseShell(command: string): boolean {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(command.trim());
+}
+
 function runCmd(command: string, args: string[]): string {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+  const result = spawnSync(command, args, { encoding: "utf8", shell: shouldUseShell(command) });
   if (result.status !== 0) {
     throw new Error(`command failed: ${command} ${args.join(" ")}\n${result.stderr || result.stdout}`);
   }
@@ -33,7 +37,7 @@ function runCmd(command: string, args: string[]): string {
 }
 
 function runCmdDetailed(command: string, args: string[]): { output: string; status: number } {
-  const result = spawnSync(command, args, { encoding: "utf8" });
+  const result = spawnSync(command, args, { encoding: "utf8", shell: shouldUseShell(command) });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
   if (result.status !== 0) {
     throw new Error(`command failed: ${command} ${args.join(" ")}\n${output}`);

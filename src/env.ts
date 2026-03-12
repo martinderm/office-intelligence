@@ -70,7 +70,7 @@ function parseCopySemantics(value: string | undefined): "normal" | "acts_like_mo
 }
 
 export function getConfig(cwd: string): EnvConfig {
-  const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-routing";
+  const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-processor";
 
   return {
     MAIL_PROCESSOR_DATA_DIR: dataDir,
