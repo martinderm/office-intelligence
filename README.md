@@ -84,7 +84,12 @@ npm run discover-projects -- --discover-last=200 --discover-output=./data/mail-p
 - ✅ Zusätzliche Tokenreduktion: Layout-Noise-Cleanup + Dedupe wiederholter Links
 - ✅ Idempotenz auf stabiler ID (primär normalisierte `Message-ID`, fallback Content-Hash) statt folder-lokaler Envelope-ID
 - ✅ State speichert `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
+- ✅ Lokale Artefakte nutzen `stableId` und folder-basierte Struktur:
+  - `exports/<folder-slug>/<stableId>.eml`
+  - `msgs/<folder-slug>/<stableId>.json`
+  - inkl. `history[]` (wann/wohin geroutet)
 - ✅ Discovery-Mode: erkennt aus den letzten X Mails potenzielle neue Projekte + Kontaktvorschläge für bestehende Projekte (`--discover-projects`)
+- ⚠️ Live-Routing-Mirroring ist implementiert, aber **noch nicht end-to-end im Produktivmodus getestet**.
 - ⏳ Retry/Backoff-Härtung für LLM-Requests folgt als nächster Schritt
 
 ## Wichtige Qualitätsvoraussetzung: Projektkatalog

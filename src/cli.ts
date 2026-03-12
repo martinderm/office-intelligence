@@ -48,6 +48,44 @@ type EffectiveRouting = {
   forcedSingleTarget: boolean;
 };
 
+type RoutingHistoryEntry = {
+  at: string;
+  event: "observed" | "routed_copy" | "routed_move";
+  envelopeId: string;
+  fromFolder?: string;
+  toFolders?: string[];
+  folder?: string;
+};
+
+function folderToSlug(folder: string): string {
+  const parts = folder
+    .split(/[\\/]+/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => p.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"))
+    .filter(Boolean);
+  return parts.length ? parts.join("__") : "unknown-folder";
+}
+
+function moveExportArtifact(dataDir: string, envelopeId: string, stableId: string, folder: string): string {
+  const exportsBaseDir = path.resolve(dataDir, "exports");
+  const sourcePath = path.join(exportsBaseDir, `${envelopeId}.eml`);
+  const targetDir = path.join(exportsBaseDir, folderToSlug(folder));
+  const targetPath = path.join(targetDir, `${stableId}.eml`);
+
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  if (fs.existsSync(sourcePath)) {
+    if (fs.existsSync(targetPath)) {
+      fs.unlinkSync(sourcePath);
+    } else {
+      fs.renameSync(sourcePath, targetPath);
+    }
+  }
+
+  return targetPath;
+}
+
 function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean, supportsUidPlus: boolean): EffectiveRouting {
   const requestedAction = cfg.MAIL_ROUTE_ACTION;
   let effectiveAction: "copy" | "move" = "copy";
@@ -257,33 +295,6 @@ async function main(): Promise<void> {
         const llmNeedsReplyScore = Number(llm?.needsReply?.score || 0);
         const needsReply = Math.max(needsReplyHeuristicFlag ? 0.65 : 0, llmNeedsReplyScore) >= cfg.NEEDS_REPLY_THRESHOLD;
 
-        const debugPath = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, `${env.id}.json`);
-        fs.writeFileSync(
-          debugPath,
-          JSON.stringify(
-            {
-              id: env.id,
-              stableId,
-              envelope: env.rawLine,
-              match,
-              llm,
-              needsReply,
-              llmNeedsReplyScore,
-              preprocessing: {
-                truncated: prepared.truncated,
-                originalChars: prepared.originalChars,
-                keptChars: prepared.keptChars,
-              },
-              mailMeta: prepared.meta,
-              sanitizing: prepared.sanitizing,
-              preview: prepared.effectiveText.slice(0, 2000),
-            },
-            null,
-            2,
-          ),
-          "utf8",
-        );
-
         const copyTargets: string[] = [];
 
         if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
@@ -349,6 +360,67 @@ async function main(): Promise<void> {
           }
         }
 
+        const finalFolder = routing.effectiveMove && copyTargets.length
+          ? copyTargets[copyTargets.length - 1]
+          : cfg.MAIL_SOURCE_FOLDER;
+
+        const history: RoutingHistoryEntry[] = [
+          {
+            at: new Date().toISOString(),
+            event: "observed",
+            envelopeId: env.id,
+            folder: cfg.MAIL_SOURCE_FOLDER,
+          },
+        ];
+
+        if (copyTargets.length) {
+          history.push({
+            at: new Date().toISOString(),
+            event: routing.effectiveMove ? "routed_move" : "routed_copy",
+            envelopeId: env.id,
+            fromFolder: cfg.MAIL_SOURCE_FOLDER,
+            toFolders: [...copyTargets],
+          });
+        }
+
+        const msgFolderDir = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToSlug(finalFolder));
+        fs.mkdirSync(msgFolderDir, { recursive: true });
+        const debugPath = path.join(msgFolderDir, `${stableId}.json`);
+
+        const localExportPath = moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, stableId, finalFolder);
+
+        fs.writeFileSync(
+          debugPath,
+          JSON.stringify(
+            {
+              id: env.id,
+              stableId,
+              envelope: env.rawLine,
+              match,
+              llm,
+              needsReply,
+              llmNeedsReplyScore,
+              preprocessing: {
+                truncated: prepared.truncated,
+                originalChars: prepared.originalChars,
+                keptChars: prepared.keptChars,
+              },
+              mailMeta: prepared.meta,
+              sanitizing: prepared.sanitizing,
+              local: {
+                msgPath: debugPath,
+                exportPath: localExportPath,
+                folder: finalFolder,
+              },
+              history,
+              preview: prepared.effectiveText.slice(0, 2000),
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+
         processed.add(stableId);
 
         appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
@@ -373,7 +445,7 @@ async function main(): Promise<void> {
           effectiveMove: routing.effectiveMove,
           forcedSingleTarget: routing.forcedSingleTarget,
           lastKnownEnvelopeId: env.id,
-          lastKnownFolder: copyTargets.length ? copyTargets[copyTargets.length - 1] : cfg.MAIL_SOURCE_FOLDER,
+          lastKnownFolder: finalFolder,
           timestamp: new Date().toISOString(),
         });
       } catch (error) {
