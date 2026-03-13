@@ -61,6 +61,12 @@ npm run build
 npm run shadow
 ```
 
+Optional gezielt nur bestimmte Envelope-IDs verarbeiten:
+
+```bash
+npm run shadow -- --ids=7588,7587
+```
+
 Optional (nur wenn explizit erlaubt):
 
 ```bash
@@ -111,6 +117,20 @@ AGENT_WORKSPACE_ROOT=/path/to/agent/workspace node skills/mail-processor/scripts
 ```
 
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
+
+Health-Check (Lock + State + TLS-Fehlerrate):
+```bash
+node skills/mail-processor/scripts/check-health.mjs
+```
+Mit optionaler Sanierung:
+```bash
+node skills/mail-processor/scripts/check-health.mjs --fix-stale-lock --cleanup-orphaned-runs
+```
+Optional über `.env` steuerbar:
+- `HEALTH_STALE_LOCK_MAX_SECONDS` (Default `300`)
+- `HEALTH_RECENT_WINDOW_MINUTES` (Default `60`)
+- `HEALTH_MAX_TLS_ERRORS` (Default `3`)
+- `HEALTH_ORPHAN_RUN_MAX_AGE_SECONDS` (Default `900`)
 
 ## Sync-Check für ausgerollte Skill-Dateien
 
@@ -210,6 +230,24 @@ Konsequenzen für `mail-processor`:
 Empfehlung:
 - Wenn du so ein Backend hast: **Single-Target-Routing** erzwingen (oder klare Priorität: „best match wins“).
 - Nach dem Copy optional verifizieren (Source/Target envelope list), wenn Konsistenz kritisch ist.
+
+## Inkrementelle Auswahlsteuerung (neu)
+
+Der Runner kann jetzt steuern, **welche** Mails pro Lauf ausgewählt werden:
+
+- `MAIL_SCAN_MODE=tail` → nur Seite 1 (neueste Mails)
+- `MAIL_SCAN_MODE=backfill` → arbeitet seitenweise historisch ab (`cursor.json`)
+- `MAIL_SCAN_MODE=auto` → kombiniert Tail + Backfill
+
+Wichtige Parameter:
+- `MAIL_ENVELOPE_PAGE_SIZE` (z. B. 100)
+- `MAIL_SELECT_MAX_SCAN_PAGES` (z. B. 10)
+- `MAIL_CURSOR_FILE` (default `data/mail-processor/cursor.json`)
+
+Explizite Einzelsteuerung pro Lauf:
+- `--ids=7588,7587,...`
+
+Hinweis: durch Idempotenz (`stableId`) sind Mehrfach-Scans unkritisch; bereits verarbeitete Mails werden übersprungen.
 
 ## Datenpfad & Retention
 

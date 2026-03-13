@@ -76,9 +76,27 @@ function parseEnvelopeList(output: string): Envelope[] {
 }
 
 export function listEnvelopes(command: string, sourceFolder: string, limit: number): Envelope[] {
-  const args = ["envelope", "list", "-f", sourceFolder, "-s", String(limit)];
-  const out = runCmd(command, args);
-  return parseEnvelopeList(out);
+  return listEnvelopesPage(command, sourceFolder, 1, limit);
+}
+
+export function listEnvelopesPage(
+  command: string,
+  sourceFolder: string,
+  page: number,
+  pageSize: number,
+  queryTerms: string[] = [],
+): Envelope[] {
+  const args = ["envelope", "list", "-f", sourceFolder, "-p", String(page), "-s", String(pageSize), ...queryTerms];
+  try {
+    const out = runCmd(command, args);
+    return parseEnvelopeList(out);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.toLowerCase().includes("out of bound")) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export function readMessage(

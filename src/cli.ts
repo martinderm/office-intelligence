@@ -6,7 +6,7 @@ import { loadDotEnv, getConfig } from "./env.js";
 import { loadProjects } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
-import { copyMessage, copyMessageWithUidPlus, listEnvelopes, moveMessage, readMessage } from "./mail-source.js";
+import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
 import { cleanupDebugMessages } from "./retention.js";
@@ -23,6 +23,64 @@ function parseMode(args: string[]): "shadow" | "run" {
     throw new Error("--mode must be shadow or run");
   }
   return value;
+}
+
+type CursorState = {
+  version: 1;
+  mailbox: string;
+  folder: string;
+  backfill: {
+    nextPage: number;
+    nextIndex: number;
+    completed: boolean;
+  };
+  updatedAt: string;
+};
+
+function loadCursorState(cursorFile: string, mailbox: string, folder: string): CursorState {
+  try {
+    const raw = fs.readFileSync(cursorFile, "utf8");
+    const parsed = JSON.parse(raw) as CursorState;
+    if (parsed.mailbox === mailbox && parsed.folder === folder && parsed.backfill?.nextPage) {
+      return {
+        ...parsed,
+        backfill: {
+          nextPage: parsed.backfill.nextPage,
+          nextIndex: Number.isFinite((parsed.backfill as any).nextIndex) ? (parsed.backfill as any).nextIndex : 0,
+          completed: Boolean(parsed.backfill.completed),
+        },
+      };
+    }
+  } catch {
+    // ignore and recreate
+  }
+  return {
+    version: 1,
+    mailbox,
+    folder,
+    backfill: {
+      nextPage: 1,
+      nextIndex: 0,
+      completed: false,
+    },
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function saveCursorState(cursorFile: string, state: CursorState): void {
+  state.updatedAt = new Date().toISOString();
+  fs.mkdirSync(path.dirname(cursorFile), { recursive: true });
+  fs.writeFileSync(cursorFile, JSON.stringify(state, null, 2), "utf8");
+}
+
+function parseExplicitEnvelopeIds(args: string[]): string[] {
+  const arg = args.find((a) => a.startsWith("--ids="));
+  if (!arg) return [];
+  return arg
+    .slice("--ids=".length)
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
 }
 
 function normalizeMessageId(value?: string): string | undefined {
@@ -134,6 +192,90 @@ function isCompleteMessageArtifact(raw: string, stableId: string, llmEnabled: bo
   }
 }
 
+function selectEnvelopesForRun(params: {
+  args: string[];
+  cfg: ReturnType<typeof getConfig>;
+  cursor: CursorState;
+}): { envelopes: Array<{ id: string; rawLine: string }>; strategy: string } {
+  const { args, cfg, cursor } = params;
+  const explicitIds = parseExplicitEnvelopeIds(args);
+  if (explicitIds.length) {
+    return {
+      envelopes: explicitIds.map((id) => ({ id, rawLine: `[explicit] ${id}` })),
+      strategy: "explicit_ids",
+    };
+  }
+
+  if (cfg.HIMALAYA_COMMAND === "mock") {
+    return {
+      envelopes: [{ id: "mock-1", rawLine: "mock-1 Example subject" }],
+      strategy: "mock",
+    };
+  }
+
+  const unique = new Map<string, { id: string; rawLine: string }>();
+  const cap = Math.max(1, cfg.MAIL_FETCH_LIMIT);
+  const pageSize = Math.max(1, cfg.MAIL_ENVELOPE_PAGE_SIZE);
+
+  const pushTailPage = (page: number) => {
+    const rows = listEnvelopesPage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, page, pageSize);
+    for (const e of rows) {
+      if (!unique.has(e.id)) unique.set(e.id, e);
+      if (unique.size >= cap) break;
+    }
+  };
+
+  const consumeBackfillFromCursor = () => {
+    let page = Math.max(1, cursor.backfill.nextPage || 1);
+    let index = Math.max(0, cursor.backfill.nextIndex || 0);
+    let scannedPages = 0;
+
+    while (scannedPages < cfg.MAIL_SELECT_MAX_SCAN_PAGES && unique.size < cap) {
+      const rows = listEnvelopesPage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, page, pageSize);
+      scannedPages += 1;
+
+      if (rows.length === 0) {
+        cursor.backfill.completed = true;
+        break;
+      }
+
+      let i = index;
+      while (i < rows.length && unique.size < cap) {
+        const e = rows[i];
+        if (!unique.has(e.id)) unique.set(e.id, e);
+        i += 1;
+      }
+
+      if (i >= rows.length) {
+        page += 1;
+        index = 0;
+      } else {
+        index = i;
+      }
+    }
+
+    cursor.backfill.nextPage = page;
+    cursor.backfill.nextIndex = index;
+  };
+
+  if (cfg.MAIL_SCAN_MODE === "tail") {
+    pushTailPage(1);
+    return { envelopes: [...unique.values()].slice(0, cap), strategy: "tail_page_1" };
+  }
+
+  if (cfg.MAIL_SCAN_MODE === "backfill") {
+    consumeBackfillFromCursor();
+    return { envelopes: [...unique.values()].slice(0, cap), strategy: "backfill_cursor" };
+  }
+
+  // auto: first newest page, then continue from backfill cursor
+  pushTailPage(1);
+  if (unique.size < cap) {
+    consumeBackfillFromCursor();
+  }
+  return { envelopes: [...unique.values()].slice(0, cap), strategy: "auto_tail_plus_backfill" };
+}
+
 function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean, supportsUidPlus: boolean): EffectiveRouting {
   const requestedAction = cfg.MAIL_ROUTE_ACTION;
   let effectiveAction: "copy" | "move" = "copy";
@@ -185,11 +327,14 @@ async function main(): Promise<void> {
     cfg.MAIL_PROCESSOR_MSGS_DIR,
     cfg.MAIL_PROCESSOR_CAPABILITIES_DIR,
     path.dirname(cfg.MAIL_PROCESSOR_STATE_FILE),
+    path.dirname(cfg.MAIL_CURSOR_FILE),
   ]);
 
   const lock = acquireLock(cfg.MAIL_PROCESSOR_LOCK_FILE, cfg.MAIL_PROCESSOR_LOCK_TTL_SECONDS);
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = new Date().toISOString();
+  const mailboxKey = process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || "default";
+  const cursor = loadCursorState(cfg.MAIL_CURSOR_FILE, mailboxKey, cfg.MAIL_SOURCE_FOLDER);
 
   let summary = {
     inspected: 0,
@@ -282,10 +427,23 @@ async function main(): Promise<void> {
     });
 
     const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
-    const envelopes =
-      cfg.HIMALAYA_COMMAND === "mock"
-        ? [{ id: "mock-1", rawLine: "mock-1 Example subject" }]
-        : listEnvelopes(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, cfg.MAIL_FETCH_LIMIT);
+    const selection = selectEnvelopesForRun({ args, cfg, cursor });
+    const envelopes = selection.envelopes;
+
+    appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+      type: "selection_resolved",
+      runId,
+      mode,
+      scanMode: cfg.MAIL_SCAN_MODE,
+      strategy: selection.strategy,
+      selectedCount: envelopes.length,
+      fetchLimit: cfg.MAIL_FETCH_LIMIT,
+      envelopePageSize: cfg.MAIL_ENVELOPE_PAGE_SIZE,
+      maxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+      cursorFile: cfg.MAIL_CURSOR_FILE,
+      cursor: cursor.backfill,
+      timestamp: new Date().toISOString(),
+    });
 
     for (const env of envelopes) {
       summary.inspected += 1;
@@ -550,6 +708,7 @@ async function main(): Promise<void> {
     fatalError = error instanceof Error ? error.message : String(error);
     throw error;
   } finally {
+    saveCursorState(cfg.MAIL_CURSOR_FILE, cursor);
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
       type: "run_finished",
       runId,
@@ -558,6 +717,7 @@ async function main(): Promise<void> {
       error: fatalError,
       finishedAt: new Date().toISOString(),
       summary,
+      cursor: cursor.backfill,
     });
     lock.release();
   }

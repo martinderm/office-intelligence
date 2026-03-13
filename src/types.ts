@@ -39,6 +39,10 @@ export type EnvConfig = {
   HIMALAYA_COMMAND: string;
   MAIL_SOURCE_FOLDER: string;
   MAIL_FETCH_LIMIT: number;
+  MAIL_SCAN_MODE: "auto" | "tail" | "backfill";
+  MAIL_ENVELOPE_PAGE_SIZE: number;
+  MAIL_SELECT_MAX_SCAN_PAGES: number;
+  MAIL_CURSOR_FILE: string;
   MAIL_ROUTE_ACTION: "auto" | "copy" | "move";
   MAIL_COPY_SEMANTICS: "normal" | "acts_like_move";
   MAIL_ROUTE_STRICT: boolean;

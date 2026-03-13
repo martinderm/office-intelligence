@@ -69,6 +69,12 @@ function parseCopySemantics(value: string | undefined): "normal" | "acts_like_mo
   return "normal";
 }
 
+function parseScanMode(value: string | undefined): "auto" | "tail" | "backfill" {
+  const v = (value ?? "auto").trim().toLowerCase();
+  if (v === "auto" || v === "tail" || v === "backfill") return v;
+  return "auto";
+}
+
 export function getConfig(cwd: string): EnvConfig {
   const dataDir = process.env.MAIL_PROCESSOR_DATA_DIR ?? "./data/mail-processor";
 
@@ -95,6 +101,10 @@ export function getConfig(cwd: string): EnvConfig {
     HIMALAYA_COMMAND: process.env.HIMALAYA_COMMAND ?? "himalaya",
     MAIL_SOURCE_FOLDER: process.env.MAIL_SOURCE_FOLDER ?? "INBOX",
     MAIL_FETCH_LIMIT: parseIntSafe(process.env.MAIL_FETCH_LIMIT, 20),
+    MAIL_SCAN_MODE: parseScanMode(process.env.MAIL_SCAN_MODE),
+    MAIL_ENVELOPE_PAGE_SIZE: parseIntSafe(process.env.MAIL_ENVELOPE_PAGE_SIZE, parseIntSafe(process.env.MAIL_FETCH_LIMIT, 20)),
+    MAIL_SELECT_MAX_SCAN_PAGES: parseIntSafe(process.env.MAIL_SELECT_MAX_SCAN_PAGES, 10),
+    MAIL_CURSOR_FILE: process.env.MAIL_CURSOR_FILE ?? `${dataDir}/cursor.json`,
     MAIL_ROUTE_ACTION: parseRouteAction(process.env.MAIL_ROUTE_ACTION),
     MAIL_COPY_SEMANTICS: parseCopySemantics(process.env.MAIL_COPY_SEMANTICS),
     MAIL_ROUTE_STRICT: parseBool(process.env.MAIL_ROUTE_STRICT, false),
