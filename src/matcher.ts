@@ -1,10 +1,13 @@
-import { Project } from "./types.js";
+import { Project, Topic } from "./types.js";
 import { LlmExtraction } from "./llm.js";
 
 export type MatchResult = {
   projectId?: string;
   score: number;
   reason: string;
+  matchedTopicId?: string;
+  topicScore?: number;
+  topicReason?: string;
   matchedWorkpackageId?: string;
   workpackageScore?: number;
   workpackageReason?: string;
@@ -30,7 +33,7 @@ export function needsReplyHeuristic(text: string, negatives: string[]): boolean 
   return t.includes("?") || t.includes("deadline") || t.includes("bitte") || t.includes("kannst du");
 }
 
-export function matchProject(textRaw: string, projects: Project[]): MatchResult {
+export function matchProject(textRaw: string, projects: Project[], topics: Topic[] = []): MatchResult {
   const text = norm(textRaw);
   let best = { projectId: undefined as string | undefined, score: 0, reason: "no match", project: undefined as Project | undefined };
 
@@ -45,6 +48,26 @@ export function matchProject(textRaw: string, projects: Project[]): MatchResult 
 
     if (score > best.score) {
       best = { projectId: p.id, score, reason: `matched ${p.id}`, project: p };
+    }
+  }
+
+  let matchedTopicId: string | undefined;
+  let topicScore = 0;
+  let topicReason = "no topic match";
+
+  for (const t of topics) {
+    let score = 0;
+    score += includesAny(text, [t.title]) * 0.25;
+    score += includesAny(text, t.aliases) * 0.2;
+    score += includesAny(text, t.keywords) * 0.1;
+    score += includesAny(text, t.domains) * 0.35;
+    score += includesAny(text, t.typical_subject_patterns) * 0.2;
+    if (t.contacts?.some((c) => c.email && text.includes(norm(c.email)))) score += 0.35;
+
+    if (score > topicScore) {
+      matchedTopicId = t.id;
+      topicScore = score;
+      topicReason = `matched topic ${t.id}`;
     }
   }
 
@@ -72,6 +95,9 @@ export function matchProject(textRaw: string, projects: Project[]): MatchResult 
     projectId: best.score > 0 ? best.projectId : undefined,
     score: Number(best.score.toFixed(3)),
     reason: best.reason,
+    matchedTopicId: topicScore > 0 ? matchedTopicId : undefined,
+    topicScore: Number(topicScore.toFixed(3)),
+    topicReason,
     matchedWorkpackageId: workpackageScore > 0 ? matchedWorkpackageId : undefined,
     workpackageScore: Number(workpackageScore.toFixed(3)),
     workpackageReason,
@@ -84,6 +110,15 @@ function resolveProjectByLabel(label: string, projects: Project[]): string | und
   for (const p of projects) {
     if (norm(p.id) === l || norm(p.title) === l) return p.id;
     if (p.aliases?.some((a) => norm(a) === l)) return p.id;
+  }
+  return undefined;
+}
+
+function resolveTopicByLabel(label: string, topics: Topic[]): string | undefined {
+  const l = norm(label);
+  for (const t of topics) {
+    if (norm(t.id) === l || norm(t.title) === l) return t.id;
+    if (t.aliases?.some((a) => norm(a) === l)) return t.id;
   }
   return undefined;
 }
@@ -101,6 +136,7 @@ export function mergeHeuristicAndLlm(
   heuristic: MatchResult,
   llm: LlmExtraction | undefined,
   projects: Project[],
+  topics: Topic[] = [],
 ): MatchResult {
   if (!llm || llm.projectCandidates.length === 0) return heuristic;
 
@@ -112,6 +148,24 @@ export function mergeHeuristicAndLlm(
   if (!top?.projectId) return heuristic;
 
   const blended = Math.max(heuristic.score * 0.45 + top.confidence * 0.65, heuristic.score);
+
+  let matchedTopicId = heuristic.matchedTopicId;
+  let topicScore = heuristic.topicScore || 0;
+  let topicReason = heuristic.topicReason || "no topic match";
+
+  if (llm.topicCandidates?.length) {
+    const topicTop = llm.topicCandidates
+      .map((c) => ({ id: resolveTopicByLabel(c.label, topics), confidence: Number(c.confidence) || 0 }))
+      .filter((c) => !!c.id)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    if (topicTop?.id) {
+      const blendedTopic = Math.max(topicScore * 0.45 + topicTop.confidence * 0.65, topicScore);
+      matchedTopicId = topicTop.id;
+      topicScore = Number(blendedTopic.toFixed(3));
+      topicReason = `llm+heuristic topic ${topicTop.id}`;
+    }
+  }
 
   let matchedWorkpackageId = heuristic.matchedWorkpackageId;
   let workpackageScore = heuristic.workpackageScore || 0;
@@ -136,6 +190,9 @@ export function mergeHeuristicAndLlm(
     projectId: top.projectId,
     score: Number(blended.toFixed(3)),
     reason: `llm+heuristic ${top.projectId}`,
+    matchedTopicId,
+    topicScore,
+    topicReason,
     matchedWorkpackageId,
     workpackageScore,
     workpackageReason,

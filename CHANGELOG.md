@@ -7,7 +7,11 @@
   - damit ist `fetch-limit` vs. tatsächliche Auswahl nachvollziehbar.
 - Envelope-Selection gehärtet: `MAIL_SELECT_MAX_SCAN_PAGES` wird dynamisch angehoben, bis `MAIL_FETCH_LIMIT` erreicht ist (oder Postfach „aus“ ist / Hard-Stop greift).
 - Transient-Fehler-Queue für Message-Reads: persistente `retry-queue.jsonl` mit exponential backoff + `max-attempts` + dead-letter (verhindert, dass wackelige Reads den Fortschritt blockieren).
-- Workpackage-Matching ergänzt (heuristisch + LLM-Schema):
+- Topic-Matching ergänzt (gleichrangig zu Projekten; heuristisch + LLM-Schema):
+  - neue Match-Felder `matchedTopicId`, `topicScore`, `topicReason`
+  - LLM-Prompt erweitert um `topicCandidates` + `TOPIC_CATALOG_HINTS`
+  - Topic-Katalog getrennt in `memory/references/topics/topics.json` (`TOPICS_JSON_PATH`)
+- Workpackage-Matching ergänzt (projektuntergeordnet; heuristisch + LLM-Schema):
   - neue Match-Felder `matchedWorkpackageId`, `workpackageScore`, `workpackageReason`
   - LLM-Prompt erweitert um `workpackageCandidates`
 

@@ -1,20 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Project } from "./types.js";
+import { Project, Topic } from "./types.js";
 
 function isSlug(value: string): boolean {
   return /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
 }
 
-function asArray(value: unknown): unknown[] {
-  if (Array.isArray(value)) return value;
-  if (value && typeof value === "object" && Array.isArray((value as any).projects)) {
-    return (value as any).projects;
+function parseCatalog(value: unknown): { projects: unknown[]; topics: unknown[] } {
+  if (Array.isArray(value)) {
+    return { projects: value, topics: [] };
   }
-  throw new Error("projects.json must be an array or { projects: [...] }");
+  if (value && typeof value === "object") {
+    const obj = value as any;
+    return {
+      projects: Array.isArray(obj.projects) ? obj.projects : [],
+      topics: Array.isArray(obj.topics) ? obj.topics : [],
+    };
+  }
+  throw new Error("projects.json must be an array or { projects: [...], topics?: [...] }");
 }
 
-export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
+function loadCatalogRaw(cwd: string, projectPathRaw: string): { projects: unknown[]; topics: unknown[] } {
   const projectPath = path.resolve(cwd, projectPathRaw);
   if (!fs.existsSync(projectPath)) {
     throw new Error(`projects.json not found: ${projectPath}`);
@@ -22,7 +28,11 @@ export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
 
   const raw = fs.readFileSync(projectPath, "utf8");
   const parsed = JSON.parse(raw);
-  const items = asArray(parsed);
+  return parseCatalog(parsed);
+}
+
+export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
+  const { projects: items } = loadCatalogRaw(cwd, projectPathRaw);
 
   const ids = new Set<string>();
   const projects: Project[] = items.map((item, idx) => {
@@ -52,4 +62,42 @@ export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
   });
 
   return projects;
+}
+
+export function loadTopics(cwd: string, topicsPathRaw: string): Topic[] {
+  const topicsPath = path.resolve(cwd, topicsPathRaw);
+  if (!fs.existsSync(topicsPath)) {
+    throw new Error(`topics.json not found: ${topicsPath}`);
+  }
+
+  const raw = fs.readFileSync(topicsPath, "utf8");
+  const parsed = JSON.parse(raw);
+  const items = Array.isArray(parsed)
+    ? parsed
+    : (parsed && typeof parsed === "object" && Array.isArray((parsed as any).topics)
+      ? (parsed as any).topics
+      : []);
+
+  const ids = new Set<string>();
+  const topics: Topic[] = (items as unknown[]).map((item: unknown, idx: number) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`topics[${idx}] must be an object`);
+    }
+
+    const t = item as Topic;
+    if (!t.id || !t.title || !t.mailbox_folder) {
+      throw new Error(`topics[${idx}] requires id, title, mailbox_folder`);
+    }
+    if (!isSlug(t.id)) {
+      throw new Error(`topics[${idx}].id must be slug-like (a-z0-9-)`);
+    }
+    if (ids.has(t.id)) {
+      throw new Error(`duplicate topic id: ${t.id}`);
+    }
+    ids.add(t.id);
+
+    return t;
+  });
+
+  return topics;
 }

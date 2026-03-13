@@ -30,6 +30,7 @@ Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
 - `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-/Wrapper-Pfad deiner Instanz; **muss mailbox-gebunden sein**)
 - `MAILBOX_KEY` (stabiler, kurzer Mailbox-Schlüssel für capability cache-Dateien)
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
+- `TOPICS_JSON_PATH` (dein Topic-Katalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
 - LLM-Zugang (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`), falls LLM-Extraktion genutzt wird
 - `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
@@ -167,6 +168,7 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 - ✅ JSONL-State-Logging (`run_started`, `selection_resolved`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
 - ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`/`message move`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-processor/msgs/*.json`)
+- ✅ Topic-Matching (gleichrangig zu Projekten; heuristisch + LLM-unterstützt) mit `matchedTopicId`, `topicScore`, `topicReason`
 - ✅ Workpackage-Matching auf Projektunterebene (heuristisch + LLM-unterstützt) mit `matchedWorkpackageId`, `workpackageScore`, `workpackageReason`
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
@@ -201,6 +203,9 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
     "projectId": "<project-id-or-null>",
     "score": 0.0,
     "reason": "string",
+    "matchedTopicId": "<topic-id-or-null>",
+    "topicScore": 0.0,
+    "topicReason": "string",
     "matchedWorkpackageId": "<workpackage-id-or-null>",
     "workpackageScore": 0.0,
     "workpackageReason": "string"

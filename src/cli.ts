@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
-import { loadProjects } from "./projects.js";
+import { loadProjects, loadTopics } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
@@ -450,8 +450,12 @@ async function main(): Promise<void> {
 
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
+    const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
     const projectHints = projects
-      .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}`)
+      .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}${p.workpackages?.length ? ` | workpackages: ${p.workpackages.map((wp) => `${wp.id}:${wp.title}`).join(", ")}` : ""}`)
+      .join("\n");
+    const topicHints = topics
+      .map((t) => `${t.id} | ${t.title}${t.aliases?.length ? ` | aliases: ${t.aliases.join(", ")}` : ""}`)
       .join("\n");
 
     if (mode === "run" && !cfg.MAIL_ROUTING_ENABLED) {
@@ -775,7 +779,7 @@ async function main(): Promise<void> {
           }
         }
 
-        const heuristicMatch = matchProject(prepared.effectiveText, projects);
+        const heuristicMatch = matchProject(prepared.effectiveText, projects, topics);
 
         let llm: any = undefined;
         if (
@@ -793,6 +797,7 @@ async function main(): Promise<void> {
               model: cfg.LLM_MODEL,
               mailText: prepared.effectiveText,
               projectHints,
+              topicHints,
               promptPath: cfg.LLM_PROMPT_PATH,
               timeoutMs: cfg.LLM_TIMEOUT_MS,
             });
@@ -810,7 +815,7 @@ async function main(): Promise<void> {
           }
         }
 
-        const match = mergeHeuristicAndLlm(heuristicMatch, llm, projects);
+        const match = mergeHeuristicAndLlm(heuristicMatch, llm, projects, topics);
         const needsReplyHeuristicFlag = needsReplyHeuristic(
           prepared.effectiveText,
           cfg.NEEDS_REPLY_NEGATIVE_HINTS,
@@ -956,6 +961,9 @@ async function main(): Promise<void> {
           stableId,
           mode,
           matchedProjectId: match.projectId,
+          matchedTopicId: match.matchedTopicId,
+          topicScore: match.topicScore,
+          topicReason: match.topicReason,
           matchedWorkpackageId: match.matchedWorkpackageId,
           workpackageScore: match.workpackageScore,
           workpackageReason: match.workpackageReason,

@@ -3,6 +3,7 @@ import path from "node:path";
 
 export type LlmExtraction = {
   projectCandidates: Array<{ label: string; confidence: number; evidence?: string[] }>;
+  topicCandidates?: Array<{ label: string; confidence: number; evidence?: string[] }>;
   workpackageCandidates?: Array<{ label: string; confidence: number; evidence?: string[] }>;
   needsReply: { score: number; reasons?: string[] };
   keywords?: string[];
@@ -24,6 +25,7 @@ Focus primarily on [CURRENT_MESSAGE]. Treat [OLDER_CONTEXT_LOWER_WEIGHT] as weak
 Output schema:
 {
   "projectCandidates": [{"label":"string","confidence":0.0,"evidence":["string"]}],
+  "topicCandidates": [{"label":"string","confidence":0.0,"evidence":["string"]}],
   "workpackageCandidates": [{"label":"string","confidence":0.0,"evidence":["string"]}],
   "needsReply": {"score":0.0,"reasons":["string"]},
   "keywords": ["string"],
@@ -36,7 +38,8 @@ Rules:
 - Prefer precision over recall
 - If unsure, return low confidence
 - When matching to projects, prefer labels from PROJECT_CATALOG_HINTS (project id/title)
-- Also use PROJECT_CATALOG_HINTS to infer plausible workpackage suggestions for the selected project
+- When matching to topics, prefer labels from TOPIC_CATALOG_HINTS (topic id/title)
+- Workpackages are strictly subordinate to projects: propose workpackageCandidates only for the most likely project candidate
 - workpackageCandidates labels must refer to workpackage id or title within the most likely project candidate
 - If no workpackage signal exists, return an empty workpackageCandidates array
 - Do not include markdown or code fences`;
@@ -153,6 +156,7 @@ export async function extractWithLlm(params: {
   model: string;
   mailText: string;
   projectHints?: string;
+  topicHints?: string;
   promptPath?: string;
   timeoutMs?: number;
 }): Promise<LlmExtraction> {
@@ -180,7 +184,7 @@ export async function extractWithLlm(params: {
           messages: [
             {
               role: "user",
-              content: `${prompt}\n\nPROJECT_CATALOG_HINTS:\n${params.projectHints ?? ""}\n\nEMAIL_INPUT:\n${params.mailText}`,
+              content: `${prompt}\n\nPROJECT_CATALOG_HINTS:\n${params.projectHints ?? ""}\n\nTOPIC_CATALOG_HINTS:\n${params.topicHints ?? ""}\n\nEMAIL_INPUT:\n${params.mailText}`,
             },
           ],
         }),
@@ -205,6 +209,7 @@ export async function extractWithLlm(params: {
       const parsed = safeJsonParse(content);
       return {
         projectCandidates: Array.isArray(parsed.projectCandidates) ? parsed.projectCandidates : [],
+        topicCandidates: Array.isArray(parsed.topicCandidates) ? parsed.topicCandidates : [],
         workpackageCandidates: Array.isArray(parsed.workpackageCandidates) ? parsed.workpackageCandidates : [],
         needsReply: parsed.needsReply && typeof parsed.needsReply === "object" ? parsed.needsReply : { score: 0 },
         keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],

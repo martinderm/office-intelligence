@@ -96,6 +96,8 @@ export function getConfig(cwd: string): EnvConfig {
     ),
     PROJECTS_JSON_PATH:
       process.env.PROJECTS_JSON_PATH ?? "./memory/references/projects/projects.json",
+    TOPICS_JSON_PATH:
+      process.env.TOPICS_JSON_PATH ?? "./memory/references/topics/topics.json",
     MAIL_ROUTING_ENABLED: parseBool(process.env.MAIL_ROUTING_ENABLED, false),
     LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
     HIMALAYA_COMMAND: process.env.HIMALAYA_COMMAND ?? "himalaya",
