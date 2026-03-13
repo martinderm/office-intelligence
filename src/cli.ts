@@ -256,8 +256,6 @@ function selectEnvelopesForRun(params: {
   }
 
   const unique = new Map<string, { id: string; rawLine: string }>();
-  const cap = Math.max(1, cfg.MAIL_FETCH_LIMIT);
-  const pageSize = Math.max(1, cfg.MAIL_ENVELOPE_PAGE_SIZE);
 
   const pushTailPage = (page: number) => {
     const rows = listEnvelopesPage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, page, pageSize);
@@ -267,12 +265,31 @@ function selectEnvelopesForRun(params: {
     }
   };
 
+  let scannedPages = 0;
+  let effectiveMaxScanPages = 0;
+
   const consumeBackfillFromCursor = () => {
     let page = Math.max(1, cursor.backfill.nextPage || 1);
     let index = Math.max(0, cursor.backfill.nextIndex || 0);
-    let scannedPages = 0;
 
-    while (scannedPages < cfg.MAIL_SELECT_MAX_SCAN_PAGES && unique.size < cap) {
+    // cfg.MAIL_SELECT_MAX_SCAN_PAGES is treated as a *baseline* safety limit.
+    // If MAIL_FETCH_LIMIT requires more pages (MAIL_ENVELOPE_PAGE_SIZE * pages),
+    // we automatically raise the effective limit so we can actually reach the fetch-limit.
+    // Example: fetchLimit=200, pageSize=20 => need at least 10 pages.
+    const pagesNeededForFetchLimit = Math.max(1, Math.ceil(cap / pageSize));
+    let dynamicMaxScanPages = Math.max(cfg.MAIL_SELECT_MAX_SCAN_PAGES, pagesNeededForFetchLimit);
+
+    // Hard stop to avoid runaway scans on very large mailboxes.
+    const HARD_MAX_SCAN_PAGES = Math.max(dynamicMaxScanPages, 500);
+
+    while (unique.size < cap) {
+      if (scannedPages >= dynamicMaxScanPages) {
+        // Still not enough unique envelopes to satisfy fetchLimit → keep extending,
+        // but never beyond the hard stop.
+        if (dynamicMaxScanPages >= HARD_MAX_SCAN_PAGES) break;
+        dynamicMaxScanPages = Math.min(HARD_MAX_SCAN_PAGES, dynamicMaxScanPages + 1);
+      }
+
       const rows = listEnvelopesPage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, page, pageSize);
       scannedPages += 1;
 
@@ -298,16 +315,37 @@ function selectEnvelopesForRun(params: {
 
     cursor.backfill.nextPage = page;
     cursor.backfill.nextIndex = index;
+    effectiveMaxScanPages = dynamicMaxScanPages;
   };
 
   if (cfg.MAIL_SCAN_MODE === "tail") {
     pushTailPage(1);
-    return { envelopes: [...unique.values()].slice(0, cap), strategy: "tail_page_1" };
+    return {
+      envelopes: [...unique.values()].slice(0, cap),
+      strategy: "tail_page_1",
+      scan: {
+        requestedMaxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+        effectiveMaxScanPages: 0,
+        scannedPages: 0,
+        pageSize,
+        fetchLimit: cap,
+      },
+    };
   }
 
   if (cfg.MAIL_SCAN_MODE === "backfill") {
     consumeBackfillFromCursor();
-    return { envelopes: [...unique.values()].slice(0, cap), strategy: "backfill_cursor" };
+    return {
+      envelopes: [...unique.values()].slice(0, cap),
+      strategy: "backfill_cursor",
+      scan: {
+        requestedMaxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+        effectiveMaxScanPages,
+        scannedPages,
+        pageSize,
+        fetchLimit: cap,
+      },
+    };
   }
 
   // auto: first newest page, then continue from backfill cursor
@@ -315,7 +353,17 @@ function selectEnvelopesForRun(params: {
   if (unique.size < cap) {
     consumeBackfillFromCursor();
   }
-  return { envelopes: [...unique.values()].slice(0, cap), strategy: "auto_tail_plus_backfill" };
+  return {
+    envelopes: [...unique.values()].slice(0, cap),
+    strategy: "auto_tail_plus_backfill",
+    scan: {
+      requestedMaxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+      effectiveMaxScanPages,
+      scannedPages,
+      pageSize,
+      fetchLimit: cap,
+    },
+  };
 }
 
 function resolveEffectiveRouting(cfg: ReturnType<typeof getConfig>, supportsMove: boolean, supportsUidPlus: boolean): EffectiveRouting {
@@ -479,9 +527,11 @@ async function main(): Promise<void> {
       scanMode: cfg.MAIL_SCAN_MODE,
       strategy: selection.strategy,
       selectedCount: envelopes.length,
-      fetchLimit: cfg.MAIL_FETCH_LIMIT,
-      envelopePageSize: cfg.MAIL_ENVELOPE_PAGE_SIZE,
-      maxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+      fetchLimit: selection.scan.fetchLimit,
+      envelopePageSize: selection.scan.pageSize,
+      requestedMaxScanPages: selection.scan.requestedMaxScanPages,
+      effectiveMaxScanPages: selection.scan.effectiveMaxScanPages,
+      scannedPages: selection.scan.scannedPages,
       cursorFile: cfg.MAIL_CURSOR_FILE,
       cursor: cursor.backfill,
       timestamp: new Date().toISOString(),
