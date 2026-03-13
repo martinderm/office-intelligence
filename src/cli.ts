@@ -7,6 +7,7 @@ import { loadProjects } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
+import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry-queue.js";
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
 import { cleanupDebugMessages } from "./retention.js";
@@ -211,6 +212,7 @@ function selectEnvelopesForRun(params: {
   args: string[];
   cfg: ReturnType<typeof getConfig>;
   cursor: CursorState;
+  priorityEnvelopeIds?: string[];
 }): {
   envelopes: Array<{ id: string; rawLine: string }>;
   strategy: string;
@@ -222,7 +224,7 @@ function selectEnvelopesForRun(params: {
     fetchLimit: number;
   };
 } {
-  const { args, cfg, cursor } = params;
+  const { args, cfg, cursor, priorityEnvelopeIds } = params;
   const explicitIds = parseExplicitEnvelopeIds(args);
   const cap = Math.max(1, cfg.MAIL_FETCH_LIMIT);
   const pageSize = Math.max(1, cfg.MAIL_ENVELOPE_PAGE_SIZE);
@@ -256,6 +258,14 @@ function selectEnvelopesForRun(params: {
   }
 
   const unique = new Map<string, { id: string; rawLine: string }>();
+
+  // Priority: retry queue items (due) are always processed first.
+  if (priorityEnvelopeIds?.length) {
+    for (const id of priorityEnvelopeIds) {
+      if (!unique.has(id)) unique.set(id, { id, rawLine: `[retry] ${id}` });
+      if (unique.size >= cap) break;
+    }
+  }
 
   const pushTailPage = (page: number) => {
     const rows = listEnvelopesPage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, page, pageSize);
@@ -517,7 +527,21 @@ async function main(): Promise<void> {
     });
 
     const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
-    const selection = selectEnvelopesForRun({ args, cfg, cursor });
+
+    // Transient-read retry queue (global): items are re-attempted across runs without blocking progress.
+    // Spec per request: max-attempts=2, base backoff=30s.
+    const retryQueuePath = path.join(cfg.MAIL_PROCESSOR_DATA_DIR, "retry-queue.jsonl");
+    const retryDeadLetterPath = path.join(cfg.MAIL_PROCESSOR_DATA_DIR, "retry-dead-letter.jsonl");
+    const retryMaxAttempts = 2;
+    const retryBaseBackoffMs = 30_000;
+
+    const dueRetry = loadDueRetryItems({ queuePath: retryQueuePath, nowMs: Date.now(), limit: cfg.MAIL_FETCH_LIMIT });
+    const dueRetryIds = dueRetry
+      .filter((x) => x.sourceFolder === cfg.MAIL_SOURCE_FOLDER)
+      .map((x) => x.envelopeId);
+    const dueRetryKeys = new Set(dueRetry.map((x) => x.key));
+
+    const selection = selectEnvelopesForRun({ args, cfg, cursor, priorityEnvelopeIds: dueRetryIds });
     const envelopes = selection.envelopes;
 
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
@@ -554,60 +578,154 @@ async function main(): Promise<void> {
             raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
           };
         } else {
-          const maxAttempts = Math.max(1, cfg.MAIL_MESSAGE_READ_RETRIES + 1);
-          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-            const started = Date.now();
-            try {
-              msg = readMessage(
-                cfg.HIMALAYA_COMMAND,
-                cfg.MAIL_SOURCE_FOLDER,
-                env.id,
-                cfg.MAIL_PROCESSOR_DATA_DIR,
-                cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
-              );
-              appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
-                type: "message_read_attempt",
-                runId,
-                sourceFolder: cfg.MAIL_SOURCE_FOLDER,
-                envelopeId: env.id,
-                attempt,
-                maxAttempts,
-                transient: false,
-                ok: true,
-                durationMs: Date.now() - started,
-                timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
-                timestamp: new Date().toISOString(),
-              });
-              break;
-            } catch (readErr) {
-              const transient = isTransientReadError(readErr);
-              const canRetry = transient && attempt < maxAttempts;
-              appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
-                type: "message_read_attempt",
-                runId,
-                sourceFolder: cfg.MAIL_SOURCE_FOLDER,
-                envelopeId: env.id,
-                attempt,
-                maxAttempts,
-                transient,
-                ok: false,
-                durationMs: Date.now() - started,
-                timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
-                willRetry: canRetry,
-                error: readErr instanceof Error ? readErr.message : String(readErr),
-                timestamp: new Date().toISOString(),
-              });
-              if (!canRetry) throw readErr;
-              const backoff = Math.max(0, cfg.MAIL_MESSAGE_READ_RETRY_BACKOFF_MS * attempt);
-              if (backoff > 0) {
-                await sleep(backoff);
+          try {
+            const maxAttempts = Math.max(1, cfg.MAIL_MESSAGE_READ_RETRIES + 1);
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              const started = Date.now();
+              try {
+                msg = readMessage(
+                  cfg.HIMALAYA_COMMAND,
+                  cfg.MAIL_SOURCE_FOLDER,
+                  env.id,
+                  cfg.MAIL_PROCESSOR_DATA_DIR,
+                  cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+                );
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "message_read_attempt",
+                  runId,
+                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                  envelopeId: env.id,
+                  attempt,
+                  maxAttempts,
+                  transient: false,
+                  ok: true,
+                  durationMs: Date.now() - started,
+                  timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+                  timestamp: new Date().toISOString(),
+                });
+                break;
+              } catch (readErr) {
+                const transient = isTransientReadError(readErr);
+                const canRetry = transient && attempt < maxAttempts;
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "message_read_attempt",
+                  runId,
+                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                  envelopeId: env.id,
+                  attempt,
+                  maxAttempts,
+                  transient,
+                  ok: false,
+                  durationMs: Date.now() - started,
+                  timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+                  willRetry: canRetry,
+                  error: readErr instanceof Error ? readErr.message : String(readErr),
+                  timestamp: new Date().toISOString(),
+                });
+                if (!canRetry) throw readErr;
+                const backoff = Math.max(0, cfg.MAIL_MESSAGE_READ_RETRY_BACKOFF_MS * attempt);
+                if (backoff > 0) {
+                  await sleep(backoff);
+                }
               }
             }
-          }
-          if (!msg) {
-            throw new Error(`message read failed without result for envelope ${env.id}`);
+            if (!msg) {
+              throw new Error(`message read failed without result for envelope ${env.id}`);
+            }
+          } catch (readErr) {
+            // Transient read errors should not block progress: enqueue into persistent retry queue.
+            if (isTransientReadError(readErr)) {
+              const key = makeRetryKey(cfg.MAIL_SOURCE_FOLDER, env.id);
+              const nowMs = Date.now();
+              // Determine prior attempts from the due list (if this run is processing a queued item).
+              const prev = dueRetry.find((x) => x.key === key);
+              const attempts = (prev?.attempts || 0) + 1;
+              const errMsg = readErr instanceof Error ? readErr.message : String(readErr);
+
+              if (attempts >= retryMaxAttempts) {
+                fs.appendFileSync(
+                  retryDeadLetterPath,
+                  `${JSON.stringify({
+                    type: "retry_dead_letter",
+                    key,
+                    sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                    envelopeId: env.id,
+                    attempts,
+                    error: errMsg,
+                    timestamp: new Date().toISOString(),
+                  })}\n`,
+                  "utf8",
+                );
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "message_deferred_transient",
+                  runId,
+                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                  envelopeId: env.id,
+                  action: "dead_letter",
+                  attempts,
+                  maxAttempts: retryMaxAttempts,
+                  error: errMsg,
+                  timestamp: new Date().toISOString(),
+                });
+              } else {
+                const nextAttemptAtMs = computeNextAttemptAtMs({ nowMs, attempts, baseBackoffMs: retryBaseBackoffMs });
+                fs.appendFileSync(
+                  retryQueuePath,
+                  `${JSON.stringify({
+                    type: "retry_enqueued",
+                    key,
+                    sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                    envelopeId: env.id,
+                    attempts,
+                    nextAttemptAtMs,
+                    error: errMsg,
+                    timestamp: new Date().toISOString(),
+                  })}\n`,
+                  "utf8",
+                );
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "message_deferred_transient",
+                  runId,
+                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                  envelopeId: env.id,
+                  action: "enqueued",
+                  attempts,
+                  maxAttempts: retryMaxAttempts,
+                  nextAttemptAt: new Date(nextAttemptAtMs).toISOString(),
+                  error: errMsg,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+
+              summary.skipped += 1;
+              continue;
+            }
+            throw readErr;
           }
         }
+        // If this envelope came from the persistent retry queue, mark it as succeeded.
+        const retryKey = makeRetryKey(cfg.MAIL_SOURCE_FOLDER, env.id);
+        if (dueRetryKeys.has(retryKey)) {
+          fs.appendFileSync(
+            retryQueuePath,
+            `${JSON.stringify({
+              type: "retry_succeeded",
+              key: retryKey,
+              sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+              envelopeId: env.id,
+              timestamp: new Date().toISOString(),
+            })}\n`,
+            "utf8",
+          );
+          appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+            type: "retry_succeeded",
+            runId,
+            sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+            envelopeId: env.id,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
         const prepared = prepareMailText(
           msg.raw,
           cfg.MAIL_HTML_MAX_CURRENT,
