@@ -3,6 +3,7 @@ import path from "node:path";
 
 export type LlmExtraction = {
   projectCandidates: Array<{ label: string; confidence: number; evidence?: string[] }>;
+  workpackageCandidates?: Array<{ label: string; confidence: number; evidence?: string[] }>;
   needsReply: { score: number; reasons?: string[] };
   keywords?: string[];
   entities?: string[];
@@ -23,6 +24,7 @@ Focus primarily on [CURRENT_MESSAGE]. Treat [OLDER_CONTEXT_LOWER_WEIGHT] as weak
 Output schema:
 {
   "projectCandidates": [{"label":"string","confidence":0.0,"evidence":["string"]}],
+  "workpackageCandidates": [{"label":"string","confidence":0.0,"evidence":["string"]}],
   "needsReply": {"score":0.0,"reasons":["string"]},
   "keywords": ["string"],
   "entities": ["string"],
@@ -33,7 +35,10 @@ Rules:
 - confidence and score in [0,1]
 - Prefer precision over recall
 - If unsure, return low confidence
-- When matching to projects, prefer labels from PROJECT_CATALOG_HINTS (id or title)
+- When matching to projects, prefer labels from PROJECT_CATALOG_HINTS (project id/title)
+- Also use PROJECT_CATALOG_HINTS to infer plausible workpackage suggestions for the selected project
+- workpackageCandidates labels must refer to workpackage id or title within the most likely project candidate
+- If no workpackage signal exists, return an empty workpackageCandidates array
 - Do not include markdown or code fences`;
 
 const DEFAULT_DISCOVERY_PROMPT = `You extract project identity and topics from ONE email for project discovery.
@@ -200,6 +205,7 @@ export async function extractWithLlm(params: {
       const parsed = safeJsonParse(content);
       return {
         projectCandidates: Array.isArray(parsed.projectCandidates) ? parsed.projectCandidates : [],
+        workpackageCandidates: Array.isArray(parsed.workpackageCandidates) ? parsed.workpackageCandidates : [],
         needsReply: parsed.needsReply && typeof parsed.needsReply === "object" ? parsed.needsReply : { score: 0 },
         keywords: Array.isArray(parsed.keywords) ? parsed.keywords : [],
         entities: Array.isArray(parsed.entities) ? parsed.entities : [],

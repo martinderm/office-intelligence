@@ -5,6 +5,9 @@ export type MatchResult = {
   projectId?: string;
   score: number;
   reason: string;
+  matchedWorkpackageId?: string;
+  workpackageScore?: number;
+  workpackageReason?: string;
   needsReply: boolean;
 };
 
@@ -29,7 +32,7 @@ export function needsReplyHeuristic(text: string, negatives: string[]): boolean 
 
 export function matchProject(textRaw: string, projects: Project[]): MatchResult {
   const text = norm(textRaw);
-  let best = { projectId: undefined as string | undefined, score: 0, reason: "no match" };
+  let best = { projectId: undefined as string | undefined, score: 0, reason: "no match", project: undefined as Project | undefined };
 
   for (const p of projects) {
     let score = 0;
@@ -41,7 +44,27 @@ export function matchProject(textRaw: string, projects: Project[]): MatchResult 
     if (p.contacts?.some((c) => c.email && text.includes(norm(c.email)))) score += 0.35;
 
     if (score > best.score) {
-      best = { projectId: p.id, score, reason: `matched ${p.id}` };
+      best = { projectId: p.id, score, reason: `matched ${p.id}`, project: p };
+    }
+  }
+
+  let matchedWorkpackageId: string | undefined;
+  let workpackageScore = 0;
+  let workpackageReason = "no workpackage match";
+
+  if (best.project && best.project.workpackages?.length) {
+    for (const wp of best.project.workpackages) {
+      let score = 0;
+      score += includesAny(text, [wp.title]) * 0.3;
+      score += includesAny(text, wp.aliases) * 0.25;
+      score += includesAny(text, wp.keywords) * 0.2;
+      if (wp.contacts?.some((c) => c.email && text.includes(norm(c.email)))) score += 0.35;
+
+      if (score > workpackageScore) {
+        matchedWorkpackageId = wp.id;
+        workpackageScore = score;
+        workpackageReason = `matched workpackage ${wp.id}`;
+      }
     }
   }
 
@@ -49,6 +72,9 @@ export function matchProject(textRaw: string, projects: Project[]): MatchResult 
     projectId: best.score > 0 ? best.projectId : undefined,
     score: Number(best.score.toFixed(3)),
     reason: best.reason,
+    matchedWorkpackageId: workpackageScore > 0 ? matchedWorkpackageId : undefined,
+    workpackageScore: Number(workpackageScore.toFixed(3)),
+    workpackageReason,
     needsReply: false,
   };
 }
@@ -58,6 +84,15 @@ function resolveProjectByLabel(label: string, projects: Project[]): string | und
   for (const p of projects) {
     if (norm(p.id) === l || norm(p.title) === l) return p.id;
     if (p.aliases?.some((a) => norm(a) === l)) return p.id;
+  }
+  return undefined;
+}
+
+function resolveWorkpackageByLabel(label: string, project: Project): string | undefined {
+  const l = norm(label);
+  for (const wp of project.workpackages || []) {
+    if (norm(wp.id) === l || norm(wp.title) === l) return wp.id;
+    if (wp.aliases?.some((a) => norm(a) === l)) return wp.id;
   }
   return undefined;
 }
@@ -77,10 +112,33 @@ export function mergeHeuristicAndLlm(
   if (!top?.projectId) return heuristic;
 
   const blended = Math.max(heuristic.score * 0.45 + top.confidence * 0.65, heuristic.score);
+
+  let matchedWorkpackageId = heuristic.matchedWorkpackageId;
+  let workpackageScore = heuristic.workpackageScore || 0;
+  let workpackageReason = heuristic.workpackageReason || "no workpackage match";
+
+  const selectedProject = projects.find((p) => p.id === top.projectId);
+  if (selectedProject && llm.workpackageCandidates?.length) {
+    const wpTop = llm.workpackageCandidates
+      .map((c) => ({ id: resolveWorkpackageByLabel(c.label, selectedProject), confidence: Number(c.confidence) || 0 }))
+      .filter((c) => !!c.id)
+      .sort((a, b) => b.confidence - a.confidence)[0];
+
+    if (wpTop?.id) {
+      const blendedWp = Math.max(workpackageScore * 0.45 + wpTop.confidence * 0.65, workpackageScore);
+      matchedWorkpackageId = wpTop.id;
+      workpackageScore = Number(blendedWp.toFixed(3));
+      workpackageReason = `llm+heuristic workpackage ${wpTop.id}`;
+    }
+  }
+
   return {
     projectId: top.projectId,
     score: Number(blended.toFixed(3)),
     reason: `llm+heuristic ${top.projectId}`,
+    matchedWorkpackageId,
+    workpackageScore,
+    workpackageReason,
     needsReply: heuristic.needsReply,
   };
 }

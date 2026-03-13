@@ -14,6 +14,9 @@ Memory-Update-Flow (kurz):
 3) `npm run apply:suggestions -- --input=<datei.json>`
 4) Konsolidierung durch den OpenClaw-Agenten (nicht per lokales Merge-Skript)
 
+Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
+- `skills/project-catalog-entry/SKILL.md`
+
 Agent-Deploy-Konvention:
 - Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
 - Skill-Runner dürfen diese Werte nicht hardcoden.
@@ -95,7 +98,7 @@ npm run discover-projects -- --discover-last=200 --discover-output=./memory/refe
 
 ### Status Discovery (Stand: 2026-03-13)
 
-- Discovery läuft derzeit im **LLM-only-Modus** pro Mail (inkl. Default-Prompt für `project_name`, `project_title`, `topics`, `confidence`).
+- Discovery läuft derzeit im **LLM-only-Modus** pro Mail (Default-Prompt mit `project_name`, `project_title`, `topics`, `confidence`).
 - Während eines Runs wird die Output-Datei **inkrementell nach jeder verarbeiteten Mail** aktualisiert.
 - **Wichtiger Befund:** Die Ergebnisqualität ist aktuell **nicht gut genug** für zuverlässige Projektpflege (zu viele `unknown`/inkonsistente Kandidaten in kleinen Stichproben).
 - Konsequenz: Discovery-Ergebnisse nur als grobe Hinweise verwenden, **nicht** als belastbare Grundlage für direkte Übernahmen in `projects.json`.
@@ -164,6 +167,7 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 - ✅ JSONL-State-Logging (`run_started`, `selection_resolved`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
 - ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`/`message move`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-processor/msgs/*.json`)
+- ✅ Workpackage-Matching auf Projektunterebene (heuristisch + LLM-unterstützt) mit `matchedWorkpackageId`, `workpackageScore`, `workpackageReason`
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
 - ✅ Modell frei wählbar über `LLM_MODEL`
@@ -193,6 +197,14 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 ```json
 {
   "stableId": "<normalized-message-id-or-fallback>",
+  "match": {
+    "projectId": "<project-id-or-null>",
+    "score": 0.0,
+    "reason": "string",
+    "matchedWorkpackageId": "<workpackage-id-or-null>",
+    "workpackageScore": 0.0,
+    "workpackageReason": "string"
+  },
   "mailMeta": { "messageId": "<raw-message-id>" },
   "local": {
     "fileId": "<16-char-id>",

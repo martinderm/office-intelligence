@@ -7,13 +7,16 @@
   - damit ist `fetch-limit` vs. tatsächliche Auswahl nachvollziehbar.
 - Envelope-Selection gehärtet: `MAIL_SELECT_MAX_SCAN_PAGES` wird dynamisch angehoben, bis `MAIL_FETCH_LIMIT` erreicht ist (oder Postfach „aus“ ist / Hard-Stop greift).
 - Transient-Fehler-Queue für Message-Reads: persistente `retry-queue.jsonl` mit exponential backoff + `max-attempts` + dead-letter (verhindert, dass wackelige Reads den Fortschritt blockieren).
+- Workpackage-Matching ergänzt (heuristisch + LLM-Schema):
+  - neue Match-Felder `matchedWorkpackageId`, `workpackageScore`, `workpackageReason`
+  - LLM-Prompt erweitert um `workpackageCandidates`
 
-- Neues Discovery-Feature (`--discover-projects`):
-  - analysiert die letzten X Mails (`--discover-last`)
-  - schlägt potenzielle neue Projekte vor (`new_project_candidates`)
-  - erzeugt Kontakt-/Teilnehmer-Vorschläge für bestehende Projekte (`project_participant_suggestions`)
-  - schreibt Ergebnis als Review-Artefakt (Default: `data/mail-routing/project-candidates.json`)
+- Discovery auf LLM-only umgestellt (`--discover-projects`):
+  - pro Mail ein LLM-Call für `project_name`, `project_title`, `topics`, `confidence`
+  - Ausgabe enthält `per_message_extractions` + aggregierte `new_project_candidates`
+  - Ergebnisdatei wird während des Runs inkrementell nach jeder verarbeiteten Mail aktualisiert
 - Schutz gegen Rauschen: list-/bulk-/auto-submitted Mails werden im Discovery-Mode übersprungen.
+- Qualitätsstatus dokumentiert: aktuelle Discovery-Ergebnisse sind für direkte Katalogpflege noch nicht zuverlässig genug (nur Review-Hinweise).
 - Himalaya-Proxy-Wrapper korrigiert: Argumente werden jetzt robust mit `%*` weitergereicht (Fix für fehlerhafte Tokens wie `--trace0`/`envelope0`).
 - Neues Script `scripts/create-himalaya-account-proxy.mjs` zum reproduzierbaren Erzeugen eines plattformübergreifenden Proxy-Wrappers mit fixer Account-Bindung.
 
