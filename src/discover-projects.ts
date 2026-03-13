@@ -4,8 +4,8 @@ import { listEnvelopes, readMessage } from "./mail-source.js";
 import { prepareMailText } from "./preprocess.js";
 import { getConfig } from "./env.js";
 import { loadProjects } from "./projects.js";
-import { matchProject } from "./matcher.js";
 import { Project } from "./types.js";
+import { extractDiscoveryWithLlm } from "./llm.js";
 
 type DiscoverSource = "local" | "imap";
 
@@ -18,36 +18,15 @@ type DiscoverOptions = {
 
 type CandidateCluster = {
   key: string;
-  idSeed: string;
-  titleSeed: string;
-  domain: string;
+  projectName: string;
+  projectTitle: string;
   messageCount: number;
   participants: Set<string>;
+  topics: Map<string, number>;
   samples: string[];
   lastSeen?: string;
+  confidenceSum: number;
 };
-
-const SUBJECT_STOPWORDS = new Set([
-  "re",
-  "fwd",
-  "wg",
-  "aw",
-  "the",
-  "and",
-  "for",
-  "und",
-  "der",
-  "die",
-  "das",
-  "von",
-  "mit",
-  "zur",
-  "zum",
-  "bitte",
-  "danke",
-  "update",
-  "info",
-]);
 
 function parseBoolFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
@@ -82,37 +61,6 @@ function extractEmails(input?: string): string[] {
   return [...new Set(found.map((e) => e.toLowerCase()))];
 }
 
-function firstDomain(emails: string[]): string | undefined {
-  return emails[0]?.split("@")[1]?.toLowerCase();
-}
-
-function cleanSubject(subject?: string): string {
-  if (!subject) return "";
-  return subject
-    .replace(/^(re|aw|wg|fwd)\s*:\s*/gi, "")
-    .replace(/\[[^\]]+\]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function subjectTokens(subject?: string): string[] {
-  return cleanSubject(subject)
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
-    .split(/\s+/)
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 4 && !SUBJECT_STOPWORDS.has(t));
-}
-
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, 48);
-}
-
 function looksLikeListMail(meta: ReturnType<typeof prepareMailText>["meta"]): boolean {
   const precedence = (meta.precedence || "").toLowerCase();
   const autoSubmitted = (meta.autoSubmitted || "").toLowerCase();
@@ -125,19 +73,6 @@ function projectHasContact(project: Project, email: string): boolean {
 
 function projectParticipantFromMessage(project: Project, emails: string[]): string[] {
   return [...new Set(emails.filter((e) => !projectHasContact(project, e)))];
-}
-
-function knownProjectDomains(projects: Project[]): Set<string> {
-  const domains = new Set<string>();
-  for (const p of projects) {
-    for (const d of p.domains || []) {
-      if (d) domains.add(d.toLowerCase());
-    }
-    for (const c of p.contacts || []) {
-      if (c.email?.includes("@")) domains.add(c.email.split("@")[1].toLowerCase());
-    }
-  }
-  return domains;
 }
 
 function listLocalEmlFiles(dataDir: string, limit: number): Array<{ id: string; rawLine: string; emlPath: string }> {
@@ -172,11 +107,61 @@ function listLocalEmlFiles(dataDir: string, limit: number): Array<{ id: string; 
   }));
 }
 
-export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfig>, options: DiscoverOptions): void {
+function resolveExistingProjectByLlmName(projects: Project[], projectName: string, projectTitle: string): Project | undefined {
+  const name = (projectName || "").trim().toLowerCase();
+  const title = (projectTitle || "").trim().toLowerCase();
+  if (!name && !title) return undefined;
+
+  return projects.find((p) => {
+    const id = (p.id || "").trim().toLowerCase();
+    const pTitle = (p.title || "").trim().toLowerCase();
+    const aliases = (p.aliases || []).map((a) => a.trim().toLowerCase());
+    return id === name || pTitle === title || aliases.includes(name) || aliases.includes(title);
+  });
+}
+
+function buildNewProjectCandidates(clusters: Map<string, CandidateCluster>) {
+  return [...clusters.values()]
+    .sort((a, b) => b.messageCount - a.messageCount)
+    .map((c) => {
+      const topics = [...c.topics.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3)
+        .map(([topic]) => topic);
+
+      return {
+        id: c.projectName,
+        title: c.projectTitle,
+        mailbox_folder: "Archive",
+        domains: [],
+        contacts: [...c.participants].slice(0, 10).map((email) => ({ email })),
+        topics,
+        candidate_score: Number((c.confidenceSum / Math.max(1, c.messageCount)).toFixed(3)),
+        evidence: {
+          message_count: c.messageCount,
+          participant_count: c.participants.size,
+          sample_subjects: c.samples,
+          last_seen: c.lastSeen || null,
+        },
+      };
+    });
+}
+
+function buildProjectParticipantSuggestions(participantUpdates: Map<string, Set<string>>) {
+  return [...participantUpdates.entries()].map(([projectId, emails]) => ({
+    project_id: projectId,
+    contacts_to_add: [...emails].slice(0, 20).map((email) => ({ email })),
+  }));
+}
+
+export async function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfig>, options: DiscoverOptions): Promise<void> {
+  if (!cfg.LLM_BASE_URL || !cfg.LLM_API_KEY || !cfg.LLM_MODEL) {
+    throw new Error("Discovery requires LLM configuration: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL");
+  }
+
   const projectsPathAbs = path.resolve(cwd, cfg.PROJECTS_JSON_PATH);
   const hasProjects = fs.existsSync(projectsPathAbs);
   const projects = hasProjects ? loadProjects(cwd, cfg.PROJECTS_JSON_PATH) : [];
-  const projectDomains = knownProjectDomains(projects);
 
   const envelopes =
     options.source === "local"
@@ -187,6 +172,35 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
 
   const clusters = new Map<string, CandidateCluster>();
   const participantUpdates = new Map<string, Set<string>>();
+  const perMessageExtractions: Array<{
+    envelope_id: string;
+    project_name: string;
+    project_title: string;
+    topics: string[];
+    confidence: number;
+    llm_error?: string;
+  }> = [];
+
+  const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+  const defaultOut = path.join("memory", "references", "projects", "inbox", `project-candidates-${ts}.json`);
+  const outputPath = path.resolve(cwd, options.outPath || defaultOut);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+
+  const writeSnapshot = () => {
+    const out = {
+      generated_at: new Date().toISOString(),
+      source_mode: options.source,
+      source_folder: cfg.MAIL_SOURCE_FOLDER,
+      inspected,
+      skipped_list_like: skippedListLike,
+      existing_projects: projects.length,
+      new_project_candidates: buildNewProjectCandidates(clusters),
+      project_participant_suggestions: buildProjectParticipantSuggestions(participantUpdates),
+      per_message_extractions: perMessageExtractions,
+      note: "Review required before merging into projects.json",
+    };
+    fs.writeFileSync(outputPath, JSON.stringify(out, null, 2), "utf8");
+  };
 
   let inspected = 0;
   let skippedListLike = 0;
@@ -221,6 +235,7 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
 
     if (looksLikeListMail(prepared.meta)) {
       skippedListLike += 1;
+      writeSnapshot();
       continue;
     }
 
@@ -232,94 +247,93 @@ export function runDiscoverProjects(cwd: string, cfg: ReturnType<typeof getConfi
     ];
     const uniqEmails = [...new Set(emails)];
 
-    if (projects.length > 0) {
-      const m = matchProject(prepared.effectiveText, projects);
-      if (m.projectId && m.score >= Math.max(cfg.PROJECT_MATCH_THRESHOLD, 0.75)) {
-        const project = projects.find((p) => p.id === m.projectId);
-        if (project) {
-          const missing = projectParticipantFromMessage(project, uniqEmails);
-          if (missing.length) {
-            const set = participantUpdates.get(project.id) || new Set<string>();
-            for (const e of missing) set.add(e);
-            participantUpdates.set(project.id, set);
-          }
-        }
-        continue;
-      }
+    let extracted;
+    try {
+      extracted = await extractDiscoveryWithLlm({
+        baseUrl: cfg.LLM_BASE_URL,
+        apiKey: cfg.LLM_API_KEY,
+        model: cfg.LLM_MODEL,
+        mailText: prepared.effectiveText,
+        timeoutMs: cfg.LLM_TIMEOUT_MS,
+      });
+    } catch (error) {
+      const llmError = error instanceof Error ? error.message : String(error);
+      perMessageExtractions.push({
+        envelope_id: env.id,
+        project_name: "unknown",
+        project_title: "Unknown",
+        topics: [],
+        confidence: 0,
+        llm_error: llmError,
+      });
+      writeSnapshot();
+      continue;
     }
 
-    const domain = firstDomain(uniqEmails);
-    const tokens = subjectTokens(prepared.meta.subject);
-    const tokenKey = tokens.slice(0, 3).join("-");
-    const key = `${domain || "unknown"}|${tokenKey || "no-subject-signal"}`;
+    perMessageExtractions.push({
+      envelope_id: env.id,
+      project_name: extracted.project_name,
+      project_title: extracted.project_title,
+      topics: extracted.topics,
+      confidence: extracted.confidence,
+    });
 
-    const titleSeed = cleanSubject(prepared.meta.subject) || tokenKey || domain || "Untitled Project Candidate";
-    const idSeed = slugify(`${tokenKey || "project"}-${domain || "mail"}`) || `project-${env.id}`;
+    const existing = resolveExistingProjectByLlmName(projects, extracted.project_name, extracted.project_title);
+    if (existing) {
+      const missing = projectParticipantFromMessage(existing, uniqEmails);
+      if (missing.length) {
+        const set = participantUpdates.get(existing.id) || new Set<string>();
+        for (const e of missing) set.add(e);
+        participantUpdates.set(existing.id, set);
+      }
+      writeSnapshot();
+      continue;
+    }
 
+    const key = extracted.project_name || "unknown";
     const c = clusters.get(key) || {
       key,
-      idSeed,
-      titleSeed,
-      domain: domain || "",
+      projectName: extracted.project_name || "unknown",
+      projectTitle: extracted.project_title || "Unknown",
       messageCount: 0,
       participants: new Set<string>(),
+      topics: new Map<string, number>(),
       samples: [],
       lastSeen: undefined,
+      confidenceSum: 0,
     };
 
     c.messageCount += 1;
+    c.confidenceSum += Number(extracted.confidence) || 0;
+
     for (const e of uniqEmails) c.participants.add(e);
+    for (const t of extracted.topics || []) {
+      c.topics.set(t, (c.topics.get(t) || 0) + 1);
+    }
     if (prepared.meta.subject && c.samples.length < 4) c.samples.push(prepared.meta.subject);
     if (prepared.meta.date) c.lastSeen = prepared.meta.date;
+
     clusters.set(key, c);
+    writeSnapshot();
   }
 
-  const newProjectCandidates = [...clusters.values()]
-    .filter((c) => c.messageCount >= 2 || c.participants.size >= 3)
-    .filter((c) => !projectDomains.has(c.domain))
-    .sort((a, b) => b.messageCount - a.messageCount)
-    .map((c) => ({
-      id: c.idSeed,
-      title: c.titleSeed,
-      mailbox_folder: "Archive",
-      domains: c.domain ? [c.domain] : [],
-      contacts: [...c.participants].slice(0, 10).map((email) => ({ email })),
-      candidate_score: Number((Math.min(1, c.messageCount / 5) * 0.7 + Math.min(1, c.participants.size / 5) * 0.3).toFixed(3)),
-      evidence: {
-        message_count: c.messageCount,
-        participant_count: c.participants.size,
-        sample_subjects: c.samples,
-        last_seen: c.lastSeen || null,
-      },
-    }));
+  if (!fs.existsSync(outputPath)) {
+    writeSnapshot();
+  }
 
-  const projectParticipantSuggestions = [...participantUpdates.entries()].map(([projectId, emails]) => ({
-    project_id: projectId,
-    contacts_to_add: [...emails].slice(0, 20).map((email) => ({ email })),
-  }));
+  const newProjectCandidates = buildNewProjectCandidates(clusters);
+  const projectParticipantSuggestions = buildProjectParticipantSuggestions(participantUpdates);
 
-  const out = {
-    generated_at: new Date().toISOString(),
-    source_mode: options.source,
-    source_folder: cfg.MAIL_SOURCE_FOLDER,
-    inspected,
-    skipped_list_like: skippedListLike,
-    existing_projects: projects.length,
-    new_project_candidates: newProjectCandidates,
-    project_participant_suggestions: projectParticipantSuggestions,
-    note: "Review required before merging into projects.json",
-  };
-
-  const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
-  const defaultOut = path.join("memory", "references", "projects", "inbox", `project-candidates-${ts}.json`);
-  const outputPath = path.resolve(cwd, options.outPath || defaultOut);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, JSON.stringify(out, null, 2), "utf8");
-
-  console.log(JSON.stringify({ ok: true, mode: "discover-projects", source: options.source, outputPath, summary: {
-    inspected,
-    skippedListLike,
-    newCandidates: newProjectCandidates.length,
-    participantSuggestions: projectParticipantSuggestions.length,
-  } }, null, 2));
+  console.log(JSON.stringify({
+    ok: true,
+    mode: "discover-projects",
+    source: options.source,
+    outputPath,
+    summary: {
+      inspected,
+      skippedListLike,
+      newCandidates: newProjectCandidates.length,
+      participantSuggestions: projectParticipantSuggestions.length,
+    },
+  }, null, 2));
 }

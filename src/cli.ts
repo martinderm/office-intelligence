@@ -418,7 +418,7 @@ async function main(): Promise<void> {
   const discover = parseDiscoverOptions(args, cfg.MAIL_FETCH_LIMIT);
 
   if (discover.enabled) {
-    runDiscoverProjects(cwd, cfg, discover);
+    await runDiscoverProjects(cwd, cfg, discover);
     return;
   }
 
