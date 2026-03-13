@@ -154,7 +154,7 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 - ✅ `.env`-Loading + Config Defaults
 - ✅ Lockfile (Single-Runner, TTL)
 - ✅ `projects.json`-Validation (MVP-Felder + Slug-ID)
-- ✅ JSONL-State-Logging (`run_started`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
+- ✅ JSONL-State-Logging (`run_started`, `selection_resolved`, `message_processed`, `message_skipped`, `message_error`, `run_finished`)
 - ✅ Himalaya-Adapter für `envelope list`, `message export --full` (bevorzugt), `message read` (Fallback), `message copy`/`message move`
 - ✅ Deterministischer Matcher + needsReply-Heuristik + Debug-Artefakte pro Mail (`data/mail-processor/msgs/*.json`)
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
@@ -168,6 +168,9 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 - ✅ Zusätzliche Tokenreduktion: Layout-Noise-Cleanup + Dedupe wiederholter Links
 - ✅ Idempotenz auf stabiler ID (primär normalisierte `Message-ID`, fallback Content-Hash) statt folder-lokaler Envelope-ID
 - ✅ State speichert `sourceFolder`, `copyTargets`, `lastKnownEnvelopeId`, `lastKnownFolder`
+- ✅ Envelope-Selection-Transparenz: `selection_resolved` loggt `fetchLimit`, `envelopePageSize`, `requestedMaxScanPages`, `effectiveMaxScanPages`, `scannedPages`
+- ✅ Selection-Härtung: Scan-Pages werden dynamisch angehoben, damit `MAIL_FETCH_LIMIT` realistisch erreicht werden kann (statt implizit durch `MAIL_ENVELOPE_PAGE_SIZE * MAIL_SELECT_MAX_SCAN_PAGES` begrenzt zu sein)
+- ✅ Transient-Fehler-Queue (Read): persistente `retry-queue.jsonl` + Backoff + Dead-letter, damit wackelige Reads (z. B. IMAP/TLS 10054) den Run nicht blockieren
 - ✅ Lokale Artefakte nutzen `fileId` (aus `stableId` abgeleitet) und folder-basierte Struktur:
   - `exports/<folder-slug>/<fileId>.eml`
   - `msgs/<folder-slug>/<fileId>.json`

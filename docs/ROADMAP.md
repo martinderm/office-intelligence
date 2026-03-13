@@ -35,6 +35,19 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - expliziter Human-Review vor Änderungen an `projects.json`
 - Ziel: bessere Datenqualität ohne unkontrollierte Auto-Edits.
 
+5) **Testplan für neue Auswahl/Retry-Features (C + D)**
+- Kontext: In boku-martin Shadow-Run mit `fetch-limit=20` triggerten die neuen Pfade nicht, weil
+  - genug Envelopes schon auf Page 1 gefunden wurden (kein dynamisches Hochdrehen sichtbar), und
+  - keine transienten Read-Fehler auftraten (Retry-Queue blieb leer).
+- Zusätzliches Detail: Runner überschreibt Shell-Env-Overrides, weil `run-shadow.mjs` `envFromFile` **nach** `process.env` merged.
+- ToDo (später):
+  - **C demonstrieren:** `MAIL_ENVELOPE_PAGE_SIZE` klein setzen und `MAIL_SELECT_MAX_SCAN_PAGES` absichtlich klein halten, sodass `effectiveMaxScanPages` > requested werden muss.
+  - **D demonstrieren:** transienten Read-Fehler provozieren (z. B. via sehr kurzem Timeout, künstlichem Fehler-Switch oder gezieltem Netzwerk-Glitch), dann prüfen:
+    - `message_deferred_transient` im `state.jsonl`
+    - `retry-queue.jsonl` erstellt + Items due beim nächsten Run priorisiert
+    - nach Erfolg `retry_succeeded`
+    - nach 2 Versuchen Eintrag in `retry-dead-letter.jsonl`
+
 ## Nicht im Scope (aktuell)
 
 - Kein blindes Auto-Routing ohne Guardrails.

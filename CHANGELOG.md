@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Envelope-Selection transparenter gemacht: `selection_resolved` loggt jetzt zusätzlich
+  - `requestedMaxScanPages`, `effectiveMaxScanPages`, `scannedPages`
+  - damit ist `fetch-limit` vs. tatsächliche Auswahl nachvollziehbar.
+- Envelope-Selection gehärtet: `MAIL_SELECT_MAX_SCAN_PAGES` wird dynamisch angehoben, bis `MAIL_FETCH_LIMIT` erreicht ist (oder Postfach „aus“ ist / Hard-Stop greift).
+- Transient-Fehler-Queue für Message-Reads: persistente `retry-queue.jsonl` mit exponential backoff + `max-attempts` + dead-letter (verhindert, dass wackelige Reads den Fortschritt blockieren).
+
 - Neues Discovery-Feature (`--discover-projects`):
   - analysiert die letzten X Mails (`--discover-last`)
   - schlägt potenzielle neue Projekte vor (`new_project_candidates`)
