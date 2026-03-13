@@ -93,6 +93,13 @@ Optionaler Output-Pfad:
 npm run discover-projects -- --discover-last=200 --discover-output=./memory/references/projects/inbox/project-candidates-manual.json
 ```
 
+### Status Discovery (Stand: 2026-03-13)
+
+- Discovery läuft derzeit im **LLM-only-Modus** pro Mail (inkl. Default-Prompt für `project_name`, `project_title`, `topics`, `confidence`).
+- Während eines Runs wird die Output-Datei **inkrementell nach jeder verarbeiteten Mail** aktualisiert.
+- **Wichtiger Befund:** Die Ergebnisqualität ist aktuell **nicht gut genug** für zuverlässige Projektpflege (zu viele `unknown`/inkonsistente Kandidaten in kleinen Stichproben).
+- Konsequenz: Discovery-Ergebnisse nur als grobe Hinweise verwenden, **nicht** als belastbare Grundlage für direkte Übernahmen in `projects.json`.
+
 ## Plattformübergreifende Runner-Skripte
 
 Für Agent-Workspaces gibt es plattformneutrale Runner:
