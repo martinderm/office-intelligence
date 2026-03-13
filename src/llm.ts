@@ -36,15 +36,37 @@ function getPrompt(cwd: string, promptPath?: string): string {
   return fs.readFileSync(p, "utf8");
 }
 
+function stripCodeFences(text: string): string {
+  return text
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+}
+
+function removeTrailingCommas(text: string): string {
+  return text.replace(/,\s*([}\]])/g, "$1");
+}
+
 function safeJsonParse(text: string): any {
-  const trimmed = text.trim();
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    const m = trimmed.match(/\{[\s\S]*\}$/);
-    if (!m) throw new Error("LLM did not return valid JSON");
-    return JSON.parse(m[0]);
+  const trimmed = stripCodeFences(text.trim());
+  const candidates: string[] = [trimmed];
+
+  const firstObj = trimmed.indexOf("{");
+  const lastObj = trimmed.lastIndexOf("}");
+  if (firstObj >= 0 && lastObj > firstObj) {
+    candidates.push(trimmed.slice(firstObj, lastObj + 1));
   }
+
+  for (const rawCandidate of candidates) {
+    const candidate = removeTrailingCommas(rawCandidate);
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try next candidate
+    }
+  }
+
+  throw new Error("LLM did not return valid JSON");
 }
 
 export async function extractWithLlm(params: {

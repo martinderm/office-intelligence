@@ -28,17 +28,31 @@ function shouldUseShell(command: string): boolean {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(command.trim());
 }
 
-function runCmd(command: string, args: string[]): string {
-  const result = spawnSync(command, args, { encoding: "utf8", shell: shouldUseShell(command) });
+function runCmd(command: string, args: string[], timeoutMs?: number): string {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    shell: shouldUseShell(command),
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    throw new Error(`command timeout after ${timeoutMs}ms: ${command} ${args.join(" ")}`);
+  }
   if (result.status !== 0) {
     throw new Error(`command failed: ${command} ${args.join(" ")}\n${result.stderr || result.stdout}`);
   }
   return result.stdout ?? "";
 }
 
-function runCmdDetailed(command: string, args: string[]): { output: string; status: number } {
-  const result = spawnSync(command, args, { encoding: "utf8", shell: shouldUseShell(command) });
+function runCmdDetailed(command: string, args: string[], timeoutMs?: number): { output: string; status: number } {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    shell: shouldUseShell(command),
+    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs } : {}),
+  });
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT") {
+    throw new Error(`command timeout after ${timeoutMs}ms: ${command} ${args.join(" ")}`);
+  }
   if (result.status !== 0) {
     throw new Error(`command failed: ${command} ${args.join(" ")}\n${output}`);
   }
@@ -104,6 +118,7 @@ export function readMessage(
   sourceFolder: string,
   id: string,
   exportBaseDir?: string,
+  timeoutMs?: number,
 ): MailMessage {
   // Prefer raw MIME export to preserve HTML parts for sanitizing.
   if (exportBaseDir) {
@@ -112,7 +127,7 @@ export function readMessage(
       fs.mkdirSync(exportDir, { recursive: true });
 
       const exportArgs = ["message", "export", "-f", sourceFolder, "--full", "-d", exportDir, id];
-      runCmd(command, exportArgs);
+      runCmd(command, exportArgs, timeoutMs);
 
       const emlPath = path.join(exportDir, `${id}.eml`);
       if (fs.existsSync(emlPath)) {
@@ -125,7 +140,7 @@ export function readMessage(
   }
 
   const args = ["message", "read", "-f", sourceFolder, id];
-  const raw = runCmd(command, args);
+  const raw = runCmd(command, args, timeoutMs);
   return { id, raw };
 }
 

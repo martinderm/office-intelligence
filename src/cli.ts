@@ -15,6 +15,21 @@ import { extractWithLlm } from "./llm.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
 import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isTransientReadError(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    msg.includes("os error 10054") ||
+    msg.includes("cannot connect to tls stream") ||
+    msg.includes("cannot connect to imap server") ||
+    msg.includes("command timeout") ||
+    msg.includes("operation was aborted")
+  );
+}
+
 function parseMode(args: string[]): "shadow" | "run" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
   if (!modeArg) return "shadow";
@@ -196,13 +211,33 @@ function selectEnvelopesForRun(params: {
   args: string[];
   cfg: ReturnType<typeof getConfig>;
   cursor: CursorState;
-}): { envelopes: Array<{ id: string; rawLine: string }>; strategy: string } {
+}): {
+  envelopes: Array<{ id: string; rawLine: string }>;
+  strategy: string;
+  scan: {
+    requestedMaxScanPages: number;
+    effectiveMaxScanPages: number;
+    scannedPages: number;
+    pageSize: number;
+    fetchLimit: number;
+  };
+} {
   const { args, cfg, cursor } = params;
   const explicitIds = parseExplicitEnvelopeIds(args);
+  const cap = Math.max(1, cfg.MAIL_FETCH_LIMIT);
+  const pageSize = Math.max(1, cfg.MAIL_ENVELOPE_PAGE_SIZE);
+
   if (explicitIds.length) {
     return {
       envelopes: explicitIds.map((id) => ({ id, rawLine: `[explicit] ${id}` })),
       strategy: "explicit_ids",
+      scan: {
+        requestedMaxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+        effectiveMaxScanPages: 0,
+        scannedPages: 0,
+        pageSize,
+        fetchLimit: cap,
+      },
     };
   }
 
@@ -210,6 +245,13 @@ function selectEnvelopesForRun(params: {
     return {
       envelopes: [{ id: "mock-1", rawLine: "mock-1 Example subject" }],
       strategy: "mock",
+      scan: {
+        requestedMaxScanPages: cfg.MAIL_SELECT_MAX_SCAN_PAGES,
+        effectiveMaxScanPages: 0,
+        scannedPages: 0,
+        pageSize,
+        fetchLimit: cap,
+      },
     };
   }
 
@@ -445,16 +487,77 @@ async function main(): Promise<void> {
       timestamp: new Date().toISOString(),
     });
 
-    for (const env of envelopes) {
+    for (let i = 0; i < envelopes.length; i += 1) {
+      const env = envelopes[i];
       summary.inspected += 1;
       try {
-        const msg =
-          cfg.HIMALAYA_COMMAND === "mock"
-            ? {
-                id: env.id,
-                raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
+        let msg:
+          | {
+              id: string;
+              raw: string;
+            }
+          | undefined;
+
+        if (cfg.HIMALAYA_COMMAND === "mock") {
+          msg = {
+            id: env.id,
+            raw: "Subject: [EXAMPLE] Bitte um Rückmeldung\nFrom: contact@example.org\nBody: Kannst du bis morgen antworten?",
+          };
+        } else {
+          const maxAttempts = Math.max(1, cfg.MAIL_MESSAGE_READ_RETRIES + 1);
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const started = Date.now();
+            try {
+              msg = readMessage(
+                cfg.HIMALAYA_COMMAND,
+                cfg.MAIL_SOURCE_FOLDER,
+                env.id,
+                cfg.MAIL_PROCESSOR_DATA_DIR,
+                cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+              );
+              appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                type: "message_read_attempt",
+                runId,
+                sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                envelopeId: env.id,
+                attempt,
+                maxAttempts,
+                transient: false,
+                ok: true,
+                durationMs: Date.now() - started,
+                timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+                timestamp: new Date().toISOString(),
+              });
+              break;
+            } catch (readErr) {
+              const transient = isTransientReadError(readErr);
+              const canRetry = transient && attempt < maxAttempts;
+              appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                type: "message_read_attempt",
+                runId,
+                sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                envelopeId: env.id,
+                attempt,
+                maxAttempts,
+                transient,
+                ok: false,
+                durationMs: Date.now() - started,
+                timeoutMs: cfg.MAIL_MESSAGE_READ_TIMEOUT_MS,
+                willRetry: canRetry,
+                error: readErr instanceof Error ? readErr.message : String(readErr),
+                timestamp: new Date().toISOString(),
+              });
+              if (!canRetry) throw readErr;
+              const backoff = Math.max(0, cfg.MAIL_MESSAGE_READ_RETRY_BACKOFF_MS * attempt);
+              if (backoff > 0) {
+                await sleep(backoff);
               }
-            : readMessage(cfg.HIMALAYA_COMMAND, cfg.MAIL_SOURCE_FOLDER, env.id, cfg.MAIL_PROCESSOR_DATA_DIR);
+            }
+          }
+          if (!msg) {
+            throw new Error(`message read failed without result for envelope ${env.id}`);
+          }
+        }
         const prepared = prepareMailText(
           msg.raw,
           cfg.MAIL_HTML_MAX_CURRENT,
@@ -514,16 +617,29 @@ async function main(): Promise<void> {
           cfg.LLM_API_KEY &&
           cfg.LLM_MODEL
         ) {
-          llm = await extractWithLlm({
-            cwd,
-            baseUrl: cfg.LLM_BASE_URL,
-            apiKey: cfg.LLM_API_KEY,
-            model: cfg.LLM_MODEL,
-            mailText: prepared.effectiveText,
-            projectHints,
-            promptPath: cfg.LLM_PROMPT_PATH,
-            timeoutMs: cfg.LLM_TIMEOUT_MS,
-          });
+          try {
+            llm = await extractWithLlm({
+              cwd,
+              baseUrl: cfg.LLM_BASE_URL,
+              apiKey: cfg.LLM_API_KEY,
+              model: cfg.LLM_MODEL,
+              mailText: prepared.effectiveText,
+              projectHints,
+              promptPath: cfg.LLM_PROMPT_PATH,
+              timeoutMs: cfg.LLM_TIMEOUT_MS,
+            });
+          } catch (llmErr) {
+            appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+              type: "llm_parse_error",
+              runId,
+              sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+              envelopeId: env.id,
+              error: llmErr instanceof Error ? llmErr.message : String(llmErr),
+              fallback: "heuristic_only",
+              timestamp: new Date().toISOString(),
+            });
+            llm = undefined;
+          }
         }
 
         const match = mergeHeuristicAndLlm(heuristicMatch, llm, projects);
@@ -699,6 +815,15 @@ async function main(): Promise<void> {
           error: error instanceof Error ? error.message : String(error),
           timestamp: new Date().toISOString(),
         });
+      }
+
+      if (i < envelopes.length - 1 && cfg.MAIL_INTER_MESSAGE_DELAY_MS > 0) {
+        const jitterMax = Math.max(0, cfg.MAIL_INTER_MESSAGE_JITTER_MS);
+        const jitter = jitterMax > 0 ? Math.floor(Math.random() * (jitterMax * 2 + 1)) - jitterMax : 0;
+        const delayMs = Math.max(0, cfg.MAIL_INTER_MESSAGE_DELAY_MS + jitter);
+        if (delayMs > 0) {
+          await sleep(delayMs);
+        }
       }
     }
 

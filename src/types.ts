@@ -43,6 +43,11 @@ export type EnvConfig = {
   MAIL_ENVELOPE_PAGE_SIZE: number;
   MAIL_SELECT_MAX_SCAN_PAGES: number;
   MAIL_CURSOR_FILE: string;
+  MAIL_INTER_MESSAGE_DELAY_MS: number;
+  MAIL_INTER_MESSAGE_JITTER_MS: number;
+  MAIL_MESSAGE_READ_TIMEOUT_MS: number;
+  MAIL_MESSAGE_READ_RETRIES: number;
+  MAIL_MESSAGE_READ_RETRY_BACKOFF_MS: number;
   MAIL_ROUTE_ACTION: "auto" | "copy" | "move";
   MAIL_COPY_SEMANTICS: "normal" | "acts_like_move";
   MAIL_ROUTE_STRICT: boolean;
