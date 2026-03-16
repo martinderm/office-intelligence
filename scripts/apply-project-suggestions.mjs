@@ -119,14 +119,14 @@ function ensureProjectDocs(project) {
   const indexAbs = path.resolve(baseAbs, "index.md");
   const signalsAbs = path.resolve(baseAbs, "signals.md");
   const evidenceDirAbs = path.resolve(baseAbs, "evidence");
-  const topicsDirAbs = path.resolve(baseAbs, "topics");
+  const workpackagesDirAbs = path.resolve(baseAbs, "workpackages");
 
   fs.mkdirSync(baseAbs, { recursive: true });
   fs.mkdirSync(evidenceDirAbs, { recursive: true });
-  fs.mkdirSync(topicsDirAbs, { recursive: true });
+  fs.mkdirSync(workpackagesDirAbs, { recursive: true });
 
   if (!fs.existsSync(indexAbs)) {
-    const indexContent = `# ${project.id} — ${project.title}\n\nKurzbeschreibung: auto-created from mail discovery suggestions.\n\n## Überblick\n\n- Status: aktiv\n- Owner: n/a\n- Mailbox-Ordner: ${project.mailbox_folder || "Archive"}\n- Letzte Aktivität: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n- Aktualisiert am: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n\n## Aktuelle Lage\n\n<!-- BEGIN:managed-summary -->\n- Zusammenfassung folgt nach den ersten klassifizierten Mails.\n<!-- END:managed-summary -->\n\n## Referenzen\n\n- Signale: ./signals.md\n- Evidenz-Log: ./evidence/\n- Topic-Notizen: ./topics/\n`;
+    const indexContent = `# ${project.id} — ${project.title}\n\nKurzbeschreibung: auto-created from mail discovery suggestions.\n\n## Überblick\n\n- Status: aktiv\n- Owner: n/a\n- Mailbox-Ordner: ${project.mailbox_folder || "Archive"}\n- Letzte Aktivität: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n- Aktualisiert am: ${project.updated_at || new Date().toISOString().slice(0, 10)}\n\n## Aktuelle Lage\n\n<!-- BEGIN:managed-summary -->\n- Zusammenfassung folgt nach den ersten klassifizierten Mails.\n<!-- END:managed-summary -->\n\n## Referenzen\n\n- Signale: ./signals.md\n- Evidenz-Log: ./evidence/\n- Workpackages: ./workpackages/\n`;
     fs.writeFileSync(indexAbs, indexContent, "utf8");
   }
 
@@ -137,8 +137,8 @@ function ensureProjectDocs(project) {
 
   const readmeKeepAbs = path.resolve(evidenceDirAbs, ".gitkeep");
   if (!fs.existsSync(readmeKeepAbs)) fs.writeFileSync(readmeKeepAbs, "\n", "utf8");
-  const topicsKeepAbs = path.resolve(topicsDirAbs, ".gitkeep");
-  if (!fs.existsSync(topicsKeepAbs)) fs.writeFileSync(topicsKeepAbs, "\n", "utf8");
+  const workpackagesKeepAbs = path.resolve(workpackagesDirAbs, ".gitkeep");
+  if (!fs.existsSync(workpackagesKeepAbs)) fs.writeFileSync(workpackagesKeepAbs, "\n", "utf8");
 }
 
 if (!dryRun) {

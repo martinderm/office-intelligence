@@ -7,6 +7,15 @@ Zentrale Doku für die Kataloge unter `memory/references/`.
 - Strukturierte, reviewbare Katalogpflege für Mail-Routing/Triage
 - Klare Trennung von Projekten und Topics
 - Keine doppelten Inhalte zwischen Katalogen
+- Allgemeine Datenbasis für Projekte: zentrale, konsistente Projektdokumentation außerhalb der Katalogfelder, referenzierbar über `index.md` und thematische `<slug>.md`-Seiten im jeweiligen Projektordner
+
+## Wo stehen allgemeine Projektinfos?
+
+- **Nicht** in diesem Katalog-README und **nicht** in `projects.json`-Feldern ausformulieren.
+- Pro Projekt liegt die allgemeine Doku im jeweiligen Projektordner:
+  - `.../<projekt>/index.md` = Einstieg/Navigation
+  - `.../<projekt>/<slug>.md` = Detailseiten je Thema (z. B. `architecture.md`, `workflow.md`, `contacts.md`)
+- In Katalogdateien (`projects.json`, `topics.json`) nur routingrelevante, strukturierte Metadaten pflegen.
 
 ## Pfad-Konvention
 

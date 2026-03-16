@@ -6,12 +6,12 @@
 
 ## Aktueller Stand (Managed)
 
-<!-- BEGIN:managed-topic-summary -->
+<!-- BEGIN:managed-workpackage-summary -->
 - Noch keine konsolidierten Einträge.
-<!-- END:managed-topic-summary -->
+<!-- END:managed-workpackage-summary -->
 
 ## Evidenz (Managed)
 
-<!-- BEGIN:managed-topic-evidence -->
+<!-- BEGIN:managed-workpackage-evidence -->
 - 
-<!-- END:managed-topic-evidence -->
+<!-- END:managed-workpackage-evidence -->

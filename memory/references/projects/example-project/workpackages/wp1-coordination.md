@@ -22,6 +22,6 @@
 
 ## Evidenz (Managed)
 
-<!-- BEGIN:managed-topic-evidence -->
+<!-- BEGIN:managed-workpackage-evidence -->
 - 
-<!-- END:managed-topic-evidence -->
+<!-- END:managed-workpackage-evidence -->

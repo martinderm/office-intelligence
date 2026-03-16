@@ -5,7 +5,7 @@ Für jedes Projekt wird ein eigener Ordner angelegt:
 - `memory/references/projects/<id>/index.md`
 - `memory/references/projects/<id>/signals.md`
 - `memory/references/projects/<id>/evidence/` (monatliche Logs)
-- `memory/references/projects/<id>/topics/` (Sub-Themen / Workpackages)
+- `memory/references/projects/<id>/workpackages/` (Workpackages)
 
 ---
 
@@ -34,7 +34,7 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 
 - Signale: ./signals.md
 - Evidenz-Log: ./evidence/
-- Topic-Notizen: ./topics/
+- Workpackages: ./workpackages/
 ```
 
 ## `signals.md` (Template)
@@ -84,7 +84,7 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 <!-- END:managed-evidence -->
 ```
 
-## `topics/<wp-id>-<slug>.md` (Template)
+## `workpackages/<wp-id>-<slug>.md` (Template)
 
 ```md
 # <WP-ID> — <Title>
@@ -99,19 +99,19 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 
 ## Aktueller Stand (Managed)
 
-<!-- BEGIN:managed-topic-summary -->
+<!-- BEGIN:managed-workpackage-summary -->
 - 
-<!-- END:managed-topic-summary -->
+<!-- END:managed-workpackage-summary -->
 
 ## Offene Punkte (Managed)
 
-<!-- BEGIN:managed-topic-open-items -->
+<!-- BEGIN:managed-workpackage-open-items -->
 - 
-<!-- END:managed-topic-open-items -->
+<!-- END:managed-workpackage-open-items -->
 
 ## Evidenz (Managed)
 
-<!-- BEGIN:managed-topic-evidence -->
+<!-- BEGIN:managed-workpackage-evidence -->
 - 
-<!-- END:managed-topic-evidence -->
+<!-- END:managed-workpackage-evidence -->
 ```

@@ -20,4 +20,4 @@ Kurzbeschreibung: Demoeintrag für den Katalog.
 
 - Signale: ./signals.md
 - Evidenz-Log: ./evidence/
-- Topic-Notizen: ./topics/
+- Workpackages: ./workpackages/
