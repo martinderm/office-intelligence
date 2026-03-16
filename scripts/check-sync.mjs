@@ -7,6 +7,15 @@ function fail(msg) {
   process.exit(1);
 }
 
+function listDirectSubdirs(root) {
+  if (!fs.existsSync(root)) return [];
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
+    .sort();
+}
+
 function parseArgs(argv) {
   const pairs = [];
   let strict = false;
@@ -17,6 +26,7 @@ function parseArgs(argv) {
       strict = true;
       continue;
     }
+
     if (arg === "--pair") {
       const source = argv[i + 1];
       const target = argv[i + 2];
@@ -28,11 +38,36 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (arg === "--pair-skills") {
+      const targetSkillsDir = argv[i + 1];
+      if (!targetSkillsDir) {
+        fail("--pair-skills braucht ein Zielverzeichnis: --pair-skills <target-skills-dir>");
+      }
+
+      const sourceSkillsDir = path.resolve("skills");
+      const targetSkillsAbs = path.resolve(targetSkillsDir);
+      const skillDirs = listDirectSubdirs(sourceSkillsDir);
+
+      if (!skillDirs.length) {
+        fail(`keine Skill-Verzeichnisse gefunden unter: ${sourceSkillsDir}`);
+      }
+
+      for (const skillName of skillDirs) {
+        pairs.push({
+          source: path.join(sourceSkillsDir, skillName),
+          target: path.join(targetSkillsAbs, skillName),
+        });
+      }
+
+      i += 1;
+      continue;
+    }
+
     fail(`unbekanntes Argument: ${arg}`);
   }
 
   if (!pairs.length) {
-    fail("mindestens ein Pair nötig: --pair <source> <target>");
+    fail("mindestens ein Pair nötig: --pair <source> <target> oder --pair-skills <target-skills-dir>");
   }
 
   return { pairs, strict };

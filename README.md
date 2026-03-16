@@ -145,7 +145,15 @@ Optional über `.env` steuerbar:
 
 ## Sync-Check für ausgerollte Skill-Dateien
 
-Für Deployments in Agent-Workspaces gibt es einen generischen Datei-Sync-Check:
+Für Deployments in Agent-Workspaces gibt es einen generischen Datei-Sync-Check.
+
+Alle Skills auf einmal prüfen (empfohlen):
+
+```bash
+npm run check:sync -- --pair-skills <agent-workspace>/skills
+```
+
+Einzelnes Paar prüfen:
 
 ```bash
 npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail-processor
@@ -154,10 +162,131 @@ npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail
 Optional streng (meldet auch zusätzliche Dateien im Ziel):
 
 ```bash
+npm run check:sync -- --strict --pair-skills <agent-workspace>/skills
 npm run check:sync -- --strict --pair <source-dir> <target-dir>
 ```
 
 Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Deploy-Pfade in `docs/INSTALL_PATHS.local.md` (Vorlage: `docs/INSTALL_PATHS.example.md`).
+
+## Scripts Reference (`./scripts`)
+
+Alle Scripts sind für Aufrufe aus dem Projekt-Root gedacht (`projects/mail-processor`).
+
+### `run-shadow.mjs`
+
+Zweck:
+- Baut das Projekt und startet einen Shadow-Run mit sicherem Default (`MAIL_ROUTING_ENABLED=false`).
+
+Aufruf:
+```bash
+node scripts/run-shadow.mjs
+node scripts/run-shadow.mjs --fetch-limit=1
+```
+
+Optionen:
+- `--fetch-limit=<n>` setzt zur Laufzeit `MAIL_FETCH_LIMIT=<n>` (nur wenn `n > 0`).
+
+Hinweise:
+- Führt intern aus: `npm run build` und danach `npm run shadow`.
+
+### `run-run.mjs`
+
+Zweck:
+- Baut das Projekt und startet einen Routing-Run (`MAIL_ROUTING_ENABLED=true`).
+
+Aufruf:
+```bash
+node scripts/run-run.mjs
+node scripts/run-run.mjs --fetch-limit=10
+```
+
+Optionen:
+- `--fetch-limit=<n>` setzt zur Laufzeit `MAIL_FETCH_LIMIT=<n>` (nur wenn `n > 0`).
+
+Hinweise:
+- Führt intern aus: `npm run build` und danach `npm run run`.
+- Nur verwenden, wenn Routing explizit gewollt ist.
+
+### `apply-project-suggestions.mjs`
+
+Zweck:
+- Übernimmt Vorschläge aus Discovery-JSON in den Projektkatalog.
+- Legt bei neuen Projekten die Basisstruktur unter `memory/references/projects/<project-id>/` an.
+- Ergänzt Changelog-Einträge in `memory/references/projects/changelog.md`.
+
+Aufruf:
+```bash
+node scripts/apply-project-suggestions.mjs --input=./memory/references/projects/inbox/<file>.json
+node scripts/apply-project-suggestions.mjs --dry-run
+```
+
+Optionen:
+- `--input=<path>` Pfad zur Suggestion-Datei.
+- `--dry-run` berechnet Änderungen ohne Schreibzugriffe.
+
+Default-Verhalten:
+- Ohne `--input` wird die neueste `*.json` aus `memory/references/projects/inbox/` verwendet.
+- `projects.json` wird über `PROJECTS_JSON_PATH` oder Default `./memory/references/projects/projects.json` geladen.
+
+### `create-himalaya-account-proxy.mjs`
+
+Zweck:
+- Erzeugt einen kleinen Wrapper, der Himalaya immer mit fixem Account (`-a <account>`) aufruft.
+
+Aufruf:
+```bash
+node scripts/create-himalaya-account-proxy.mjs --account=ACCOUNT_NAME --out=./scripts/himalaya-account-proxy.mjs
+```
+
+Optionen:
+- `--account=<name>` Account-Name für `-a` (Default: `ACCOUNT_NAME`).
+- `--out=<path>` Zielpfad für den Wrapper (Default: `./scripts/himalaya-account-proxy.mjs`).
+- `--himalaya=<cmd>` Basis-Kommando/Binary (Default: `himalaya`).
+
+Hinweise:
+- Der erzeugte Wrapper erlaubt Overwrites via Env:
+  - `HIMALAYA_ACCOUNT`
+  - `HIMALAYA_EXE`
+
+### `check-sync.mjs`
+
+Zweck:
+- Vergleicht Dateien/Verzeichnisse zwischen Source und Target (Deploy-Sync-Check).
+
+Aufruf:
+```bash
+npm run check:sync -- --pair-skills <agent-workspace>/skills
+npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail-processor
+npm run check:sync -- --strict --pair-skills <agent-workspace>/skills
+```
+
+Optionen:
+- `--pair-skills <target-skills-dir>` vergleicht automatisch **alle** lokalen Skill-Unterordner unter `./skills/*` gegen `<target-skills-dir>/<skill-name>`.
+- `--pair <source> <target>` einzelnes Vergleichspaar (mehrfach möglich).
+- `--strict` meldet zusätzliche Dateien im Target als Fehler.
+
+Exit-Code:
+- `0` wenn alle Vergleiche OK.
+- `1` bei Abweichungen/Fehlern.
+
+### `check-skill-runners.mjs`
+
+Zweck:
+- Prüft ausgerollte Skill-Runner auf verbotene Hardcodings (z. B. Mailbox/LLM/Pfade) und absolute Windows-Pfade.
+
+Geprüfte Dateien:
+- `skills/mail-processor/scripts/run-shadow.mjs`
+- `skills/mail-processor/scripts/run-run.mjs`
+- `skills/mail-processor/scripts/run-discover-projects.mjs`
+
+Aufruf:
+```bash
+npm run check:skill-runners
+```
+
+Hinweise:
+- Der Check ist Teil von `npm run check`.
+- Fehlschlag bedeutet: Runner müssen instanzspezifische Werte aus `.env` beziehen statt Hardcoding.
 
 ## Aktueller Implementierungsstand
 
