@@ -1,6 +1,16 @@
-﻿# mail-processor
+﻿# mail-processor (office-intelligence)
 
-Standalone Mail-Triage/Routing/Processing pipeline (concept-first).
+`mail-processor` ist ein Unterpaket der Zielarchitektur **office-intelligence**.
+
+Geplante Paketstruktur:
+- `mail-processor` → Ingestion, Mail-Triage, Routing-Signale
+- `project-intelligence` → Projektwissen, Projektkatalog, projektbezogene Zuordnung
+- `topic-intelligence` → Topic-Taxonomie, thematische Erkennung und Querbezüge
+
+Rolle dieses Repos heute:
+- **Primärquelle:** Mail
+- **Fokus:** zuverlässige Verarbeitungspipeline + Signale als Basis für Project/Topic-Intelligence
+- **Ausbaupfad:** zusätzliche Quellen neben Mail (z. B. Tickets, Doku, Chat)
 
 Für die Installation in einen bestehenden Mail-Agent siehe:
 - `docs/INSTALL-INTO-AGENT.md`
@@ -16,6 +26,11 @@ Memory-Update-Flow (kurz):
 
 Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
 - `skills/project-catalog-entry/SKILL.md`
+
+Knowledge-Architektur (verbindlich):
+- **Routing-Metadaten:** `memory/references/projects/projects.json`
+- **Projektdokumentation:** `memory/references/projects/<slug>/` (mit `index.md` als Einstieg)
+- `reference_md` zeigt auf `memory/references/projects/<slug>/index.md`
 
 Agent-Deploy-Konvention:
 - Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
