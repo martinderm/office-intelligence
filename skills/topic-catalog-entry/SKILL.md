@@ -1,37 +1,49 @@
 ---
 name: topic-catalog-entry
-description: Topic-Katalog-Pflege für mail-processor. Verwende diesen Skill, wenn neue Topics strukturiert in memory/references/topics/topics.json angelegt oder bestehende Topic-Einträge aktualisiert/ergänzt werden sollen – entweder interaktiv per Einzelfragen (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns) oder durch Einlesen einer Markdown-Vorlage mit denselben Feldern.
+description: Topic-Katalog-Pflege für mail-processor. Verwende diesen Skill, wenn Topics im Katalog `memory/references/topics/topics.json` angelegt/aktualisiert werden und die zugehörige Topic-Referenz unter `memory/references/topics/<slug>/` strukturiert werden muss. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, subtopics).
 ---
 
 # topic-catalog-entry
 
-Lege neue Topics strukturiert und reviewbar an oder aktualisiere bestehende Topic-Katalogeinträge gezielt.
+Pflege Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar.
 
-## Ziel
+## Zielbild (verbindlich)
 
-- Konsistente Einträge in `memory/references/topics/topics.json`
-- Strukturierte Neuanlage **und** Updates bestehender Topics
-- Keine Freitext-Wildwest-Felder
-- Entweder **interaktiv (Q&A)** oder **Markdown-Vorlage**
+Unterscheide immer zwei Ebenen:
+
+1. **Routing-Metadaten** → `memory/references/topics/topics.json`
+2. **Inhaltliche Topic-Doku** → `memory/references/topics/<slug>/`
+
+Für neue Topics gilt: **nicht nur JSON-Eintrag**, sondern auch **Topic-Ordner-Struktur** anlegen.
+
+## Verbindliche Ordnerstruktur bei Neuanlage
+
+Lege für neue Topics an:
+
+- `memory/references/topics/<slug>/index.md`
+- `memory/references/topics/<slug>/contacts.md`
+- `memory/references/topics/<slug>/signals.md`
+- `memory/references/topics/<slug>/subtopics/` (Ordner)
+- optional: `memory/references/topics/<slug>/evidence/` (Ordner)
+
+Regeln:
+
+- `reference_md` zeigt standardmäßig auf `memory/references/topics/<slug>/index.md`.
+- **Keine ausführliche Topic-Doku in `topics.json`.**
+- **Keine Einzeldatei `memory/references/topics/<slug>.md` als Hauptreferenz.**
+- Falls eine alte Einzeldatei existiert: nur als kurzer Redirect/Deprecation-Hinweis verwenden.
 
 ## Arbeitsmodus
 
-1. Ermittele den Modus:
-   - Wenn der User eine Vorlage liefert → `template-mode`
-   - Sonst → `questionnaire-mode`
-
-2. Sammle die Daten im gemeinsamen Zielschema.
-
-3. Validiere Pflichtfelder:
-   - `id` (slug)
-   - `title`
-   - `mailbox_folder`
-
-4. Erzeuge einen JSON-Block im `topics.json`-Format.
-
-5. Zeige vor dem Schreiben immer eine kurze Review-Zusammenfassung.
-
-6. Schreibe erst nach expliziter Freigabe in `topics.json`.
+1. Modus ermitteln:
+   - Vorlage vorhanden → `template-mode`
+   - sonst → `questionnaire-mode`
+2. Daten im gemeinsamen Zielschema sammeln.
+3. Pflichtfelder validieren (`id`, `title`, `mailbox_folder`).
+4. Bei Neuanlage: Topic-Ordner-Struktur planen/erzeugen.
+5. JSON-Block erzeugen (`topics.json`-Format).
+6. Vor Schreiben immer eine kurze Review-Zusammenfassung zeigen (JSON + Dateipfade).
+7. Erst nach expliziter Freigabe schreiben.
 
 ## Zielschema (pro Topic)
 
@@ -40,10 +52,22 @@ Lege neue Topics strukturiert und reviewbar an oder aktualisiere bestehende Topi
   "id": "string",
   "title": "string",
   "mailbox_folder": "string",
+  "reference_md": "string",
   "aliases": ["string"],
   "keywords": ["string"],
   "domains": ["string"],
   "contacts": [{ "name": "string", "email": "string", "role": "string" }],
+  "subtopics": [
+    {
+      "id": "string",
+      "title": "string",
+      "aliases": ["string"],
+      "keywords": ["string"],
+      "contacts": [{ "email": "string" }],
+      "status": "active"
+    }
+  ],
+  "description": "string",
   "typical_subject_patterns": ["string"],
   "routing_priority": 70,
   "do_not_route_if": ["newsletter", "no-reply"],
@@ -57,43 +81,55 @@ Lege neue Topics strukturiert und reviewbar an oder aktualisiere bestehende Topi
 Frage in dieser Reihenfolge, kurz und präzise:
 
 1. Topic-Titel (`title`)
-2. Topic-ID (`id`, sonst aus Titel vorschlagen)
+2. Topic-ID (`id`, sonst aus Titel als slug vorschlagen)
 3. Zielordner (`mailbox_folder`)
 4. Domains
 5. Kontakte (Name + E-Mail + Rolle optional)
 6. Aliases
 7. Keywords
 8. Typical subject patterns
-9. Routing-Priorität / do_not_route_if
+9. Subtopics (optional)
+10. Routing-Priorität / `do_not_route_if`
+
+Dann:
+
+11. `reference_md` auf `memory/references/topics/<slug>/index.md` setzen (Default)
+12. Fehlende Inhalte für `index.md`, `contacts.md`, `signals.md` kurz abfragen (oder mit Platzhaltern anlegen)
 
 Regeln:
-- Wenn Feld unbekannt ist: leeres Array oder sinnvoller Default.
-- Keine Felder erfinden, die nicht genannt wurden.
+
+- Wenn Feld unbekannt: leeres Array oder sinnvoller Default.
+- Keine zusätzlichen Felder erfinden.
 
 ## Template-Mode
 
-Wenn der User eine Markdown-Vorlage liefert, parse nach den Überschriften aus `references/topic-template.md`.
+Wenn eine Markdown-Vorlage geliefert wird, parse nach `references/topic-template.md`.
 
 - Fehlende Pflichtfelder aktiv nachfragen.
-- Leere optionale Felder als `[]` oder weglassen (je nach bestehendem Stil in topics.json).
+- Leere optionale Felder als `[]` oder weglassen (gemäß bestehendem Stil).
+- Auch im Template-Mode bei Neuanlage die Topic-Ordner-Struktur anlegen.
 
 ## Validierung
 
 Vor Ausgabe prüfen:
+
 - `id` nur `[a-z0-9-]`
 - keine doppelten Domains/Kontakte
 - `contacts[].email` syntaktisch plausibel
+- `subtopics[].id` ebenfalls slug
 - `schema_version = 1`
+- `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)
 
 ## Schreibregeln
 
 - Nie blind überschreiben.
-- Immer bestehenden JSON-Stil beibehalten.
+- Bestehenden JSON-Stil beibehalten.
 - Nur minimal patchen.
-- Bei mehreren neuen/aktualisierten Topics: gesammelt als ein Patch.
+- Bei mehreren neuen Topics: gesammelt als ein Patch.
+- Struktur zuerst konsistent planen, dann in einem sauberen Schritt schreiben.
 
 ## Anti-Duplikat-Regel
 
 - Keine inhaltliche Doppelpflege zwischen `projects.json` und `topics.json`.
 - Querverweise sparsam halten (IDs/Links), nur wenn routing- oder kontextrelevant.
-- Workpackages bleiben ausschließlich unter Projekten.
+- Workpackages bleiben bei Projekten; Topics verwenden stattdessen `subtopics`.

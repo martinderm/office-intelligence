@@ -7,14 +7,17 @@ Zentrale Doku für die Kataloge unter `memory/references/`.
 - Strukturierte, reviewbare Katalogpflege für Mail-Routing/Triage
 - Klare Trennung von Projekten und Topics
 - Keine doppelten Inhalte zwischen Katalogen
-- Allgemeine Datenbasis für Projekte: zentrale, konsistente Projektdokumentation außerhalb der Katalogfelder, referenzierbar über `index.md` und thematische `<slug>.md`-Seiten im jeweiligen Projektordner
+- Allgemeine Datenbasis für Projekte und Topics: zentrale, konsistente Fachdokumentation außerhalb der Katalogfelder, referenzierbar über `index.md` und thematische Unterseiten in den jeweiligen Ordnern
 
-## Wo stehen allgemeine Projektinfos?
+## Wo stehen allgemeine Projekt-/Topic-Infos?
 
-- **Nicht** in diesem Katalog-README und **nicht** in `projects.json`-Feldern ausformulieren.
+- **Nicht** in diesem Katalog-README und **nicht** in `projects.json`/`topics.json`-Feldern ausformulieren.
 - Pro Projekt liegt die allgemeine Doku im jeweiligen Projektordner:
-  - `.../<projekt>/index.md` = Einstieg/Navigation
-  - `.../<projekt>/<slug>.md` = Detailseiten je Thema (z. B. `architecture.md`, `workflow.md`, `contacts.md`)
+  - `.../projects/<projekt>/index.md` = Einstieg/Navigation
+  - `.../projects/<projekt>/<slug>.md` = Detailseiten je Thema (z. B. `architecture.md`, `workflow.md`, `contacts.md`)
+- Pro Topic liegt die allgemeine Doku im jeweiligen Topic-Ordner:
+  - `.../topics/<topic>/index.md` = Einstieg/Navigation
+  - `.../topics/<topic>/signals.md`, `.../topics/<topic>/contacts.md`, `.../topics/<topic>/subtopics/`
 - In Katalogdateien (`projects.json`, `topics.json`) nur routingrelevante, strukturierte Metadaten pflegen.
 
 ## Pfad-Konvention
@@ -32,7 +35,8 @@ Env:
 
 - **Projects** und **Topics** sind gleichrangige Kataloge.
 - **Workpackages** bleiben strikt unter `projects[].workpackages[]`.
-- Routing darf auf Project-, Topic- und Workpackage-Ebene matchen.
+- **Subtopics** bleiben strikt unter `topics[].subtopics[]`.
+- Routing darf auf Project-, Topic-, Subtopic- und Workpackage-Ebene matchen.
 
 ## Anti-Duplikat-Regel (wichtig)
 
@@ -82,16 +86,28 @@ Pflicht pro Projekt:
     "id": "rpl-validation",
     "title": "Recognition of Prior Learning (RPL)",
     "mailbox_folder": "Topics/RPL",
+    "reference_md": "memory/references/topics/rpl-validation/index.md",
     "aliases": ["RPL"],
     "keywords": ["validation", "prior learning"],
     "domains": ["example.org"],
     "contacts": [
       { "name": "Topic Lead", "email": "topic.lead@example.org", "role": "topic-lead" }
     ],
+    "subtopics": [
+      {
+        "id": "portfolio-assessment",
+        "title": "Portfolio Assessment",
+        "aliases": ["Portfolio"],
+        "keywords": ["portfolio", "assessment"],
+        "contacts": [{ "email": "topic.lead@example.org" }],
+        "status": "active"
+      }
+    ],
+    "description": "Rahmen und Prozesse zur Anerkennung von Vorkenntnissen.",
     "typical_subject_patterns": ["RPL"],
     "routing_priority": 70,
     "do_not_route_if": ["newsletter", "no-reply"],
-    "updated_at": "2026-03-13",
+    "updated_at": "2026-03-24",
     "schema_version": 1
   }
 ]
@@ -99,6 +115,9 @@ Pflicht pro Projekt:
 
 Pflicht pro Topic:
 - `id`, `title`, `mailbox_folder`
+
+Empfohlen (Default bei Neuanlage):
+- `reference_md` → `memory/references/topics/<slug>/index.md`
 
 ## Review-Flow
 

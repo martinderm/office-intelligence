@@ -3,36 +3,44 @@
 `mail-processor` ist ein Unterpaket der Zielarchitektur **office-intelligence**.
 
 Geplante Paketstruktur:
+
 - `mail-processor` → Ingestion, Mail-Triage, Routing-Signale
 - `project-intelligence` → Projektwissen, Projektkatalog, projektbezogene Zuordnung
 - `topic-intelligence` → Topic-Taxonomie, thematische Erkennung und Querbezüge
 
 Rolle dieses Repos heute:
+
 - **Primärquelle:** Mail
 - **Fokus:** zuverlässige Verarbeitungspipeline + Signale als Basis für Project/Topic-Intelligence
 - **Ausbaupfad:** zusätzliche Quellen neben Mail (z. B. Tickets, Doku, Chat)
 
 Für die Installation in einen bestehenden Mail-Agent siehe:
+
 - `docs/INSTALL-INTO-AGENT.md`
 
 Geplante Weiterentwicklungen:
+
 - `docs/ROADMAP.md`
 
 Memory-Update-Flow (kurz):
+
 1) Discovery über Runner starten: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 2) Vorschlag in `memory/references/projects/inbox/*.json` prüfen
 3) `npm run apply:suggestions -- --input=<datei.json>`
 4) Konsolidierung durch den OpenClaw-Agenten (nicht per lokales Merge-Skript)
 
 Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
+
 - `skills/project-catalog-entry/SKILL.md`
 
 Knowledge-Architektur (verbindlich):
+
 - **Routing-Metadaten:** `memory/references/projects/projects.json`
 - **Projektdokumentation:** `memory/references/projects/<slug>/` (mit `index.md` als Einstieg)
 - `reference_md` zeigt auf `memory/references/projects/<slug>/index.md`
 
 Agent-Deploy-Konvention:
+
 - Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
 - Skill-Runner dürfen diese Werte nicht hardcoden.
 - Siehe `docs/INSTALL-INTO-AGENT.md`.
@@ -42,6 +50,7 @@ Agent-Deploy-Konvention:
 Der `mail-processor` hat im Code bereits konservative Defaults (Shadow-first, Routing standardmäßig aus, sinnvolle Schwellwerte/Timeouts/Sanitizing). Das heißt: Für einen sicheren Start musst du **nicht** alles konfigurieren.
 
 Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
+
 - `HIMALAYA_COMMAND` (konkreter Himalaya-Binary-/Gate-/Wrapper-Pfad deiner Instanz; **muss mailbox-gebunden sein**)
 - `MAILBOX_KEY` (stabiler, kurzer Mailbox-Schlüssel für capability cache-Dateien)
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
@@ -59,10 +68,12 @@ Alle übrigen Parameter können in der Regel auf Default bleiben und nur bei Bed
 `mail-processor` ist so gedacht, dass es in einem Agent-Workspace läuft. Der Agent soll dafür eine **Memory-Struktur unter `/memory`** anlegen (relativ zum Workspace-Root).
 
 Wichtige Pfade:
-- `memory/references/projects/projects.json` — Projektkatalog (Source of truth für Routing)
-- `memory/references/projects/README.md` — Doku + Schema, wie der Katalog aufgebaut sein soll
 
-Siehe: `memory/references/projects/README.md`
+- `memory/references/projects/projects.json` — Projektkatalog (Source of truth für Projekt-Routing)
+- `memory/references/topics/topics.json` — Topic-Katalog (Source of truth für Topic-Routing)
+- `memory/references/README.md` — gemeinsame Doku + Schemata für beide Kataloge
+
+Siehe: `memory/references/README.md`
 
 ## Quickstart
 
@@ -133,11 +144,13 @@ Warum Discovery-Runner: Bei Agent-Setups liegen Gate-/Mailbox-Bindung und Pfade 
 Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discover-projects` im Projektkontext kann sonst auf ein ungebundenes `himalaya` zurückfallen.
 
 Wichtig für alle Runner (`run-shadow`, `run-run`, `run-discover-projects`):
+
 - `AGENT_WORKSPACE_ROOT` als Umgebungsvariable setzen (Pfad zum Agent-Workspace, der die `.env` enthält).
 - `MAIL_PROCESSOR_PROJECT_DIR` im Agent-`.env` auf das echte Repo setzen (z. B. `<workspace>/projects/mail-processor`).
 - Ohne diesen Wert kann der Prozess im Skill-Ordner landen (`skills/mail-processor`) und dort fehlt erwartungsgemäß `package.json`.
 
 Beispiel:
+
 ```bash
 AGENT_WORKSPACE_ROOT=/path/to/agent/workspace node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
 ```
@@ -145,14 +158,19 @@ AGENT_WORKSPACE_ROOT=/path/to/agent/workspace node skills/mail-processor/scripts
 Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
 
 Health-Check (Lock + State + TLS-Fehlerrate):
+
 ```bash
 node skills/mail-processor/scripts/check-health.mjs
 ```
+
 Mit optionaler Sanierung:
+
 ```bash
 node skills/mail-processor/scripts/check-health.mjs --fix-stale-lock --cleanup-orphaned-runs
 ```
+
 Optional über `.env` steuerbar:
+
 - `HEALTH_STALE_LOCK_MAX_SECONDS` (Default `300`)
 - `HEALTH_RECENT_WINDOW_MINUTES` (Default `60`)
 - `HEALTH_MAX_TLS_ERRORS` (Default `3`)
@@ -190,75 +208,91 @@ Alle Scripts sind für Aufrufe aus dem Projekt-Root gedacht (`projects/mail-proc
 ### `run-shadow.mjs`
 
 Zweck:
+
 - Baut das Projekt und startet einen Shadow-Run mit sicherem Default (`MAIL_ROUTING_ENABLED=false`).
 
 Aufruf:
+
 ```bash
 node scripts/run-shadow.mjs
 node scripts/run-shadow.mjs --fetch-limit=1
 ```
 
 Optionen:
+
 - `--fetch-limit=<n>` setzt zur Laufzeit `MAIL_FETCH_LIMIT=<n>` (nur wenn `n > 0`).
 
 Hinweise:
+
 - Führt intern aus: `npm run build` und danach `npm run shadow`.
 
 ### `run-run.mjs`
 
 Zweck:
+
 - Baut das Projekt und startet einen Routing-Run (`MAIL_ROUTING_ENABLED=true`).
 
 Aufruf:
+
 ```bash
 node scripts/run-run.mjs
 node scripts/run-run.mjs --fetch-limit=10
 ```
 
 Optionen:
+
 - `--fetch-limit=<n>` setzt zur Laufzeit `MAIL_FETCH_LIMIT=<n>` (nur wenn `n > 0`).
 
 Hinweise:
+
 - Führt intern aus: `npm run build` und danach `npm run run`.
 - Nur verwenden, wenn Routing explizit gewollt ist.
 
 ### `apply-project-suggestions.mjs`
 
 Zweck:
+
 - Übernimmt Vorschläge aus Discovery-JSON in den Projektkatalog.
 - Legt bei neuen Projekten die Basisstruktur unter `memory/references/projects/<project-id>/` an.
 - Ergänzt Changelog-Einträge in `memory/references/projects/changelog.md`.
 
 Aufruf:
+
 ```bash
 node scripts/apply-project-suggestions.mjs --input=./memory/references/projects/inbox/<file>.json
 node scripts/apply-project-suggestions.mjs --dry-run
 ```
 
 Optionen:
+
 - `--input=<path>` Pfad zur Suggestion-Datei.
 - `--dry-run` berechnet Änderungen ohne Schreibzugriffe.
 
 Default-Verhalten:
+
 - Ohne `--input` wird die neueste `*.json` aus `memory/references/projects/inbox/` verwendet.
 - `projects.json` wird über `PROJECTS_JSON_PATH` oder Default `./memory/references/projects/projects.json` geladen.
 
 ### `create-himalaya-account-proxy.mjs`
 
 Zweck:
+
 - Erzeugt einen kleinen Wrapper, der Himalaya immer mit fixem Account (`-a <account>`) aufruft.
 
 Aufruf:
+
 ```bash
 node scripts/create-himalaya-account-proxy.mjs --account=ACCOUNT_NAME --out=./scripts/himalaya-account-proxy.mjs
 ```
 
 Optionen:
+
 - `--account=<name>` Account-Name für `-a` (Default: `ACCOUNT_NAME`).
 - `--out=<path>` Zielpfad für den Wrapper (Default: `./scripts/himalaya-account-proxy.mjs`).
 - `--himalaya=<cmd>` Basis-Kommando/Binary (Default: `himalaya`).
 
 Hinweise:
+
 - Der erzeugte Wrapper erlaubt Overwrites via Env:
   - `HIMALAYA_ACCOUNT`
   - `HIMALAYA_EXE`
@@ -266,9 +300,11 @@ Hinweise:
 ### `check-sync.mjs`
 
 Zweck:
+
 - Vergleicht Dateien/Verzeichnisse zwischen Source und Target (Deploy-Sync-Check).
 
 Aufruf:
+
 ```bash
 npm run check:sync -- --pair-skills <agent-workspace>/skills
 npm run check:sync -- --pair skills/mail-processor <agent-workspace>/skills/mail-processor
@@ -276,30 +312,36 @@ npm run check:sync -- --strict --pair-skills <agent-workspace>/skills
 ```
 
 Optionen:
+
 - `--pair-skills <target-skills-dir>` vergleicht automatisch **alle** lokalen Skill-Unterordner unter `./skills/*` gegen `<target-skills-dir>/<skill-name>`.
 - `--pair <source> <target>` einzelnes Vergleichspaar (mehrfach möglich).
 - `--strict` meldet zusätzliche Dateien im Target als Fehler.
 
 Exit-Code:
+
 - `0` wenn alle Vergleiche OK.
 - `1` bei Abweichungen/Fehlern.
 
 ### `check-skill-runners.mjs`
 
 Zweck:
+
 - Prüft ausgerollte Skill-Runner auf verbotene Hardcodings (z. B. Mailbox/LLM/Pfade) und absolute Windows-Pfade.
 
 Geprüfte Dateien:
+
 - `skills/mail-processor/scripts/run-shadow.mjs`
 - `skills/mail-processor/scripts/run-run.mjs`
 - `skills/mail-processor/scripts/run-discover-projects.mjs`
 
 Aufruf:
+
 ```bash
 npm run check:skill-runners
 ```
 
 Hinweise:
+
 - Der Check ist Teil von `npm run check`.
 - Fehlschlag bedeutet: Runner müssen instanzspezifische Werte aus `.env` beziehen statt Hardcoding.
 
@@ -374,6 +416,7 @@ Hinweis: `stableId` bleibt der fachliche Idempotenz-Key; `fileId` ist der kompak
 Die Qualität der Klassifizierung hängt stark von `memory/references/projects/projects.json` ab.
 
 Wenn die Projektliste dünn/unscharf ist, wird Routing unzuverlässig (oder bleibt leer). Für gute Ergebnisse braucht der Katalog:
+
 - klare `id` + `title` pro Projekt
 - gepflegte `aliases`, `domains`, `contacts`
 - sinnvolle `keywords` (spezifisch statt generisch)
@@ -391,14 +434,17 @@ Kurz: **Gutes LLM + schwacher Projektkatalog = schwaches Routing**.
 ### IMAP-Server-Spezialfall: COPY kann wie MOVE wirken
 
 Einige IMAP-Server/Backends verhalten sich so, dass ein `message copy <target> <id>` **effektiv einem Move entspricht** (beobachtet z. B. bei OpenText GroupWise 25.2.0.148299):
+
 - die Nachricht ist danach im Source-Ordner nicht mehr vorhanden
 - im Zielordner erscheint sie unter einer **neuen Envelope-ID**
 
 Konsequenzen für `mail-processor`:
+
 - Envelope-IDs sind **nicht stabil** und dürfen nicht als dauerhafter Verarbeitungsschlüssel verwendet werden (darum: `Message-ID`/Hash).
 - Multi-Target-Routing (mehrere `copyTargets`) kann auf solchen Systemen fehlschlagen oder nur den ersten Target erreichen.
 
 Empfehlung:
+
 - Wenn du so ein Backend hast: **Single-Target-Routing** erzwingen (oder klare Priorität: „best match wins“).
 - Nach dem Copy optional verifizieren (Source/Target envelope list), wenn Konsistenz kritisch ist.
 
@@ -411,11 +457,13 @@ Der Runner kann jetzt steuern, **welche** Mails pro Lauf ausgewählt werden:
 - `MAIL_SCAN_MODE=auto` → kombiniert Tail + Backfill
 
 Wichtige Parameter:
+
 - `MAIL_ENVELOPE_PAGE_SIZE` (z. B. 100)
 - `MAIL_SELECT_MAX_SCAN_PAGES` (z. B. 10)
 - `MAIL_CURSOR_FILE` (default `data/mail-processor/cursor.json`)
 
 Explizite Einzelsteuerung pro Lauf:
+
 - `--ids=7588,7587,...`
 
 Hinweis: durch Idempotenz (`stableId`) sind Mehrfach-Scans unkritisch; bereits verarbeitete Mails werden übersprungen.
@@ -463,6 +511,7 @@ Zusätzlich zur Policy steuern diese Env-Variablen das operative Verhalten:
 - `MAIL_USE_UIDPLUS=true|false` (optional; nur wirksam wenn `supportsUidPlus=true`)
 
 Logik:
+
 - `auto` nutzt `move`, wenn `supportsMove=true`, sonst `copy`.
 - `move` ohne Capability führt bei `MAIL_ROUTE_STRICT=true` zum Fehler, sonst Fallback auf `copy`.
 - `MAIL_COPY_SEMANTICS=acts_like_move` erzwingt **Single-Target-Routing** (auch bei `copy`), um serverseitige Copy→Move-Semantik sauber zu behandeln.
@@ -498,5 +547,3 @@ node scripts/create-himalaya-account-proxy.mjs --account=ACCOUNT_NAME --out=./sc
 ```
 
 Danach kann der erzeugte Wrapper als `HIMALAYA_COMMAND` verwendet werden.
-
-

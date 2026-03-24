@@ -8,6 +8,9 @@
 ## mailbox_folder
 <!-- z. B. Topics/RPL -->
 
+## reference_md
+<!-- default: memory/references/topics/<slug>/index.md -->
+
 ## aliases
 - 
 
@@ -18,9 +21,19 @@
 - 
 
 ## contacts
-- name: 
-  email: 
-  role: 
+- name:
+  email:
+  role:
+
+## subtopics
+- id:
+  title:
+  aliases: []
+  keywords: []
+  contacts: []
+  status: active
+
+## description
 
 ## typical_subject_patterns
 - 

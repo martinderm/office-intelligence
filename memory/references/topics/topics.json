@@ -1,0 +1,30 @@
+[
+  {
+    "id": "example-topic",
+    "title": "Example Topic",
+    "mailbox_folder": "Topics/Example",
+    "reference_md": "memory/references/topics/example-topic/index.md",
+    "aliases": ["Example"],
+    "keywords": ["example"],
+    "domains": ["example.org"],
+    "contacts": [
+      { "name": "Example Topic Lead", "email": "topic@example.org", "role": "topic-lead" }
+    ],
+    "subtopics": [
+      {
+        "id": "example-subtopic",
+        "title": "Example Subtopic",
+        "aliases": ["Subtopic Example"],
+        "keywords": ["subtopic", "example"],
+        "contacts": [{ "email": "topic@example.org" }],
+        "status": "active"
+      }
+    ],
+    "description": "Beispieltopic für den initialen Setup.",
+    "typical_subject_patterns": ["[EXAMPLE-TOPIC]"],
+    "routing_priority": 70,
+    "do_not_route_if": ["newsletter", "no-reply"],
+    "updated_at": "2026-03-24",
+    "schema_version": 1
+  }
+]
