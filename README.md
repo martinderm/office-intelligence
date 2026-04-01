@@ -11,7 +11,7 @@ Geplante Paketstruktur:
 Rolle dieses Repos heute:
 
 - **Primärquelle:** Mail
-- **Fokus:** zuverlässige Verarbeitungspipeline + Signale als Basis für Project/Topic-Intelligence
+- **Fokus:** Projektmanagement sowie zuverlässige Verarbeitungspipeline + Signale als Basis für Project/Topic-Intelligence
 - **Ausbaupfad:** zusätzliche Quellen neben Mail (z. B. Tickets, Doku, Chat)
 
 Für die Installation in einen bestehenden Mail-Agent siehe:

@@ -4,7 +4,7 @@ Zentrale Doku für die Kataloge unter `memory/references/`.
 
 ## Ziel
 
-- Strukturierte, reviewbare Katalogpflege für Mail-Routing/Triage
+- Strukturierte, reviewbare Katalogpflege für Projektmanagement und Mail-Routing/Triage
 - Klare Trennung von Projekten und Topics
 - Keine doppelten Inhalte zwischen Katalogen
 - Allgemeine Datenbasis für Projekte und Topics: zentrale, konsistente Fachdokumentation außerhalb der Katalogfelder, referenzierbar über `index.md` und thematische Unterseiten in den jeweiligen Ordnern
@@ -128,6 +128,5 @@ Empfohlen (Default bei Neuanlage):
 
 ## Hinweise
 
-- `mail-processor` arbeitet COPY-only.
 - Bei Ambiguität: lieber nicht routen als falsch routen.
 - Für bessere Trefferquote zuerst `domains` + `contacts` pflegen.
