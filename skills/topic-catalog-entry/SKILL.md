@@ -1,18 +1,18 @@
 ---
 name: topic-catalog-entry
-description: Topic-Katalog-Pflege für mail-processor. Verwende diesen Skill, wenn Topics im Katalog `memory/references/topics/topics.json` angelegt/aktualisiert werden und die zugehörige Topic-Referenz unter `memory/references/topics/<slug>/` strukturiert werden muss. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, subtopics).
+description: Topic-Katalog- und Topic-Arbeitsstruktur-Pflege für mail-processor. Verwende diesen Skill, wenn Topics in `memory/references/topics/topics.json` angelegt/aktualisiert werden oder die zugehörige Topic-Referenz unter `memory/references/topics/<slug>/` als thematische Arbeits- und Wissensstruktur gepflegt werden soll. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, subtopics).
 ---
 
 # topic-catalog-entry
 
-Pflege Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar.
+Pflege thematische Arbeitsstruktur, Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar.
 
 ## Zielbild (verbindlich)
 
 Unterscheide immer zwei Ebenen:
 
-1. **Routing-Metadaten** → `memory/references/topics/topics.json`
-2. **Inhaltliche Topic-Doku** → `memory/references/topics/<slug>/`
+1. **Strukturierte Topic-Metadaten** → `memory/references/topics/topics.json`
+2. **Inhaltliche und operative Topic-Doku** → `memory/references/topics/<slug>/`
 
 Für neue Topics gilt: **nicht nur JSON-Eintrag**, sondern auch **Topic-Ordner-Struktur** anlegen.
 

@@ -1,18 +1,18 @@
 ---
 name: project-catalog-entry
-description: Projektkatalog-Pflege für mail-processor. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden und die zugehörige Projektreferenz unter `memory/references/projects/<slug>/` strukturiert werden muss. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
+description: Projektkatalog- und Projektarbeitsstruktur-Pflege für mail-processor. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige Projektreferenz unter `memory/references/projects/<slug>/` als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
 ---
 
 # project-catalog-entry
 
-Pflege Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar.
+Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar.
 
 ## Zielbild (verbindlich)
 
 Unterscheide immer zwei Ebenen:
 
-1. **Routing-Metadaten** → `memory/references/projects/projects.json`
-2. **Inhaltliche Projektdoku** → `memory/references/projects/<slug>/`
+1. **Strukturierte Projekt-Metadaten** → `memory/references/projects/projects.json`
+2. **Inhaltliche und operative Projektdoku** → `memory/references/projects/<slug>/`
 
 Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch **Projektordner-Struktur** anlegen.
 
