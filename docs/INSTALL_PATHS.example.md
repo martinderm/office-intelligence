@@ -8,7 +8,7 @@ Diese Datei ist eine Vorlage. Lege eine lokale Kopie an als:
 ### <instance-name>
 - Agent workspace: `<abs path>`
 - Skill target: `<abs path>/skills/mail-processor`
-- Project repo: `<abs path>/projects/mail-processor`
+- Project repo: `<abs path>/projects/office-intelligence`
 - Env file: `<abs path>/.env`
 - Notes: `<optional>`
 

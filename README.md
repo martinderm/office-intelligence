@@ -150,7 +150,7 @@ Der Runner lädt diese `.env` zuverlässig; ein direkter Aufruf `npm run discove
 Wichtig für alle Runner (`run-shadow`, `run-run`, `run-discover-projects`):
 
 - `AGENT_WORKSPACE_ROOT` als Umgebungsvariable setzen (Pfad zum Agent-Workspace, der die `.env` enthält).
-- `MAIL_PROCESSOR_PROJECT_DIR` im Agent-`.env` auf das echte Repo setzen (z. B. `<workspace>/projects/mail-processor`).
+- `MAIL_PROCESSOR_PROJECT_DIR` im Agent-`.env` auf das echte Repo setzen (z. B. `<workspace>/projects/office-intelligence`).
 - Ohne diesen Wert kann der Prozess im Skill-Ordner landen (`skills/mail-processor`) und dort fehlt erwartungsgemäß `package.json`.
 
 Beispiel:
@@ -207,7 +207,7 @@ Instanzpfade gehören nicht ins öffentliche README. Tracke deine konkreten Depl
 
 ## Scripts Reference (`./scripts`)
 
-Alle Scripts sind für Aufrufe aus dem Projekt-Root gedacht (`projects/mail-processor`).
+Alle Scripts sind für Aufrufe aus dem Projekt-Root gedacht (`projects/office-intelligence`).
 
 ### `run-shadow.mjs`
 

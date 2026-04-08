@@ -7,7 +7,7 @@ Ziel: Ein Main-Agent installiert/aktualisiert die Mail-Verarbeitungskomponente `
 - Mail-Agent-Workspace existiert (z. B. `D:/users/dagobert/.openclaw/agents/<agent-id>/workspace`)
 - Himalaya-Zugriff ist für **genau eine Mailbox** verfügbar (direkt oder via Gate)
 - Projekt ist lokal verfügbar unter:
-  - `C:/Users/dagobert-ai/.openclaw/workspace/projects/mail-processor`
+  - `C:/Users/dagobert-ai/.openclaw/workspace/projects/office-intelligence`
 
 ## 2) Skill-Dateien im Ziel-Agent bereitstellen
 
@@ -36,7 +36,7 @@ Run-Skript-Konvention (verbindlich):
   - optional `MAIL_FETCH_LIMIT` via CLI-Flag
 
 Empfohlene `.env`-Felder im Agent-Workspace:
-- `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-mail-processor-projekt>`
+- `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-office-intelligence-projekt>`
 - `HIMALAYA_COMMAND=<agent-spezifischer command/gate oder node-wrapper>`
 - `MAILBOX_KEY=<kurzer stabiler key>`
 - `MAIL_SOURCE_FOLDER=INBOX` (oder Instanzwert)
