@@ -1,11 +1,11 @@
 ---
 name: project-catalog-entry
-description: Projektkatalog- und Projektarbeitsstruktur-Pflege für mail-processor. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige Projektreferenz unter `memory/references/projects/<slug>/` als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
+description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige Projektreferenz unter `memory/references/projects/<slug>/` als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. `mail-processor` nutzt diese Strukturen für Projekt-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
 ---
 
 # project-catalog-entry
 
-Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar.
+Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`.
 
 ## Zielbild (verbindlich)
 
@@ -13,6 +13,8 @@ Unterscheide immer zwei Ebenen:
 
 1. **Strukturierte Projekt-Metadaten** → `memory/references/projects/projects.json`
 2. **Inhaltliche und operative Projektdoku** → `memory/references/projects/<slug>/`
+
+Diese Ebene gehört fachlich zu `office-intelligence`; `mail-processor` konsumiert davon nur die routing- und matchingrelevanten Teile.
 
 Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch **Projektordner-Struktur** anlegen.
 

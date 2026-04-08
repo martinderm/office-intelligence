@@ -1,17 +1,21 @@
-﻿# mail-processor (office-intelligence)
+﻿# mail-processor within office-intelligence
 
-`mail-processor` ist ein Unterpaket der Zielarchitektur **office-intelligence**.
+`mail-processor` bleibt die Mail-Verarbeitungskomponente innerhalb der größeren Architektur **office-intelligence**.
 
-Geplante Paketstruktur:
+Begriffsschichtung:
 
-- `mail-processor` → Ingestion, Mail-Triage, Routing-Signale
-- `project-intelligence` → Projektwissen, Projektkatalog, projektbezogene Zuordnung
-- `topic-intelligence` → Topic-Taxonomie, thematische Erkennung und Querbezüge
+- `office-intelligence` → Oberbau für Office-Wissen, Kataloge, Skills und agentische Wissenspflege
+- `mail-processor` → Mail-Ingestion, Mail-Triage, Routing-Signale, Mail-Artefakte
+
+Einfach gesagt:
+
+- Alles rund um **Mail-Verarbeitung** bleibt `mail-processor`.
+- Alles rund um **Projekt-/Topic-Wissen, Katalogpflege und ergänzende Office-Skills** gehört konzeptionell zu `office-intelligence`.
 
 Rolle dieses Repos heute:
 
 - **Primärquelle:** Mail
-- **Fokus:** Projektmanagement sowie zuverlässige Verarbeitungspipeline + Signale als Basis für Project/Topic-Intelligence
+- **Fokus:** zuverlässige Mail-Verarbeitungspipeline plus Signale und Artefakte als Basis für weiterführende Office-Intelligence-Funktionen
 - **Ausbaupfad:** zusätzliche Quellen neben Mail (z. B. Tickets, Doku, Chat)
 
 Für die Installation in einen bestehenden Mail-Agent siehe:
@@ -33,10 +37,10 @@ Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
 
 - `skills/project-catalog-entry/SKILL.md`
 
-Knowledge-Architektur (verbindlich):
+Knowledge-Architektur innerhalb von office-intelligence (verbindlich):
 
-- **Routing-Metadaten:** `memory/references/projects/projects.json`
-- **Projektdokumentation:** `memory/references/projects/<slug>/` (mit `index.md` als Einstieg)
+- **Routing-Metadaten für Mail-Verarbeitung:** `memory/references/projects/projects.json`
+- **Wissens- und Arbeitsdokumentation:** `memory/references/projects/<slug>/` (mit `index.md` als Einstieg)
 - `reference_md` zeigt auf `memory/references/projects/<slug>/index.md`
 
 Agent-Deploy-Konvention:

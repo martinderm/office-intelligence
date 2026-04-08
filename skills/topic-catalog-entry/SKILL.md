@@ -1,11 +1,11 @@
 ---
 name: topic-catalog-entry
-description: Topic-Katalog- und Topic-Arbeitsstruktur-Pflege für mail-processor. Verwende diesen Skill, wenn Topics in `memory/references/topics/topics.json` angelegt/aktualisiert werden oder die zugehörige Topic-Referenz unter `memory/references/topics/<slug>/` als thematische Arbeits- und Wissensstruktur gepflegt werden soll. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, subtopics).
+description: Topic-Katalog- und Topic-Arbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill, wenn Topics in `memory/references/topics/topics.json` angelegt/aktualisiert werden oder die zugehörige Topic-Referenz unter `memory/references/topics/<slug>/` als thematische Arbeits- und Wissensstruktur gepflegt werden soll. `mail-processor` nutzt diese Strukturen für Topic-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, subtopics).
 ---
 
 # topic-catalog-entry
 
-Pflege thematische Arbeitsstruktur, Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar.
+Pflege thematische Arbeitsstruktur, Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`.
 
 ## Zielbild (verbindlich)
 
@@ -13,6 +13,8 @@ Unterscheide immer zwei Ebenen:
 
 1. **Strukturierte Topic-Metadaten** → `memory/references/topics/topics.json`
 2. **Inhaltliche und operative Topic-Doku** → `memory/references/topics/<slug>/`
+
+Diese Ebene gehört fachlich zu `office-intelligence`; `mail-processor` konsumiert davon nur die routing- und matchingrelevanten Teile.
 
 Für neue Topics gilt: **nicht nur JSON-Eintrag**, sondern auch **Topic-Ordner-Struktur** anlegen.
 

@@ -1,6 +1,7 @@
 # Project Memory Consolidation (Agent Task)
 
 Diese Konsolidierung ist **agent-basiert** (OpenClaw), nicht skriptbasiert.
+Sie gehört fachlich zur Wissenspflege in **office-intelligence**, nutzt aber Artefakte aus dem `mail-processor`.
 
 ## Input
 
@@ -17,6 +18,7 @@ Für klar zugeordnete Mails (`match.projectId` + hohe Confidence) soll der Agent
 2. `signals.md` aktualisieren (nur `managed-signals`)
 3. Evidenz append-only in `evidence/YYYY-MM.md` schreiben (`managed-evidence`)
 4. **Topics/Workpackages aktualisieren** unter `topics/`
+5. die Wissensstruktur konsistent halten, ohne die Mail-Verarbeitungsschicht begrifflich zu überladen
 5. bei Ambiguität: keine Direktänderung, stattdessen Review-Hinweis
 
 ## Workpackage/Topic-Regeln

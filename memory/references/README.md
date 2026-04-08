@@ -4,7 +4,8 @@ Zentrale Doku für die Kataloge unter `memory/references/`.
 
 ## Ziel
 
-- Strukturierte, reviewbare Katalogpflege für Projektmanagement und Mail-Routing/Triage
+- Strukturierte, reviewbare Katalogpflege innerhalb von **office-intelligence**
+- Klare Trennung von Mail-Verarbeitung (`mail-processor`) und darüberliegender Wissenspflege
 - Klare Trennung von Projekten und Topics
 - Keine doppelten Inhalte zwischen Katalogen
 - Allgemeine Datenbasis für Projekte und Topics: zentrale, konsistente Fachdokumentation außerhalb der Katalogfelder, referenzierbar über `index.md` und thematische Unterseiten in den jeweiligen Ordnern
@@ -33,10 +34,10 @@ Env:
 
 ## Modellregeln
 
-- **Projects** und **Topics** sind gleichrangige Kataloge.
+- **Projects** und **Topics** sind gleichrangige Wissenskataloge innerhalb von `office-intelligence`.
 - **Workpackages** bleiben strikt unter `projects[].workpackages[]`.
 - **Subtopics** bleiben strikt unter `topics[].subtopics[]`.
-- Routing darf auf Project-, Topic-, Subtopic- und Workpackage-Ebene matchen.
+- `mail-processor` darf auf Project-, Topic-, Subtopic- und Workpackage-Ebene matchen, bleibt dabei aber die Mail-Verarbeitungsschicht.
 
 ## Anti-Duplikat-Regel (wichtig)
 

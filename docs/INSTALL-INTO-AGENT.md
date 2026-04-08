@@ -1,6 +1,6 @@
 # Install into existing Mail Agent (Operator Runbook)
 
-Ziel: Ein Main-Agent installiert/aktualisiert den `mail-processor` in einem bestehenden Mail-Agent-Workspace reproduzierbar und sicher.
+Ziel: Ein Main-Agent installiert/aktualisiert die Mail-Verarbeitungskomponente `mail-processor` in einem bestehenden Mail-Agent-Workspace reproduzierbar und sicher. Die darüberliegenden Wissensstrukturen und Skills gehören konzeptionell zu `office-intelligence`.
 
 ## 1) Voraussetzungen
 
@@ -44,13 +44,13 @@ Empfohlene `.env`-Felder im Agent-Workspace:
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT_MS`
 
-## 3) Projektkatalog sicherstellen
+## 3) Wissenskataloge sicherstellen
 
 Im Ziel-Agent-Workspace muss vorhanden sein:
 
 - `memory/references/projects/projects.json`
 
-Hinweis: Ohne gepflegten Katalog bleibt Matching schwach/unzuverlässig.
+Hinweis: Ohne gepflegte Kataloge bleibt Matching schwach/unzuverlässig.
 
 ## 4) Build & Smoke-Test
 

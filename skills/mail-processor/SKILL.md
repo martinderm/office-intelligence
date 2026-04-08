@@ -1,7 +1,7 @@
 # Skill: mail-processor
 
-Bindet das Projekt **mail-processor** als OpenClaw-Skill in einen Agenten ein.
-Ziel: Mail-Triage (Extraktion/Klassifizierung) + sicheres Routing (COPY-only) via Himalaya/IMAP.
+Bindet die Mail-Verarbeitungskomponente **mail-processor** als OpenClaw-Skill in einen Agenten ein.
+Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch aber klar auf Mail-Triage, Extraktion/Klassifizierung und sicheres Routing (COPY-only) via Himalaya/IMAP fokussiert.
 
 ## Was der Skill bereitstellt
 
@@ -78,14 +78,14 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 ### 2) Routing Run (COPY-only, gated)
 - `npm run run`
 
-### 3) Memory-Update aus Mails (reviewed)
+### 3) Wissenspflege aus Mail-Artefakten (reviewed)
 - Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 - Optional IMAP-Quelle: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-source=imap --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
 
-### 4) Konsolidierung in Projektordner (Agent-basiert)
+### 4) Konsolidierung in Wissens-/Projektordner (Agent-basiert)
 - Die Konsolidierung wird **vom OpenClaw-Agenten** durchgeführt, nicht durch ein lokales Merge-Skript.
 - Input: verarbeitete Mail-Artefakte unter `data/mail-processor/msgs/**/*.json`.
 - Ziel: Managed-Sections in `index.md`/`signals.md` aktualisieren und Evidenz in `evidence/YYYY-MM.md` ergänzen.
