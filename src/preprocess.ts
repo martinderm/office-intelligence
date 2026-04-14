@@ -9,6 +9,7 @@ export type MailMeta = {
   messageId?: string;
   inReplyTo?: string;
   references?: string;
+  referencesNormalized?: string[];
   listId?: string;
   listUnsubscribe?: string;
   precedence?: string;

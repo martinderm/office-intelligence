@@ -85,3 +85,16 @@ export type EnvConfig = {
   MAIL_HTML_MAX_CURRENT: number;
   MAIL_HTML_MAX_QUOTED: number;
 };
+
+export type MailArtifactThreadInfo = {
+  messageIdNormalized: string;
+  inReplyToNormalized: string | null;
+  referencesNormalized: string[];
+};
+
+export type MailArtifactContextInfo = {
+  currentMessageText: string | null;
+  olderContextText: string | null;
+  effectiveText: string;
+  previewText: string | null;
+};

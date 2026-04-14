@@ -3,13 +3,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
+import type { MailArtifactContextInfo, MailArtifactThreadInfo } from "./types.js";
 import { loadProjects, loadTopics } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
 import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry-queue.js";
 import { getProcessedIds } from "./idempotency.js";
-import { matchProject, mergeHeuristicAndLlm, needsReplyHeuristic } from "./matcher.js";
+import { matchProject, needsReplyHeuristic } from "./matcher.js";
+import { mergeHeuristicAndLegacyLlm } from "./classification/legacy-llm-merge.js";
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { extractWithLlm } from "./llm.js";
@@ -103,6 +105,46 @@ function normalizeMessageId(value?: string): string | undefined {
   if (!value) return undefined;
   const v = value.trim().toLowerCase().replace(/^<+|>+$/g, "");
   return v || undefined;
+}
+
+function normalizeMessageIdList(value?: string): string[] {
+  if (!value) return [];
+  const matches = value.match(/<[^>]+>/g);
+  if (matches?.length) {
+    return matches
+      .map((item) => normalizeMessageId(item))
+      .filter((item): item is string => Boolean(item));
+  }
+
+  return value
+    .split(/\s+/)
+    .map((item) => normalizeMessageId(item))
+    .filter((item): item is string => Boolean(item));
+}
+
+function buildThreadInfo(meta: {
+  messageId?: string;
+  inReplyTo?: string;
+  references?: string;
+}, stableId: string): MailArtifactThreadInfo {
+  return {
+    messageIdNormalized: normalizeMessageId(meta.messageId) || stableId,
+    inReplyToNormalized: normalizeMessageId(meta.inReplyTo) || null,
+    referencesNormalized: normalizeMessageIdList(meta.references),
+  };
+}
+
+function buildContextInfo(prepared: {
+  currentMessage: string;
+  quotedContext: string;
+  effectiveText: string;
+}): MailArtifactContextInfo {
+  return {
+    currentMessageText: prepared.currentMessage || null,
+    olderContextText: prepared.quotedContext || null,
+    effectiveText: prepared.effectiveText,
+    previewText: prepared.effectiveText.slice(0, 2000) || null,
+  };
 }
 
 function fallbackStableId(meta: { from?: string; date?: string; subject?: string }, bodyText: string): string {
@@ -202,6 +244,13 @@ function isCompleteMessageArtifact(raw: string, stableId: string, llmEnabled: bo
     if (typeof parsed.needsReply !== "boolean") return false;
     if (!("mailMeta" in parsed)) return false;
     if (llmEnabled && !("llm" in parsed)) return false;
+
+    const thread = parsed.thread as Record<string, unknown> | undefined;
+    const context = parsed.context as Record<string, unknown> | undefined;
+    if (!thread || typeof thread.messageIdNormalized !== "string") return false;
+    if (!Array.isArray(thread.referencesNormalized)) return false;
+    if (!context || typeof context.effectiveText !== "string") return false;
+
     return true;
   } catch {
     return false;
@@ -744,6 +793,8 @@ async function main(): Promise<void> {
         const normalizedMessageId = normalizeMessageId(prepared.meta.messageId);
         const stableId = normalizedMessageId || fallbackStableId(prepared.meta, prepared.effectiveText);
         const fileId = fileIdFromStableId(stableId);
+        const thread = buildThreadInfo(prepared.meta, stableId);
+        const context = buildContextInfo(prepared);
 
         if (processed.has(stableId)) {
           summary.skipped += 1;
@@ -815,7 +866,7 @@ async function main(): Promise<void> {
           }
         }
 
-        const match = mergeHeuristicAndLlm(heuristicMatch, llm, projects, topics);
+        const match = mergeHeuristicAndLegacyLlm(heuristicMatch, llm, projects, topics);
         const needsReplyHeuristicFlag = needsReplyHeuristic(
           prepared.effectiveText,
           cfg.NEEDS_REPLY_NEGATIVE_HINTS,
@@ -933,7 +984,12 @@ async function main(): Promise<void> {
                 originalChars: prepared.originalChars,
                 keptChars: prepared.keptChars,
               },
-              mailMeta: prepared.meta,
+              mailMeta: {
+                ...prepared.meta,
+                referencesNormalized: thread.referencesNormalized,
+              },
+              thread,
+              context,
               sanitizing: prepared.sanitizing,
               local: {
                 fileId,
@@ -942,7 +998,7 @@ async function main(): Promise<void> {
                 folder: finalFolder,
               },
               history,
-              preview: prepared.effectiveText.slice(0, 2000),
+              preview: context.previewText,
             },
             null,
             2,
