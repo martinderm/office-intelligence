@@ -911,6 +911,12 @@ Ergebnis:
 Ergebnis:
 - `cli.ts` muss Thread-Kontext nicht selbst zusammenzimmern
 
+Aktueller Umsetzungsstand:
+- `src/classification/thread-context.ts` eingeführt
+- Lookup bekannter Referenzmails läuft über normalisierte Message-ID gegen vorhandene JSON-Artefakte
+- bevorzugt werden neue Felder aus `thread.*` und `context.*`, mit Fallback auf ältere Felder wie `mailMeta.*` und `preview`
+- aktuell werden nur bekannte Artefakte als `thread_context` genutzt, noch kein Fetch/Import unbekannter Referenzmails
+
 ##### Paket 2D: Artefakt-Schema erweitern
 
 - Writer/Reader für Mail-JSON-Artefakte anpassen
@@ -940,8 +946,9 @@ Ergebnis:
 
 - **2A umgesetzt:** Contracts, Classifier-Interface und Artefakt-Erweiterungstypen sind angelegt.
 - **2B begonnen:** `matcher.ts` ist auf reine Heuristik reduziert, der bisherige Heuristik+LLM-Merge liegt übergangsweise separat in `src/classification/legacy-llm-merge.ts`.
-- **2D teilweise umgesetzt:** neue Artefaktfelder werden bereits geschrieben; Reader-/Fallback-Logik für Alt-Artefakte fehlt noch.
-- **2C/2E offen:** Thread-Kontext-Baustein und austauschbares Backend sind noch nicht integriert.
+- **2D teilweise umgesetzt:** neue Artefaktfelder werden bereits geschrieben; Reader-/Fallback-Logik für Alt-Artefakte ist nun teilweise im Thread-Kontext-Lookup berücksichtigt, aber noch nicht als allgemeiner Reader zentralisiert.
+- **2C teilweise umgesetzt:** Thread-Kontext-Baustein ist eingeführt und lokal in den bestehenden Klassifikationspfad eingehängt.
+- **2E offen:** austauschbares Backend ist noch nicht im operativen Pfad verdrahtet.
 
 #### Empfohlene Umsetzungsreihenfolge in Paket 2
 

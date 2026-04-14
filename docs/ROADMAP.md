@@ -59,6 +59,7 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - Paket 2A umgesetzt (Contracts, Classifier-Interface, Artefakt-Typen)
   - Paket 2B begonnen (`matcher.ts` als reine Heuristik, Legacy-Merge separat ausgelagert)
   - Paket 2D teilweise umgesetzt (Artefakt-Writer ergänzt um `thread.*`, `context.*`, `referencesNormalized`)
+  - Paket 2C teilweise umgesetzt (`thread-context.ts`, Lookup bekannter Referenzmails aus Artefakten, lokale Einhängung in bestehenden Pfad)
 
 6) **Reviewbarer Suggestion-Flow für Projektkatalog**
 - Problem: Wissen über Projekte altert, manuelle Pflege ist aufwändig.

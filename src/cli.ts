@@ -12,6 +12,7 @@ import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry
 import { getProcessedIds } from "./idempotency.js";
 import { matchProject, needsReplyHeuristic } from "./matcher.js";
 import { mergeHeuristicAndLegacyLlm } from "./classification/legacy-llm-merge.js";
+import { buildThreadContextFromMailArtifact } from "./classification/thread-context.js";
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { extractWithLlm } from "./llm.js";
@@ -830,7 +831,27 @@ async function main(): Promise<void> {
           }
         }
 
-        const heuristicMatch = matchProject(prepared.effectiveText, projects, topics);
+        const threadContext = buildThreadContextFromMailArtifact({
+          msgsDir: cfg.MAIL_PROCESSOR_MSGS_DIR,
+          meta: prepared.meta,
+          maxEntries: 3,
+        });
+
+        const heuristicInputText = [
+          prepared.effectiveText,
+          ...threadContext.map((entry) => {
+            if (entry.source === "artifact") {
+              return [entry.subject, entry.current_message, entry.older_context, entry.effective_text]
+                .filter(Boolean)
+                .join("\n");
+            }
+            return entry.raw_text;
+          }),
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+
+        const heuristicMatch = matchProject(heuristicInputText, projects, topics);
 
         let llm: any = undefined;
         if (
@@ -846,7 +867,16 @@ async function main(): Promise<void> {
               baseUrl: cfg.LLM_BASE_URL,
               apiKey: cfg.LLM_API_KEY,
               model: cfg.LLM_MODEL,
-              mailText: prepared.effectiveText,
+              mailText: [
+                prepared.effectiveText,
+                ...threadContext.map((entry) =>
+                  entry.source === "artifact"
+                    ? [entry.subject, entry.current_message, entry.older_context, entry.effective_text].filter(Boolean).join("\n")
+                    : entry.raw_text,
+                ),
+              ]
+                .filter(Boolean)
+                .join("\n\n"),
               projectHints,
               topicHints,
               promptPath: cfg.LLM_PROMPT_PATH,
@@ -990,6 +1020,7 @@ async function main(): Promise<void> {
               },
               thread,
               context,
+              threadContext,
               sanitizing: prepared.sanitizing,
               local: {
                 fileId,
