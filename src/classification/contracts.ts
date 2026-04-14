@@ -137,6 +137,8 @@ export type ClassificationResult = {
   warnings?: ClassificationWarning[];
 };
 
+export type LegacyClassificationInput = ClassificationInput;
+
 export type RoutingDecisionState =
   | "route"
   | "shadow_only"

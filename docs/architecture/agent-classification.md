@@ -942,13 +942,18 @@ Aktueller Umsetzungsstand:
 Ergebnis:
 - der operative Mail-Run ist entkoppelt vom konkreten Modellpfad
 
+Aktueller Umsetzungsstand:
+- `src/classification/legacy-llm-classifier.ts` als Übergangs-Backend eingeführt
+- `cli.ts` konsumiert nun ein `MailClassifier`-Backend statt den direkten LLM-Aufruf selbst zusammenzubauen
+- der operative Pfad ist damit an eine Klassifikations-Schnittstelle gehängt, auch wenn aktuell noch das Legacy-Backend darunter arbeitet
+
 #### Aktueller Stand Paket 2
 
 - **2A umgesetzt:** Contracts, Classifier-Interface und Artefakt-Erweiterungstypen sind angelegt.
 - **2B begonnen:** `matcher.ts` ist auf reine Heuristik reduziert, der bisherige Heuristik+LLM-Merge liegt übergangsweise separat in `src/classification/legacy-llm-merge.ts`.
 - **2D teilweise umgesetzt:** neue Artefaktfelder werden bereits geschrieben; Reader-/Fallback-Logik für Alt-Artefakte ist nun teilweise im Thread-Kontext-Lookup berücksichtigt, aber noch nicht als allgemeiner Reader zentralisiert.
 - **2C teilweise umgesetzt:** Thread-Kontext-Baustein ist eingeführt und lokal in den bestehenden Klassifikationspfad eingehängt.
-- **2E offen:** austauschbares Backend ist noch nicht im operativen Pfad verdrahtet.
+- **2E teilweise umgesetzt:** operativer Pfad konsumiert jetzt ein Classifier-Backend; derzeit hängt darunter noch ein Legacy-LLM-Adapter.
 
 #### Empfohlene Umsetzungsreihenfolge in Paket 2
 

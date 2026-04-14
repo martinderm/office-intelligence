@@ -10,12 +10,11 @@ import { appendJsonl, ensureRuntimeDirs } from "./state.js";
 import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
 import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry-queue.js";
 import { getProcessedIds } from "./idempotency.js";
-import { matchProject, needsReplyHeuristic } from "./matcher.js";
-import { mergeHeuristicAndLegacyLlm } from "./classification/legacy-llm-merge.js";
+import { needsReplyHeuristic } from "./matcher.js";
 import { buildThreadContextFromMailArtifact } from "./classification/thread-context.js";
+import { LegacyLlmClassifier } from "./classification/legacy-llm-classifier.js";
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
-import { extractWithLlm } from "./llm.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
 import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
 
@@ -501,12 +500,18 @@ async function main(): Promise<void> {
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
     const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
-    const projectHints = projects
-      .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}${p.workpackages?.length ? ` | workpackages: ${p.workpackages.map((wp) => `${wp.id}:${wp.title}`).join(", ")}` : ""}`)
-      .join("\n");
-    const topicHints = topics
-      .map((t) => `${t.id} | ${t.title}${t.aliases?.length ? ` | aliases: ${t.aliases.join(", ")}` : ""}`)
-      .join("\n");
+    const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
+      ? new LegacyLlmClassifier({
+          cwd,
+          baseUrl: cfg.LLM_BASE_URL,
+          apiKey: cfg.LLM_API_KEY,
+          model: cfg.LLM_MODEL,
+          timeoutMs: cfg.LLM_TIMEOUT_MS,
+          promptPath: cfg.LLM_PROMPT_PATH,
+          projects,
+          topics,
+        })
+      : null;
 
     if (mode === "run" && !cfg.MAIL_ROUTING_ENABLED) {
       throw new Error(
@@ -837,71 +842,88 @@ async function main(): Promise<void> {
           maxEntries: 3,
         });
 
-        const heuristicInputText = [
+        const needsReplyHeuristicFlag = needsReplyHeuristic(
           prepared.effectiveText,
-          ...threadContext.map((entry) => {
-            if (entry.source === "artifact") {
-              return [entry.subject, entry.current_message, entry.older_context, entry.effective_text]
-                .filter(Boolean)
-                .join("\n");
-            }
-            return entry.raw_text;
-          }),
-        ]
-          .filter(Boolean)
-          .join("\n\n");
+          cfg.NEEDS_REPLY_NEGATIVE_HINTS,
+        );
 
-        const heuristicMatch = matchProject(heuristicInputText, projects, topics);
+        const classificationInput = {
+          schema_version: 1 as const,
+          mail: {
+            message_id: stableId,
+            subject: prepared.meta.subject || "",
+            from: prepared.meta.from || "",
+            date: prepared.meta.date || "",
+            current_message: prepared.currentMessage || "",
+            sanitized_text: prepared.effectiveText,
+            headers: {
+              reply_to: prepared.meta.replyTo || null,
+              return_path: prepared.meta.returnPath || null,
+              list_id: prepared.meta.listId || null,
+              in_reply_to: prepared.meta.inReplyTo || null,
+              references: prepared.meta.referencesNormalized || [],
+            },
+            thread_context: threadContext.length ? threadContext : undefined,
+          },
+          catalog_hints: {
+            projects: [],
+            topics: [],
+          },
+          options: {
+            include_needs_reply: true,
+            max_project_candidates: 4,
+            max_topic_candidates: 4,
+            max_workpackage_candidates: 3,
+          },
+        };
 
         let llm: any = undefined;
-        if (
-          cfg.LLM_ENABLED &&
-          cfg.HIMALAYA_COMMAND !== "mock" &&
-          cfg.LLM_BASE_URL &&
-          cfg.LLM_API_KEY &&
-          cfg.LLM_MODEL
-        ) {
-          try {
-            llm = await extractWithLlm({
-              cwd,
-              baseUrl: cfg.LLM_BASE_URL,
-              apiKey: cfg.LLM_API_KEY,
-              model: cfg.LLM_MODEL,
-              mailText: [
-                prepared.effectiveText,
-                ...threadContext.map((entry) =>
-                  entry.source === "artifact"
-                    ? [entry.subject, entry.current_message, entry.older_context, entry.effective_text].filter(Boolean).join("\n")
-                    : entry.raw_text,
-                ),
-              ]
-                .filter(Boolean)
-                .join("\n\n"),
-              projectHints,
-              topicHints,
-              promptPath: cfg.LLM_PROMPT_PATH,
-              timeoutMs: cfg.LLM_TIMEOUT_MS,
-            });
-          } catch (llmErr) {
+        let match = {
+          projectId: undefined as string | undefined,
+          score: 0,
+          reason: "no match",
+          matchedTopicId: undefined as string | undefined,
+          topicScore: 0,
+          topicReason: "no topic match",
+          matchedWorkpackageId: undefined as string | undefined,
+          workpackageScore: 0,
+          workpackageReason: "no workpackage match",
+          needsReply: false,
+        };
+
+        if (classifier) {
+          const response = await classifier.classify(classificationInput);
+          if (response.ok) {
+            llm = response.result;
+            const topProject = response.result.projectCandidates[0];
+            const topTopic = response.result.topicCandidates[0];
+            const topWorkpackage = response.result.workpackageCandidates[0];
+            match = {
+              projectId: topProject?.id,
+              score: Number(topProject?.confidence || 0),
+              reason: topProject ? `classifier ${topProject.id}` : "no match",
+              matchedTopicId: topTopic?.id,
+              topicScore: Number(topTopic?.confidence || 0),
+              topicReason: topTopic ? `classifier topic ${topTopic.id}` : "no topic match",
+              matchedWorkpackageId: topWorkpackage?.id,
+              workpackageScore: Number(topWorkpackage?.confidence || 0),
+              workpackageReason: topWorkpackage ? `classifier workpackage ${topWorkpackage.id}` : "no workpackage match",
+              needsReply: response.result.needsReply,
+            };
+          } else {
             appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
               type: "llm_parse_error",
               runId,
               sourceFolder: cfg.MAIL_SOURCE_FOLDER,
               envelopeId: env.id,
-              error: llmErr instanceof Error ? llmErr.message : String(llmErr),
+              error: response.error,
               fallback: "heuristic_only",
               timestamp: new Date().toISOString(),
             });
-            llm = undefined;
           }
         }
 
-        const match = mergeHeuristicAndLegacyLlm(heuristicMatch, llm, projects, topics);
-        const needsReplyHeuristicFlag = needsReplyHeuristic(
-          prepared.effectiveText,
-          cfg.NEEDS_REPLY_NEGATIVE_HINTS,
-        );
-        const llmNeedsReplyScore = Number(llm?.needsReply?.score || 0);
+        const llmNeedsReplyScore = llm?.needsReply ? 1 : 0;
         const needsReply = Math.max(needsReplyHeuristicFlag ? 0.65 : 0, llmNeedsReplyScore) >= cfg.NEEDS_REPLY_THRESHOLD;
 
         const copyTargets: string[] = [];
