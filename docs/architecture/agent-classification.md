@@ -781,6 +781,7 @@ Bedeutung:
 
 - `heuristic-classifier.ts`
   - bisherige heuristische Zuordnung aus `matcher.ts`, in eine klar nutzbare Backend-/Signalform gebracht
+  - inzwischen als eigenes Backend-Modul angelegt
 
 - `openclaw-tool-classifier.ts`
   - neue Implementierung für den späteren Tool-Call `mail_intelligence.classify`
@@ -957,6 +958,7 @@ Aktueller Umsetzungsstand:
 - **2E teilweise umgesetzt:** operativer Pfad konsumiert jetzt ein Classifier-Backend; derzeit hängt darunter noch ein Legacy-LLM-Adapter.
 - `catalog_hints` werden inzwischen im neuen Input-Vertrag real aus Projekten und Topics befüllt, statt leer als Platzhalter übergeben zu werden.
 - erster expliziter `fusion.ts`-Baustein ist eingezogen, damit die Entscheidungslogik nicht mehr nur implizit aus Top-1-Ableitungen besteht.
+- `heuristic-classifier.ts` liegt nun als separates Backend vor und wird bereits vom Legacy-Adapter als eigene Erststimme genutzt.
 
 #### Empfohlene Umsetzungsreihenfolge in Paket 2
 

@@ -1,7 +1,7 @@
 import type { Project, Topic } from "../types.js";
 import { extractWithLlm } from "../llm.js";
-import { matchProject } from "../matcher.js";
 import { mergeHeuristicAndLegacyLlm } from "./legacy-llm-merge.js";
+import { HeuristicClassifier } from "./heuristic-classifier.js";
 import type { MailClassifier, ClassifierResponse, ClassifierRequest } from "./classifier.js";
 import type {
   ClassificationInput,
@@ -55,7 +55,14 @@ function topicHintsToText(topics: ClassificationTopicHint[]): string {
     .join("\n");
 }
 
-function toClassificationResult(match: ReturnType<typeof matchProject>, needsReply: boolean): ClassificationResult {
+function toClassificationResult(match: {
+  projectId?: string;
+  score: number;
+  matchedTopicId?: string;
+  topicScore?: number;
+  matchedWorkpackageId?: string;
+  workpackageScore?: number;
+}, needsReply: boolean): ClassificationResult {
   return {
     schema_version: 1,
     projectCandidates: match.projectId
@@ -78,8 +85,25 @@ export class LegacyLlmClassifier implements MailClassifier {
 
   async classify(input: ClassifierRequest): Promise<ClassifierResponse> {
     try {
+      const heuristicResponse = await new HeuristicClassifier({
+        projects: this.params.projects,
+        topics: this.params.topics,
+      }).classify(input);
+
       const combinedMailText = buildCombinedMailText(input);
-      const heuristicMatch = matchProject(combinedMailText, this.params.projects, this.params.topics);
+      const heuristicTop = heuristicResponse.ok ? heuristicResponse.result : undefined;
+      const heuristicMatch = {
+        projectId: heuristicTop?.projectCandidates[0]?.id,
+        score: Number(heuristicTop?.projectCandidates[0]?.confidence || 0),
+        reason: heuristicTop?.projectCandidates[0]?.id ? `heuristic ${heuristicTop.projectCandidates[0].id}` : "no match",
+        matchedTopicId: heuristicTop?.topicCandidates[0]?.id,
+        topicScore: Number(heuristicTop?.topicCandidates[0]?.confidence || 0),
+        topicReason: heuristicTop?.topicCandidates[0]?.id ? `heuristic topic ${heuristicTop.topicCandidates[0].id}` : "no topic match",
+        matchedWorkpackageId: heuristicTop?.workpackageCandidates[0]?.id,
+        workpackageScore: Number(heuristicTop?.workpackageCandidates[0]?.confidence || 0),
+        workpackageReason: heuristicTop?.workpackageCandidates[0]?.id ? `heuristic workpackage ${heuristicTop.workpackageCandidates[0].id}` : "no workpackage match",
+        needsReply: false,
+      };
 
       const llm = await extractWithLlm({
         cwd: this.params.cwd,

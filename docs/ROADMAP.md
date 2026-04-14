@@ -62,6 +62,7 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - Paket 2C teilweise umgesetzt (`thread-context.ts`, Lookup bekannter Referenzmails aus Artefakten, lokale Einhängung in bestehenden Pfad)
   - Paket 2E teilweise umgesetzt (`legacy-llm-classifier.ts`, CLI konsumiert jetzt ein Classifier-Backend, `catalog_hints` werden real befüllt)
   - erster Fusionsbaustein umgesetzt (`src/classification/fusion.ts`, explizite Ableitung von Entscheidungszuständen aus `ClassificationResult`)
+  - heuristisches Backend ergänzt (`src/classification/heuristic-classifier.ts`), Legacy-Adapter nutzt Heuristik jetzt als separates Signal
 
 6) **Reviewbarer Suggestion-Flow für Projektkatalog**
 - Problem: Wissen über Projekte altert, manuelle Pflege ist aufwändig.
