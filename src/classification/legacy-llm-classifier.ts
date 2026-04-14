@@ -3,7 +3,13 @@ import { extractWithLlm } from "../llm.js";
 import { matchProject } from "../matcher.js";
 import { mergeHeuristicAndLegacyLlm } from "./legacy-llm-merge.js";
 import type { MailClassifier, ClassifierResponse, ClassifierRequest } from "./classifier.js";
-import type { ClassificationInput, ClassificationResult, ThreadContextEntry } from "./contracts.js";
+import type {
+  ClassificationInput,
+  ClassificationProjectHint,
+  ClassificationResult,
+  ClassificationTopicHint,
+  ThreadContextEntry,
+} from "./contracts.js";
 
 type LegacyLlmClassifierParams = {
   cwd: string;
@@ -37,15 +43,15 @@ function buildCombinedMailText(input: ClassificationInput): string {
     .join("\n\n");
 }
 
-function projectHintsToText(projects: Project[]): string {
+function projectHintsToText(projects: ClassificationProjectHint[]): string {
   return projects
-    .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}${p.workpackages?.length ? ` | workpackages: ${p.workpackages.map((wp) => `${wp.id}:${wp.title}`).join(", ")}` : ""}`)
+    .map((p) => `${p.id} | ${p.title}${p.aliases?.length ? ` | aliases: ${p.aliases.join(", ")}` : ""}${p.workpackages?.length ? ` | workpackages: ${p.workpackages.map((wp) => `${wp.id}:${wp.title}`).join(", ")}` : ""}${p.hint_rank ? ` | hint_rank: ${p.hint_rank}` : ""}`)
     .join("\n");
 }
 
-function topicHintsToText(topics: Topic[]): string {
+function topicHintsToText(topics: ClassificationTopicHint[]): string {
   return topics
-    .map((t) => `${t.id} | ${t.title}${t.aliases?.length ? ` | aliases: ${t.aliases.join(", ")}` : ""}`)
+    .map((t) => `${t.id} | ${t.title}${t.aliases?.length ? ` | aliases: ${t.aliases.join(", ")}` : ""}${t.hint_rank ? ` | hint_rank: ${t.hint_rank}` : ""}`)
     .join("\n");
 }
 
@@ -81,8 +87,8 @@ export class LegacyLlmClassifier implements MailClassifier {
         apiKey: this.params.apiKey,
         model: this.params.model,
         mailText: combinedMailText,
-        projectHints: projectHintsToText(this.params.projects),
-        topicHints: topicHintsToText(this.params.topics),
+        projectHints: projectHintsToText(input.catalog_hints.projects),
+        topicHints: topicHintsToText(input.catalog_hints.topics),
         promptPath: this.params.promptPath,
         timeoutMs: this.params.timeoutMs,
       });

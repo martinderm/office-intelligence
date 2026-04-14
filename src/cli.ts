@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
 import type { MailArtifactContextInfo, MailArtifactThreadInfo } from "./types.js";
+import { toClassificationProjectHint, toClassificationTopicHint } from "./classification/contracts.js";
 import { loadProjects, loadTopics } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
@@ -13,6 +14,7 @@ import { getProcessedIds } from "./idempotency.js";
 import { needsReplyHeuristic } from "./matcher.js";
 import { buildThreadContextFromMailArtifact } from "./classification/thread-context.js";
 import { LegacyLlmClassifier } from "./classification/legacy-llm-classifier.js";
+import { fuseClassificationResult } from "./classification/fusion.js";
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
@@ -866,8 +868,8 @@ async function main(): Promise<void> {
             thread_context: threadContext.length ? threadContext : undefined,
           },
           catalog_hints: {
-            projects: [],
-            topics: [],
+            projects: projects.slice(0, 4).map((project, index) => toClassificationProjectHint(project, index + 1)),
+            topics: topics.slice(0, 4).map((topic, index) => toClassificationTopicHint(topic, index + 1)),
           },
           options: {
             include_needs_reply: true,
@@ -895,20 +897,21 @@ async function main(): Promise<void> {
           const response = await classifier.classify(classificationInput);
           if (response.ok) {
             llm = response.result;
-            const topProject = response.result.projectCandidates[0];
-            const topTopic = response.result.topicCandidates[0];
-            const topWorkpackage = response.result.workpackageCandidates[0];
+            const fused = fuseClassificationResult({
+              result: response.result,
+              projectThreshold: cfg.PROJECT_MATCH_THRESHOLD,
+            });
             match = {
-              projectId: topProject?.id,
-              score: Number(topProject?.confidence || 0),
-              reason: topProject ? `classifier ${topProject.id}` : "no match",
-              matchedTopicId: topTopic?.id,
-              topicScore: Number(topTopic?.confidence || 0),
-              topicReason: topTopic ? `classifier topic ${topTopic.id}` : "no topic match",
-              matchedWorkpackageId: topWorkpackage?.id,
-              workpackageScore: Number(topWorkpackage?.confidence || 0),
-              workpackageReason: topWorkpackage ? `classifier workpackage ${topWorkpackage.id}` : "no workpackage match",
-              needsReply: response.result.needsReply,
+              projectId: fused.projectId,
+              score: fused.score,
+              reason: fused.reason,
+              matchedTopicId: fused.topicId,
+              topicScore: Number(response.result.topicCandidates[0]?.confidence || 0),
+              topicReason: fused.topicId ? `classifier topic ${fused.topicId}` : "no topic match",
+              matchedWorkpackageId: fused.workpackageId,
+              workpackageScore: Number(response.result.workpackageCandidates[0]?.confidence || 0),
+              workpackageReason: fused.workpackageId ? `classifier workpackage ${fused.workpackageId}` : "no workpackage match",
+              needsReply: fused.needsReply,
             };
           } else {
             appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {

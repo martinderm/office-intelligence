@@ -787,6 +787,7 @@ Bedeutung:
 
 - `fusion.ts`
   - Regeln zur Zusammenführung von Heuristik + Tool-Resultat + Guardrails
+  - aktuell bereits als erster expliziter Fusionsbaustein für `ClassificationResult` angelegt
 
 - `thread-context.ts`
   - Aufbereitung von `thread_context` aus bekannten Artefakten oder unbekanntem Referenzvolltext
@@ -954,6 +955,8 @@ Aktueller Umsetzungsstand:
 - **2D teilweise umgesetzt:** neue Artefaktfelder werden bereits geschrieben; Reader-/Fallback-Logik für Alt-Artefakte ist nun teilweise im Thread-Kontext-Lookup berücksichtigt, aber noch nicht als allgemeiner Reader zentralisiert.
 - **2C teilweise umgesetzt:** Thread-Kontext-Baustein ist eingeführt und lokal in den bestehenden Klassifikationspfad eingehängt.
 - **2E teilweise umgesetzt:** operativer Pfad konsumiert jetzt ein Classifier-Backend; derzeit hängt darunter noch ein Legacy-LLM-Adapter.
+- `catalog_hints` werden inzwischen im neuen Input-Vertrag real aus Projekten und Topics befüllt, statt leer als Platzhalter übergeben zu werden.
+- erster expliziter `fusion.ts`-Baustein ist eingezogen, damit die Entscheidungslogik nicht mehr nur implizit aus Top-1-Ableitungen besteht.
 
 #### Empfohlene Umsetzungsreihenfolge in Paket 2
 
