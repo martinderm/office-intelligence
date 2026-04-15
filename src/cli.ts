@@ -14,6 +14,7 @@ import { getProcessedIds } from "./idempotency.js";
 import { needsReplyHeuristic } from "./matcher.js";
 import { buildThreadContextFromMailArtifact } from "./classification/thread-context.js";
 import { LegacyLlmClassifier } from "./classification/legacy-llm-classifier.js";
+import { OpenClawToolClassifier } from "./classification/openclaw-tool-classifier.js";
 import { fuseClassificationResult } from "./classification/fusion.js";
 import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
@@ -503,6 +504,15 @@ async function main(): Promise<void> {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
     const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
     const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
+      ? new OpenClawToolClassifier({
+          baseUrl: cfg.LLM_BASE_URL,
+          apiKey: cfg.LLM_API_KEY,
+          model: cfg.LLM_MODEL,
+          timeoutMs: cfg.LLM_TIMEOUT_MS,
+        })
+      : null;
+
+    const legacyClassifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
       ? new LegacyLlmClassifier({
           cwd,
           baseUrl: cfg.LLM_BASE_URL,
@@ -880,6 +890,7 @@ async function main(): Promise<void> {
         };
 
         let llm: any = undefined;
+        let classifierBackend: string | null = null;
         let match = {
           projectId: undefined as string | undefined,
           score: 0,
@@ -896,6 +907,7 @@ async function main(): Promise<void> {
         if (classifier) {
           const response = await classifier.classify(classificationInput);
           if (response.ok) {
+            classifierBackend = response.backend;
             llm = response.result;
             const fused = fuseClassificationResult({
               result: response.result,
@@ -920,9 +932,45 @@ async function main(): Promise<void> {
               sourceFolder: cfg.MAIL_SOURCE_FOLDER,
               envelopeId: env.id,
               error: response.error,
-              fallback: "heuristic_only",
+              fallback: legacyClassifier ? "legacy_llm_classifier" : "heuristic_only",
+              backend: response.backend,
               timestamp: new Date().toISOString(),
             });
+
+            if (legacyClassifier) {
+              const legacyResponse = await legacyClassifier.classify(classificationInput);
+              if (legacyResponse.ok) {
+                classifierBackend = legacyResponse.backend;
+                llm = legacyResponse.result;
+                const fused = fuseClassificationResult({
+                  result: legacyResponse.result,
+                  projectThreshold: cfg.PROJECT_MATCH_THRESHOLD,
+                });
+                match = {
+                  projectId: fused.projectId,
+                  score: fused.score,
+                  reason: `${fused.reason} (legacy fallback)`,
+                  matchedTopicId: fused.topicId,
+                  topicScore: Number(legacyResponse.result.topicCandidates[0]?.confidence || 0),
+                  topicReason: fused.topicId ? `classifier topic ${fused.topicId}` : "no topic match",
+                  matchedWorkpackageId: fused.workpackageId,
+                  workpackageScore: Number(legacyResponse.result.workpackageCandidates[0]?.confidence || 0),
+                  workpackageReason: fused.workpackageId ? `classifier workpackage ${fused.workpackageId}` : "no workpackage match",
+                  needsReply: fused.needsReply,
+                };
+              } else {
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "llm_parse_error",
+                  runId,
+                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+                  envelopeId: env.id,
+                  error: legacyResponse.error,
+                  fallback: "heuristic_only",
+                  backend: legacyResponse.backend,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            }
           }
         }
 
@@ -1032,6 +1080,7 @@ async function main(): Promise<void> {
               envelope: env.rawLine,
               match,
               llm,
+              classifierBackend,
               needsReply,
               llmNeedsReplyScore,
               preprocessing: {
@@ -1091,6 +1140,7 @@ async function main(): Promise<void> {
           useUidPlus: routing.useUidPlus,
           effectiveMove: routing.effectiveMove,
           forcedSingleTarget: routing.forcedSingleTarget,
+          classifierBackend,
           lastKnownEnvelopeId: env.id,
           lastKnownFolder: finalFolder,
           timestamp: new Date().toISOString(),

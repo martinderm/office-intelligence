@@ -955,7 +955,7 @@ Aktueller Umsetzungsstand:
 - **2B begonnen:** `matcher.ts` ist auf reine Heuristik reduziert, der bisherige Heuristik+LLM-Merge liegt übergangsweise separat in `src/classification/legacy-llm-merge.ts`.
 - **2D teilweise umgesetzt:** neue Artefaktfelder werden bereits geschrieben; Reader-/Fallback-Logik für Alt-Artefakte ist nun teilweise im Thread-Kontext-Lookup berücksichtigt, aber noch nicht als allgemeiner Reader zentralisiert.
 - **2C teilweise umgesetzt:** Thread-Kontext-Baustein ist eingeführt und lokal in den bestehenden Klassifikationspfad eingehängt.
-- **2E teilweise umgesetzt:** operativer Pfad konsumiert jetzt ein Classifier-Backend; derzeit hängt darunter noch ein Legacy-LLM-Adapter.
+- **2E teilweise umgesetzt:** operativer Pfad konsumiert jetzt ein Classifier-Backend; darunter hängt jetzt primär `src/classification/openclaw-tool-classifier.ts` mit dem finalen Contract. Der Legacy-LLM-Adapter bleibt parallel als Fallback bestehen.
 - `catalog_hints` werden inzwischen im neuen Input-Vertrag real aus Projekten und Topics befüllt, statt leer als Platzhalter übergeben zu werden.
 - erster expliziter `fusion.ts`-Baustein ist eingezogen, damit die Entscheidungslogik nicht mehr nur implizit aus Top-1-Ableitungen besteht.
 - `heuristic-classifier.ts` liegt nun als separates Backend vor und wird bereits vom Legacy-Adapter als eigene Erststimme genutzt.
@@ -967,6 +967,7 @@ Aktueller Umsetzungsstand:
 3. **2D Artefakt-Schema erweitern**
 4. **2C Thread-Kontext-Baustein**
 5. **2E Backend-Abstraktion andocken**
+6. **2E.1 OpenClaw-Tool-Backend als Primärpfad einhängen, Legacy parallel als Fallback behalten**
 
 Warum so:
 - erst Typen und Grenzen
