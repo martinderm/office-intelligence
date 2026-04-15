@@ -1,0 +1,10 @@
+{
+  "name": "mail-intelligence-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "openclaw": "^0.0.0"
+  }
+}

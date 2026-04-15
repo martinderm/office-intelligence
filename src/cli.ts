@@ -505,9 +505,7 @@ async function main(): Promise<void> {
     const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
     const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
       ? new OpenClawToolClassifier({
-          baseUrl: cfg.LLM_BASE_URL,
-          apiKey: cfg.LLM_API_KEY,
-          model: cfg.LLM_MODEL,
+          gatewayToken: cfg.LLM_API_KEY,
           timeoutMs: cfg.LLM_TIMEOUT_MS,
         })
       : null;

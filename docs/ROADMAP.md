@@ -64,6 +64,7 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - erster Fusionsbaustein umgesetzt (`src/classification/fusion.ts`, explizite Ableitung von Entscheidungszuständen aus `ClassificationResult`)
   - heuristisches Backend ergänzt (`src/classification/heuristic-classifier.ts`), Legacy-Adapter nutzt Heuristik jetzt als separates Signal
   - neuer Primärpfad hängt das OpenClaw-Tool-Backend ein; Legacy bleibt bewusst als Fallback parallel bestehen
+  - Paket 3 minimal angelegt: lokales Plugin-Skelett `plugin/mail-intelligence/`, Tool `mail_intelligence.classify`, echter `/tools/invoke`-Pfad im Adapter
 
 6) **Reviewbarer Suggestion-Flow für Projektkatalog**
 - Problem: Wissen über Projekte altert, manuelle Pflege ist aufwändig.

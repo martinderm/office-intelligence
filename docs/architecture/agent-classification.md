@@ -1003,6 +1003,25 @@ Ergebnis:
 - nutzbares Tool mit stabilem JSON-Vertrag
 - keine Side Effects außerhalb des Tool-Outputs
 
+#### Paket-3-Arbeitsstand
+
+Status: **minimal lauffähig angelegt**
+
+Aktueller Umsetzungsstand:
+- lokales Plugin-Skelett unter `plugin/mail-intelligence/` angelegt
+- Manifest `openclaw.plugin.json` angelegt
+- Tool `mail_intelligence.classify` registriert
+- Tool-Input-Schema an den festgezogenen Contract angelehnt
+- Tool kapselt Promptbau, Modellaufruf und strikte Ergebnis-Normalisierung
+- `src/classification/openclaw-tool-classifier.ts` ruft jetzt den echten Gateway-Endpunkt `/tools/invoke` auf statt nur einen pseudo-toolartigen Chat-Request zu bauen
+- Kandidatenraum-Prüfung bleibt sowohl im Tool als auch im `mail-processor`-Adapter aktiv
+- Legacy-LLM-Backend bleibt parallel als Fallback bestehen
+
+Bewusst noch nicht fertig in Paket 3:
+- Plugin ist lokal im Repo angelegt, aber noch nicht als installierte/aktiv genutzte Gateway-Extension ausgerollt
+- Modellwahl im Plugin ist vorerst einfach gehalten
+- ausführlichere Beobachtbarkeit und Vergleichsausgaben folgen in Paket 4
+
 ### Paket 4: Shadow-Integration & Beobachtbarkeit
 
 Ziel:

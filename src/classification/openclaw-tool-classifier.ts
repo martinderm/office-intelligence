@@ -9,11 +9,11 @@ import type {
 } from "./contracts.js";
 
 type OpenClawToolClassifierParams = {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
+  gatewayBaseUrl?: string;
+  gatewayToken: string;
   timeoutMs?: number;
   toolName?: string;
+  sessionKey?: string;
 };
 
 type RawToolCandidate = {
@@ -154,13 +154,13 @@ function safeJsonParse(text: string): RawToolResult {
   return JSON.parse(trimmed) as RawToolResult;
 }
 
-async function callOpenAiCompatibleEndpoint(params: {
+async function callGatewayToolInvoke(params: {
   endpoint: string;
-  apiKey: string;
-  model: string;
+  gatewayToken: string;
   toolName: string;
   input: ClassificationInput;
   timeoutMs: number;
+  sessionKey?: string;
 }): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs);
@@ -170,34 +170,25 @@ async function callOpenAiCompatibleEndpoint(params: {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${params.apiKey}`,
+        Authorization: `Bearer ${params.gatewayToken}`,
       },
       body: JSON.stringify({
-        model: params.model,
-        temperature: 0,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "user",
-            content: JSON.stringify({
-              tool: params.toolName,
-              input: params.input,
-            }),
-          },
-        ],
+        tool: params.toolName,
+        args: params.input,
+        sessionKey: params.sessionKey ?? "main",
       }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`OpenClaw tool backend request failed (${response.status}): ${text}`);
+      throw new Error(`OpenClaw tool invoke failed (${response.status}): ${text}`);
     }
 
     const data = (await response.json()) as any;
-    const content = data?.choices?.[0]?.message?.content;
+    const content = data?.result?.content?.[0]?.text;
     if (typeof content !== "string" || !content.trim()) {
-      throw new Error("OpenClaw tool backend response missing message content");
+      throw new Error("OpenClaw tool invoke response missing text result content");
     }
     return content;
   } finally {
@@ -212,8 +203,8 @@ export class OpenClawToolClassifier implements MailClassifier {
 
   async classify(input: ClassifierRequest): Promise<ClassifierResponse> {
     const timeoutMs = this.params.timeoutMs ?? 60_000;
-    const base = this.params.baseUrl.replace(/\/$/, "");
-    const endpoints = [`${base}/chat/completions`, `${base}/v1/chat/completions`];
+    const base = (this.params.gatewayBaseUrl ?? "http://127.0.0.1:18789").replace(/\/$/, "");
+    const endpoints = [`${base}/tools/invoke`];
     const toolName = this.params.toolName ?? DEFAULT_TOOL_NAME;
 
     try {
@@ -222,27 +213,25 @@ export class OpenClawToolClassifier implements MailClassifier {
 
       for (const endpoint of endpoints) {
         try {
-          rawText = await callOpenAiCompatibleEndpoint({
+          rawText = await callGatewayToolInvoke({
             endpoint,
-            apiKey: this.params.apiKey,
-            model: this.params.model,
+            gatewayToken: this.params.gatewayToken,
             toolName,
             input,
             timeoutMs,
+            sessionKey: this.params.sessionKey,
           });
           lastError = null;
           break;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           lastError = message;
-          if (!message.includes("404")) {
-            throw error;
-          }
+          throw error;
         }
       }
 
       if (!rawText) {
-        throw new Error(lastError || "OpenClaw tool backend request failed: no endpoint succeeded");
+        throw new Error(lastError || "OpenClaw tool invoke failed: no endpoint succeeded");
       }
 
       const parsed = safeJsonParse(rawText);
