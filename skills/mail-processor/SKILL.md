@@ -13,8 +13,9 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 ## Voraussetzungen im Agent
 
 1) Himalaya ist konfiguriert (Account im Agent vorhanden, via Gate oder direktem Account-Setup).
-2) LLM-Endpoint ist verfügbar (OpenAI-kompatibel).
-3) Der Agent-Workspace enthält die Memory-Struktur:
+2) OpenClaw-Gateway-Zugang für `mail-classify` ist verfügbar (`OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY`).
+3) Der Agent darf das Tool `mail-classify` verwenden.
+4) Der Agent-Workspace enthält die Memory-Struktur:
 
 - `memory/references/projects/projects.json`
 - optional: `memory/references/projects/<id>/index.md` (+ `signals.md`, `evidence/`, `topics/`)
@@ -66,7 +67,8 @@ Runner-Konvention:
 - Runner toggeln nur den Modus (`MAIL_ROUTING_ENABLED`) und optional `MAIL_FETCH_LIMIT`.
 
 Hinweis:
-- `LLM_*` Variablen sind im aktuellen Codepfad aktiv (Extraktion via LLM), bleiben aber optional konfigurierbar.
+- Der operative Klassifikationspfad läuft über das OpenClaw-Tool `mail-classify`.
+- `LLM_*` Variablen bleiben nur für getrennte Discovery-/Suggestion-Pfade relevant und sind für den normalen Shadow-/Routing-Pfad nicht die primäre Abhängigkeit.
 
 Siehe vollständige Liste: `/.env.example` im Repo.
 
@@ -99,7 +101,7 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - COPY-only (nie MOVE/DELETE)
 - Safe default: bei Ambiguität **keine Aktion**
 - Hard negative rules für needsReply (Newsletter/Auto-Reply/no-reply)
-- JSON-Schema-Validation für LLM-Extrakt; bei Fehlern skip+log
+- JSON-Schema-Validation für Tool-/LLM-Extrakt; bei Fehlern skip+log
 - Retention für `data/mail-processor/msgs/**/*.json` (z.B. 30 Tage)
 - Guard gegen Doppelverarbeitung: wenn vollständiges `msgs/**/<fileId>.json` existiert (inkl. LLM-Feld, falls aktiv), dann skip (Legacy `<stableId>.json` wird weiterhin erkannt)
 
