@@ -3,8 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "index.ts",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
   "dependencies": {
-    "openclaw": "^0.0.0"
+    "@sinclair/typebox": "0.34.49",
+    "openclaw": "file:../../../../../../AppData/Roaming/npm/node_modules/openclaw"
+  },
+  "openclaw": {
+    "extensions": [
+      "./dist/index.js"
+    ]
   }
 }

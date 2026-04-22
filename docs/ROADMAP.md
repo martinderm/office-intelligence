@@ -13,7 +13,7 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 - Umsetzungspakete:
   - **Paket 1:** Contract & Entscheidungsmodell
   - **Paket 2:** Klassifikations-Abstraktion im `mail-processor`
-  - **Paket 3:** OpenClaw-Plugin-Tool `mail_intelligence.classify`
+  - **Paket 3:** OpenClaw-Plugin-Tool `mail-classify`
   - **Paket 4:** Shadow-Integration & Beobachtbarkeit
   - **Paket 5:** Routing-Fusion aktivieren
   - **Paket 6:** Altpfad und Discovery neu ordnen
@@ -63,8 +63,11 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - Paket 2E teilweise umgesetzt (`legacy-llm-classifier.ts`, `openclaw-tool-classifier.ts`, CLI konsumiert jetzt ein Classifier-Backend, `catalog_hints` werden real befüllt)
   - erster Fusionsbaustein umgesetzt (`src/classification/fusion.ts`, explizite Ableitung von Entscheidungszuständen aus `ClassificationResult`)
   - heuristisches Backend ergänzt (`src/classification/heuristic-classifier.ts`), Legacy-Adapter nutzt Heuristik jetzt als separates Signal
-  - neuer Primärpfad hängt das OpenClaw-Tool-Backend ein; Legacy bleibt bewusst als Fallback parallel bestehen
-  - Paket 3 minimal angelegt: lokales Plugin-Skelett `plugin/mail-intelligence/`, Tool `mail_intelligence.classify`, echter `/tools/invoke`-Pfad im Adapter
+  - neuer Primärpfad hängt das OpenClaw-Tool-Backend ein; der direkte Legacy-LLM-Pfad ist nicht mehr operativer Standard
+  - Paket 3 minimal angelegt: lokales Plugin-Skelett `plugin/mail-intelligence/`, Tool `mail-classify`, echter `/tools/invoke`-Pfad im Adapter
+  - eingebetteter Plugin-Run auf Minimalparameter reduziert (keine hart gesetzten `temperature`-/`responseFormat`-Vorgaben)
+  - Confidence-Semantik des Tool-Contracts auf `0..100` vereinheitlicht
+  - Paket 4 erweitert: Shadow-Beobachtbarkeit pro Mail (`classificationComparison`) in Artefakt und `state.jsonl`; Vergleichsdaten bleiben strukturiert, auch wenn der Legacy-Pfad nicht mehr aktiv genutzt wird
 
 6) **Reviewbarer Suggestion-Flow für Projektkatalog**
 - Problem: Wissen über Projekte altert, manuelle Pflege ist aufwändig.

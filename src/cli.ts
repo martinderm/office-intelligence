@@ -4,7 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { loadDotEnv, getConfig } from "./env.js";
 import type { MailArtifactContextInfo, MailArtifactThreadInfo } from "./types.js";
-import { toClassificationProjectHint, toClassificationTopicHint } from "./classification/contracts.js";
+import {
+  type ClassificationComparisonRecord,
+  type ClassificationResult,
+  type ClassificationRunRecord,
+  toClassificationProjectHint,
+  toClassificationTopicHint,
+} from "./classification/contracts.js";
 import { loadProjects, loadTopics } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
@@ -13,7 +19,6 @@ import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry
 import { getProcessedIds } from "./idempotency.js";
 import { needsReplyHeuristic } from "./matcher.js";
 import { buildThreadContextFromMailArtifact } from "./classification/thread-context.js";
-import { LegacyLlmClassifier } from "./classification/legacy-llm-classifier.js";
 import { OpenClawToolClassifier } from "./classification/openclaw-tool-classifier.js";
 import { fuseClassificationResult } from "./classification/fusion.js";
 import { cleanupDebugMessages } from "./retention.js";
@@ -503,23 +508,12 @@ async function main(): Promise<void> {
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
     const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
-    const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
+    const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.OPENCLAW_BASE_URL && cfg.OPENCLAW_GATEWAY_TOKEN
       ? new OpenClawToolClassifier({
-          gatewayToken: cfg.LLM_API_KEY,
+          gatewayBaseUrl: cfg.OPENCLAW_BASE_URL,
+          gatewayToken: cfg.OPENCLAW_GATEWAY_TOKEN,
+          sessionKey: cfg.OPENCLAW_SESSION_KEY || undefined,
           timeoutMs: cfg.LLM_TIMEOUT_MS,
-        })
-      : null;
-
-    const legacyClassifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.LLM_BASE_URL && cfg.LLM_API_KEY && cfg.LLM_MODEL
-      ? new LegacyLlmClassifier({
-          cwd,
-          baseUrl: cfg.LLM_BASE_URL,
-          apiKey: cfg.LLM_API_KEY,
-          model: cfg.LLM_MODEL,
-          timeoutMs: cfg.LLM_TIMEOUT_MS,
-          promptPath: cfg.LLM_PROMPT_PATH,
-          projects,
-          topics,
         })
       : null;
 
@@ -887,8 +881,9 @@ async function main(): Promise<void> {
           },
         };
 
-        let llm: any = undefined;
+        let llm: ClassificationResult | undefined = undefined;
         let classifierBackend: string | null = null;
+        const classificationRuns: ClassificationRunRecord[] = [];
         let match = {
           projectId: undefined as string | undefined,
           score: 0,
@@ -904,6 +899,18 @@ async function main(): Promise<void> {
 
         if (classifier) {
           const response = await classifier.classify(classificationInput);
+          classificationRuns.push(
+            response.ok
+              ? { backend: response.backend, ok: true, result: response.result, role: "primary" }
+              : {
+                  backend: response.backend,
+                  ok: false,
+                  error: response.error,
+                  retryable: response.retryable,
+                  role: "primary",
+                },
+          );
+
           if (response.ok) {
             classifierBackend = response.backend;
             llm = response.result;
@@ -923,6 +930,8 @@ async function main(): Promise<void> {
               workpackageReason: fused.workpackageId ? `classifier workpackage ${fused.workpackageId}` : "no workpackage match",
               needsReply: fused.needsReply,
             };
+            classificationRuns[classificationRuns.length - 1]!.usedForDecision = true;
+
           } else {
             appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
               type: "llm_parse_error",
@@ -930,47 +939,23 @@ async function main(): Promise<void> {
               sourceFolder: cfg.MAIL_SOURCE_FOLDER,
               envelopeId: env.id,
               error: response.error,
-              fallback: legacyClassifier ? "legacy_llm_classifier" : "heuristic_only",
+              fallback: "heuristic_only",
               backend: response.backend,
               timestamp: new Date().toISOString(),
             });
 
-            if (legacyClassifier) {
-              const legacyResponse = await legacyClassifier.classify(classificationInput);
-              if (legacyResponse.ok) {
-                classifierBackend = legacyResponse.backend;
-                llm = legacyResponse.result;
-                const fused = fuseClassificationResult({
-                  result: legacyResponse.result,
-                  projectThreshold: cfg.PROJECT_MATCH_THRESHOLD,
-                });
-                match = {
-                  projectId: fused.projectId,
-                  score: fused.score,
-                  reason: `${fused.reason} (legacy fallback)`,
-                  matchedTopicId: fused.topicId,
-                  topicScore: Number(legacyResponse.result.topicCandidates[0]?.confidence || 0),
-                  topicReason: fused.topicId ? `classifier topic ${fused.topicId}` : "no topic match",
-                  matchedWorkpackageId: fused.workpackageId,
-                  workpackageScore: Number(legacyResponse.result.workpackageCandidates[0]?.confidence || 0),
-                  workpackageReason: fused.workpackageId ? `classifier workpackage ${fused.workpackageId}` : "no workpackage match",
-                  needsReply: fused.needsReply,
-                };
-              } else {
-                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
-                  type: "llm_parse_error",
-                  runId,
-                  sourceFolder: cfg.MAIL_SOURCE_FOLDER,
-                  envelopeId: env.id,
-                  error: legacyResponse.error,
-                  fallback: "heuristic_only",
-                  backend: legacyResponse.backend,
-                  timestamp: new Date().toISOString(),
-                });
-              }
-            }
           }
         }
+
+        const primaryClassification = classificationRuns.find((entry) => entry.role === "primary") ?? null;
+        const fallbackClassification = classificationRuns.find((entry) => entry.role === "fallback" || entry.role === "shadow_compare") ?? null;
+        const toolRun = classificationRuns.find((entry) => entry.backend === "openclaw_tool");
+        const classificationComparison: ClassificationComparisonRecord = {
+          attempted: classificationRuns.map((entry) => entry.backend),
+          primary: primaryClassification,
+          fallback: fallbackClassification,
+          decisionSource: classifierBackend === null ? "heuristic_only" : "openclaw_tool",
+        };
 
         const llmNeedsReplyScore = llm?.needsReply ? 1 : 0;
         const needsReply = Math.max(needsReplyHeuristicFlag ? 0.65 : 0, llmNeedsReplyScore) >= cfg.NEEDS_REPLY_THRESHOLD;
@@ -1079,6 +1064,7 @@ async function main(): Promise<void> {
               match,
               llm,
               classifierBackend,
+              classificationComparison,
               needsReply,
               llmNeedsReplyScore,
               preprocessing: {
@@ -1139,6 +1125,7 @@ async function main(): Promise<void> {
           effectiveMove: routing.effectiveMove,
           forcedSingleTarget: routing.forcedSingleTarget,
           classifierBackend,
+          classificationComparison,
           lastKnownEnvelopeId: env.id,
           lastKnownFolder: finalFolder,
           timestamp: new Date().toISOString(),

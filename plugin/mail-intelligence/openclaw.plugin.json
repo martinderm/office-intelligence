@@ -17,5 +17,7 @@
       }
     }
   },
-  "tools": ["mail_intelligence.classify"]
+  "contracts": {
+    "tools": ["mail-classify"]
+  }
 }

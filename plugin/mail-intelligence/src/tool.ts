@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { ClassificationCandidate, ClassificationInput, ClassificationResult, ClassificationWorkpackageCandidate } from "./contracts.js";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "../types/openclaw-plugin-api.js";
 
 type RawCandidate = {
   id?: unknown;
@@ -53,11 +56,18 @@ const ALLOWED_WARNINGS = new Set([
   "catalog_gap_suspected",
 ]);
 
+const DEBUG_LOG_PATH = path.join(os.tmpdir(), "mail-intelligence-debug.log");
+
+async function appendDebugLog(payload: unknown): Promise<void> {
+  const line = `${JSON.stringify({ ts: new Date().toISOString(), ...((payload && typeof payload === "object") ? payload as Record<string, unknown> : { payload }) })}\n`;
+  await fs.appendFile(DEBUG_LOG_PATH, line, "utf8").catch(() => undefined);
+}
+
 function clampConfidence(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   if (numeric < 0) return 0;
-  if (numeric > 1) return 1;
+  if (numeric > 100) return 100;
   return numeric;
 }
 
@@ -69,6 +79,14 @@ function asStringArray(value: unknown): string[] {
 function safeJsonParse(text: string): RawExtraction {
   const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   return JSON.parse(trimmed) as RawExtraction;
+}
+
+function collectText(payloads: Array<{ isError?: boolean; text?: string }> | undefined): string {
+  return (payloads ?? [])
+    .filter((payload) => !payload?.isError && typeof payload?.text === "string")
+    .map((payload) => payload.text ?? "")
+    .join("\n")
+    .trim();
 }
 
 function normalizeCandidates(raw: unknown, allowedIds: Set<string>, maxCount: number): ClassificationCandidate[] {
@@ -118,59 +136,145 @@ function renderPrompt(input: ClassificationInput): string {
   });
 }
 
+function normalizeModelRef(model: string | { primary?: string } | null | undefined): string | undefined {
+  if (typeof model === "string" && model.trim()) return model.trim();
+  if (model && typeof model === "object" && typeof model.primary === "string" && model.primary.trim()) {
+    return model.primary.trim();
+  }
+  return undefined;
+}
+
+function resolveProviderRequestModel(model: string): string {
+  if (!model.includes("/")) return model;
+  const [, providerModel] = model.split(/\/(.+)/, 2);
+  return providerModel || model;
+}
+
+function resolveAgentPrimaryModel(api: OpenClawPluginApi): string | undefined {
+  const configuredDefault = normalizeModelRef(api.pluginConfig?.defaultModel);
+  if (configuredDefault) return configuredDefault;
+
+  const agentId = api.toolContext?.agentId;
+  const resolvedIdentity = api.runtime.agent?.resolveAgentIdentity?.(api.config, agentId);
+  const resolvedIdentityModel = normalizeModelRef(resolvedIdentity?.model);
+  if (resolvedIdentityModel) return resolvedIdentityModel;
+
+  const listedAgentModel = normalizeModelRef(
+    api.config?.agents?.list?.find((entry) => entry.id === agentId)?.model,
+  );
+  if (listedAgentModel) return listedAgentModel;
+
+  const defaultsModel = normalizeModelRef(api.config?.agents?.defaults?.model);
+  if (defaultsModel) return defaultsModel;
+
+  return undefined;
+}
+
 export async function classifyMailWithModel(params: {
   api: OpenClawPluginApi;
   input: ClassificationInput;
   defaultModel?: string;
 }): Promise<ClassificationResult> {
-  const model = params.defaultModel || "academicai/gpt-5";
-  const auth = await params.api.runtime.modelAuth.getApiKeyForModel({ model, cfg: params.api.config });
-  const providerBaseUrl = params.api.config.models?.providers?.academicai?.baseUrl
-    || params.api.config.models?.providers?.openai?.baseUrl
-    || "http://127.0.0.1:11435/v1";
-
-  const response = await fetch(`${String(providerBaseUrl).replace(/\/$/, "")}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${auth}`,
-    },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "user", content: `${SYSTEM_PROMPT}\n\n${renderPrompt(params.input)}` },
-      ],
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`mail_intelligence.classify model request failed (${response.status})`);
-  }
-
-  const data = await response.json() as any;
-  const content = data?.choices?.[0]?.message?.content;
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("mail_intelligence.classify model response missing content");
-  }
-
-  const parsed = safeJsonParse(content);
-  const allowedProjects = new Set(params.input.catalog_hints.projects.map((item) => item.id));
-  const allowedTopics = new Set(params.input.catalog_hints.topics.map((item) => item.id));
-  const allowedWorkpackages = new Map<string, string>();
-  for (const project of params.input.catalog_hints.projects) {
-    for (const workpackage of project.workpackages ?? []) {
-      allowedWorkpackages.set(workpackage.id, project.id);
+  try {
+    const model = params.defaultModel || resolveAgentPrimaryModel(params.api);
+    if (!model) {
+      throw new Error("mail-classify could not resolve a default model for the calling agent");
     }
-  }
 
-  return {
-    schema_version: 1,
-    projectCandidates: normalizeCandidates(parsed.projectCandidates, allowedProjects, params.input.options.max_project_candidates),
-    topicCandidates: normalizeCandidates(parsed.topicCandidates, allowedTopics, params.input.options.max_topic_candidates),
-    workpackageCandidates: normalizeWorkpackages(parsed.workpackageCandidates, allowedWorkpackages, params.input.options.max_workpackage_candidates),
-    needsReply: Boolean(parsed.needsReply),
-    warnings: asStringArray(parsed.warnings).filter((item) => ALLOWED_WARNINGS.has(item)) as ClassificationResult["warnings"],
-  };
+    const providerId = model.includes("/") ? model.split("/")[0] : "";
+    const providerModel = resolveProviderRequestModel(model);
+    if (!providerId || !providerModel) {
+      throw new Error(`mail-classify could not split provider/model from ${model}`);
+    }
+
+    const workspaceDir = params.api.runtime.agent?.resolveAgentWorkspaceDir?.(params.api.config, params.api.toolContext?.agentId)
+      || params.api.config?.agents?.defaults?.workspace
+      || process.cwd();
+    const runEmbeddedPiAgent = params.api.runtime.agent?.runEmbeddedPiAgent;
+    await appendDebugLog({
+      event: "start",
+      model,
+      providerId,
+      providerModel,
+      workspaceDir,
+      agentId: params.api.toolContext?.agentId ?? null,
+      sessionKey: params.api.toolContext?.sessionKey ?? null,
+      hasRunEmbeddedPiAgent: Boolean(runEmbeddedPiAgent),
+      runtimeAgentKeys: params.api.runtime.agent ? Object.keys(params.api.runtime.agent) : [],
+    });
+    if (!runEmbeddedPiAgent) {
+      throw new Error("mail-classify runtime is missing runEmbeddedPiAgent");
+    }
+
+    let tempDir: string | null = null;
+    let content = "";
+    try {
+      tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mail-intelligence-"));
+      const sessionId = `mail-intelligence-${Date.now()}`;
+      const sessionFile = path.join(tempDir, "session.json");
+      const result = await runEmbeddedPiAgent({
+        sessionId,
+        sessionFile,
+        workspaceDir,
+        config: params.api.config,
+        prompt: `${SYSTEM_PROMPT}\n\n${renderPrompt(params.input)}`,
+        timeoutMs: 120000,
+        runId: `mail-intelligence-${Date.now()}`,
+        provider: providerId,
+        model: providerModel,
+        authProfileIdSource: "auto",
+        disableTools: true,
+      });
+      content = collectText((result as any)?.payloads);
+      await appendDebugLog({
+        event: "after_run",
+        contentPreview: content.slice(0, 300),
+        payloadCount: Array.isArray((result as any)?.payloads) ? (result as any).payloads.length : null,
+        payloads: Array.isArray((result as any)?.payloads)
+          ? (result as any).payloads.map((payload: any) => ({
+              text: typeof payload?.text === "string" ? payload.text.slice(0, 300) : payload?.text,
+              isError: payload?.isError ?? false,
+              isReasoning: payload?.isReasoning ?? false,
+              mediaUrl: payload?.mediaUrl ?? null,
+              mediaUrls: Array.isArray(payload?.mediaUrls) ? payload.mediaUrls : null,
+            }))
+          : null,
+        meta: (result as any)?.meta ?? null,
+      });
+    } finally {
+      if (tempDir) {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
+
+    if (!content.trim()) {
+      throw new Error("mail-classify model response missing content");
+    }
+
+    const parsed = safeJsonParse(content);
+    const allowedProjects = new Set(params.input.catalog_hints.projects.map((item) => item.id));
+    const allowedTopics = new Set(params.input.catalog_hints.topics.map((item) => item.id));
+    const allowedWorkpackages = new Map<string, string>();
+    for (const project of params.input.catalog_hints.projects) {
+      for (const workpackage of project.workpackages ?? []) {
+        allowedWorkpackages.set(workpackage.id, project.id);
+      }
+    }
+
+    return {
+      schema_version: 1,
+      projectCandidates: normalizeCandidates(parsed.projectCandidates, allowedProjects, params.input.options.max_project_candidates),
+      topicCandidates: normalizeCandidates(parsed.topicCandidates, allowedTopics, params.input.options.max_topic_candidates),
+      workpackageCandidates: normalizeWorkpackages(parsed.workpackageCandidates, allowedWorkpackages, params.input.options.max_workpackage_candidates),
+      needsReply: Boolean(parsed.needsReply),
+      warnings: asStringArray(parsed.warnings).filter((item) => ALLOWED_WARNINGS.has(item)) as ClassificationResult["warnings"],
+    };
+  } catch (error) {
+    await appendDebugLog({
+      event: "error",
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
 }

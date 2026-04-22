@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { definePluginEntry } from "./vendor/plugin-entry.js";
+import type { OpenClawPluginApi } from "./types/openclaw-plugin-api.js";
 import { classifyMailWithModel } from "./src/tool.js";
 
 const CONTACT = Type.Object({
@@ -102,10 +103,10 @@ export default definePluginEntry({
   register(api: OpenClawPluginApi) {
     api.registerTool(
       {
-        name: "mail_intelligence.classify",
+        name: "mail-classify",
         description: "Classify one prepared email into allowed project/topic/workpackage ids and needsReply.",
         parameters: TOOL_INPUT,
-        async execute(_toolCallId, params) {
+        async execute(_toolCallId: string, params: unknown) {
           const result = await classifyMailWithModel({
             api,
             input: params as any,

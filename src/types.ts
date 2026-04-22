@@ -72,6 +72,9 @@ export type EnvConfig = {
   NEEDS_REPLY_THRESHOLD: number;
   NEEDS_REPLY_NEGATIVE_HINTS: string[];
   MAIL_DEBUG_RETENTION_DAYS: number | null;
+  OPENCLAW_BASE_URL: string;
+  OPENCLAW_GATEWAY_TOKEN: string;
+  OPENCLAW_SESSION_KEY: string;
   LLM_BASE_URL: string;
   LLM_API_KEY: string;
   LLM_MODEL: string;

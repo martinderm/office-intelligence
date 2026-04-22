@@ -137,6 +137,33 @@ export type ClassificationResult = {
   warnings?: ClassificationWarning[];
 };
 
+export type ClassificationRunRecord = {
+  backend: ClassifierBackendKind;
+  ok: boolean;
+  result?: ClassificationResult;
+  error?: string;
+  retryable?: boolean;
+  usedForDecision?: boolean;
+  role?: "primary" | "fallback" | "shadow_compare";
+};
+
+export type ClassificationComparisonRecord = {
+  attempted: ClassifierBackendKind[];
+  primary: ClassificationRunRecord | null;
+  fallback?: ClassificationRunRecord | null;
+  decisionSource: ClassifierBackendKind | "heuristic_only" | null;
+  toolVsLegacy?: {
+    bothOk: boolean;
+    sameProjectTop1: boolean;
+    sameTopicTop1: boolean;
+    sameWorkpackageTop1: boolean;
+    sameNeedsReply: boolean;
+    projectDelta?: number;
+    topicDelta?: number;
+    workpackageDelta?: number;
+  };
+};
+
 export type LegacyClassificationInput = ClassificationInput;
 
 export type RoutingDecisionState =

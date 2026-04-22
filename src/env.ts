@@ -123,6 +123,9 @@ export function getConfig(cwd: string): EnvConfig {
       .map((s) => s.trim())
       .filter(Boolean),
     MAIL_DEBUG_RETENTION_DAYS: parseRetentionDays(process.env.MAIL_DEBUG_RETENTION_DAYS, 30),
+    OPENCLAW_BASE_URL: process.env.OPENCLAW_BASE_URL ?? "http://127.0.0.1:18789",
+    OPENCLAW_GATEWAY_TOKEN: process.env.OPENCLAW_GATEWAY_TOKEN ?? "",
+    OPENCLAW_SESSION_KEY: process.env.OPENCLAW_SESSION_KEY ?? "",
     LLM_BASE_URL: process.env.LLM_BASE_URL ?? "",
     LLM_API_KEY: process.env.LLM_API_KEY ?? "",
     LLM_MODEL: normalizeModelName(process.env.LLM_MODEL),

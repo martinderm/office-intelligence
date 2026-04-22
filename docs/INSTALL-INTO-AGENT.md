@@ -42,7 +42,8 @@ Empfohlene `.env`-Felder im Agent-Workspace:
 - `MAIL_SOURCE_FOLDER=INBOX` (oder Instanzwert)
 - `PROJECTS_JSON_PATH=<agent-workspace>/memory/references/projects/projects.json`
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
-- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TIMEOUT_MS`
+- `OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY`, `LLM_TIMEOUT_MS` (Gateway-Zugang für `mail-classify`; mit Session-Key kann gezielt das Modell des Ziel-Agents genutzt werden; das Plugin selbst hält den eingebetteten Modellaufruf bewusst minimal und setzt keine harten Sampling-/Format-Parameter wie `temperature` oder `responseFormat`)
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` nur dann, wenn zusätzlich Discovery/Suggestion-Pfade genutzt werden
 
 ## 3) Wissenskataloge sicherstellen
 

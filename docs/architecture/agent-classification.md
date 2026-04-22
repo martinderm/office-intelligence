@@ -44,7 +44,7 @@ Verantwortlich für:
 - tatsächliche Mail-Operationen (copy/move)
 - Logging und Artefaktpersistenz
 
-#### OpenClaw-Tool `mail_intelligence.classify`
+#### OpenClaw-Tool `mail-classify`
 
 Verantwortlich für:
 
@@ -80,7 +80,7 @@ Der bestehende direkte LLM-Pfad wird mittelfristig durch den Tool-Pfad ersetzt o
 
 Neues dediziertes Tool, z. B.:
 
-- `mail_intelligence.classify`
+- `mail-classify`
 
 Optional später getrennte Schwester-Tools:
 
@@ -119,7 +119,7 @@ Ziel: Das Modell soll nur innerhalb eines kontrollierten Kandidatenraums entsche
 
 ### Schritt 4: Tool-Call
 
-`mail-processor` ruft das Tool `mail_intelligence.classify` mit vorbereitetem JSON auf.
+`mail-processor` ruft das Tool `mail-classify` mit vorbereitetem JSON auf.
 
 ### Schritt 5: Modellaufruf im Tool
 
@@ -158,7 +158,7 @@ Das Tool kapselt den gesamten Modellzugriff.
 
 Ablauf:
 
-1. `mail-processor` ruft `mail_intelligence.classify` auf
+1. `mail-processor` ruft `mail-classify` auf
 2. das Tool erhält strukturierten Input
 3. das Tool baut einen strikten Prompt mit Output-Vertrag
 4. das Tool ruft das konfigurierte Modell über die OpenClaw-Runtime auf
@@ -258,6 +258,17 @@ Die finale Entscheidung bleibt immer im `mail-processor`.
 Wenn der Tool-Call fehlschlägt:
 
 - kein Routing
+
+## Shadow-Beobachtbarkeit und Vergleichbarkeit
+
+Für Paket 4 wird pro verarbeiteter Mail explizit festgehalten:
+
+- welches Backend primär versucht wurde
+- ob ein Fallback lief
+- welches Ergebnis tatsächlich für die Entscheidung verwendet wurde
+- welche Backend-Läufe pro Mail stattgefunden haben
+
+Diese Beobachtungsdaten landen sowohl im Mail-Artefakt als auch im `state.jsonl`, damit Shadow-Auswertungen ohne implizites Rekonstruieren möglich sind.
 - Fehler im State protokollieren
 - optional Retry, falls sinnvoll
 - Mail verbleibt unverändert in der Quelllage bzw. im Shadow-Fluss
@@ -272,7 +283,9 @@ Wenn Tool-Output ungültig ist:
 
 ### Zielzustand
 
-Der direkte Pfad über `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` im `mail-processor` ist nicht mehr Primärpfad für operative Klassifikation.
+Der direkte Pfad über einen separaten Legacy-LLM-Provider im `mail-processor` ist nicht mehr Teil des operativen Klassifikationspfads. `OPENCLAW_BASE_URL` und `OPENCLAW_GATEWAY_TOKEN` dienen hier dem Zugriff auf das Tool `mail-classify`; das Modell kommt standardmäßig vom aufrufenden Agent. `LLM_BASE_URL` und `LLM_API_KEY` bleiben nur für getrennte Discovery-/Suggestion-Pfade relevant.
+
+Für den eingebetteten Modelllauf im Plugin gilt bewusst eine Minimalstrategie: keine hart verdrahteten Sampling-/Format-Parameter wie `temperature` oder `responseFormat`, solange der konkrete OpenClaw-/Provider-Pfad das nicht stabil verlangt. Die Modell- und Laufzeitentscheidung soll so weit wie möglich bei OpenClaw bzw. der Agent-Konfiguration bleiben.
 
 ### Geplanter Migrationspfad
 
@@ -280,7 +293,7 @@ Der direkte Pfad über `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` im `mail-proce
 2. bestehende direkte LLM-Logik dahinter kapseln
 3. Tool-basierte Implementierung ergänzen
 4. Fusion und Entscheidungslogik auf das neue Resultat umstellen
-5. direkte AcademicAI-Nutzung aus dem Standardpfad entfernen oder nur als Fallback lassen
+5. direkte AcademicAI-Nutzung aus dem Standardpfad entfernen
 6. Discovery später getrennt auf eigenes Tool migrieren
 
 ## Offene Designfragen
@@ -298,7 +311,7 @@ Die Migration wird in getrennte, überprüfbare Pakete geschnitten. Ziel ist, Be
 ### Paket 1: Contract & Entscheidungsmodell
 
 Ziel:
-- verbindlichen Contract für `mail_intelligence.classify` festziehen
+- verbindlichen Contract für `mail-classify` festziehen
 - Eingabe-/Ausgabefelder stabil definieren
 - Fusionslogik zwischen Heuristik und Tool-Resultat festlegen
 
@@ -320,7 +333,7 @@ Status: **begonnen**
 
 #### Ziel des Contracts
 
-Das Tool `mail_intelligence.classify` soll pro Mail genau einen synchronen Analysevorgang ausführen und strikt validierbares JSON liefern.
+Das Tool `mail-classify` soll pro Mail genau einen synchronen Analysevorgang ausführen und strikt validierbares JSON liefern.
 
 Der Contract muss so eng sein, dass:
 
@@ -454,14 +467,14 @@ Der Contract muss so eng sein, dass:
   "projectCandidates": [
     {
       "id": "project-a",
-      "confidence": 0.81,
+      "confidence": 81,
       "evidence": ["subject_match", "sender_domain", "current_message"]
     }
   ],
   "topicCandidates": [
     {
       "id": "topic-x",
-      "confidence": 0.73,
+      "confidence": 73,
       "evidence": ["keyword_match", "current_message"]
     }
   ],
@@ -469,7 +482,7 @@ Der Contract muss so eng sein, dass:
     {
       "id": "wp-2",
       "project_id": "project-a",
-      "confidence": 0.66,
+      "confidence": 66,
       "evidence": ["task_reference", "milestone_reference"]
     }
   ],
@@ -484,7 +497,7 @@ Der Contract muss so eng sein, dass:
 - alle Kandidatenlisten dürfen leer sein
 - `id` muss immer aus dem zugelieferten Kandidatenraum stammen
 - `project_id` bei Workpackages muss zu einem zugelassenen Projekt gehören
-- `confidence` liegt in `[0,1]`
+- `confidence` liegt in `0..100` (ganzzahlig oder numerisch interpretierbar)
 - `needsReply` ist in v1 rein binär (`true`/`false`)
 - `evidence` ist eine kontrollierte Kurzliste, keine freien Romane
 - Output enthält nur IDs, keine freien Labels
@@ -784,7 +797,7 @@ Bedeutung:
   - inzwischen als eigenes Backend-Modul angelegt
 
 - `openclaw-tool-classifier.ts`
-  - neue Implementierung für den späteren Tool-Call `mail_intelligence.classify`
+  - neue Implementierung für den späteren Tool-Call `mail-classify`
 
 - `fusion.ts`
   - Regeln zur Zusammenführung von Heuristik + Tool-Resultat + Guardrails
@@ -986,7 +999,7 @@ Paket 2 gilt erst dann als sauber vorbereitet, wenn:
 - `thread_context` aus bekannten Artefakten aufgebaut werden kann
 - der operative Run nur noch ein Klassifikations-Interface konsumiert
 
-### Paket 3: OpenClaw-Plugin-Tool `mail_intelligence.classify`
+### Paket 3: OpenClaw-Plugin-Tool `mail-classify`
 
 Ziel:
 - dediziertes, synchrones Analyse-Tool für Mail-Klassifikation bauen
@@ -1010,7 +1023,7 @@ Status: **minimal lauffähig angelegt**
 Aktueller Umsetzungsstand:
 - lokales Plugin-Skelett unter `plugin/mail-intelligence/` angelegt
 - Manifest `openclaw.plugin.json` angelegt
-- Tool `mail_intelligence.classify` registriert
+- Tool `mail-classify` registriert
 - Tool-Input-Schema an den festgezogenen Contract angelehnt
 - Tool kapselt Promptbau, Modellaufruf und strikte Ergebnis-Normalisierung
 - `src/classification/openclaw-tool-classifier.ts` ruft jetzt den echten Gateway-Endpunkt `/tools/invoke` auf statt nur einen pseudo-toolartigen Chat-Request zu bauen

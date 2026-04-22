@@ -60,7 +60,7 @@ Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
 - `TOPICS_JSON_PATH` (dein Topic-Katalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
-- LLM-Zugang (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`), falls LLM-Extraktion genutzt wird
+- Gateway-Zugang für das OpenClaw-Tool (`OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY` für agentgebundenes Modellverhalten), falls tool-basierte Klassifikation genutzt wird
 - `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
 
 Alle übrigen Parameter können in der Regel auf Default bleiben und nur bei Bedarf nachgeschärft werden.
@@ -362,7 +362,7 @@ Hinweise:
 - ✅ Workpackage-Matching auf Projektunterebene (heuristisch + LLM-unterstützt) mit `matchedWorkpackageId`, `workpackageScore`, `workpackageReason`
 - ✅ Mock-Mode (`HIMALAYA_COMMAND=mock`) für lokale Tests ohne echte Mailbox
 - ✅ LLM-Extraktion über OpenAI-kompatible API (`/chat/completions`, Fallback `/v1/chat/completions`)
-- ✅ Modell frei wählbar über `LLM_MODEL`
+- ✅ Tool-basierte Klassifikation nutzt das Hauptmodell des aufrufenden Agents (Plugin-Default optional überschreibbar)
 - ✅ Prompt anpassbar über `LLM_PROMPT_PATH` (Fallback auf eingebauten Default)
 - ✅ Antwort-Preprocessing priorisiert aktuelle Nachricht und gewichtet ältere Thread-Blöcke niedriger
 - ✅ MIME-aware Body-Extraktion (multipart: bevorzugt `text/html`, fallback `text/plain`) inkl. quoted-printable/base64-Dekodierung

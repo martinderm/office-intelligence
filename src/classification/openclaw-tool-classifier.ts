@@ -32,7 +32,7 @@ type RawToolResult = {
   warnings?: unknown;
 };
 
-const DEFAULT_TOOL_NAME = "mail_intelligence.classify";
+const DEFAULT_TOOL_NAME = "mail-classify";
 
 const ALLOWED_EVIDENCE = new Set<ClassificationEvidence>([
   "subject_match",
@@ -62,7 +62,7 @@ function clampConfidence(value: unknown): number {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return 0;
   if (numeric < 0) return 0;
-  if (numeric > 1) return 1;
+  if (numeric > 100) return 100;
   return numeric;
 }
 
