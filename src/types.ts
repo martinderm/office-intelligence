@@ -25,6 +25,15 @@ export type Project = {
   schema_version?: number;
 };
 
+export type TopicSubtopic = {
+  id: string;
+  title: string;
+  aliases?: string[];
+  keywords?: string[];
+  contacts?: Array<{ name?: string; email?: string; role?: string }>;
+  status?: "active" | "paused" | "done" | "unknown";
+};
+
 export type Topic = {
   id: string;
   title: string;
@@ -33,6 +42,8 @@ export type Topic = {
   keywords?: string[];
   domains?: string[];
   contacts?: Array<{ name?: string; email?: string; role?: string }>;
+  subtopics?: TopicSubtopic[];
+  description?: string;
   typical_subject_patterns?: string[];
   routing_priority?: number;
   do_not_route_if?: string[];

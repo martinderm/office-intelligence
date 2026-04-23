@@ -76,6 +76,13 @@ export type ClassificationProjectHint = {
   hint_rank?: number;
 };
 
+export type ClassificationTopicSubtopicHint = {
+  id: string;
+  title: string;
+  aliases?: string[];
+  keywords?: string[];
+};
+
 export type ClassificationTopicHint = {
   id: string;
   title: string;
@@ -83,6 +90,9 @@ export type ClassificationTopicHint = {
   keywords?: string[];
   domains?: string[];
   contacts?: ClassificationContactHint[];
+  description?: string;
+  typical_subject_patterns?: string[];
+  subtopics?: ClassificationTopicSubtopicHint[];
   hint_rank?: number;
 };
 
@@ -236,6 +246,14 @@ export function toClassificationTopicHint(topic: Topic, hint_rank?: number): Cla
         ? [{ email: contact.email, name: contact.name, role: contact.role }]
         : [],
     ),
+    description: topic.description,
+    typical_subject_patterns: topic.typical_subject_patterns,
+    subtopics: topic.subtopics?.map((subtopic) => ({
+      id: subtopic.id,
+      title: subtopic.title,
+      aliases: subtopic.aliases,
+      keywords: subtopic.keywords,
+    })),
     hint_rank,
   };
 }

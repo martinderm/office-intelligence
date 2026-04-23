@@ -198,6 +198,18 @@ function buildCanonicalCatalogHints(input: ClassificationInput): ClassificationI
             }))
             .sort((left, right) => `${left.email}\u0000${left.name ?? ""}\u0000${left.role ?? ""}`.localeCompare(`${right.email}\u0000${right.name ?? ""}\u0000${right.role ?? ""}`))
         : undefined,
+      description: topic.description,
+      typical_subject_patterns: sortStrings(topic.typical_subject_patterns),
+      subtopics: topic.subtopics?.length
+        ? [...topic.subtopics]
+            .map((subtopic) => ({
+              id: subtopic.id,
+              title: subtopic.title,
+              aliases: sortStrings(subtopic.aliases),
+              keywords: sortStrings(subtopic.keywords),
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id))
+        : undefined,
       hint_rank: topic.hint_rank,
     }))
     .sort((left, right) => left.id.localeCompare(right.id));

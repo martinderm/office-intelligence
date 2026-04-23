@@ -28,6 +28,13 @@ const PROJECT = Type.Object({
   hint_rank: Type.Optional(Type.Number()),
 });
 
+const TOPIC_SUBTOPIC = Type.Object({
+  id: Type.String(),
+  title: Type.String(),
+  aliases: Type.Optional(Type.Array(Type.String())),
+  keywords: Type.Optional(Type.Array(Type.String())),
+});
+
 const TOPIC = Type.Object({
   id: Type.String(),
   title: Type.String(),
@@ -35,6 +42,9 @@ const TOPIC = Type.Object({
   keywords: Type.Optional(Type.Array(Type.String())),
   domains: Type.Optional(Type.Array(Type.String())),
   contacts: Type.Optional(Type.Array(CONTACT)),
+  description: Type.Optional(Type.String()),
+  typical_subject_patterns: Type.Optional(Type.Array(Type.String())),
+  subtopics: Type.Optional(Type.Array(TOPIC_SUBTOPIC)),
   hint_rank: Type.Optional(Type.Number()),
 });
 

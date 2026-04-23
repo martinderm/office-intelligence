@@ -69,6 +69,13 @@ export type ClassificationProjectHint = {
   hint_rank?: number;
 };
 
+export type ClassificationTopicSubtopicHint = {
+  id: string;
+  title: string;
+  aliases?: string[];
+  keywords?: string[];
+};
+
 export type ClassificationTopicHint = {
   id: string;
   title: string;
@@ -76,6 +83,9 @@ export type ClassificationTopicHint = {
   keywords?: string[];
   domains?: string[];
   contacts?: ClassificationContactHint[];
+  description?: string;
+  typical_subject_patterns?: string[];
+  subtopics?: ClassificationTopicSubtopicHint[];
   hint_rank?: number;
 };
 

@@ -64,13 +64,6 @@ export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
     }
     ids.add(p.id);
 
-    if (p.reference_md) {
-      const refPath = resolveReferencePath(cwd, p.reference_md);
-      if (!fs.existsSync(refPath)) {
-        console.warn(`[warn] reference_md missing for ${p.id}: ${p.reference_md}`);
-      }
-    }
-
     return p;
   });
 
