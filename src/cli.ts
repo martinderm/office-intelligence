@@ -42,12 +42,12 @@ function isTransientReadError(err: unknown): boolean {
   );
 }
 
-function parseMode(args: string[]): "shadow" | "run" {
+function parseMode(args: string[]): "shadow" | "run" | "move" {
   const modeArg = args.find((a) => a.startsWith("--mode="));
   if (!modeArg) return "shadow";
   const value = modeArg.split("=")[1];
-  if (value !== "shadow" && value !== "run") {
-    throw new Error("--mode must be shadow or run");
+  if (value !== "shadow" && value !== "run" && value !== "move") {
+    throw new Error("--mode must be shadow, run or move");
   }
   return value;
 }
@@ -124,6 +124,24 @@ function parseSyncFolderArg(args: string[]): string | null {
   return value || null;
 }
 
+function parseSourceFolderArg(args: string[]): string | null {
+  const arg = args.find((a) => a.startsWith("--source-folder="));
+  if (!arg) return null;
+  const value = arg.slice("--source-folder=".length).trim();
+  return value || null;
+}
+
+function parseTargetFolderArg(args: string[]): string | null {
+  const arg = args.find((a) => a.startsWith("--target-folder="));
+  if (!arg) return null;
+  const value = arg.slice("--target-folder=".length).trim();
+  return value || null;
+}
+
+function wantsDryRun(args: string[]): boolean {
+  return args.includes("--dry-run");
+}
+
 function wantsMailboxFolderSyncForce(args: string[]): boolean {
   return args.includes("--sync-mailbox-folders-force");
 }
@@ -193,7 +211,7 @@ type EffectiveRouting = {
 
 type RoutingHistoryEntry = {
   at: string;
-  event: "observed" | "routed_copy" | "routed_move";
+  event: "observed" | "routed_copy" | "routed_move" | "folder_sync_detected" | "controlled_move";
   envelopeId: string;
   fromFolder?: string;
   toFolders?: string[];
@@ -265,6 +283,92 @@ function findMessageArtifactByStableId(msgsDir: string, stableId: string): strin
   }
 
   return undefined;
+}
+
+function ensureParentDir(filePath: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+}
+
+function moveFileIfNeeded(sourcePath: string, targetPath: string): void {
+  if (path.resolve(sourcePath) === path.resolve(targetPath)) return;
+  if (!fs.existsSync(sourcePath)) return;
+  ensureParentDir(targetPath);
+  if (fs.existsSync(targetPath)) {
+    fs.unlinkSync(sourcePath);
+    return;
+  }
+  fs.renameSync(sourcePath, targetPath);
+}
+
+function relocateExistingExportArtifact(dataDir: string, fileId: string, finalFolder: string): string {
+  const exportsBaseDir = path.resolve(dataDir, "exports");
+  const targetPath = path.join(exportsBaseDir, folderToRelativePath(finalFolder), `${fileId}.eml`);
+  const stack = [exportsBaseDir];
+  while (stack.length) {
+    const dir = stack.pop();
+    if (!dir || !fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        stack.push(full);
+        continue;
+      }
+      if (entry.isFile() && entry.name === `${fileId}.eml`) {
+        moveFileIfNeeded(full, targetPath);
+        return targetPath;
+      }
+    }
+  }
+  return targetPath;
+}
+
+function relocateArtifactByStableId(params: {
+  msgsDir: string;
+  dataDir: string;
+  stableId: string;
+  fileId: string;
+  finalFolder: string;
+  historyEntry: RoutingHistoryEntry;
+  envelopeId: string;
+}): { artifactPath?: string; exportPath: string; updated: boolean } {
+  const existingArtifactPath = findMessageArtifactByStableId(params.msgsDir, params.stableId);
+  const targetMsgPath = path.join(path.resolve(params.msgsDir, folderToRelativePath(params.finalFolder)), `${params.fileId}.json`);
+  const targetExportPath = path.join(path.resolve(params.dataDir, "exports", folderToRelativePath(params.finalFolder)), `${params.fileId}.eml`);
+
+  let updated = false;
+  if (existingArtifactPath && fs.existsSync(existingArtifactPath)) {
+    const parsed = JSON.parse(fs.readFileSync(existingArtifactPath, "utf8")) as Record<string, any>;
+    const history = Array.isArray(parsed.history) ? parsed.history : [];
+    const duplicate = history.find((entry: any) => entry?.event === params.historyEntry.event && entry?.fromFolder === params.historyEntry.fromFolder && JSON.stringify(entry?.toFolders || []) === JSON.stringify(params.historyEntry.toFolders || []));
+    if (!duplicate) history.push(params.historyEntry);
+
+    parsed.local = {
+      ...(parsed.local || {}),
+      fileId: params.fileId,
+      msgPath: targetMsgPath,
+      exportPath: targetExportPath,
+      folder: params.finalFolder,
+    };
+    parsed.folders = {
+      ...(parsed.folders || {}),
+      current: params.finalFolder,
+      final: params.finalFolder,
+    };
+    parsed.routing = {
+      ...(parsed.routing || {}),
+      currentFolder: params.finalFolder,
+      finalFolder: params.finalFolder,
+    };
+    parsed.history = history;
+    ensureParentDir(targetMsgPath);
+    fs.writeFileSync(existingArtifactPath, JSON.stringify(parsed, null, 2), "utf8");
+    moveFileIfNeeded(existingArtifactPath, targetMsgPath);
+    relocateExistingExportArtifact(params.dataDir, params.fileId, params.finalFolder);
+    updated = true;
+    return { artifactPath: targetMsgPath, exportPath: targetExportPath, updated };
+  }
+
+  return { artifactPath: undefined, exportPath: targetExportPath, updated };
 }
 
 function isCompleteMessageArtifact(raw: string, stableId: string, llmEnabled: boolean): boolean {
@@ -498,6 +602,9 @@ async function main(): Promise<void> {
   const discover = parseDiscoverOptions(args, cfg.MAIL_FETCH_LIMIT);
   const inspectFolder = parseInspectFolderArg(args);
   const syncFolder = parseSyncFolderArg(args);
+  const explicitSourceFolder = parseSourceFolderArg(args);
+  const targetFolder = parseTargetFolderArg(args);
+  const dryRun = wantsDryRun(args);
 
   if (discover.enabled) {
     await runDiscoverProjects(cwd, cfg, discover);
@@ -516,7 +623,7 @@ async function main(): Promise<void> {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = new Date().toISOString();
   const mailboxKey = process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || "default";
-  const activeSourceFolder = syncFolder || cfg.MAIL_SOURCE_FOLDER;
+  const activeSourceFolder = explicitSourceFolder || syncFolder || cfg.MAIL_SOURCE_FOLDER;
   cfg.MAIL_SOURCE_FOLDER = activeSourceFolder;
   const cursor = loadCursorState(cfg.MAIL_CURSOR_FILE, mailboxKey, cfg.MAIL_SOURCE_FOLDER);
 
@@ -624,6 +731,8 @@ async function main(): Promise<void> {
       mode,
       startedAt,
       sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+      targetFolder: targetFolder || null,
+      dryRun,
       fetchLimit: cfg.MAIL_FETCH_LIMIT,
       projectCount: projects.length,
       llmEnabled: cfg.LLM_ENABLED,
@@ -657,7 +766,9 @@ async function main(): Promise<void> {
       });
     }
 
-    const routing = resolveEffectiveRouting(cfg, supportsMove, supportsUidPlus);
+    const routing = mode === "move"
+      ? { ...resolveEffectiveRouting(cfg, supportsMove, supportsUidPlus), effectiveMove: true, forcedSingleTarget: true }
+      : resolveEffectiveRouting(cfg, supportsMove, supportsUidPlus);
 
     appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
       type: "routing_policy_resolved",
@@ -674,7 +785,7 @@ async function main(): Promise<void> {
       timestamp: new Date().toISOString(),
     });
 
-    const processed = getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
+    const processed = mode === "move" ? new Set<string>() : getProcessedIds(cfg.MAIL_PROCESSOR_STATE_FILE);
 
     // Transient-read retry queue (global): items are re-attempted across runs without blocking progress.
     // Spec per request: max-attempts=2, base backoff=30s.
@@ -906,9 +1017,10 @@ async function main(): Promise<void> {
         }
 
         const existingArtifactPath = findMessageArtifactByStableId(cfg.MAIL_PROCESSOR_MSGS_DIR, stableId);
+        const canRelocateExisting = mode === "move" || Boolean(syncFolder);
         if (existingArtifactPath) {
           const existingRaw = fs.readFileSync(existingArtifactPath, "utf8");
-          if (isCompleteMessageArtifact(existingRaw, stableId, cfg.LLM_ENABLED)) {
+          if (isCompleteMessageArtifact(existingRaw, stableId, cfg.LLM_ENABLED) && !canRelocateExisting) {
             summary.skipped += 1;
             processed.add(stableId);
             appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
@@ -1047,6 +1159,37 @@ async function main(): Promise<void> {
 
         const copyTargets: string[] = [];
 
+        if (mode === "move") {
+          if (!targetFolder) {
+            throw new Error("--target-folder is required for --mode=move");
+          }
+          if (dryRun) {
+            copyTargets.push(targetFolder);
+          } else if (cfg.HIMALAYA_COMMAND !== "mock") {
+            if (routing.effectiveAction === "move") {
+              moveMessage(cfg.HIMALAYA_COMMAND, targetFolder, env.id);
+            } else if (routing.useUidPlus) {
+              const routeResult = copyMessageWithUidPlus(cfg.HIMALAYA_COMMAND, targetFolder, env.id);
+              if (routeResult.uidPlus) {
+                appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+                  type: "uidplus_copy_mapping",
+                  runId,
+                  envelopeId: env.id,
+                  stableId,
+                  targetFolder,
+                  mapping: routeResult.uidPlus as unknown as Record<string, unknown>,
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            } else {
+              copyMessage(cfg.HIMALAYA_COMMAND, targetFolder, env.id);
+            }
+            copyTargets.push(targetFolder);
+          } else {
+            copyTargets.push(targetFolder);
+          }
+        }
+
         if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
           const project = projects.find((p) => p.id === match.projectId);
           if (project) {
@@ -1110,9 +1253,11 @@ async function main(): Promise<void> {
           }
         }
 
-        const finalFolder = routing.effectiveMove && copyTargets.length
-          ? copyTargets[copyTargets.length - 1]
-          : cfg.MAIL_SOURCE_FOLDER;
+        const finalFolder = (mode === "move" && targetFolder)
+          ? targetFolder
+          : (routing.effectiveMove && copyTargets.length
+            ? copyTargets[copyTargets.length - 1]
+            : cfg.MAIL_SOURCE_FOLDER);
 
         const history: RoutingHistoryEntry[] = [
           {
@@ -1126,18 +1271,38 @@ async function main(): Promise<void> {
         if (copyTargets.length) {
           history.push({
             at: new Date().toISOString(),
-            event: routing.effectiveMove ? "routed_move" : "routed_copy",
+            event: mode === "move" ? "controlled_move" : (routing.effectiveMove ? "routed_move" : "routed_copy"),
             envelopeId: env.id,
             fromFolder: cfg.MAIL_SOURCE_FOLDER,
             toFolders: [...copyTargets],
           });
+        } else if (syncFolder && finalFolder !== cfg.MAIL_SOURCE_FOLDER) {
+          history.push({
+            at: new Date().toISOString(),
+            event: "folder_sync_detected",
+            envelopeId: env.id,
+            fromFolder: cfg.MAIL_SOURCE_FOLDER,
+            toFolders: [finalFolder],
+          });
         }
+
+        const relocated = relocateArtifactByStableId({
+          msgsDir: cfg.MAIL_PROCESSOR_MSGS_DIR,
+          dataDir: cfg.MAIL_PROCESSOR_DATA_DIR,
+          stableId,
+          fileId,
+          finalFolder,
+          historyEntry: history[history.length - 1] ?? history[0],
+          envelopeId: env.id,
+        });
 
         const msgFolderDir = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToRelativePath(finalFolder));
         fs.mkdirSync(msgFolderDir, { recursive: true });
-        const debugPath = path.join(msgFolderDir, `${fileId}.json`);
+        const debugPath = relocated.artifactPath || path.join(msgFolderDir, `${fileId}.json`);
 
-        const localExportPath = moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, fileId, finalFolder);
+        const localExportPath = relocated.updated
+          ? relocated.exportPath
+          : moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, fileId, finalFolder);
 
         fs.writeFileSync(
           debugPath,
@@ -1173,14 +1338,18 @@ async function main(): Promise<void> {
               },
               folders: {
                 source: cfg.MAIL_SOURCE_FOLDER,
-                current: cfg.MAIL_SOURCE_FOLDER,
-                primary_target: match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null,
+                current: finalFolder,
+                primary_target: mode === "move"
+                  ? (targetFolder || null)
+                  : (match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null),
                 special_targets: copyTargets.filter((target) => target !== (copyTargets[0] ?? "")),
                 final: finalFolder,
               },
               routing: {
-                currentFolder: cfg.MAIL_SOURCE_FOLDER,
-                primaryTargetFolder: match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null,
+                currentFolder: finalFolder,
+                primaryTargetFolder: mode === "move"
+                  ? (targetFolder || null)
+                  : (match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null),
                 secondaryTargetFolders: [],
                 specialTargetFolders: copyTargets.filter((target) => target !== (copyTargets[0] ?? "")),
                 finalFolder,
@@ -1200,10 +1369,12 @@ async function main(): Promise<void> {
           type: "message_processed",
           runId,
           sourceFolder: cfg.MAIL_SOURCE_FOLDER,
+          targetFolder: targetFolder || null,
           envelopeId: env.id,
           messageId: normalizedMessageId || prepared.meta.messageId || env.id,
           stableId,
           mode,
+          dryRun,
           matchedProjectId: match.projectId,
           matchedTopicId: match.matchedTopicId,
           topicScore: match.topicScore,
@@ -1216,7 +1387,7 @@ async function main(): Promise<void> {
           copied: mode === "run" ? summary.copied : 0,
           copyTargets,
           routeActionRequested: routing.requestedAction,
-          routeActionEffective: routing.effectiveAction,
+          routeActionEffective: mode === "move" ? (routing.effectiveMove ? "move" : routing.effectiveAction) : routing.effectiveAction,
           copySemantics: routing.copySemantics,
           supportsMove: routing.supportsMove,
           supportsUidPlus: routing.supportsUidPlus,

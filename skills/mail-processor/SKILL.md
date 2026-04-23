@@ -1,7 +1,7 @@
 # Skill: mail-processor
 
 Bindet die Mail-Verarbeitungskomponente **mail-processor** als OpenClaw-Skill in einen Agenten ein.
-Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch aber klar auf Mail-Triage, Extraktion/Klassifizierung und sicheres Routing (COPY-only) via Himalaya/IMAP fokussiert.
+Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch aber klar auf Mail-Triage, Extraktion/Klassifizierung und sicheres Routing bzw. kontrollierte Move-/Sync-Aktionen via Himalaya/IMAP fokussiert.
 
 ## Was der Skill bereitstellt
 
@@ -12,7 +12,7 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 - **Pending-Decisions-Queue** für fehlende referenzierte Ordner, damit Entscheidungen nicht verloren gehen
 - **Gezielte Folder-Inspektion** eines existierenden Mailbox-Ordners ohne Routing-Aktion
 - **Gezielter Folder-Sync** eines existierenden Mailbox-Ordners in die lokale Artefaktstruktur
-- **Guardrails**: Locking/Idempotenz, COPY-only, Fail-safe Defaults
+- **Guardrails**: Locking/Idempotenz, kontrollierte Mailbox-Aktionen nur über offizielle Pfade, Fail-safe Defaults
 
 ## Voraussetzungen im Agent
 
@@ -86,10 +86,16 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 ### 1) Shadow Run
 - `npm run shadow`
 
-### 2) Routing Run (COPY-only, gated)
+### 2) Routing Run (gated)
 - `npm run run`
 
-### 3) Mailbox-Folder-Sync / Pending Decisions
+### 3) Kontrollierter Move einer explizit ausgewählten Mail
+- `node dist/cli.js --mode=move --source-folder="INBOX" --target-folder="Projekte/USAGE-NG" --ids=7588`
+- Optional nur zur Vorschau: `node dist/cli.js --mode=move --source-folder="INBOX" --target-folder="Projekte/USAGE-NG" --ids=7588 --dry-run`
+- Der Move-Pfad nutzt die bestehende Copy/Move-Semantik des Systems und hängt lokale Artefakte (`msgs`, `exports`, `history`, `folders`, `routing`) anschließend auf den Zielordnerzustand um.
+
+### 4) Mailbox-Folder-Sync / Pending Decisions
+
 - Normale Mail-Runs prüfen automatisch vorab, ob `data/mail-processor/mailbox-folders.json` fehlt oder älter als `MAILBOX_FOLDERS_MAX_AGE_HOURS` ist. Nur dann wird live neu geholt.
 - Force-Refresh: `npm run sync:mailbox-folders`
 - Source of truth für Zielordner bleibt in `projects.json` und `topics.json`; `mailbox-folders.json` ist nur beobachteter Snapshot.
@@ -99,17 +105,17 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Wenn keine aktive Session vorhanden ist, bleiben Entscheidungen in `pending-decisions.json`, bis sie im nächsten aktiven Kontext aufgegriffen werden.
 - Für gezielte Prüfung eines existierenden Ordners: `node dist/cli.js --mode=shadow --inspect-folder="Projekte/USAGE-NG"`.
 - Dieser Pfad liest nur die letzten `MAIL_FETCH_LIMIT` Envelopes des angegebenen Ordners und eignet sich für Review/Diagnose ohne Routing.
-- Für gezielte Materialisierung eines existierenden Ordners in die lokale Struktur: `node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"`.
-- Dieser Pfad liest die letzten `MAIL_FETCH_LIMIT` Nachrichten des angegebenen Ordners, schreibt Msg-/EML-Artefakte im gleichen Schema wie normale Runs. Die Sync-Metadaten landen direkt im passenden Folder-Eintrag von `data/mail-processor/mailbox-folders.json`. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
+- Für gezielte Materialisierung bzw. Konsolidierung eines existierenden Ordners in die lokale Struktur: `node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"`.
+- Dieser Pfad liest die letzten `MAIL_FETCH_LIMIT` Nachrichten des angegebenen Ordners, schreibt bzw. konsolidiert Msg-/EML-Artefakte im gleichen Schema wie normale Runs. Wenn dieselbe Mail lokal bereits unter einem anderen Ordnerpfad existiert, wird die lokale Repräsentation per `stableId` auf den synchronisierten Zielordner umgehängt statt dupliziert. Die Sync-Metadaten landen direkt im passenden Folder-Eintrag von `data/mail-processor/mailbox-folders.json`. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
 
-### 4) Wissenspflege aus Mail-Artefakten (reviewed)
+### 5) Wissenspflege aus Mail-Artefakten (reviewed)
 - Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 - Optional IMAP-Quelle: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-source=imap --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
 
-### 4) Konsolidierung in Wissens-/Projektordner (Agent-basiert)
+### 6) Konsolidierung in Wissens-/Projektordner (Agent-basiert)
 - Die Konsolidierung wird **vom OpenClaw-Agenten** durchgeführt, nicht durch ein lokales Merge-Skript.
 - Input: verarbeitete Mail-Artefakte unter `data/mail-processor/msgs/**/*.json`.
 - Ziel: Managed-Sections in `index.md`/`signals.md` aktualisieren und Evidenz in `evidence/YYYY-MM.md` ergänzen.
@@ -120,7 +126,7 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
 
-- COPY-only (nie MOVE/DELETE)
+- Mailbox-Schreibaktionen nur über explizite offizielle Pfade (Routing-Run / kontrollierter Move), nie implizit durch Review-/Sync-Hilfspfade
 - Safe default: bei Ambiguität **keine Aktion**
 - Hard negative rules für needsReply (Newsletter/Auto-Reply/no-reply)
 - JSON-Schema-Validation für Tool-/LLM-Extrakt; bei Fehlern skip+log

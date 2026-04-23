@@ -126,7 +126,16 @@ Wenn du einen existierenden Ordner lokal im gleichen Artefakt-Schema wie INBOX m
 node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"
 ```
 
-Das liest die letzten `MAIL_FETCH_LIMIT` Nachrichten dieses Ordners, schreibt EMLs und Msg-Artefakte in die bestehende lokale Struktur. Sync-Metadaten des Ordners werden direkt im passenden Eintrag von `data/mail-processor/mailbox-folders.json` gespeichert. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
+Das liest die letzten `MAIL_FETCH_LIMIT` Nachrichten dieses Ordners, schreibt bzw. konsolidiert EMLs und Msg-Artefakte in die bestehende lokale Struktur. Wenn dieselbe Mail lokal bereits unter einem anderen Ordnerpfad existiert, wird die lokale Repräsentation per `stableId` auf den synchronisierten Zielordner umgehängt statt dupliziert. Sync-Metadaten des Ordners werden direkt im passenden Eintrag von `data/mail-processor/mailbox-folders.json` gespeichert. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
+
+Für einen kontrollierten operativen Move gibt es zusätzlich einen offiziellen Pfad:
+
+```bash
+node dist/cli.js --mode=move --source-folder="INBOX" --target-folder="Projekte/USAGE-NG" --ids=7588,7587
+node dist/cli.js --mode=move --source-folder="INBOX" --target-folder="Projekte/USAGE-NG" --ids=7588 --dry-run
+```
+
+Der Move-Pfad nutzt die bestehende Copy/Move-Semantik des Systems und zieht die lokalen Artefakte (`msgs`, `exports`, `history`, `folders`, `routing`) anschließend auf den Zielordnerzustand nach.
 
 Für einen erzwungenen Frischabruf gibt es:
 
