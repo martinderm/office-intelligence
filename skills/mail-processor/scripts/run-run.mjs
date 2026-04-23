@@ -27,13 +27,40 @@ function loadDotEnv(filePath) {
   return out;
 }
 
+function resolveNpmInvocation() {
+  const candidates = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    path.join(path.dirname(process.execPath), "..", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return { command: process.execPath, args: [candidate] };
+    }
+  }
+
+  if (process.platform === "win32") {
+    return { command: "npm.cmd", args: [] };
+  }
+  return { command: "npm", args: [] };
+}
+
 function run(command, args, env, cwd) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
-    shell: process.platform === "win32",
+    shell: false,
+    windowsHide: true,
     env,
     cwd,
   });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal);
+    return;
+  }
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
@@ -60,5 +87,6 @@ if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }
 
-run("npm", ["run", "build"], env, projectDir);
-run("npm", ["run", "run"], env, projectDir);
+const npm = resolveNpmInvocation();
+run(npm.command, [...npm.args, "run", "build"], env, projectDir);
+run(process.execPath, ["dist/cli.js", "--mode=run"], env, projectDir);
