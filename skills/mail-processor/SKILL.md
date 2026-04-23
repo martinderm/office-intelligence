@@ -10,6 +10,8 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 - **Shadow-Mode** als Standard (erst klassifizieren/loggen; kein COPY)
 - **Automatischer Mailbox-Folder-Sync** mit TTL-Prüfung vor normalen Mail-Runs; Force-Refresh nur bei Bedarf
 - **Pending-Decisions-Queue** für fehlende referenzierte Ordner, damit Entscheidungen nicht verloren gehen
+- **Gezielte Folder-Inspektion** eines existierenden Mailbox-Ordners ohne Routing-Aktion
+- **Gezielter Folder-Sync** eines existierenden Mailbox-Ordners in die lokale Artefaktstruktur
 - **Guardrails**: Locking/Idempotenz, COPY-only, Fail-safe Defaults
 
 ## Voraussetzungen im Agent
@@ -95,6 +97,10 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Wenn der Skill in einer aktiven Chat-Session läuft und offene `pending-decisions` existieren, sollen diese **direkt kurz abgefragt** werden, statt still liegenzubleiben.
 - Der CLI-Output eines normalen Runs enthält dafür `pendingDecisions.count`, `pendingDecisions.prompts` und `pendingDecisions.path`; diese Felder sind im Live-Chat aktiv aufzugreifen statt nur zu loggen.
 - Wenn keine aktive Session vorhanden ist, bleiben Entscheidungen in `pending-decisions.json`, bis sie im nächsten aktiven Kontext aufgegriffen werden.
+- Für gezielte Prüfung eines existierenden Ordners: `node dist/cli.js --mode=shadow --inspect-folder="Projekte/USAGE-NG"`.
+- Dieser Pfad liest nur die letzten `MAIL_FETCH_LIMIT` Envelopes des angegebenen Ordners und eignet sich für Review/Diagnose ohne Routing.
+- Für gezielte Materialisierung eines existierenden Ordners in die lokale Struktur: `node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"`.
+- Dieser Pfad liest die letzten `MAIL_FETCH_LIMIT` Nachrichten des angegebenen Ordners, schreibt Msg-/EML-Artefakte im gleichen Schema wie normale Runs. Die Sync-Metadaten landen direkt im passenden Folder-Eintrag von `data/mail-processor/mailbox-folders.json`. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
 
 ### 4) Wissenspflege aus Mail-Artefakten (reviewed)
 - Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
@@ -124,11 +130,11 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 ## Output / Artefakte
 
 - `data/mail-processor/state.jsonl` — Idempotenz-Log
-- `data/mail-processor/msgs/<folder-slug>/<fileId>.json` — Extrakte/Debug inkl. `history[]`
-- `data/mail-processor/exports/<folder-slug>/<fileId>.eml` — lokale EML-Ablage
+- `data/mail-processor/msgs/<folder-path>/<fileId>.json` — Extrakte/Debug inkl. `history[]`, `routing` und zusätzlichem `folders`-Block
+- `data/mail-processor/mailbox-folders.json` — beobachteter Mailbox-Ordnerbaum (Cache/Snapshot), optional pro Folder mit `sync`-Block zu gezielten Folder-Sync-Läufen
+- `data/mail-processor/exports/<folder-path>/<fileId>.eml` — lokale EML-Ablage
 - `fileId` wird im Msg-Artefakt unter `local.fileId` mitgeführt
 - `fileId` wird deterministisch aus `stableId` abgeleitet: `sha256(stableId)` → `base64url` → auf 16 Zeichen gekürzt (kompakter Dateiname, minimales Kollisionsrisiko)
-- `data/mail-processor/mailbox-folders.json` — beobachteter Mailbox-Ordnerbaum (Cache/Snapshot)
 - `data/mail-processor/pending-decisions.json` — offene/gelöste Entscheidungen zu fehlenden referenzierten Ordnern
 - `data/mail-processor/memory_suggestions.jsonl` — Vorschläge zur Katalogpflege
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` — Capabilities + Policy-Cache

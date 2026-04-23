@@ -122,6 +122,10 @@ export function listEnvelopes(command: string, sourceFolder: string, limit: numb
   return listEnvelopesPage(command, sourceFolder, 1, limit);
 }
 
+export function listEnvelopesInFolder(command: string, sourceFolder: string, limit: number): Envelope[] {
+  return listEnvelopesPage(command, sourceFolder, 1, limit);
+}
+
 export function listEnvelopesPage(
   command: string,
   sourceFolder: string,

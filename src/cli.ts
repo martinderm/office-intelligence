@@ -14,7 +14,7 @@ import {
 import { loadProjects, loadTopics } from "./projects.js";
 import { acquireLock } from "./lock.js";
 import { appendJsonl, ensureRuntimeDirs } from "./state.js";
-import { copyMessage, copyMessageWithUidPlus, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
+import { copyMessage, copyMessageWithUidPlus, listEnvelopesInFolder, listEnvelopesPage, moveMessage, readMessage } from "./mail-source.js";
 import { computeNextAttemptAtMs, loadDueRetryItems, makeRetryKey } from "./retry-queue.js";
 import { getProcessedIds } from "./idempotency.js";
 import { needsReplyHeuristic } from "./matcher.js";
@@ -25,7 +25,7 @@ import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
 import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
-import { getOpenPendingDecisions, summarizePendingDecisionsForChat, syncMailboxFolders } from "./mailbox-sync.js";
+import { getOpenPendingDecisions, saveJson, summarizePendingDecisionsForChat, syncMailboxFolders, updateFolderSyncMetadata } from "./mailbox-sync.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -110,6 +110,20 @@ function parseExplicitEnvelopeIds(args: string[]): string[] {
     .filter(Boolean);
 }
 
+function parseInspectFolderArg(args: string[]): string | null {
+  const arg = args.find((a) => a.startsWith("--inspect-folder="));
+  if (!arg) return null;
+  const value = arg.slice("--inspect-folder=".length).trim();
+  return value || null;
+}
+
+function parseSyncFolderArg(args: string[]): string | null {
+  const arg = args.find((a) => a.startsWith("--sync-folder="));
+  if (!arg) return null;
+  const value = arg.slice("--sync-folder=".length).trim();
+  return value || null;
+}
+
 function wantsMailboxFolderSyncForce(args: string[]): boolean {
   return args.includes("--sync-mailbox-folders-force");
 }
@@ -186,14 +200,18 @@ type RoutingHistoryEntry = {
   folder?: string;
 };
 
-function folderToSlug(folder: string): string {
+function folderPathParts(folder: string): string[] {
   const parts = folder
     .split(/[\\/]+/)
     .map((p) => p.trim())
     .filter(Boolean)
     .map((p) => p.toLowerCase().replace(/[^a-z0-9._-]+/g, "-"))
     .filter(Boolean);
-  return parts.length ? parts.join("__") : "unknown-folder";
+  return parts.length ? parts : ["unknown-folder"];
+}
+
+function folderToRelativePath(folder: string): string {
+  return path.join(...folderPathParts(folder));
 }
 
 function fileIdFromStableId(stableId: string): string {
@@ -203,7 +221,7 @@ function fileIdFromStableId(stableId: string): string {
 function moveExportArtifact(dataDir: string, envelopeId: string, fileId: string, folder: string): string {
   const exportsBaseDir = path.resolve(dataDir, "exports");
   const sourcePath = path.join(exportsBaseDir, `${envelopeId}.eml`);
-  const targetDir = path.join(exportsBaseDir, folderToSlug(folder));
+  const targetDir = path.join(exportsBaseDir, folderToRelativePath(folder));
   const targetPath = path.join(targetDir, `${fileId}.eml`);
 
   fs.mkdirSync(targetDir, { recursive: true });
@@ -478,6 +496,8 @@ async function main(): Promise<void> {
   const mode = parseMode(args);
   const cfg = getConfig(cwd);
   const discover = parseDiscoverOptions(args, cfg.MAIL_FETCH_LIMIT);
+  const inspectFolder = parseInspectFolderArg(args);
+  const syncFolder = parseSyncFolderArg(args);
 
   if (discover.enabled) {
     await runDiscoverProjects(cwd, cfg, discover);
@@ -496,6 +516,8 @@ async function main(): Promise<void> {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = new Date().toISOString();
   const mailboxKey = process.env.MAILBOX_KEY || process.env.HIMALAYA_MAILBOX_KEY || "default";
+  const activeSourceFolder = syncFolder || cfg.MAIL_SOURCE_FOLDER;
+  cfg.MAIL_SOURCE_FOLDER = activeSourceFolder;
   const cursor = loadCursorState(cfg.MAIL_CURSOR_FILE, mailboxKey, cfg.MAIL_SOURCE_FOLDER);
 
   let summary = {
@@ -535,6 +557,38 @@ async function main(): Promise<void> {
         snapshotPath: path.resolve(cfg.MAILBOX_FOLDERS_FILE),
         pendingDecisionsPath: path.resolve(cfg.PENDING_DECISIONS_FILE),
         pendingDecisionPrompts,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    if (inspectFolder) {
+      const envelopes = listEnvelopesInFolder(cfg.HIMALAYA_COMMAND, inspectFolder, cfg.MAIL_FETCH_LIMIT);
+      console.log(JSON.stringify({
+        ok: true,
+        mode: "inspect-folder",
+        folder: inspectFolder,
+        limit: cfg.MAIL_FETCH_LIMIT,
+        mailboxSync: mailboxSync ? {
+          syncMode: mailboxSync.syncMode,
+          snapshotPath: path.resolve(cfg.MAILBOX_FOLDERS_FILE),
+        } : null,
+        pendingDecisions: {
+          count: pendingDecisionCount,
+          prompts: pendingDecisionPrompts,
+          path: path.resolve(cfg.PENDING_DECISIONS_FILE),
+        },
+        envelopes,
+      }, null, 2));
+      runStatus = "ok";
+      return;
+    }
+
+    if (syncFolder) {
+      appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+        type: "folder_sync_started",
+        runId,
+        folder: syncFolder,
+        fetchLimit: cfg.MAIL_FETCH_LIMIT,
         timestamp: new Date().toISOString(),
       });
     }
@@ -1079,7 +1133,7 @@ async function main(): Promise<void> {
           });
         }
 
-        const msgFolderDir = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToSlug(finalFolder));
+        const msgFolderDir = path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToRelativePath(finalFolder));
         fs.mkdirSync(msgFolderDir, { recursive: true });
         const debugPath = path.join(msgFolderDir, `${fileId}.json`);
 
@@ -1116,6 +1170,13 @@ async function main(): Promise<void> {
                 msgPath: debugPath,
                 exportPath: localExportPath,
                 folder: finalFolder,
+              },
+              folders: {
+                source: cfg.MAIL_SOURCE_FOLDER,
+                current: cfg.MAIL_SOURCE_FOLDER,
+                primary_target: match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null,
+                special_targets: copyTargets.filter((target) => target !== (copyTargets[0] ?? "")),
+                final: finalFolder,
               },
               routing: {
                 currentFolder: cfg.MAIL_SOURCE_FOLDER,
@@ -1191,16 +1252,40 @@ async function main(): Promise<void> {
       }
     }
 
+    if (syncFolder && mailboxSync) {
+      const updatedSnapshot = updateFolderSyncMetadata(mailboxSync.snapshot, syncFolder, {
+        last_synced_at: new Date().toISOString(),
+        mode: "sync-folder",
+        fetch_limit: cfg.MAIL_FETCH_LIMIT,
+        inspected: summary.inspected,
+        skipped: summary.skipped,
+        errors: summary.errors,
+        msg_dir: path.resolve(cfg.MAIL_PROCESSOR_MSGS_DIR, folderToRelativePath(syncFolder)),
+        export_dir: path.resolve(cfg.MAIL_PROCESSOR_DATA_DIR, "exports", folderToRelativePath(syncFolder)),
+      });
+      saveJson(cfg.MAILBOX_FOLDERS_FILE, updatedSnapshot);
+      appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+        type: "folder_sync_finished",
+        runId,
+        folder: syncFolder,
+        summary,
+        mailboxFoldersPath: path.resolve(cfg.MAILBOX_FOLDERS_FILE),
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     console.log(JSON.stringify({
       ok: true,
       runId,
-      mode,
+      mode: syncFolder ? "sync-folder" : mode,
+      syncedFolder: syncFolder || null,
       summary,
       pendingDecisions: {
         count: pendingDecisionCount,
         prompts: pendingDecisionPrompts,
         path: path.resolve(cfg.PENDING_DECISIONS_FILE),
       },
+      mailboxFoldersPath: path.resolve(cfg.MAILBOX_FOLDERS_FILE),
     }, null, 2));
     runStatus = "ok";
   } catch (error) {

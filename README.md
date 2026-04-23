@@ -112,6 +112,22 @@ npm run run
 
 Beim normalen Mail-Run wird der Mailbox-Ordnerbaum automatisch mitgeprüft und nur dann live neu geholt, wenn der lokale Snapshot fehlt oder älter als `MAILBOX_FOLDERS_MAX_AGE_HOURS` (Default: 12) ist.
 
+Einen existierenden Ordner kannst du gezielt inspizieren über:
+
+```bash
+node dist/cli.js --mode=shadow --inspect-folder="Projekte/USAGE-NG"
+```
+
+Dabei werden die letzten `MAIL_FETCH_LIMIT` Envelopes dieses Ordners gelesen, ohne Routing-Aktion.
+
+Wenn du einen existierenden Ordner lokal im gleichen Artefakt-Schema wie INBOX materialisieren willst, nutze:
+
+```bash
+node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"
+```
+
+Das liest die letzten `MAIL_FETCH_LIMIT` Nachrichten dieses Ordners, schreibt EMLs und Msg-Artefakte in die bestehende lokale Struktur. Sync-Metadaten des Ordners werden direkt im passenden Eintrag von `data/mail-processor/mailbox-folders.json` gespeichert. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
+
 Für einen erzwungenen Frischabruf gibt es:
 
 ```bash
@@ -124,6 +140,8 @@ Dabei entstehen unter `data/mail-processor/`:
 
 - `mailbox-folders.json` — beobachteter aktueller Ordnerbaum
 - `pending-decisions.json` — offene/gelöste Entscheidungen bei fehlenden referenzierten Ordnern
+- `mailbox-folders.json` enthält pro Folder optional einen `sync`-Block mit lokalen Sync-Metadaten
+- Msg-Artefakte enthalten zusätzlich einen `folders`-Block mit `source`, `current`, `primary_target`, `special_targets`, `final`
 
 Projektkandidaten aus den letzten Mails vorschlagen (Default: lokale `exports/**/*.eml`):
 
@@ -391,8 +409,8 @@ Hinweise:
 - ✅ Selection-Härtung: Scan-Pages werden dynamisch angehoben, damit `MAIL_FETCH_LIMIT` realistisch erreicht werden kann (statt implizit durch `MAIL_ENVELOPE_PAGE_SIZE * MAIL_SELECT_MAX_SCAN_PAGES` begrenzt zu sein)
 - ✅ Transient-Fehler-Queue (Read): persistente `retry-queue.jsonl` + Backoff + Dead-letter, damit wackelige Reads (z. B. IMAP/TLS 10054) den Run nicht blockieren
 - ✅ Lokale Artefakte nutzen `fileId` (aus `stableId` abgeleitet) und folder-basierte Struktur:
-  - `exports/<folder-slug>/<fileId>.eml`
-  - `msgs/<folder-slug>/<fileId>.json`
+  - `exports/<folder-path>/<fileId>.eml`
+  - `msgs/<folder-path>/<fileId>.json`
   - `fileId` = `sha256(stableId)` → `base64url` → erste 16 Zeichen
   - inkl. `history[]` (wann/wohin geroutet)
 - ✅ Discovery-Mode: erkennt aus den letzten X Mails potenzielle neue Projekte + Kontaktvorschläge für bestehende Projekte (`--discover-projects`)
@@ -400,7 +418,7 @@ Hinweise:
 
 ### Msg-Artefakt-Schema (Ausschnitt)
 
-`msgs/<folder-slug>/<fileId>.json` enthält u. a.:
+`msgs/<folder-path>/<fileId>.json` enthält u. a.:
 
 ```json
 {

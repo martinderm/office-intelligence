@@ -16,6 +16,16 @@ export type MailboxFolderSnapshot = {
     normalized_path: string;
     attributes: string[];
     raw_desc?: string;
+    sync?: {
+      last_synced_at: string;
+      mode: string;
+      fetch_limit: number;
+      inspected: number;
+      skipped: number;
+      errors: number;
+      msg_dir: string;
+      export_dir: string;
+    };
   }>;
 };
 
@@ -143,7 +153,7 @@ export function loadPendingDecisionQueue(filePath: string): PendingDecisionQueue
   };
 }
 
-function saveJson(filePath: string, value: unknown): void {
+export function saveJson(filePath: string, value: unknown): void {
   const resolved = path.resolve(filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
   fs.writeFileSync(resolved, `${JSON.stringify(value, null, 2)}\n`, "utf8");
@@ -301,6 +311,34 @@ export function summarizePendingDecisionsForChat(items: PendingDecisionItem[], l
     const actions = item.proposed_actions.join(" / ");
     return `${item.summary} (${item.expected_folder}) — Optionen: ${actions}`;
   });
+}
+
+export function updateFolderSyncMetadata(
+  snapshot: MailboxFolderSnapshot,
+  folderPath: string,
+  sync: {
+    last_synced_at: string;
+    mode: string;
+    fetch_limit: number;
+    inspected: number;
+    skipped: number;
+    errors: number;
+    msg_dir: string;
+    export_dir: string;
+  },
+): MailboxFolderSnapshot {
+  const normalized = normalizeFolderPath(folderPath);
+  const folders = snapshot.folders.map((folder) => {
+    if (folder.normalized_path !== normalized) return folder;
+    return {
+      ...folder,
+      sync,
+    };
+  });
+  return {
+    ...snapshot,
+    folders,
+  };
 }
 
 export function syncMailboxFolders(cfg: EnvConfig, projects: Project[], topics: Topic[], opts?: { force?: boolean }): MailboxSyncResult {
