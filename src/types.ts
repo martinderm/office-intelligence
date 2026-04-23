@@ -48,11 +48,15 @@ export type EnvConfig = {
   MAIL_PROCESSOR_CAPABILITIES_DIR: string;
   MAIL_PROCESSOR_LOCK_FILE: string;
   MAIL_PROCESSOR_LOCK_TTL_SECONDS: number;
+  MAILBOX_FOLDERS_FILE: string;
+  PENDING_DECISIONS_FILE: string;
+  MAILBOX_FOLDERS_MAX_AGE_HOURS: number;
   PROJECTS_JSON_PATH: string;
   TOPICS_JSON_PATH: string;
   MAIL_ROUTING_ENABLED: boolean;
   LOG_LEVEL: string;
   HIMALAYA_COMMAND: string;
+  HIMALAYA_ACCOUNT: string;
   MAIL_SOURCE_FOLDER: string;
   MAIL_FETCH_LIMIT: number;
   MAIL_SCAN_MODE: "auto" | "tail" | "backfill";

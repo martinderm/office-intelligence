@@ -25,6 +25,7 @@ import { cleanupDebugMessages } from "./retention.js";
 import { prepareMailText } from "./preprocess.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
 import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
+import { getOpenPendingDecisions, summarizePendingDecisionsForChat, syncMailboxFolders } from "./mailbox-sync.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -107,6 +108,10 @@ function parseExplicitEnvelopeIds(args: string[]): string[] {
     .split(",")
     .map((v) => v.trim())
     .filter(Boolean);
+}
+
+function wantsMailboxFolderSyncForce(args: string[]): boolean {
+  return args.includes("--sync-mailbox-folders-force");
 }
 
 function normalizeMessageId(value?: string): string | undefined {
@@ -502,12 +507,38 @@ async function main(): Promise<void> {
     projectsLoaded: 0,
     retentionDeleted: 0,
   };
+  let pendingDecisionPrompts: string[] = [];
+  let pendingDecisionCount = 0;
   let runStatus: "ok" | "failed" = "failed";
   let fatalError: string | null = null;
 
   try {
     const projects = loadProjects(cwd, cfg.PROJECTS_JSON_PATH);
     const topics = loadTopics(cwd, cfg.TOPICS_JSON_PATH);
+    const mailboxSync = cfg.HIMALAYA_COMMAND !== "mock"
+      ? syncMailboxFolders(cfg, projects, topics, { force: wantsMailboxFolderSyncForce(args) })
+      : null;
+
+    if (mailboxSync) {
+      const openPendingDecisions = getOpenPendingDecisions(mailboxSync.pendingDecisions);
+      pendingDecisionCount = openPendingDecisions.length;
+      pendingDecisionPrompts = summarizePendingDecisionsForChat(openPendingDecisions);
+
+      appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+        type: "mailbox_folder_sync",
+        mailbox: mailboxSync.snapshot.mailbox,
+        syncMode: mailboxSync.syncMode,
+        totalFolders: mailboxSync.stats.totalFolders,
+        referencedFoldersChecked: mailboxSync.stats.referencedFoldersChecked,
+        openDecisions: mailboxSync.stats.openDecisions,
+        changedDecisions: mailboxSync.stats.changedDecisions,
+        snapshotPath: path.resolve(cfg.MAILBOX_FOLDERS_FILE),
+        pendingDecisionsPath: path.resolve(cfg.PENDING_DECISIONS_FILE),
+        pendingDecisionPrompts,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     const classifier = cfg.LLM_ENABLED && cfg.HIMALAYA_COMMAND !== "mock" && cfg.OPENCLAW_BASE_URL && cfg.OPENCLAW_GATEWAY_TOKEN
       ? new OpenClawToolClassifier({
           gatewayBaseUrl: cfg.OPENCLAW_BASE_URL,
@@ -1086,6 +1117,13 @@ async function main(): Promise<void> {
                 exportPath: localExportPath,
                 folder: finalFolder,
               },
+              routing: {
+                currentFolder: cfg.MAIL_SOURCE_FOLDER,
+                primaryTargetFolder: match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD ? copyTargets[0] ?? null : null,
+                secondaryTargetFolders: [],
+                specialTargetFolders: copyTargets.filter((target) => target !== (copyTargets[0] ?? "")),
+                finalFolder,
+              },
               history,
               preview: context.previewText,
             },
@@ -1153,7 +1191,17 @@ async function main(): Promise<void> {
       }
     }
 
-    console.log(JSON.stringify({ ok: true, runId, mode, summary }, null, 2));
+    console.log(JSON.stringify({
+      ok: true,
+      runId,
+      mode,
+      summary,
+      pendingDecisions: {
+        count: pendingDecisionCount,
+        prompts: pendingDecisionPrompts,
+        path: path.resolve(cfg.PENDING_DECISIONS_FILE),
+      },
+    }, null, 2));
     runStatus = "ok";
   } catch (error) {
     fatalError = error instanceof Error ? error.message : String(error);

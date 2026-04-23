@@ -24,6 +24,11 @@ export type RouteCommandResult = {
   uidPlus?: UidPlusCopyInfo;
 };
 
+export type MailFolder = {
+  name: string;
+  desc?: string;
+};
+
 function shouldUseShell(command: string): boolean {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(command.trim());
 }
@@ -69,6 +74,15 @@ function parseUidPlusCopy(output: string): UidPlusCopyInfo | undefined {
   };
 }
 
+function extractJsonArray(output: string): string {
+  const ansiStripped = output.replace(/\u001b\[[0-9;]*m/g, "");
+  const match = ansiStripped.match(/(\[\s*\{[\s\S]*\])\s*$/);
+  if (!match) {
+    throw new Error(`json array not found in command output: ${ansiStripped.slice(0, 300)}`);
+  }
+  return match[1];
+}
+
 function parseEnvelopeList(output: string): Envelope[] {
   const lines = output.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const items: Envelope[] = [];
@@ -87,6 +101,21 @@ function parseEnvelopeList(output: string): Envelope[] {
     }
   }
   return items;
+}
+
+export function listFolders(command: string, account?: string): MailFolder[] {
+  const args = ["folder", "list", "-o", "json"];
+  if (account?.trim()) {
+    args.push("-a", account.trim());
+  }
+  const out = runCmd(command, args);
+  const parsed = JSON.parse(extractJsonArray(out)) as Array<{ name?: string; desc?: string }>;
+  return parsed
+    .filter((item) => typeof item?.name === "string" && item.name.trim())
+    .map((item) => ({
+      name: item.name!.trim(),
+      ...(typeof item.desc === "string" && item.desc.trim() ? { desc: item.desc.trim() } : {}),
+    }));
 }
 
 export function listEnvelopes(command: string, sourceFolder: string, limit: number): Envelope[] {

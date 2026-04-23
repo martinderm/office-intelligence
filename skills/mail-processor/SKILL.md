@@ -8,6 +8,8 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 - **Einheitlicher Entry Point** über `HIMALAYA_COMMAND` (direktes Himalaya-Binary oder Agent-Gate)
 - **Konventionen** für Ordner/Dateien im Agent-Workspace (`/memory`, `/data`)
 - **Shadow-Mode** als Standard (erst klassifizieren/loggen; kein COPY)
+- **Automatischer Mailbox-Folder-Sync** mit TTL-Prüfung vor normalen Mail-Runs; Force-Refresh nur bei Bedarf
+- **Pending-Decisions-Queue** für fehlende referenzierte Ordner, damit Entscheidungen nicht verloren gehen
 - **Guardrails**: Locking/Idempotenz, COPY-only, Fail-safe Defaults
 
 ## Voraussetzungen im Agent
@@ -41,6 +43,8 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
       msgs/
       exports/
       capabilities/
+      mailbox-folders.json
+      pending-decisions.json
       memory_suggestions.jsonl
       router.lock
 ```
@@ -49,10 +53,13 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 
 Minimal (aktueller Stand):
 - `HIMALAYA_COMMAND=<command-or-path>`
+- optional `HIMALAYA_ACCOUNT=<account-name>`
 - `MAIL_SOURCE_FOLDER=INBOX`
 - `MAILBOX_KEY=<stable-mailbox-key>` (für kurze/stabile Capability-Cache-Dateinamen)
 - `MAIL_FETCH_LIMIT=20`
+- `MAILBOX_FOLDERS_MAX_AGE_HOURS=12`
 - `PROJECTS_JSON_PATH=./memory/references/projects/projects.json`
+- `TOPICS_JSON_PATH=./memory/references/topics/topics.json`
 - `PROJECT_MATCH_THRESHOLD=0.65`
 - `NEEDS_REPLY_THRESHOLD=0.70`
 - `NEEDS_REPLY_NEGATIVE_HINTS=no-reply,newsletter,autoreply`
@@ -80,7 +87,16 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 ### 2) Routing Run (COPY-only, gated)
 - `npm run run`
 
-### 3) Wissenspflege aus Mail-Artefakten (reviewed)
+### 3) Mailbox-Folder-Sync / Pending Decisions
+- Normale Mail-Runs prüfen automatisch vorab, ob `data/mail-processor/mailbox-folders.json` fehlt oder älter als `MAILBOX_FOLDERS_MAX_AGE_HOURS` ist. Nur dann wird live neu geholt.
+- Force-Refresh: `npm run sync:mailbox-folders`
+- Source of truth für Zielordner bleibt in `projects.json` und `topics.json`; `mailbox-folders.json` ist nur beobachteter Snapshot.
+- Fehlende referenzierte Ordner landen in `data/mail-processor/pending-decisions.json`.
+- Wenn der Skill in einer aktiven Chat-Session läuft und offene `pending-decisions` existieren, sollen diese **direkt kurz abgefragt** werden, statt still liegenzubleiben.
+- Der CLI-Output eines normalen Runs enthält dafür `pendingDecisions.count`, `pendingDecisions.prompts` und `pendingDecisions.path`; diese Felder sind im Live-Chat aktiv aufzugreifen statt nur zu loggen.
+- Wenn keine aktive Session vorhanden ist, bleiben Entscheidungen in `pending-decisions.json`, bis sie im nächsten aktiven Kontext aufgegriffen werden.
+
+### 4) Wissenspflege aus Mail-Artefakten (reviewed)
 - Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 - Optional IMAP-Quelle: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-source=imap --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
@@ -112,6 +128,8 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - `data/mail-processor/exports/<folder-slug>/<fileId>.eml` — lokale EML-Ablage
 - `fileId` wird im Msg-Artefakt unter `local.fileId` mitgeführt
 - `fileId` wird deterministisch aus `stableId` abgeleitet: `sha256(stableId)` → `base64url` → auf 16 Zeichen gekürzt (kompakter Dateiname, minimales Kollisionsrisiko)
+- `data/mail-processor/mailbox-folders.json` — beobachteter Mailbox-Ordnerbaum (Cache/Snapshot)
+- `data/mail-processor/pending-decisions.json` — offene/gelöste Entscheidungen zu fehlenden referenzierten Ordnern
 - `data/mail-processor/memory_suggestions.jsonl` — Vorschläge zur Katalogpflege
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` — Capabilities + Policy-Cache
 

@@ -94,6 +94,14 @@ export function getConfig(cwd: string): EnvConfig {
       process.env.MAIL_PROCESSOR_LOCK_TTL_SECONDS,
       900,
     ),
+    MAILBOX_FOLDERS_FILE:
+      process.env.MAILBOX_FOLDERS_FILE ?? `${dataDir}/mailbox-folders.json`,
+    PENDING_DECISIONS_FILE:
+      process.env.PENDING_DECISIONS_FILE ?? `${dataDir}/pending-decisions.json`,
+    MAILBOX_FOLDERS_MAX_AGE_HOURS: parseIntSafe(
+      process.env.MAILBOX_FOLDERS_MAX_AGE_HOURS,
+      12,
+    ),
     PROJECTS_JSON_PATH:
       process.env.PROJECTS_JSON_PATH ?? "./memory/references/projects/projects.json",
     TOPICS_JSON_PATH:
@@ -101,6 +109,7 @@ export function getConfig(cwd: string): EnvConfig {
     MAIL_ROUTING_ENABLED: parseBool(process.env.MAIL_ROUTING_ENABLED, false),
     LOG_LEVEL: process.env.LOG_LEVEL ?? "info",
     HIMALAYA_COMMAND: process.env.HIMALAYA_COMMAND ?? "himalaya",
+    HIMALAYA_ACCOUNT: process.env.HIMALAYA_ACCOUNT ?? "",
     MAIL_SOURCE_FOLDER: process.env.MAIL_SOURCE_FOLDER ?? "INBOX",
     MAIL_FETCH_LIMIT: parseIntSafe(process.env.MAIL_FETCH_LIMIT, 20),
     MAIL_SCAN_MODE: parseScanMode(process.env.MAIL_SCAN_MODE),

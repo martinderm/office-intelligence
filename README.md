@@ -60,6 +60,7 @@ Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
 - `TOPICS_JSON_PATH` (dein Topic-Katalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
+- optional `HIMALAYA_ACCOUNT`, falls der gleiche `himalaya`-Binary mehrere Accounts kennt und die Folder-Sync/Reads explizit auf eine Mailbox gebunden werden sollen
 - Gateway-Zugang für das OpenClaw-Tool (`OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY` für agentgebundenes Modellverhalten), falls tool-basierte Klassifikation genutzt wird
 - `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
 
@@ -108,6 +109,21 @@ npm run run
 ```
 
 > `run` bricht absichtlich ab, wenn `MAIL_ROUTING_ENABLED` nicht auf `true` gesetzt ist.
+
+Beim normalen Mail-Run wird der Mailbox-Ordnerbaum automatisch mitgeprüft und nur dann live neu geholt, wenn der lokale Snapshot fehlt oder älter als `MAILBOX_FOLDERS_MAX_AGE_HOURS` (Default: 12) ist.
+
+Für einen erzwungenen Frischabruf gibt es:
+
+```bash
+npm run sync:mailbox-folders
+```
+
+Das stößt einen Shadow-Run mit `--sync-mailbox-folders-force` an und aktualisiert Snapshot + offene Entscheidungen sofort.
+
+Dabei entstehen unter `data/mail-processor/`:
+
+- `mailbox-folders.json` — beobachteter aktueller Ordnerbaum
+- `pending-decisions.json` — offene/gelöste Entscheidungen bei fehlenden referenzierten Ordnern
 
 Projektkandidaten aus den letzten Mails vorschlagen (Default: lokale `exports/**/*.eml`):
 
