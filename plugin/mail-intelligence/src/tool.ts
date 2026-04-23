@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import type { ClassificationCandidate, ClassificationInput, ClassificationResult, ClassificationWorkpackageCandidate } from "./contracts.js";
@@ -20,6 +21,7 @@ type RawExtraction = {
 };
 
 const PROMPT_VERSION = "mail-intelligence-classify-v1";
+const FALLBACK_MODEL = "openai-codex/gpt-5.4-mini";
 
 const SYSTEM_PROMPT = [
   "You classify one email for deterministic routing.",
@@ -126,14 +128,120 @@ function normalizeWorkpackages(raw: unknown, allowedWorkpackages: Map<string, st
   return out;
 }
 
-function renderPrompt(input: ClassificationInput): string {
-  return JSON.stringify({
+function sortStrings(values: string[] | undefined): string[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) return undefined;
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+function canonicalizeObject(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => canonicalizeObject(entry));
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(entries.map(([key, entry]) => [key, canonicalizeObject(entry)]));
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalizeObject(value));
+}
+
+function buildCanonicalCatalogHints(input: ClassificationInput): ClassificationInput["catalog_hints"] {
+  const projects = [...input.catalog_hints.projects]
+    .map((project) => ({
+      id: project.id,
+      title: project.title,
+      aliases: sortStrings(project.aliases),
+      keywords: sortStrings(project.keywords),
+      domains: sortStrings(project.domains),
+      contacts: project.contacts?.length
+        ? [...project.contacts]
+            .map((contact) => ({
+              email: contact.email,
+              name: contact.name,
+              role: contact.role,
+            }))
+            .sort((left, right) => `${left.email}\u0000${left.name ?? ""}\u0000${left.role ?? ""}`.localeCompare(`${right.email}\u0000${right.name ?? ""}\u0000${right.role ?? ""}`))
+        : undefined,
+      workpackages: project.workpackages?.length
+        ? [...project.workpackages]
+            .map((workpackage) => ({
+              id: workpackage.id,
+              title: workpackage.title,
+              aliases: sortStrings(workpackage.aliases),
+              keywords: sortStrings(workpackage.keywords),
+              hint_rank: workpackage.hint_rank,
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id))
+        : undefined,
+      hint_rank: project.hint_rank,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const topics = [...input.catalog_hints.topics]
+    .map((topic) => ({
+      id: topic.id,
+      title: topic.title,
+      aliases: sortStrings(topic.aliases),
+      keywords: sortStrings(topic.keywords),
+      domains: sortStrings(topic.domains),
+      contacts: topic.contacts?.length
+        ? [...topic.contacts]
+            .map((contact) => ({
+              email: contact.email,
+              name: contact.name,
+              role: contact.role,
+            }))
+            .sort((left, right) => `${left.email}\u0000${left.name ?? ""}\u0000${left.role ?? ""}`.localeCompare(`${right.email}\u0000${right.name ?? ""}\u0000${right.role ?? ""}`))
+        : undefined,
+      hint_rank: topic.hint_rank,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return { projects, topics };
+}
+
+function renderPromptParts(input: ClassificationInput): { cachePrefix: string; mailTail: string; cacheFingerprint: string } {
+  const stableCatalogHints = buildCanonicalCatalogHints(input);
+  const stableOptions = {
+    include_needs_reply: input.options.include_needs_reply,
+    max_project_candidates: input.options.max_project_candidates,
+    max_topic_candidates: input.options.max_topic_candidates,
+    max_workpackage_candidates: input.options.max_workpackage_candidates,
+  };
+
+  const cachePrefixPayload = {
     task: "mail_classification",
     prompt_version: PROMPT_VERSION,
-    allowed_evidence: [...ALLOWED_EVIDENCE],
-    allowed_warnings: [...ALLOWED_WARNINGS],
-    input,
+    allowed_evidence: [...ALLOWED_EVIDENCE].sort((a, b) => a.localeCompare(b)),
+    allowed_warnings: [...ALLOWED_WARNINGS].sort((a, b) => a.localeCompare(b)),
+    catalog_hints: stableCatalogHints,
+    options: stableOptions,
+  };
+  const cachePrefixJson = canonicalJson(cachePrefixPayload);
+  const cacheFingerprint = crypto.createHash("sha256").update(cachePrefixJson).digest("hex").slice(0, 16);
+  const mailTailJson = canonicalJson({
+    schema_version: input.schema_version,
+    mail: input.mail,
   });
+
+  return {
+    cachePrefix: [
+      "Stable cache prefix:",
+      cachePrefixJson,
+      "",
+      "Classify the next mail using the stable catalog context above.",
+    ].join("\n"),
+    mailTail: [
+      "Mail tail:",
+      mailTailJson,
+    ].join("\n"),
+    cacheFingerprint,
+  };
 }
 
 function normalizeModelRef(model: string | { primary?: string } | null | undefined): string | undefined {
@@ -176,7 +284,7 @@ export async function classifyMailWithModel(params: {
   defaultModel?: string;
 }): Promise<ClassificationResult> {
   try {
-    const model = params.defaultModel || resolveAgentPrimaryModel(params.api);
+    const model = params.defaultModel || resolveAgentPrimaryModel(params.api) || FALLBACK_MODEL;
     if (!model) {
       throw new Error("mail-classify could not resolve a default model for the calling agent");
     }
@@ -210,14 +318,17 @@ export async function classifyMailWithModel(params: {
     let content = "";
     try {
       tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mail-intelligence-"));
-      const sessionId = `mail-intelligence-${Date.now()}`;
+      const promptParts = renderPromptParts(params.input);
+      const sessionId = `mail-intel-cache-${promptParts.cacheFingerprint}`;
+      const sessionKey = `mail-intelligence:${params.api.toolContext?.agentId ?? "default"}:${promptParts.cacheFingerprint}`;
       const sessionFile = path.join(tempDir, "session.json");
       const result = await runEmbeddedPiAgent({
         sessionId,
+        sessionKey,
         sessionFile,
         workspaceDir,
         config: params.api.config,
-        prompt: `${SYSTEM_PROMPT}\n\n${renderPrompt(params.input)}`,
+        prompt: `${SYSTEM_PROMPT}\n\n${promptParts.cachePrefix}\n\n${promptParts.mailTail}`,
         timeoutMs: 120000,
         runId: `mail-intelligence-${Date.now()}`,
         provider: providerId,
@@ -228,6 +339,9 @@ export async function classifyMailWithModel(params: {
       content = collectText((result as any)?.payloads);
       await appendDebugLog({
         event: "after_run",
+        cacheFingerprint: promptParts.cacheFingerprint,
+        embeddedSessionId: sessionId,
+        embeddedSessionKey: sessionKey,
         contentPreview: content.slice(0, 300),
         payloadCount: Array.isArray((result as any)?.payloads) ? (result as any).payloads.length : null,
         payloads: Array.isArray((result as any)?.payloads)

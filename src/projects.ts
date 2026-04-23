@@ -31,6 +31,19 @@ function loadCatalogRaw(cwd: string, projectPathRaw: string): { projects: unknow
   return parseCatalog(parsed);
 }
 
+function resolveReferencePath(cwd: string, referencePathRaw: string): string {
+  const direct = path.resolve(cwd, referencePathRaw);
+  if (fs.existsSync(direct)) return direct;
+
+  const workspaceRoot = process.env.AGENT_WORKSPACE_ROOT;
+  if (workspaceRoot) {
+    const fromWorkspace = path.resolve(workspaceRoot, referencePathRaw);
+    if (fs.existsSync(fromWorkspace)) return fromWorkspace;
+  }
+
+  return direct;
+}
+
 export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
   const { projects: items } = loadCatalogRaw(cwd, projectPathRaw);
 
@@ -52,7 +65,7 @@ export function loadProjects(cwd: string, projectPathRaw: string): Project[] {
     ids.add(p.id);
 
     if (p.reference_md) {
-      const refPath = path.resolve(cwd, p.reference_md);
+      const refPath = resolveReferencePath(cwd, p.reference_md);
       if (!fs.existsSync(refPath)) {
         console.warn(`[warn] reference_md missing for ${p.id}: ${p.reference_md}`);
       }

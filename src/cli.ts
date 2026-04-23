@@ -955,8 +955,8 @@ async function main(): Promise<void> {
             thread_context: threadContext.length ? threadContext : undefined,
           },
           catalog_hints: {
-            projects: projects.slice(0, 4).map((project, index) => toClassificationProjectHint(project, index + 1)),
-            topics: topics.slice(0, 4).map((topic, index) => toClassificationTopicHint(topic, index + 1)),
+            projects: projects.map((project, index) => toClassificationProjectHint(project, index + 1)),
+            topics: topics.map((topic, index) => toClassificationTopicHint(topic, index + 1)),
           },
           options: {
             include_needs_reply: true,

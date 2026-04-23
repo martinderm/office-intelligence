@@ -32,6 +32,7 @@ export type OpenClawPluginApi = {
       resolveAgentWorkspaceDir?(cfg: unknown, agentId?: string): string | undefined;
       runEmbeddedPiAgent?(params: {
         sessionId: string;
+        sessionKey?: string;
         sessionFile: string;
         workspaceDir: string;
         config: unknown;

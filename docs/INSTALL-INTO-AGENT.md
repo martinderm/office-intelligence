@@ -1,6 +1,12 @@
-# Install into existing Mail Agent (Operator Runbook)
+# Install office-intelligence into existing Agent (Operator Runbook)
 
-Ziel: Ein Main-Agent installiert/aktualisiert die Mail-Verarbeitungskomponente `mail-processor` in einem bestehenden Mail-Agent-Workspace reproduzierbar und sicher. Die darüberliegenden Wissensstrukturen und Skills gehören konzeptionell zu `office-intelligence`.
+Ziel: Ein Main-Agent installiert/aktualisiert die relevanten `office-intelligence`-Skills in einem bestehenden Agent-Workspace reproduzierbar und sicher. Für einen bestehenden Mail-Agenten umfasst der Standard-Rollout aktuell drei Skill-Verzeichnisse:
+
+- `skills/mail-processor`
+- `skills/project-catalog-entry`
+- `skills/topic-catalog-entry`
+
+Wichtig: Nur `mail-processor` enthält operative Runner für die Mail-Verarbeitung. Der eigentliche TypeScript-/Node-Projektcode (`package.json`, `src/`, zentrale `scripts/`) bleibt im Projekt-Repo `projects/office-intelligence`. In den Agent-Workspace werden die Skill-Verzeichnisse aus `projects/office-intelligence/skills/` kopiert; der `mail-processor`-Skill greift dann über `MAIL_PROCESSOR_PROJECT_DIR` auf das zentrale Projekt zu.
 
 ## 1) Voraussetzungen
 
@@ -11,13 +17,21 @@ Ziel: Ein Main-Agent installiert/aktualisiert die Mail-Verarbeitungskomponente `
 
 ## 2) Skill-Dateien im Ziel-Agent bereitstellen
 
+Standard-Rollout in den Ziel-Agenten:
+
+- `skills/mail-processor/`
+- `skills/project-catalog-entry/`
+- `skills/topic-catalog-entry/`
+
+Diese drei Verzeichnisse werden als komplette Skill-Ordner in den Agent-Workspace kopiert. Andere bereits vorhandene Skills des Ziel-Agenten bleiben unberührt.
+
 Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
 - Empfohlen ist ein Gate (fixe Account-/Command-Policy).
 - Alternativ kann ein `.mjs`-Wrapper genutzt werden.
 - Für allgemeine Wrapper-Erzeugung liegt ein Beispiel im Projekt: `scripts/create-himalaya-account-proxy.mjs`.
 
 
-Im Ziel-Agent-Workspace unter `skills/mail-processor/`:
+Für `mail-processor` liegen im Ziel-Agent-Workspace unter `skills/mail-processor/` typischerweise:
 
 - `SKILL.md`
 - `PROJECT_MEMORY_AGENT_TASK.md`
@@ -34,6 +48,13 @@ Run-Skript-Konvention (verbindlich):
   - `MAIL_ROUTING_ENABLED=false` im Shadow-Skript
   - `MAIL_ROUTING_ENABLED=true` im Run-Skript
   - optional `MAIL_FETCH_LIMIT` via CLI-Flag
+
+Wichtige Abgrenzung:
+
+- Die Dateien unter `projects/office-intelligence/src/` werden bei diesem Rollout **nicht** in den Agent-Workspace kopiert.
+- Die Dateien unter `projects/office-intelligence/scripts/` werden ebenfalls **nicht** pauschal in den Agent-Workspace kopiert.
+- Im Agent-Workspace landen die Skill-Dateien unter `skills/...`; für `mail-processor` sind das vor allem `SKILL.md`, `PROJECT_MEMORY_AGENT_TASK.md` und die Runner unter `skills/mail-processor/scripts/`.
+- Die Runner verwenden `MAIL_PROCESSOR_PROJECT_DIR`, um Build und Lauf gegen das zentrale Projekt-Repo auszuführen.
 
 Empfohlene `.env`-Felder im Agent-Workspace:
 - `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-office-intelligence-projekt>`
@@ -55,7 +76,7 @@ Hinweis: Ohne gepflegte Kataloge bleibt Matching schwach/unzuverlässig.
 
 ## 4) Build & Smoke-Test
 
-Im Projektverzeichnis:
+Im Projektverzeichnis (also im zentralen Repo, nicht im Agent-Skill-Ordner):
 
 ```bash
 npm install
