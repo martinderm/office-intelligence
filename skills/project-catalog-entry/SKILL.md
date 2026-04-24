@@ -30,6 +30,9 @@ Lege für neue Projekte an:
 
 Regeln:
 
+- `mailbox_folder` ist der fachliche Parent-Ordner des Projekts.
+- Antwortbedürftige Projektmails landen operativ im Child-Ordner `<mailbox_folder>/_Needs-Reply`.
+- Der `_Needs-Reply`-Child muss nicht in `projects.json` als eigenes Feld gepflegt werden; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.
 - `reference_md` zeigt standardmäßig auf `memory/references/projects/<slug>/index.md`.
 - **Keine ausführliche Projektdoku in `projects.json`.**
 - **Keine Einzeldatei `memory/references/projects/<slug>.md` als Hauptreferenz.**
@@ -84,7 +87,7 @@ Frage in dieser Reihenfolge, kurz und präzise:
 
 1. Projektname (`title`)
 2. Projekt-ID (`id`, sonst aus Titel als slug vorschlagen)
-3. Zielordner (`mailbox_folder`)
+3. Zielordner (`mailbox_folder`, Parent-Ordner; `_Needs-Reply` wird davon abgeleitet)
 4. Domains
 5. Kontakte (Name + E-Mail)
 6. Aliases

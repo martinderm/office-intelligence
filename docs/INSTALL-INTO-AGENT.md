@@ -63,6 +63,9 @@ Empfohlene `.env`-Felder im Agent-Workspace:
 - `MAIL_SOURCE_FOLDER=INBOX` (oder Instanzwert)
 - `PROJECTS_JSON_PATH=<agent-workspace>/memory/references/projects/projects.json`
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
+- optional explizit: `PENDING_ACTIONS_FILE=<agent-workspace>/data/mail-processor/pending-actions.json`
+- optional explizit: `ACTION_LOG_DIR=<agent-workspace>/data/mail-processor/logs/actions`
+- bei BOKU/GroupWise: `MAIL_COPY_SEMANTICS=acts_like_move` setzen, weil Himalaya `message copy` dort de-facto wie ein Move wirkt
 - `OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY`, `LLM_TIMEOUT_MS` (Gateway-Zugang für `mail-classify`; mit Session-Key kann gezielt das Modell des Ziel-Agents genutzt werden; das Plugin selbst hält den eingebetteten Modellaufruf bewusst minimal und setzt keine harten Sampling-/Format-Parameter wie `temperature` oder `responseFormat`)
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` nur dann, wenn zusätzlich Discovery/Suggestion-Pfade genutzt werden
 
@@ -94,7 +97,9 @@ Erwartung:
 
 - `data/mail-processor/state.jsonl` existiert/wird ergänzt
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` existiert
-- Shadow-Run ohne Routing-Aktionen
+- `data/mail-processor/pending-actions.json` enthält für klassifizierte Mails schlanke Postprocessing-Items
+- ggf. `data/mail-processor/pending-decisions.json` enthält fehlende Parent- oder `_Needs-Reply`-Ordner
+- Shadow-Run ohne Mailbox-Routing-Aktionen
 
 ## 5) Optional: Discovery + reviewed Apply
 
@@ -137,6 +142,11 @@ Empfehlung:
 
 - zuerst kleine Batches (`FetchLimit` klein)
 - State/Artefakte nach jedem Lauf prüfen
+- Bei `MAIL_COPY_SEMANTICS=acts_like_move` ist Needs-Reply ein Single-Target-Move:
+  - Project + `needs_reply=true` → `<project.mailbox_folder>/_Needs-Reply`
+  - Topic ohne Project + `needs_reply=true` → `<topic.mailbox_folder>/_Needs-Reply`
+  - kein Project/Topic + `needs_reply=true` → `Inbox/_Needs-Reply`
+- Fehlende `_Needs-Reply`-Unterordner vor Go-Live über `pending-decisions.json` klären.
 
 ## 7) Betriebsgrenzen (aktuell)
 

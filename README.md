@@ -148,7 +148,9 @@ Das stößt einen Shadow-Run mit `--sync-mailbox-folders-force` an und aktualisi
 Dabei entstehen unter `data/mail-processor/`:
 
 - `mailbox-folders.json` — beobachteter aktueller Ordnerbaum
-- `pending-decisions.json` — offene/gelöste Entscheidungen bei fehlenden referenzierten Ordnern
+- `pending-actions.json` — schlanke Queue für noch nicht kontextuell nachverarbeitete Mail-Artefakte
+- `logs/actions/YYYY-Www.json` — Weekly Action Logs für abgearbeitete/verwerfene Pending Actions
+- `pending-decisions.json` — offene/gelöste Entscheidungen bei fehlenden referenzierten Ordnern oder echten Review-Fragen
 - `mailbox-folders.json` enthält pro Folder optional einen `sync`-Block mit lokalen Sync-Metadaten
 - Msg-Artefakte enthalten zusätzlich einen `folders`-Block mit `source`, `current`, `primary_target`, `special_targets`, `final`
 
@@ -493,7 +495,35 @@ Konsequenzen für `mail-processor`:
 Empfehlung:
 
 - Wenn du so ein Backend hast: **Single-Target-Routing** erzwingen (oder klare Priorität: „best match wins“).
+- BOKU/GroupWise: `MAIL_COPY_SEMANTICS=acts_like_move` setzen.
+- Needs-Reply ist dort ein Move in genau einen Zielordner:
+  - Project + `needs_reply=true` → `<project.mailbox_folder>/_Needs-Reply`
+  - Topic ohne Project + `needs_reply=true` → `<topic.mailbox_folder>/_Needs-Reply`
+  - kein Project/Topic + `needs_reply=true` → `Inbox/_Needs-Reply`
 - Nach dem Copy optional verifizieren (Source/Target envelope list), wenn Konsistenz kritisch ist.
+
+## Pending Actions / Postprocessing
+
+Jeder erfolgreich klassifizierte Mail-JSON-Artefakt erzeugt/aktualisiert ein schlankes Item in `data/mail-processor/pending-actions.json`.
+
+Zweck:
+
+- unverarbeitete Mail-Artefakte auffindbar halten
+- späteren Postprocessor mit `stable_id`, `file_id`, Artefaktpfad, Target, Confidence und `needs_reply` versorgen
+- keine Mailinhalte, Zusammenfassungen, Wissensvorschläge oder Entscheidungen duplizieren
+
+Abgrenzung:
+
+- `pending-actions.json` = operative Queue für Mail-Postprocessing
+- `pending-decisions.json` = Entscheidungen, die Martin treffen muss
+- `logs/actions/YYYY-Www.json` = erledigte/verwerfene Actions
+
+CLI-Helfer:
+
+```bash
+node dist/cli.js --pending-actions-list
+node dist/cli.js --pending-actions-mark-done=<action-id>
+```
 
 ## Inkrementelle Auswahlsteuerung (neu)
 
@@ -561,7 +591,7 @@ Logik:
 
 - `auto` nutzt `move`, wenn `supportsMove=true`, sonst `copy`.
 - `move` ohne Capability führt bei `MAIL_ROUTE_STRICT=true` zum Fehler, sonst Fallback auf `copy`.
-- `MAIL_COPY_SEMANTICS=acts_like_move` erzwingt **Single-Target-Routing** (auch bei `copy`), um serverseitige Copy→Move-Semantik sauber zu behandeln.
+- `MAIL_COPY_SEMANTICS=acts_like_move` erzwingt **Single-Target-Routing** (auch bei `copy`), um serverseitige Copy→Move-Semantik sauber zu behandeln; bei `needs_reply=true` wird dann direkt in den passenden `_Needs-Reply`-Unterordner verschoben.
 
 Pro Run wird ein Event `routing_policy_resolved` geschrieben; pro Mail wird die effektive Routing-Entscheidung in `message_processed` mitgeloggt.
 Wenn `MAIL_USE_UIDPLUS=true` und der Server `UIDPLUS` anbietet, wird bei COPY zusätzlich ein Event `uidplus_copy_mapping` (COPYUID-Mapping) in `state.jsonl` geschrieben.

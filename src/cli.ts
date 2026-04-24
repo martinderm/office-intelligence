@@ -257,26 +257,34 @@ function relativePathFromCwd(cwd: string, targetPath: string): string {
   return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : targetPath;
 }
 
+function childMailboxFolder(parentFolder: string, childFolder: string): string {
+  return `${parentFolder.replace(/[\\/]+$/g, "")}/${childFolder.replace(/^[\\/]+/g, "")}`;
+}
+
 function buildPendingActionTarget(match: {
   projectId?: string;
   matchedTopicId?: string;
   matchedWorkpackageId?: string;
   score: number;
   topicScore: number;
-}): PendingActionTarget {
-  if (match.projectId) {
+}, projectThreshold: number): PendingActionTarget {
+  const projectScore = Number.isFinite(match.score) ? match.score : 0;
+  const topicScore = Number.isFinite(match.topicScore) ? match.topicScore : 0;
+  const projectUsable = Boolean(match.projectId) && projectScore >= projectThreshold && projectScore >= topicScore;
+
+  if (projectUsable) {
     return {
       kind: "project",
-      id: match.projectId,
+      id: match.projectId!,
       workpackage_id: match.matchedWorkpackageId || null,
-      confidence: Number.isFinite(match.score) ? match.score : null,
+      confidence: projectScore,
     };
   }
   if (match.matchedTopicId) {
     return {
       kind: "topic",
       id: match.matchedTopicId,
-      confidence: Number.isFinite(match.topicScore) ? match.topicScore : null,
+      confidence: topicScore,
     };
   }
   return {
@@ -1277,10 +1285,26 @@ async function main(): Promise<void> {
           const project = match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD
             ? projects.find((p) => p.id === match.projectId)
             : undefined;
+          const topic = !project && match.matchedTopicId
+            ? topics.find((t) => t.id === match.matchedTopicId)
+            : undefined;
           const plannedTargets: string[] = [];
           if (project) {
-            plannedTargets.push(project.mailbox_folder);
-            if (needsReply) plannedTargets.push("Projekte/_Needs-Reply");
+            const projectNeedsReplyFolder = childMailboxFolder(project.mailbox_folder, "_Needs-Reply");
+            if (needsReply && routing.effectiveMove) {
+              plannedTargets.push(projectNeedsReplyFolder);
+            } else {
+              plannedTargets.push(project.mailbox_folder);
+              if (needsReply) plannedTargets.push(projectNeedsReplyFolder);
+            }
+          } else if (topic) {
+            const topicNeedsReplyFolder = childMailboxFolder(topic.mailbox_folder, "_Needs-Reply");
+            if (needsReply && routing.effectiveMove) {
+              plannedTargets.push(topicNeedsReplyFolder);
+            } else {
+              plannedTargets.push(topic.mailbox_folder);
+              if (needsReply) plannedTargets.push(topicNeedsReplyFolder);
+            }
           } else if (needsReply) {
             plannedTargets.push("Inbox/_Needs-Reply");
           }
@@ -1316,10 +1340,10 @@ async function main(): Promise<void> {
                   });
                 }
 
-                if (project && target === project.mailbox_folder) {
+                if ((project && target === project.mailbox_folder) || (topic && target === topic.mailbox_folder)) {
                   summary.copied += 1;
                 }
-                if (target === "Projekte/_Needs-Reply" || target === "Inbox/_Needs-Reply") {
+                if (target.endsWith("/_Needs-Reply")) {
                   summary.replyCopied += 1;
                 }
               }
@@ -1463,7 +1487,7 @@ async function main(): Promise<void> {
             file_id: fileId,
             artifact_path: relativePathFromCwd(cwd, debugPath),
           },
-          target: buildPendingActionTarget(match),
+          target: buildPendingActionTarget(match, cfg.PROJECT_MATCH_THRESHOLD),
           needs_reply: needsReply,
           classification_source: classificationSource,
         });

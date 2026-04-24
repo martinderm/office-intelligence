@@ -9,7 +9,9 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
 - **Konventionen** für Ordner/Dateien im Agent-Workspace (`/memory`, `/data`)
 - **Shadow-Mode** als Standard (erst klassifizieren/loggen; kein COPY)
 - **Automatischer Mailbox-Folder-Sync** mit TTL-Prüfung vor normalen Mail-Runs; Force-Refresh nur bei Bedarf
-- **Pending-Decisions-Queue** für fehlende referenzierte Ordner, damit Entscheidungen nicht verloren gehen
+- **Pending-Actions-Queue** für klassifizierte Mail-Artefakte, die noch kontextuell nachverarbeitet werden müssen
+- **Weekly Action Logs** für abgearbeitete/verwerfene Pending Actions
+- **Pending-Decisions-Queue** für fehlende referenzierte Ordner und echte menschliche Entscheidungen
 - **Gezielte Folder-Inspektion** eines existierenden Mailbox-Ordners ohne Routing-Aktion
 - **Gezielter Folder-Sync** eines existierenden Mailbox-Ordners in die lokale Artefaktstruktur
 - **Guardrails**: Locking/Idempotenz, kontrollierte Mailbox-Aktionen nur über offizielle Pfade, Fail-safe Defaults
@@ -46,8 +48,12 @@ Im größeren Bild ist sie Teil von **office-intelligence**, bleibt technisch ab
       exports/
       capabilities/
       mailbox-folders.json
+      pending-actions.json
       pending-decisions.json
       memory_suggestions.jsonl
+      logs/
+        actions/
+          YYYY-Www.json
       router.lock
 ```
 
@@ -65,6 +71,9 @@ Minimal (aktueller Stand):
 - `PROJECT_MATCH_THRESHOLD=0.65`
 - `NEEDS_REPLY_THRESHOLD=0.70`
 - `NEEDS_REPLY_NEGATIVE_HINTS=no-reply,newsletter,autoreply`
+- `PENDING_ACTIONS_FILE=./data/mail-processor/pending-actions.json`
+- `ACTION_LOG_DIR=./data/mail-processor/logs/actions`
+- `MAIL_COPY_SEMANTICS=acts_like_move` bei BOKU/GroupWise, weil `copy` dort de-facto wie `move` wirkt
 
 Sicherer Start:
 - `MAIL_ROUTING_ENABLED=false`  (Shadow-Mode)
@@ -108,14 +117,35 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - Für gezielte Materialisierung bzw. Konsolidierung eines existierenden Ordners in die lokale Struktur: `node dist/cli.js --mode=shadow --sync-folder="Projekte/USAGE-NG"`.
 - Dieser Pfad liest die letzten `MAIL_FETCH_LIMIT` Nachrichten des angegebenen Ordners, schreibt bzw. konsolidiert Msg-/EML-Artefakte im gleichen Schema wie normale Runs. Wenn dieselbe Mail lokal bereits unter einem anderen Ordnerpfad existiert, wird die lokale Repräsentation per `stableId` auf den synchronisierten Zielordner umgehängt statt dupliziert. Die Sync-Metadaten landen direkt im passenden Folder-Eintrag von `data/mail-processor/mailbox-folders.json`. Verschachtelte Mailbox-Ordner werden lokal ebenfalls verschachtelt abgebildet.
 
-### 5) Wissenspflege aus Mail-Artefakten (reviewed)
+### 5) Pending Actions / Nachverarbeitung
+
+- Jeder erfolgreich klassifizierte Mail-JSON-Artefakt erzeugt/aktualisiert ein schlankes Item in `data/mail-processor/pending-actions.json`.
+- Diese Datei enthält nur Finder-Informationen: `stable_id`, `file_id`, JSON-Artefaktpfad, Target (`project|topic|none`), Confidence, `needs_reply`, Klassifikationsquelle.
+- Keine Mailinhalte, Zusammenfassungen, Wissensvorschläge oder Entscheidungen in `pending-actions.json` speichern.
+- Abgearbeitete Items werden aus `pending-actions.json` entfernt und in das Weekly Log unter `data/mail-processor/logs/actions/YYYY-Www.json` geschrieben.
+- CLI-Helfer:
+  - `node dist/cli.js --pending-actions-list`
+  - `node dist/cli.js --pending-actions-mark-done=<action-id>`
+- `pending-decisions.json` bleibt strikt für menschliche Entscheidungen; `target.kind=none` ist keine Entscheidung.
+
+### 6) Needs-Reply-Routing
+
+- Bei normaler Copy-Semantik kann eine Mail in Parent-Ordner **und** `_Needs-Reply`-Unterordner landen.
+- Bei `MAIL_COPY_SEMANTICS=acts_like_move` (BOKU/GroupWise) gilt Single-Target-Routing:
+  - Project + `needs_reply=true` → `<project.mailbox_folder>/_Needs-Reply`
+  - Topic ohne Project + `needs_reply=true` → `<topic.mailbox_folder>/_Needs-Reply`
+  - kein Project/Topic + `needs_reply=true` → `Inbox/_Needs-Reply`
+  - ohne Antwortbedarf → Parent-Ordner, soweit Project/Topic gematcht
+- Fehlende `_Needs-Reply`-Unterordner werden als `pending-decisions` gemeldet; nicht still annehmen.
+
+### 7) Wissenspflege aus Mail-Artefakten (reviewed)
 - Discovery (Default: lokale `exports/**/*.eml`): `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200`
 - Optional IMAP-Quelle: `node skills/mail-processor/scripts/run-discover-projects.mjs --discover-source=imap --discover-last=200`
 - Review-Queue: `memory/references/projects/inbox/*.json`
 - Apply: `npm run apply:suggestions -- --input=<datei.json>`
 - Wirkung: aktualisiert `projects.json`, pflegt `changelog.md`, erstellt fehlende Projektordner (`<id>/index.md`, `signals.md`, `evidence/`, `topics/`)
 
-### 6) Konsolidierung in Wissens-/Projektordner (Agent-basiert)
+### 8) Konsolidierung in Wissens-/Projektordner (Agent-basiert)
 - Die Konsolidierung wird **vom OpenClaw-Agenten** durchgeführt, nicht durch ein lokales Merge-Skript.
 - Input: verarbeitete Mail-Artefakte unter `data/mail-processor/msgs/**/*.json`.
 - Ziel: Managed-Sections in `index.md`/`signals.md` aktualisieren und Evidenz in `evidence/YYYY-MM.md` ergänzen.
@@ -127,6 +157,7 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 ## Safety / Guardrails (müssen im Skill enforcebar sein)
 
 - Mailbox-Schreibaktionen nur über explizite offizielle Pfade (Routing-Run / kontrollierter Move), nie implizit durch Review-/Sync-Hilfspfade
+- Shadow-Mode liest/klassifiziert nur und schreibt lokale Artefakte/Pending Actions; keine Mailbox-Aktion
 - Safe default: bei Ambiguität **keine Aktion**
 - Hard negative rules für needsReply (Newsletter/Auto-Reply/no-reply)
 - JSON-Schema-Validation für Tool-/LLM-Extrakt; bei Fehlern skip+log
@@ -141,7 +172,9 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 - `data/mail-processor/exports/<folder-path>/<fileId>.eml` — lokale EML-Ablage
 - `fileId` wird im Msg-Artefakt unter `local.fileId` mitgeführt
 - `fileId` wird deterministisch aus `stableId` abgeleitet: `sha256(stableId)` → `base64url` → auf 16 Zeichen gekürzt (kompakter Dateiname, minimales Kollisionsrisiko)
-- `data/mail-processor/pending-decisions.json` — offene/gelöste Entscheidungen zu fehlenden referenzierten Ordnern
+- `data/mail-processor/pending-actions.json` — offene Mail-Postprocessing-Queue; schlank, keine Mailinhalte/Entscheidungen
+- `data/mail-processor/logs/actions/YYYY-Www.json` — Weekly Action Logs für erledigte/verwerfene Pending Actions
+- `data/mail-processor/pending-decisions.json` — offene/gelöste Entscheidungen zu fehlenden referenzierten Ordnern oder echten Review-Fragen
 - `data/mail-processor/memory_suggestions.jsonl` — Vorschläge zur Katalogpflege
 - `data/mail-processor/capabilities/<MAILBOX_KEY>.json` — Capabilities + Policy-Cache
 

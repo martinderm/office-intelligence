@@ -74,6 +74,21 @@ mail_postprocess:<stableId>:<fileId>
 
 `message_id` is represented by `stable_id`; for normal messages they are identical. `file_id` is retained because it points to the local artifact naming scheme.
 
+## Routing Rule
+
+For BOKU GroupWise, Himalaya `message copy` has been observed to behave effectively like a move. Therefore `MAIL_COPY_SEMANTICS=acts_like_move` must be treated as a single-target operation.
+
+Needs-reply handling is consequently a needs-reply move in that environment:
+
+- project match + `needs_reply=true` -> `<project.mailbox_folder>/_Needs-Reply`
+- topic match without project + `needs_reply=true` -> `<topic.mailbox_folder>/_Needs-Reply`
+- no project/topic match + `needs_reply=true` -> `Inbox/_Needs-Reply`
+- project/topic match + `needs_reply=false` -> project/topic folder
+
+With normal copy semantics, project/topic mails that need a reply may still be copied to both the parent folder and its `_Needs-Reply` child folder.
+
+Final archival/routing after contextual post-processing should be implemented as a later explicit processing step, not hidden inside classification.
+
 ## Processing Rule
 
 A later processor should:

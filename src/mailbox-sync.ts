@@ -200,49 +200,54 @@ function plannedFolderRefs(cfg: EnvConfig, projects: Project[], topics: Topic[])
     summary: string;
     proposedActions: string[];
     meta?: Record<string, unknown>;
-  }> = [
-    ...projects.map((project) => ({
-      entityKind: "project" as const,
+  }> = [];
+
+  for (const project of projects) {
+    refs.push({
+      entityKind: "project",
       entityId: project.id,
       expectedFolder: project.mailbox_folder,
       summary: `Projektordner fehlt in der Mailbox: ${project.title}`,
       proposedActions: ["mailbox_create_folder", "catalog_change_folder", "ignore"],
       meta: { title: project.title },
-    })),
-    ...topics.map((topic) => ({
-      entityKind: "topic" as const,
+    });
+    refs.push({
+      entityKind: "project",
+      entityId: `${project.id}:needs-reply`,
+      expectedFolder: normalizeFolderPath(`${project.mailbox_folder}/_Needs-Reply`),
+      summary: `Needs-Reply-Unterordner fehlt im Projektordner: ${project.title}`,
+      proposedActions: ["mailbox_create_folder", "ignore_feature", "ignore"],
+      meta: { title: project.title, parent_entity_id: project.id, feature: "needs-reply", scope: "project" },
+    });
+  }
+
+  for (const topic of topics) {
+    refs.push({
+      entityKind: "topic",
       entityId: topic.id,
       expectedFolder: topic.mailbox_folder,
       summary: `Topic-Ordner fehlt in der Mailbox: ${topic.title}`,
       proposedActions: ["mailbox_create_folder", "catalog_change_folder", "ignore"],
       meta: { title: topic.title },
-    })),
-  ];
-
-  const needsReplyFolders = [
-    {
-      entityId: "project-needs-reply",
-      expectedFolder: "Projekte/_Needs-Reply",
-      summary: "Sonderordner für projektbezogene Needs-Reply-Mails fehlt in der Mailbox",
-      meta: { feature: "needs-reply", scope: "project" },
-    },
-    {
-      entityId: "inbox-needs-reply",
-      expectedFolder: "Inbox/_Needs-Reply",
-      summary: "Sonderordner für nicht zugeordnete Needs-Reply-Mails fehlt in der Mailbox",
-      meta: { feature: "needs-reply", scope: "inbox" },
-    },
-  ];
-  for (const folder of needsReplyFolders) {
+    });
     refs.push({
-      entityKind: "special",
-      entityId: folder.entityId,
-      expectedFolder: folder.expectedFolder,
-      summary: folder.summary,
+      entityKind: "topic",
+      entityId: `${topic.id}:needs-reply`,
+      expectedFolder: normalizeFolderPath(`${topic.mailbox_folder}/_Needs-Reply`),
+      summary: `Needs-Reply-Unterordner fehlt im Topic-Ordner: ${topic.title}`,
       proposedActions: ["mailbox_create_folder", "ignore_feature", "ignore"],
-      meta: folder.meta,
+      meta: { title: topic.title, parent_entity_id: topic.id, feature: "needs-reply", scope: "topic" },
     });
   }
+
+  refs.push({
+    entityKind: "special",
+    entityId: "inbox-needs-reply",
+    expectedFolder: "Inbox/_Needs-Reply",
+    summary: "Sonderordner für nicht zugeordnete Needs-Reply-Mails fehlt in der Mailbox",
+    proposedActions: ["mailbox_create_folder", "ignore_feature", "ignore"],
+    meta: { feature: "needs-reply", scope: "inbox" },
+  });
 
   return refs;
 }

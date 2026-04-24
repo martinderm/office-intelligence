@@ -30,6 +30,9 @@ Lege für neue Topics an:
 
 Regeln:
 
+- `mailbox_folder` ist der fachliche Parent-Ordner des Topics.
+- Antwortbedürftige Topic-Mails landen operativ im Child-Ordner `<mailbox_folder>/_Needs-Reply`.
+- Der `_Needs-Reply`-Child muss nicht in `topics.json` als eigenes Feld gepflegt werden; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.
 - `reference_md` zeigt standardmäßig auf `memory/references/topics/<slug>/index.md`.
 - **Keine ausführliche Topic-Doku in `topics.json`.**
 - **Keine Einzeldatei `memory/references/topics/<slug>.md` als Hauptreferenz.**
@@ -84,7 +87,7 @@ Frage in dieser Reihenfolge, kurz und präzise:
 
 1. Topic-Titel (`title`)
 2. Topic-ID (`id`, sonst aus Titel als slug vorschlagen)
-3. Zielordner (`mailbox_folder`)
+3. Zielordner (`mailbox_folder`, Parent-Ordner; `_Needs-Reply` wird davon abgeleitet)
 4. Domains
 5. Kontakte (Name + E-Mail + Rolle optional)
 6. Aliases
