@@ -26,6 +26,7 @@ import { prepareMailText } from "./preprocess.js";
 import { loadOrFetchCapabilities } from "./capabilities.js";
 import { parseDiscoverOptions, runDiscoverProjects } from "./discover-projects.js";
 import { getOpenPendingDecisions, saveJson, summarizePendingDecisionsForChat, syncMailboxFolders, updateFolderSyncMetadata } from "./mailbox-sync.js";
+import { completePendingAction, loadPendingActions, pendingActionId, upsertPendingAction, type PendingActionClassificationSource, type PendingActionTarget } from "./pending-actions.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -146,6 +147,17 @@ function wantsMailboxFolderSyncForce(args: string[]): boolean {
   return args.includes("--sync-mailbox-folders-force");
 }
 
+function parsePendingActionMarkDoneArg(args: string[]): string | null {
+  const arg = args.find((a) => a.startsWith("--pending-actions-mark-done="));
+  if (!arg) return null;
+  const value = arg.slice("--pending-actions-mark-done=".length).trim();
+  return value || null;
+}
+
+function wantsPendingActionList(args: string[]): boolean {
+  return args.includes("--pending-actions-list");
+}
+
 function normalizeMessageId(value?: string): string | undefined {
   if (!value) return undefined;
   const v = value.trim().toLowerCase().replace(/^<+|>+$/g, "");
@@ -234,6 +246,44 @@ function folderToRelativePath(folder: string): string {
 
 function fileIdFromStableId(stableId: string): string {
   return crypto.createHash("sha256").update(stableId, "utf8").digest("base64url").slice(0, 16);
+}
+
+function mailboxNameForActions(cfg: { HIMALAYA_ACCOUNT: string; HIMALAYA_COMMAND: string }): string {
+  return cfg.HIMALAYA_ACCOUNT?.trim() || cfg.HIMALAYA_COMMAND;
+}
+
+function relativePathFromCwd(cwd: string, targetPath: string): string {
+  const relative = path.relative(cwd, targetPath);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : targetPath;
+}
+
+function buildPendingActionTarget(match: {
+  projectId?: string;
+  matchedTopicId?: string;
+  matchedWorkpackageId?: string;
+  score: number;
+  topicScore: number;
+}): PendingActionTarget {
+  if (match.projectId) {
+    return {
+      kind: "project",
+      id: match.projectId,
+      workpackage_id: match.matchedWorkpackageId || null,
+      confidence: Number.isFinite(match.score) ? match.score : null,
+    };
+  }
+  if (match.matchedTopicId) {
+    return {
+      kind: "topic",
+      id: match.matchedTopicId,
+      confidence: Number.isFinite(match.topicScore) ? match.topicScore : null,
+    };
+  }
+  return {
+    kind: "none",
+    id: null,
+    confidence: null,
+  };
 }
 
 function moveExportArtifact(dataDir: string, envelopeId: string, fileId: string, folder: string): string {
@@ -605,6 +655,8 @@ async function main(): Promise<void> {
   const explicitSourceFolder = parseSourceFolderArg(args);
   const targetFolder = parseTargetFolderArg(args);
   const dryRun = wantsDryRun(args);
+  const pendingActionsList = wantsPendingActionList(args);
+  const pendingActionMarkDone = parsePendingActionMarkDoneArg(args);
 
   if (discover.enabled) {
     await runDiscoverProjects(cwd, cfg, discover);
@@ -615,9 +667,40 @@ async function main(): Promise<void> {
     cfg.MAIL_PROCESSOR_DATA_DIR,
     cfg.MAIL_PROCESSOR_MSGS_DIR,
     cfg.MAIL_PROCESSOR_CAPABILITIES_DIR,
+    cfg.ACTION_LOG_DIR,
     path.dirname(cfg.MAIL_PROCESSOR_STATE_FILE),
     path.dirname(cfg.MAIL_CURSOR_FILE),
+    path.dirname(cfg.PENDING_ACTIONS_FILE),
   ]);
+
+  if (pendingActionsList) {
+    const queue = loadPendingActions(cfg.PENDING_ACTIONS_FILE);
+    console.log(JSON.stringify({
+      ok: true,
+      path: path.resolve(cfg.PENDING_ACTIONS_FILE),
+      count: queue.items.length,
+      items: queue.items,
+    }, null, 2));
+    return;
+  }
+
+  if (pendingActionMarkDone) {
+    const entry = completePendingAction({
+      pendingActionsFile: cfg.PENDING_ACTIONS_FILE,
+      actionLogDir: cfg.ACTION_LOG_DIR,
+      actionId: pendingActionMarkDone,
+      status: "completed",
+      result: { marked_by: "cli" },
+    });
+    console.log(JSON.stringify({
+      ok: Boolean(entry),
+      actionId: pendingActionMarkDone,
+      pendingActionsPath: path.resolve(cfg.PENDING_ACTIONS_FILE),
+      actionLogDir: path.resolve(cfg.ACTION_LOG_DIR),
+      entry,
+    }, null, 2));
+    return;
+  }
 
   const lock = acquireLock(cfg.MAIL_PROCESSOR_LOCK_FILE, cfg.MAIL_PROCESSOR_LOCK_TTL_SECONDS);
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1190,17 +1273,22 @@ async function main(): Promise<void> {
           }
         }
 
-        if (mode === "run" && match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD) {
-          const project = projects.find((p) => p.id === match.projectId);
+        if (mode === "run") {
+          const project = match.projectId && match.score >= cfg.PROJECT_MATCH_THRESHOLD
+            ? projects.find((p) => p.id === match.projectId)
+            : undefined;
+          const plannedTargets: string[] = [];
           if (project) {
-            const plannedTargets: string[] = [project.mailbox_folder];
-            if (needsReply) {
-              plannedTargets.push("Projekte/_Needs-Reply");
-            }
+            plannedTargets.push(project.mailbox_folder);
+            if (needsReply) plannedTargets.push("Projekte/_Needs-Reply");
+          } else if (needsReply) {
+            plannedTargets.push("Inbox/_Needs-Reply");
+          }
 
-            const executionTargets = routing.forcedSingleTarget ? plannedTargets.slice(0, 1) : plannedTargets;
-            const skippedTargets = plannedTargets.slice(executionTargets.length);
+          const executionTargets = routing.forcedSingleTarget ? plannedTargets.slice(0, 1) : plannedTargets;
+          const skippedTargets = plannedTargets.slice(executionTargets.length);
 
+          if (executionTargets.length) {
             if (cfg.HIMALAYA_COMMAND !== "mock") {
               for (const target of executionTargets) {
                 let uidPlusCopy: Record<string, unknown> | undefined;
@@ -1228,10 +1316,10 @@ async function main(): Promise<void> {
                   });
                 }
 
-                if (target === project.mailbox_folder) {
+                if (project && target === project.mailbox_folder) {
                   summary.copied += 1;
                 }
-                if (target === "Projekte/_Needs-Reply") {
+                if (target === "Projekte/_Needs-Reply" || target === "Inbox/_Needs-Reply") {
                   summary.replyCopied += 1;
                 }
               }
@@ -1304,10 +1392,7 @@ async function main(): Promise<void> {
           ? relocated.exportPath
           : moveExportArtifact(cfg.MAIL_PROCESSOR_DATA_DIR, env.id, fileId, finalFolder);
 
-        fs.writeFileSync(
-          debugPath,
-          JSON.stringify(
-            {
+        const artifact = {
               id: env.id,
               stableId,
               envelope: env.rawLine,
@@ -1356,12 +1441,45 @@ async function main(): Promise<void> {
               },
               history,
               preview: context.previewText,
-            },
-            null,
-            2,
-          ),
+            };
+
+        fs.writeFileSync(
+          debugPath,
+          JSON.stringify(artifact, null, 2),
           "utf8",
         );
+
+        const classificationSource: PendingActionClassificationSource = classifierBackend === "openclaw_tool"
+          ? "openclaw_tool"
+          : (classifierBackend === "legacy_llm" ? "legacy_llm" : "heuristic_only");
+        const pendingAction = upsertPendingAction(cfg.PENDING_ACTIONS_FILE, {
+          id: pendingActionId(stableId, fileId),
+          type: "mail_postprocess",
+          source: {
+            mailbox: mailboxNameForActions(cfg),
+            source_folder: cfg.MAIL_SOURCE_FOLDER,
+            envelope_id: env.id,
+            stable_id: stableId,
+            file_id: fileId,
+            artifact_path: relativePathFromCwd(cwd, debugPath),
+          },
+          target: buildPendingActionTarget(match),
+          needs_reply: needsReply,
+          classification_source: classificationSource,
+        });
+
+        appendJsonl(cfg.MAIL_PROCESSOR_STATE_FILE, {
+          type: "pending_action_upserted",
+          runId,
+          actionId: pendingAction.id,
+          pendingActionsPath: path.resolve(cfg.PENDING_ACTIONS_FILE),
+          stableId,
+          fileId,
+          target: pendingAction.target,
+          needsReply,
+          classificationSource,
+          timestamp: new Date().toISOString(),
+        });
 
         processed.add(stableId);
 

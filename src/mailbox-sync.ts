@@ -219,16 +219,28 @@ function plannedFolderRefs(cfg: EnvConfig, projects: Project[], topics: Topic[])
     })),
   ];
 
-  const needsReplyFolder = "Projekte/_Needs-Reply";
-  const usesNeedsReply = projects.some(() => true);
-  if (usesNeedsReply) {
+  const needsReplyFolders = [
+    {
+      entityId: "project-needs-reply",
+      expectedFolder: "Projekte/_Needs-Reply",
+      summary: "Sonderordner für projektbezogene Needs-Reply-Mails fehlt in der Mailbox",
+      meta: { feature: "needs-reply", scope: "project" },
+    },
+    {
+      entityId: "inbox-needs-reply",
+      expectedFolder: "Inbox/_Needs-Reply",
+      summary: "Sonderordner für nicht zugeordnete Needs-Reply-Mails fehlt in der Mailbox",
+      meta: { feature: "needs-reply", scope: "inbox" },
+    },
+  ];
+  for (const folder of needsReplyFolders) {
     refs.push({
       entityKind: "special",
-      entityId: "needs-reply",
-      expectedFolder: needsReplyFolder,
-      summary: "Sonderordner für Needs-Reply fehlt in der Mailbox",
+      entityId: folder.entityId,
+      expectedFolder: folder.expectedFolder,
+      summary: folder.summary,
       proposedActions: ["mailbox_create_folder", "ignore_feature", "ignore"],
-      meta: { feature: "needs-reply" },
+      meta: folder.meta,
     });
   }
 

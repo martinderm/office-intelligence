@@ -61,6 +61,8 @@ export type EnvConfig = {
   MAIL_PROCESSOR_LOCK_TTL_SECONDS: number;
   MAILBOX_FOLDERS_FILE: string;
   PENDING_DECISIONS_FILE: string;
+  PENDING_ACTIONS_FILE: string;
+  ACTION_LOG_DIR: string;
   MAILBOX_FOLDERS_MAX_AGE_HOURS: number;
   PROJECTS_JSON_PATH: string;
   TOPICS_JSON_PATH: string;

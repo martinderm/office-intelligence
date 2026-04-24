@@ -98,6 +98,10 @@ export function getConfig(cwd: string): EnvConfig {
       process.env.MAILBOX_FOLDERS_FILE ?? `${dataDir}/mailbox-folders.json`,
     PENDING_DECISIONS_FILE:
       process.env.PENDING_DECISIONS_FILE ?? `${dataDir}/pending-decisions.json`,
+    PENDING_ACTIONS_FILE:
+      process.env.PENDING_ACTIONS_FILE ?? `${dataDir}/pending-actions.json`,
+    ACTION_LOG_DIR:
+      process.env.ACTION_LOG_DIR ?? `${dataDir}/logs/actions`,
     MAILBOX_FOLDERS_MAX_AGE_HOURS: parseIntSafe(
       process.env.MAILBOX_FOLDERS_MAX_AGE_HOURS,
       12,
