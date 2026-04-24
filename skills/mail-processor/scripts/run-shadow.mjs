@@ -11,6 +11,10 @@ function parseFetchLimit(argv) {
   return Number.isFinite(value) && value > 0 ? String(value) : undefined;
 }
 
+function wantsBuild(argv, env) {
+  return argv.includes("--build") || env.MAIL_PROCESSOR_BUILD_BEFORE_RUN === "true";
+}
+
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return {};
   const out = {};
@@ -70,8 +74,9 @@ const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
 const workspaceRoot = path.resolve(scriptDir, "../../..");
 const envFromFile = loadDotEnv(path.join(workspaceRoot, ".env"));
+const argv = process.argv.slice(2);
 
-const fetchLimit = parseFetchLimit(process.argv.slice(2));
+const fetchLimit = parseFetchLimit(argv);
 const env = {
   ...process.env,
   ...envFromFile,
@@ -87,6 +92,14 @@ if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }
 
-const npm = resolveNpmInvocation();
-run(npm.command, [...npm.args, "run", "build"], env, projectDir);
-run(process.execPath, ["dist/cli.js", "--mode=shadow"], env, projectDir);
+const cliPath = path.join(projectDir, "dist", "cli.js");
+if (!fs.existsSync(cliPath)) {
+  throw new Error(`Missing built CLI: ${cliPath}. Run npm run build in MAIL_PROCESSOR_PROJECT_DIR once.`);
+}
+
+if (wantsBuild(argv, env)) {
+  const npm = resolveNpmInvocation();
+  run(npm.command, [...npm.args, "run", "build"], env, projectDir);
+}
+
+run(process.execPath, [cliPath, "--mode=shadow"], env, projectDir);

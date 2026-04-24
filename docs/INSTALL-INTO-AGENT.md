@@ -42,7 +42,9 @@ Für `mail-processor` liegen im Ziel-Agent-Workspace unter `skills/mail-processo
 Run-Skript-Konvention (verbindlich):
 
 - Agent-spezifische Konfiguration liegt in `<agent-workspace>/.env`.
-- Die Runner laden diese `.env` und reichen sie an `npm run build/shadow/run` weiter.
+- Die Runner laden diese `.env` und starten die bereits gebaute `dist/cli.js` im zentralen Projekt.
+- Die Runner führen standardmäßig **kein** `npm run build` aus.
+- Build ist ein expliziter Dev-/Test-Schritt im zentralen Repo; optional können Runner mit `--build` oder `MAIL_PROCESSOR_BUILD_BEFORE_RUN=true` bauen.
 - Runner dürfen **keine** mailbox-/proxy-/pfadbezogenen Hardcodes enthalten.
 - Runner setzen nur Modus-Toggles:
   - `MAIL_ROUTING_ENABLED=false` im Shadow-Skript
@@ -86,6 +88,8 @@ npm install
 npm run build
 npm run check
 ```
+
+Dieser Build erzeugt/aktualisiert `projects/office-intelligence/dist/`. Agenten nutzen danach direkt diese gebauten Dateien; sie bauen im Normalbetrieb nicht selbst.
 
 Dann im Ziel-Agent:
 
@@ -133,6 +137,8 @@ Mit `--strict` werden auch zusätzliche Dateien im Ziel als Drift markiert.
 Instanzspezifische Zielpfade bitte lokal in `docs/INSTALL_PATHS.local.md` dokumentieren (Vorlage: `docs/INSTALL_PATHS.example.md`).
 
 ## 6) Go-Live (erst nach Shadow-Validierung)
+
+Vor Go-Live sicherstellen, dass im zentralen Repo ein aktueller Build vorliegt (`npm run build`). Danach nutzen Agent-Runner direkt `dist/cli.js`.
 
 ```bash
 node skills/mail-processor/scripts/run-run.mjs

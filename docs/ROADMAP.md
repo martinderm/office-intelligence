@@ -43,6 +43,17 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 - Ziel: bessere Zuordnung bei Reply-Ketten.
 - Hinweis: Thread-Kontext soll sowohl der Heuristik als auch dem OpenClaw-Klassifikationstool zugeliefert werden.
 
+5) **Prozessrobustheit für hängende Runs verbessern**
+- Befund 2026-04-24: Ein `run-shadow` aus `boku-martin:main` blieb nach Verarbeitung von Envelope `8871` mit Lock stehen; ein erneuter gezielter Lauf erkannte die Mail korrekt als `already_processed`.
+- Vorschlag:
+  - Lock beim Start auf lebende PID prüfen; tote PID bzw. abgelaufene TTL automatisch als stale entfernen
+  - Lock optional mit `heartbeatAt` aktualisieren, damit lange, aber aktive Runs erkennbar bleiben
+  - Himalaya-/Gate-Child-Prozesse mit harten Timeouts und Prozessbaum-Kill absichern
+  - bei Timeout Mail in Retry-/Dead-Letter-Pfad verschieben statt gesamten Run zu blockieren
+  - feinere State-Events um `message_read`, Export, Klassifikation, Artefakt-Write und Pending-Action-Upsert schreiben
+- Ziel: Keine manuell zu entfernenden Locks und keine hängenden Mail-Processor-Runs durch einzelne zache IMAP/Himalaya-Aufrufe.
+- Naming-Hinweis: `shadow` mittelfristig als `ingest` aliasieren/ablösen; Semantik ist sichere Ingestion ohne Mailbox-Aktion.
+
 ## Priorität Mittel
 
 5) **Umsetzungspakete sequentiell abarbeiten**

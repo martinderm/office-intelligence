@@ -83,6 +83,8 @@ Runner-Konvention:
 - `skills/mail-processor/scripts/run-shadow.mjs`, `run-run.mjs` und `run-discover-projects.mjs` laden nur diese `.env`.
 - In den Runnern sind keine mailbox-/proxy-/pfadbezogenen Hardcodes erlaubt.
 - Runner toggeln nur den Modus (`MAIL_ROUTING_ENABLED`) und optional `MAIL_FETCH_LIMIT`.
+- Runner bauen **nicht** automatisch. Sie starten die bereits gebaute `dist/cli.js` im zentralen Projekt.
+- Build ist ein expliziter Dev-/Test-Schritt: einmal `npm run build` im Repo ausführen. Optional können Runner mit `--build` oder `MAIL_PROCESSOR_BUILD_BEFORE_RUN=true` dennoch vorher bauen.
 
 Hinweis:
 - Der operative Klassifikationspfad läuft über das OpenClaw-Tool `mail-classify`.
@@ -94,9 +96,13 @@ Siehe vollständige Liste: `/.env.example` im Repo.
 
 ### 1) Shadow Run
 - `npm run shadow`
+- Im Agent-Workspace: `node skills/mail-processor/scripts/run-shadow.mjs --fetch-limit=1`
 
 ### 2) Routing Run (gated)
 - `npm run run`
+- Im Agent-Workspace: `node skills/mail-processor/scripts/run-run.mjs --fetch-limit=1`
+
+Hinweis: Agent-Runner nutzen standardmäßig die vorhandene `dist/cli.js` und bauen nicht automatisch. Bei fehlender `dist/cli.js` brechen sie mit klarer Fehlermeldung ab. Explizit bauen: `--build` oder `MAIL_PROCESSOR_BUILD_BEFORE_RUN=true`.
 
 ### 3) Kontrollierter Move einer explizit ausgewählten Mail
 - `node dist/cli.js --mode=move --source-folder="INBOX" --target-folder="Projekte/USAGE-NG" --ids=7588`

@@ -1,14 +1,19 @@
 #!/usr/bin/env node
-// Template for agent-local skill runners.
-// Rules:
-// - load <agent-workspace>/.env
-// - do not hardcode mailbox/proxy/path settings in this file
-// - only set mode toggles (e.g. MAIL_ROUTING_ENABLED) and optional runtime flags
-
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+
+function parseFetchLimit(argv) {
+  const arg = argv.find((a) => a.startsWith("--fetch-limit="));
+  if (!arg) return undefined;
+  const value = Number.parseInt(arg.split("=")[1] ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? String(value) : undefined;
+}
+
+function wantsBuild(argv, env) {
+  return argv.includes("--build") || env.MAIL_PROCESSOR_BUILD_BEFORE_RUN === "true";
+}
 
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return {};
@@ -19,33 +24,82 @@ function loadDotEnv(filePath) {
     if (!line || line.startsWith("#")) continue;
     const i = line.indexOf("=");
     if (i <= 0) continue;
-    out[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+    const key = line.slice(0, i).trim();
+    const value = line.slice(i + 1).trim();
+    out[key] = value;
   }
   return out;
+}
+
+function resolveNpmInvocation() {
+  const candidates = [
+    process.env.npm_execpath,
+    path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    path.join(path.dirname(process.execPath), "..", "node_modules", "npm", "bin", "npm-cli.js"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return { command: process.execPath, args: [candidate] };
+    }
+  }
+
+  if (process.platform === "win32") {
+    return { command: "npm.cmd", args: [] };
+  }
+  return { command: "npm", args: [] };
+}
+
+function run(command, args, env, cwd) {
+  const result = spawnSync(command, args, {
+    stdio: "inherit",
+    shell: false,
+    windowsHide: true,
+    env,
+    cwd,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.signal) {
+    process.kill(process.pid, result.signal);
+    return;
+  }
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
 }
 
 const __filename = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(__filename);
 const workspaceRoot = path.resolve(scriptDir, "../../..");
 const envFromFile = loadDotEnv(path.join(workspaceRoot, ".env"));
+const argv = process.argv.slice(2);
 
+const fetchLimit = parseFetchLimit(argv);
 const env = {
   ...process.env,
   ...envFromFile,
-  // only minimal runtime toggle here:
-  MAIL_ROUTING_ENABLED: "false",
+  MAIL_ROUTING_ENABLED: "false", // run-run.mjs sets this to true
+  ...(fetchLimit ? { MAIL_FETCH_LIMIT: fetchLimit } : {}),
 };
 
-const projectDir = env.MAIL_PROCESSOR_PROJECT_DIR || process.cwd();
+const repoRootFromScript = path.resolve(scriptDir, "../../..");
+const projectDir =
+  env.MAIL_PROCESSOR_PROJECT_DIR ||
+  (fs.existsSync(path.join(repoRootFromScript, "package.json")) ? repoRootFromScript : process.cwd());
 if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }
 
-const result = spawnSync("npm", ["run", "shadow"], {
-  stdio: "inherit",
-  shell: process.platform === "win32",
-  env,
-  cwd: projectDir,
-});
+const cliPath = path.join(projectDir, "dist", "cli.js");
+if (!fs.existsSync(cliPath)) {
+  throw new Error(`Missing built CLI: ${cliPath}. Run npm run build in MAIL_PROCESSOR_PROJECT_DIR once.`);
+}
 
-if (result.status !== 0) process.exit(result.status ?? 1);
+if (wantsBuild(argv, env)) {
+  const npm = resolveNpmInvocation();
+  run(npm.command, [...npm.args, "run", "build"], env, projectDir);
+}
+
+run(process.execPath, [cliPath, "--mode=shadow"], env, projectDir);

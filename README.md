@@ -204,7 +204,14 @@ Beispiel:
 AGENT_WORKSPACE_ROOT=/path/to/agent/workspace node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
 ```
 
-Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und rufen dann die normalen npm-Commands auf.
+Die Skripte setzen nur sichere Defaults (`MAIL_ROUTING_ENABLED`) und starten dann direkt die gebaute `dist/cli.js` im zentralen Projekt. Sie führen standardmäßig **kein** `npm run build` aus.
+
+Build-Regel:
+
+- Einmal im zentralen Repo bauen: `npm run build`.
+- Danach nutzen Agenten direkt `dist/cli.js`.
+- Optionaler Runner-Build nur explizit: `--build` oder `MAIL_PROCESSOR_BUILD_BEFORE_RUN=true`.
+- Wenn `dist/cli.js` fehlt, brechen Runner mit klarer Fehlermeldung ab.
 
 Health-Check (Lock + State + TLS-Fehlerrate):
 
@@ -583,7 +590,8 @@ Hinweis: Der Policy-Layer ist bewusst klein und transparent. Er dient als Grundl
 Zusätzlich zur Policy steuern diese Env-Variablen das operative Verhalten:
 
 - `MAIL_ROUTE_ACTION=auto|copy|move`
-- `MAIL_COPY_SEMANTICS=normal|acts_like_move`
+- `MAIL_COPY_SEMANTICS=normal
+MAIL_PROCESSOR_BUILD_BEFORE_RUN=false|acts_like_move`
 - `MAIL_ROUTE_STRICT=true|false`
 - `MAIL_USE_UIDPLUS=true|false` (optional; nur wirksam wenn `supportsUidPlus=true`)
 

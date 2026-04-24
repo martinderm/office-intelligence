@@ -4,6 +4,10 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+function wantsBuild(argv, env) {
+  return argv.includes("--build") || env.MAIL_PROCESSOR_BUILD_BEFORE_RUN === "true";
+}
+
 function loadDotEnv(filePath) {
   if (!fs.existsSync(filePath)) return {};
   const out = {};
@@ -66,7 +70,8 @@ if (!fs.existsSync(path.join(projectDir, "package.json"))) {
   throw new Error(`MAIL_PROCESSOR_PROJECT_DIR invalid or missing package.json: ${projectDir}`);
 }
 
-const cliArgs = process.argv.slice(2);
+const rawCliArgs = process.argv.slice(2);
+const cliArgs = rawCliArgs.filter((arg) => arg !== "--build");
 const hasDiscoverOut = cliArgs.some((a) => a === "--discover-output" || a.startsWith("--discover-output="));
 if (!hasDiscoverOut) {
   const ts = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
@@ -75,5 +80,12 @@ if (!hasDiscoverOut) {
   cliArgs.push(`--discover-output=${path.join(outDir, `project-candidates-${ts}.json`)}`);
 }
 
-run("npm", ["run", "build"], env, projectDir);
+const cliPath = path.join(projectDir, "dist", "cli.js");
+if (!fs.existsSync(cliPath)) {
+  throw new Error(`Missing built CLI: ${cliPath}. Run npm run build in MAIL_PROCESSOR_PROJECT_DIR once.`);
+}
+
+if (wantsBuild(rawCliArgs, env)) {
+  run("npm", ["run", "build"], env, projectDir);
+}
 run("npm", ["run", "discover-projects", "--", ...cliArgs], env, projectDir);
