@@ -77,4 +77,4 @@ Before handling a mail, search these JSONL files for the normalized `message_id`
 - `pending-review.jsonl`
 - `replies-needed.jsonl`
 
-If already present, do not process again unless Martin explicitly asks.
+If already present, do not process again unless the user explicitly asks.

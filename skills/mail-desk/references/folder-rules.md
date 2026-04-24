@@ -33,7 +33,7 @@ The mailbox-specific Himalaya skill owns the exact command syntax and backend ca
 
 If a target folder is missing:
 
-1. Do not silently route elsewhere unless Martin gave a rule.
+1. Do not silently route elsewhere unless the user gave a rule.
 2. Add `pending-review.jsonl` entry with `reason="missing_folder"`.
 3. If the missing folder is structurally expected, ask whether to create it or update the catalog.
 
