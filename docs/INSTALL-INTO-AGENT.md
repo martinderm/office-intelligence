@@ -1,12 +1,14 @@
 # Install office-intelligence into existing Agent (Operator Runbook)
 
-Ziel: Ein Main-Agent installiert/aktualisiert die relevanten `office-intelligence`-Skills in einem bestehenden Agent-Workspace reproduzierbar und sicher. Für einen bestehenden Mail-Agenten umfasst der Standard-Rollout aktuell drei Skill-Verzeichnisse:
+Ziel: Ein Main-Agent installiert/aktualisiert die relevanten `office-intelligence`-Skills in einem bestehenden Agent-Workspace reproduzierbar und sicher. Für einen bestehenden Mail-Agenten umfasst der Standard-Rollout bis auf Weiteres drei Skill-Verzeichnisse:
 
-- `skills/mail-processor`
+- `skills/mail-desk`
 - `skills/project-catalog-entry`
 - `skills/topic-catalog-entry`
 
-Wichtig: Nur `mail-processor` enthält operative Runner für die Mail-Verarbeitung. Der eigentliche TypeScript-/Node-Projektcode (`package.json`, `src/`, zentrale `scripts/`) bleibt im Projekt-Repo `projects/office-intelligence`. In den Agent-Workspace werden die Skill-Verzeichnisse aus `projects/office-intelligence/skills/` kopiert; der `mail-processor`-Skill greift dann über `MAIL_PROCESSOR_PROJECT_DIR` auf das zentrale Projekt zu.
+`skills/mail-processor` wird **nicht mehr standardmäßig ausgerollt**. Nur bei expliziter Legacy-/Experiment-Anforderung mitnehmen.
+
+Wichtig: `mail-desk` ist der bevorzugte leichte Agenten-Workflow für Einzelmail-Bearbeitung und nutzt den vorhandenen mailbox-spezifischen Himalaya-Skill. Der alte `mail-processor` enthält operative Runner für die schwerere Pipeline, wird aber bis auf Weiteres nicht regulär installiert. Der eigentliche TypeScript-/Node-Projektcode (`package.json`, `src/`, zentrale `scripts/`) bleibt im Projekt-Repo `projects/office-intelligence`.
 
 ## 1) Voraussetzungen
 
@@ -19,11 +21,15 @@ Wichtig: Nur `mail-processor` enthält operative Runner für die Mail-Verarbeitu
 
 Standard-Rollout in den Ziel-Agenten:
 
-- `skills/mail-processor/`
+- `skills/mail-desk/`
 - `skills/project-catalog-entry/`
 - `skills/topic-catalog-entry/`
 
 Diese drei Verzeichnisse werden als komplette Skill-Ordner in den Agent-Workspace kopiert. Andere bereits vorhandene Skills des Ziel-Agenten bleiben unberührt.
+
+Nicht standardmäßig kopieren:
+
+- `skills/mail-processor/` — nur auf expliziten Wunsch für Legacy-/Experiment-Pipeline.
 
 Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
 - Empfohlen ist ein Gate (fixe Account-/Command-Policy).
@@ -31,34 +37,14 @@ Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
 - Für allgemeine Wrapper-Erzeugung liegt ein Beispiel im Projekt: `scripts/create-himalaya-account-proxy.mjs`.
 
 
-Für `mail-processor` liegen im Ziel-Agent-Workspace unter `skills/mail-processor/` typischerweise:
+Legacy-Hinweis zu `mail-processor`:
 
-- `SKILL.md`
-- `PROJECT_MEMORY_AGENT_TASK.md`
-- `scripts/run-shadow.mjs`
-- `scripts/run-run.mjs`
-- `scripts/run-discover-projects.mjs`
+- Nur bei expliziter Anforderung `skills/mail-processor/` zusätzlich kopieren.
+- Dann liegen dort typischerweise `SKILL.md`, `PROJECT_MEMORY_AGENT_TASK.md` und Runner unter `scripts/`.
+- Die Runner nutzen `MAIL_PROCESSOR_PROJECT_DIR` und die bereits gebaute `dist/cli.js` im zentralen Repo.
+- Für den normalen Mail-Desk-Betrieb ist das alles nicht erforderlich.
 
-Run-Skript-Konvention (verbindlich):
-
-- Agent-spezifische Konfiguration liegt in `<agent-workspace>/.env`.
-- Die Runner laden diese `.env` und starten die bereits gebaute `dist/cli.js` im zentralen Projekt.
-- Die Runner führen standardmäßig **kein** `npm run build` aus.
-- Build ist ein expliziter Dev-/Test-Schritt im zentralen Repo; optional können Runner mit `--build` oder `MAIL_PROCESSOR_BUILD_BEFORE_RUN=true` bauen.
-- Runner dürfen **keine** mailbox-/proxy-/pfadbezogenen Hardcodes enthalten.
-- Runner setzen nur Modus-Toggles:
-  - `MAIL_ROUTING_ENABLED=false` im Shadow-Skript
-  - `MAIL_ROUTING_ENABLED=true` im Run-Skript
-  - optional `MAIL_FETCH_LIMIT` via CLI-Flag
-
-Wichtige Abgrenzung:
-
-- Die Dateien unter `projects/office-intelligence/src/` werden bei diesem Rollout **nicht** in den Agent-Workspace kopiert.
-- Die Dateien unter `projects/office-intelligence/scripts/` werden ebenfalls **nicht** pauschal in den Agent-Workspace kopiert.
-- Im Agent-Workspace landen die Skill-Dateien unter `skills/...`; für `mail-processor` sind das vor allem `SKILL.md`, `PROJECT_MEMORY_AGENT_TASK.md` und die Runner unter `skills/mail-processor/scripts/`.
-- Die Runner verwenden `MAIL_PROCESSOR_PROJECT_DIR`, um Build und Lauf gegen das zentrale Projekt-Repo auszuführen.
-
-Empfohlene `.env`-Felder im Agent-Workspace:
+Empfohlene `.env`-Felder im Agent-Workspace für Legacy-`mail-processor` nur bei expliziter Nutzung:
 - `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-office-intelligence-projekt>`
 - `HIMALAYA_COMMAND=<agent-spezifischer command/gate oder node-wrapper>`
 - `MAILBOX_KEY=<kurzer stabiler key>`
@@ -71,7 +57,18 @@ Empfohlene `.env`-Felder im Agent-Workspace:
 - `OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY`, `LLM_TIMEOUT_MS` (Gateway-Zugang für `mail-classify`; mit Session-Key kann gezielt das Modell des Ziel-Agents genutzt werden; das Plugin selbst hält den eingebetteten Modellaufruf bewusst minimal und setzt keine harten Sampling-/Format-Parameter wie `temperature` oder `responseFormat`)
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` nur dann, wenn zusätzlich Discovery/Suggestion-Pfade genutzt werden
 
-## 3) Wissenskataloge sicherstellen
+## 3) Mail-Desk bevorzugen
+
+Für normale Einzelmail-Arbeit zuerst `skills/mail-desk/SKILL.md` verwenden:
+
+- Mail direkt über den mailbox-spezifischen Himalaya-Skill lesen
+- Projekt-/Topic-Kontext aus `memory/references/...` laden
+- Entscheidung und leichte Logs unter `data/mail-desk/` schreiben
+- nur bei klarer Lage verschieben/kopieren
+
+`mail-processor` bleibt verfügbar, soll aber nicht der erste Reflex für normale Triage sein.
+
+## 4) Wissenskataloge sicherstellen
 
 Im Ziel-Agent-Workspace muss vorhanden sein:
 
@@ -79,7 +76,7 @@ Im Ziel-Agent-Workspace muss vorhanden sein:
 
 Hinweis: Ohne gepflegte Kataloge bleibt Matching schwach/unzuverlässig.
 
-## 4) Build & Smoke-Test
+## 5) Build & Smoke-Test
 
 Im Projektverzeichnis (also im zentralen Repo, nicht im Agent-Skill-Ordner):
 
@@ -105,7 +102,7 @@ Erwartung:
 - ggf. `data/mail-processor/pending-decisions.json` enthält fehlende Parent- oder `_Needs-Reply`-Ordner
 - Shadow-Run ohne Mailbox-Routing-Aktionen
 
-## 5) Optional: Discovery + reviewed Apply
+## 6) Optional: Discovery + reviewed Apply
 
 ```bash
 node skills/mail-processor/scripts/run-discover-projects.mjs --discover-last=200
@@ -136,7 +133,7 @@ Mit `--strict` werden auch zusätzliche Dateien im Ziel als Drift markiert.
 
 Instanzspezifische Zielpfade bitte lokal in `docs/INSTALL_PATHS.local.md` dokumentieren (Vorlage: `docs/INSTALL_PATHS.example.md`).
 
-## 6) Go-Live (erst nach Shadow-Validierung)
+## 7) Go-Live Pipeline-Pfad (erst nach Shadow-Validierung)
 
 Vor Go-Live sicherstellen, dass im zentralen Repo ein aktueller Build vorliegt (`npm run build`). Danach nutzen Agent-Runner direkt `dist/cli.js`.
 
@@ -154,7 +151,7 @@ Empfehlung:
   - kein Project/Topic + `needs_reply=true` → `Inbox/_Needs-Reply`
 - Fehlende `_Needs-Reply`-Unterordner vor Go-Live über `pending-decisions.json` klären.
 
-## 7) Betriebsgrenzen (aktuell)
+## 8) Betriebsgrenzen (aktuell)
 
 - Ein Run arbeitet gegen genau **eine** Mailbox (`HIMALAYA_COMMAND` + `MAILBOX_KEY`).
 - Mehrere Mailboxen erfordern getrennte Instanzen/Runs mit eigenem Data-Dir.

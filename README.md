@@ -37,6 +37,10 @@ Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
 
 - `skills/project-catalog-entry/SKILL.md`
 
+Schlanke agentische Mailbearbeitung als Alternative zur schweren Pipeline:
+
+- `skills/mail-desk/SKILL.md`
+
 Knowledge-Architektur innerhalb von office-intelligence (verbindlich):
 
 - **Routing-Metadaten für Mail-Verarbeitung:** `memory/references/projects/projects.json`
@@ -48,6 +52,16 @@ Agent-Deploy-Konvention:
 - Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
 - Skill-Runner dürfen diese Werte nicht hardcoden.
 - Siehe `docs/INSTALL-INTO-AGENT.md`.
+
+## Mail-Denkmodell: processor vs desk
+
+`mail-processor` bleibt als experimenteller/technischer Pipeline-Pfad erhalten, wird aber **bis auf Weiteres nicht mehr in Agenten ausgerollt**. Für operative Einzelmail-Bearbeitung ist künftig der leichtere Ansatz bevorzugt:
+
+- `mail-desk` orchestriert eine Mail nach der anderen direkt über den passenden Himalaya-/Mailbox-Skill.
+- Notizen und Bearbeitungsstatus liegen leichtgewichtig unter `data/mail-desk/` als JSONL.
+- Projekt-/Topic-Kataloge bleiben Source of truth für Zielordner.
+- `mail-processor` nicht weiter aufblasen, wenn eine agentische Mail-Desk-Entscheidung mit geladenem Kontext ausreicht.
+- Neue Agent-Rollouts enthalten standardmäßig `mail-desk`, `project-catalog-entry` und `topic-catalog-entry`; `mail-processor` nur noch explizit für Legacy-/Experiment-Zwecke.
 
 ## Defaults & instanzspezifische Pflichtwerte
 

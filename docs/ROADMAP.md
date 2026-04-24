@@ -4,7 +4,16 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 
 ## Priorität Hoch
 
-1) **OpenClaw-Tool-basierte Klassifikation als neuer Zielpfad einführen**
+1) **Mail-Desk als leichten Zielpfad etablieren**
+- Entscheidung 2026-04-24: Für operative Einzelmail-Bearbeitung den neuen Skill `mail-desk` bevorzugen statt den `mail-processor` weiter aufzublasen.
+- Zielbild:
+  - Agent interagiert direkt über mailbox-spezifischen Himalaya-Skill mit Mails
+  - Projekt-/Topic-Kontext wird bei Bedarf geladen
+  - Bearbeitungsnotizen bleiben leichtgewichtig unter `data/mail-desk/`
+  - Mailbox-Aktion nur bei klarer Entscheidung
+- `mail-processor` bleibt als Legacy/Experiment/Batch-Pipeline erhalten, ist aber nicht mehr der bevorzugte erste Ansatz.
+
+2) **OpenClaw-Tool-basierte Klassifikation als neuer Zielpfad einführen**
 - Entscheidung: Für operative Mail-Klassifikation künftig **Variante A** verfolgen.
 - Das bedeutet:
   - `mail-processor` bleibt deterministischer Orchestrator
