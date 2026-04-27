@@ -129,6 +129,11 @@ Zusätzlich einen schlanken Lookup-Index pflegen:
 - Zweck: schnelle Auflösung von `Message-ID` → finaler Ordner + zuletzt gesehene Envelope-ID
 - Keine Mailinhalte speichern
 - Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
+- JSON-Struktur und Feldregeln für den Index sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
+- Für schnellen Zugriff den Index über Skripte bedienen (nicht vollständig lesen):
+  - `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
+  - `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin` (Payload via STDIN)
+  - `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin` (Payload via STDIN)
 
 ## Erledigungsregel und Archivierung
 

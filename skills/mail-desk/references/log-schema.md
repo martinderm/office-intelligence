@@ -164,6 +164,15 @@ Regeln:
 - Schlüssel pro Eintrag ist die normalisierte `message_id`.
 - Bei fehlender Message-ID optional analog über `message_key` arbeiten.
 
+CLI-Helfer (`skills/mail-desk/scripts/`):
+
+- `final_index_lookup.py --message-id ...`
+- `final_index_upsert.py --mode upsert-final --stdin`
+  - Pflichtfelder im Payload: `message_id`, `final_folder`, `envelope_id`
+- `final_index_upsert.py --mode patch --stdin`
+  - Pflichtfeld im Payload: `message_id`
+  - patcht nur bestehende Einträge
+
 ## Idempotency
 
 Before handling a mail, search active and archived JSONL files for the normalized `message_id` or fallback `message_key`:
