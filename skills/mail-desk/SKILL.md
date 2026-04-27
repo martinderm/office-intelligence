@@ -123,6 +123,13 @@ data/mail-desk/
 
 Keine großen Mailarchive standardmäßig anlegen. Bei Bedarf kurze Auszüge oder Pfade auf Anhänge notieren, aber nicht die komplette Mail duplizieren.
 
+Zusätzlich einen schlanken Lookup-Index pflegen:
+
+- `data/mail-desk/final-location-index.json`
+- Zweck: schnelle Auflösung von `Message-ID` → finaler Ordner + zuletzt gesehene Envelope-ID
+- Keine Mailinhalte speichern
+- Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
+
 ## Erledigungsregel und Archivierung
 
 Wenn ein offener Eintrag erledigt wird, immer den **ursprünglichen Eintrag aktualisieren** statt einen widersprüchlichen zweiten Eintrag daneben zu schreiben.
@@ -196,7 +203,8 @@ Regeln:
 - Neue Informationen in bestehende Seiten integrieren, nicht einfach neue Log-Blöcke anhängen.
 - Bestehende `signals.md`, `evidence/YYYY-MM.md`, `contacts.md`, `index.md` und Katalogfelder gezielt aktualisieren.
 - Mailinhalte knapp zusammenfassen; keine langen Mailtexte in Referenzen kopieren.
-- Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Zielordner. Envelope-ID höchstens als `last_seen_envelope_id` erwähnen.
+- Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Zielordner. Envelope-ID höchstens als `envelope_id` erwähnen.
+- Beim Schreiben von Projekt-/Topic-Referenzen die Message-ID immer explizit als Quellenbezug mitführen (z. B. `message_id`; bei mehreren Mails `message_ids`). Nur wenn keine Message-ID existiert, den Fallback-Key als Quellenbezug verwenden.
 - Katalogfelder (`aliases`, `keywords`, `contacts`, `typical_subject_patterns`, Workpackages/Subtopics) nur ändern, wenn die Mail dafür ein klares Signal liefert.
 - Bei unsicherer oder struktureller Änderung erst Review notieren oder den User fragen.
 - `data/mail-desk/action-log.jsonl` bleibt nur Bearbeitungslog; dauerhafte Erkenntnisse gehören in `memory/references/projects/...` oder `memory/references/topics/...`.

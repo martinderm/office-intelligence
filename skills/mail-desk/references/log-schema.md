@@ -9,7 +9,7 @@ Envelope-ID is not durable. It may change after copy/move, especially on GroupWi
 Rules:
 
 - Never use Envelope-ID as primary key, close key, idempotency key, or reference key.
-- Store it only as `last_seen_envelope_id` for operational traceability.
+- Store it only as `envelope_id` for operational traceability.
 - Durable keys are `message_id` or fallback `message_key` with `key_type="fallback_hash"`.
 - When closing or updating an item, match by `message_id`/`message_key`, not Envelope-ID.
 
@@ -33,7 +33,7 @@ Use for current handling notes. Completed handling records should be moved to th
   "mailbox": "MAIN-MAILBOX",
   "message_id": "69e789bb020000f1000d1629@mail.example.org",
   "key_type": "message_id",
-  "last_seen_envelope_id": "8871",
+  "envelope_id": "8871",
   "subject": "Wtrlt: ...",
   "from": "Sender Name <...>",
   "decision": {
@@ -61,7 +61,7 @@ Use when the agent should not decide alone. Active file contains only unresolved
   "mailbox": "MAIN-MAILBOX",
   "message_id": "...",
   "key_type": "message_id",
-  "last_seen_envelope_id": "8871",
+  "envelope_id": "8871",
   "subject": "...",
   "from": "...",
   "reason": "ambiguous_target|missing_folder|possible_catalog_gap|unclear_reply_need|other",
@@ -84,7 +84,7 @@ Optional helper index for reply work. Use only if `needs_reply=true`. Active fil
   "mailbox": "MAIN-MAILBOX",
   "message_id": "...",
   "key_type": "message_id",
-  "last_seen_envelope_id": "8871",
+  "envelope_id": "8871",
   "subject": "...",
   "from": "...",
   "folder": "Themen/AIxLLL/_Needs-Reply",
@@ -120,6 +120,49 @@ Example:
 ```text
 data/mail-desk/archive/2026-W17/replies-needed.jsonl
 ```
+
+## final-location-index.json
+
+Optional, aber empfohlen für schnelle Quellauflösung aus Projekt-/Topic-Referenzen.
+
+Path:
+
+```text
+data/mail-desk/final-location-index.json
+```
+
+Zweck:
+
+- `message_id` schnell auf finalen Ordner mappen
+- zuletzt gesehene Envelope-ID für den Zielordner behalten
+- optional Thread-Bezug ohne Mailinhalt über `in_reply_to` und `references`
+
+Minimalstruktur:
+
+```json
+{
+  "schema_version": 1,
+  "updated_at": "2026-04-27T11:14:00Z",
+  "items": {
+    "normalized-message-id": {
+      "message_id": "<id@host>",
+      "mailbox": "MAIN-MAILBOX",
+      "final_folder": "Projekte/XYZ",
+      "envelope_id": "4711",
+      "updated_at": "2026-04-27T11:14:00Z",
+      "in_reply_to": "<parent@host>",
+      "references": ["<root@host>", "<parent@host>"]
+    }
+  }
+}
+```
+
+Regeln:
+
+- Keine Mailinhalte im Index speichern.
+- Envelope-ID nur zusammen mit dem `final_folder` interpretieren.
+- Schlüssel pro Eintrag ist die normalisierte `message_id`.
+- Bei fehlender Message-ID optional analog über `message_key` arbeiten.
 
 ## Idempotency
 
