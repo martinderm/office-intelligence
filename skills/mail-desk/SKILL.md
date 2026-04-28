@@ -7,6 +7,23 @@ description: Schlanke agentische Mail-Triage innerhalb von office-intelligence. 
 
 Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht loggen, dann nur bei klarer Lage verschieben/kopieren.
 
+## Verbindlicher Ablauf (immer in dieser Reihenfolge prüfen)
+
+1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag).
+2. Mail lesen und stabile Identität erfassen (Message-ID, sonst Fallback-Key).
+3. Projekt-/Topic-Kontext laden und klassifizieren.
+4. Mail routen/ablegen (oder Review statt Aktion).
+5. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
+6. Leichte `data/`-Pflege durchführen:
+   - `data/mail-desk/action-log.jsonl` aktualisieren
+   - offene Review-Fälle in `data/mail-desk/pending-review.jsonl` führen
+   - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
+   - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
+   - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
+7. Kurzbericht mit Routing + Wissenspflege liefern.
+
+Schritt 5 ist konditional, aber die Prüfung ist verpflichtend.
+
 ## Abgrenzung
 
 `mail-desk` ist die agentische Arbeitsweise. Der Skill enthält **keinen** eigenen Mailbox-Zugriff.
@@ -19,7 +36,7 @@ Für konkrete Befehle immer den passenden Mailbox-Skill verwenden, z. B.:
 Nicht doppeln:
 
 - Gate-Pfade, Himalaya-Syntax und BOKU-GroupWise-Details bleiben im jeweiligen Himalaya-Skill.
-- Projekt-/Topic-Katalogpflege bleibt in `project-catalog-entry` und `topic-catalog-entry`.
+- Projekt-/Topic-Katalogpflege erfolgt über `project-catalog-entry` und `topic-catalog-entry`.
 - `mail-desk` orchestriert die Bearbeitung und führt leichte Logs.
 
 ## Grundregeln
@@ -68,7 +85,8 @@ Wenn eine Katalogdatei fehlt oder nicht lesbar ist: keine Mailbox-Aktion ausfüh
 9. Zielordner bestimmen.
 10. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
 11. Aktion ausführen oder Review notieren.
-12. Ergebnis als JSONL in `data/mail-desk/` loggen.
+12. Prüfen, ob aus der Mail belastbare neue Information für `memory/references/` entsteht; falls ja, über `project-catalog-entry` und/oder `topic-catalog-entry` integrieren.
+13. Ergebnis als JSONL in `data/mail-desk/` loggen.
 
 ## Verschiebe-Regel
 
@@ -76,7 +94,7 @@ Wenn eine Mail nach geladener Projekt-/Topic-Kataloglage eine konkrete und ausre
 
 Konkret heißt:
 
-- klare Project-Zuordnung → Project-Zielordner gemäß Regeln unten
+- klare Projekt-Zuordnung → Projekt-Zielordner gemäß Regeln unten
 - klare Topic-Zuordnung → Topic-Zielordner gemäß Regeln unten
 - klare Zuordnung + Antwortbedarf → jeweiliger `_Needs-Reply`-Unterordner
 
@@ -94,9 +112,9 @@ Dann Review notieren oder kurz fragen.
 
 Allgemein:
 
-- Project + Antwort nötig → `<project.mailbox_folder>/_Needs-Reply`
+- Projekt + Antwort nötig → `<project.mailbox_folder>/_Needs-Reply`
 - Topic + Antwort nötig → `<topic.mailbox_folder>/_Needs-Reply`
-- Project ohne Antwortbedarf → `<project.mailbox_folder>`
+- Projekt ohne Antwortbedarf → `<project.mailbox_folder>`
 - Topic ohne Antwortbedarf → `<topic.mailbox_folder>`
 - Unklar + Antwort nötig → `INBOX/_Needs-Reply` oder Review, je nach Risiko
 - Unklar ohne Antwortbedarf → in INBOX lassen und Review notieren
@@ -160,7 +178,7 @@ Schemas siehe `references/log-schema.md`.
 
 ## Entscheidungskriterien
 
-Starke Project-Signale:
+Starke Projekt-Signale:
 
 - spezifische Projekt-ID / Akronym im Betreff
 - Projektkontakt oder klarer Partner
@@ -189,9 +207,9 @@ Kein Antwortbedarf:
 Beim Verarbeiten einer Mail immer beides erledigen:
 
 1. **Mail routen/ablegen** gemäß `mail-desk`-Zielordnerregeln.
-2. **Passende `memory/references/` sofort aktualisieren**, wenn die Mail neue belastbare Informationen enthält.
+2. **Wissenspflege prüfen und bei Bedarf umsetzen** (siehe nächster Abschnitt).
 
-Nicht bei Mail-Ablage stehen bleiben. Neue Informationen müssen in die bestehende Projekt-/Topic-Struktur integriert werden; reines Logging in `data/mail-desk/` reicht nicht.
+Nicht bei Mail-Ablage stehen bleiben. Reines Logging in `data/mail-desk/` reicht nicht.
 
 ## Wissenspflege aus Mails
 
@@ -226,7 +244,7 @@ Nach jeder bearbeiteten Mail im Bericht kurz nennen:
 
 - wohin die Mail geroutet/abgelegt wurde
 - welche `memory/references/`-Dateien aktualisiert wurden
-- falls keine Wissenspflege erfolgte: warum nicht
+- falls keine Wissenspflege erfolgte: warum nicht (z. B. keine belastbare neue Information)
 
 ## Review statt Aktion
 
