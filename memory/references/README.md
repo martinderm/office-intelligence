@@ -52,7 +52,13 @@ Env:
   {
     "id": "usage-ng",
     "title": "USAGE-NG",
+    "kuerzel": "USAGE-NG",
     "mailbox_folder": "Projekte/USAGE-NG",
+    "project_website": "k. A.",
+    "project_reference": "k. A.",
+    "laufzeit": "k. A.",
+    "gesamtbudget": "k. A.",
+    "boku_budget": "k. A.",
     "aliases": ["USAGE NG"],
     "keywords": ["usage"],
     "domains": ["usage-ng.example.org"],
@@ -71,7 +77,7 @@ Env:
     "routing_priority": 50,
     "do_not_route_if": ["newsletter", "no-reply"],
     "updated_at": "2026-03-13",
-    "schema_version": 1
+    "schema_version": 2
   }
 ]
 ```
@@ -109,7 +115,7 @@ Pflicht pro Projekt:
     "routing_priority": 70,
     "do_not_route_if": ["newsletter", "no-reply"],
     "updated_at": "2026-03-24",
-    "schema_version": 1
+    "schema_version": 2
   }
 ]
 ```

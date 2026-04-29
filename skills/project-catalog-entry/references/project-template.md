@@ -8,6 +8,24 @@
 ## mailbox_folder
 <!-- z. B. Projekte/USAGE-NG -->
 
+## kuerzel
+<!-- z. B. USAGE-NG -->
+
+## project_website
+<!-- optional, z. B. https://example.org oder k. A. -->
+
+## project_reference
+<!-- optional, z. B. 101243057 oder k. A. -->
+
+## laufzeit
+<!-- optional, z. B. 2026-01-01 bis 2028-12-31 oder k. A. -->
+
+## gesamtbudget
+<!-- optional, z. B. EUR 490,980 oder k. A. -->
+
+## boku_budget
+<!-- optional, z. B. EUR 85,000 oder k. A. -->
+
 ## reference_md
 <!-- optional, z. B. memory/references/projects/usage-ng/index.md -->
 

@@ -2,7 +2,13 @@
   {
     "id": "example-project",
     "title": "Example Project",
+    "kuerzel": "EXAMPLE",
     "mailbox_folder": "Projekte/Example-Project",
+    "project_website": "k. A.",
+    "project_reference": "k. A.",
+    "laufzeit": "k. A.",
+    "gesamtbudget": "k. A.",
+    "boku_budget": "k. A.",
     "reference_md": "memory/references/projects/example-project/index.md",
     "aliases": ["Example"],
     "keywords": ["example"],
@@ -23,6 +29,6 @@
     "routing_priority": 10,
     "do_not_route_if": ["newsletter", "no-reply"],
     "updated_at": "2026-03-06",
-    "schema_version": 1
+    "schema_version": 2
   }
 ]

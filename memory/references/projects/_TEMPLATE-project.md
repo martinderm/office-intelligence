@@ -12,6 +12,18 @@ Für jedes Projekt wird ein eigener Ordner angelegt:
 ## `index.md` (Template)
 
 ```md
+---
+id: <id>
+title: <title>
+kuerzel: <KÜRZEL>
+mailbox_folder: <Projekte/...>
+project_website: <https://... | k. A.>
+project_reference: <... | k. A.>
+laufzeit: <... | k. A.>
+gesamtbudget: <... | k. A.>
+boku_budget: <... | k. A.>
+---
+
 # <id> — <title>
 
 Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das Ziel?

@@ -37,6 +37,10 @@ Kompakte Katalogpflege (Neuanlage + Updates) per Skill:
 
 - `skills/project-catalog-entry/SKILL.md`
 
+Workspace-Bootstrap (einmalige Init-Chores, getrennt vom laufenden Skill-Flow):
+
+- `skills/project-catalog-entry/references/init-checklist.md`
+
 Schlanke agentische Mailbearbeitung als Alternative zur schweren Pipeline:
 
 - `skills/mail-desk/SKILL.md`

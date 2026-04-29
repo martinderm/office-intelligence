@@ -56,7 +56,13 @@ Regeln:
 {
   "id": "string",
   "title": "string",
+  "kuerzel": "string",
   "mailbox_folder": "string",
+  "project_website": "string",
+  "project_reference": "string",
+  "laufzeit": "string",
+  "gesamtbudget": "string",
+  "boku_budget": "string",
   "reference_md": "string",
   "aliases": ["string"],
   "keywords": ["string"],
@@ -77,7 +83,7 @@ Regeln:
   "routing_priority": 50,
   "do_not_route_if": ["newsletter", "no-reply"],
   "updated_at": "YYYY-MM-DD",
-  "schema_version": 1
+  "schema_version": 2
 }
 ```
 
@@ -122,7 +128,7 @@ Vor Ausgabe prüfen:
 - keine doppelten Domains/Kontakte
 - `contacts[].email` syntaktisch plausibel
 - `workpackages[].id` ebenfalls slug
-- `schema_version = 1`
+- `schema_version = 2`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)
 
 ## Schreibregeln
