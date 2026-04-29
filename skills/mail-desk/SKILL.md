@@ -36,7 +36,7 @@ Für konkrete Befehle immer den passenden Mailbox-Skill verwenden, z. B.:
 Nicht doppeln:
 
 - Gate-Pfade, Himalaya-Syntax und BOKU-GroupWise-Details bleiben im jeweiligen Himalaya-Skill.
-- Projekt-/Topic-Katalogpflege erfolgt über `project-catalog-entry` und `topic-catalog-entry`.
+- Projekt-/Topic-Katalogpflege bleibt in `project-catalog-entry` und `topic-catalog-entry`.
 - `mail-desk` orchestriert die Bearbeitung und führt leichte Logs.
 
 ## Grundregeln
@@ -85,8 +85,7 @@ Wenn eine Katalogdatei fehlt oder nicht lesbar ist: keine Mailbox-Aktion ausfüh
 9. Zielordner bestimmen.
 10. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
 11. Aktion ausführen oder Review notieren.
-12. Prüfen, ob aus der Mail belastbare neue Information für `memory/references/` entsteht; falls ja, über `project-catalog-entry` und/oder `topic-catalog-entry` integrieren.
-13. Ergebnis als JSONL in `data/mail-desk/` loggen.
+12. Ergebnis als JSONL in `data/mail-desk/` loggen.
 
 ## Verschiebe-Regel
 
@@ -94,7 +93,7 @@ Wenn eine Mail nach geladener Projekt-/Topic-Kataloglage eine konkrete und ausre
 
 Konkret heißt:
 
-- klare Projekt-Zuordnung → Projekt-Zielordner gemäß Regeln unten
+- klare Project-Zuordnung → Project-Zielordner gemäß Regeln unten
 - klare Topic-Zuordnung → Topic-Zielordner gemäß Regeln unten
 - klare Zuordnung + Antwortbedarf → jeweiliger `_Needs-Reply`-Unterordner
 
@@ -112,9 +111,9 @@ Dann Review notieren oder kurz fragen.
 
 Allgemein:
 
-- Projekt + Antwort nötig → `<project.mailbox_folder>/_Needs-Reply`
+- Project + Antwort nötig → `<project.mailbox_folder>/_Needs-Reply`
 - Topic + Antwort nötig → `<topic.mailbox_folder>/_Needs-Reply`
-- Projekt ohne Antwortbedarf → `<project.mailbox_folder>`
+- Project ohne Antwortbedarf → `<project.mailbox_folder>`
 - Topic ohne Antwortbedarf → `<topic.mailbox_folder>`
 - Unklar + Antwort nötig → `INBOX/_Needs-Reply` oder Review, je nach Risiko
 - Unklar ohne Antwortbedarf → in INBOX lassen und Review notieren
@@ -122,6 +121,36 @@ Allgemein:
 Bei BOKU/GroupWise gilt laut mailbox-spezifischem Himalaya-Skill: `message copy` wirkt de-facto oft wie ein Move. Daher nur **ein** Ziel pro Mail verwenden.
 
 Details siehe `references/folder-rules.md`.
+
+## Verbindlicher Compliance-Gate (neu)
+
+Eine Mail darf nur dann als **„verarbeitet/erledigt“** gemeldet werden, wenn alle folgenden Punkte erfüllt und verifiziert sind:
+
+1. Mailbox-Aktion durchgeführt (oder bewusst unterlassen und begründet).
+2. `data/mail-desk`-Metadaten aktualisiert (`action-log.jsonl`, ggf. `replies-needed.jsonl` / `pending-review.jsonl`).
+3. Final-Location-Index **script-basiert** aktualisiert und geprüft.
+
+Wenn einer der Punkte fehlt: Status ist **nicht erledigt**.
+
+### Harte Regel: kein manueller Final-Index-Write
+
+`data/mail-desk/final-location-index.json` darf **niemals manuell** editiert werden.
+Ausschließlich zulässig sind die vorgesehenen Skripte:
+
+- `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
+- `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin`
+- `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin`
+
+### Pflicht-Output pro verarbeiteter Mail
+
+Am Ende der Bearbeitung einer Mail immer einen kompakten Compliance-Block ausgeben:
+
+- `routing: ok|fail`
+- `metadata: ok|fail`
+- `final-index-script: ok|fail`
+- `reference-source-id: ok|fail`
+
+Ohne diesen Block gilt die Bearbeitung als unvollständig.
 
 ## Leichte Daten unter `data/mail-desk/`
 
@@ -141,14 +170,14 @@ data/mail-desk/
 
 Keine großen Mailarchive standardmäßig anlegen. Bei Bedarf kurze Auszüge oder Pfade auf Anhänge notieren, aber nicht die komplette Mail duplizieren.
 
-Zusätzlich einen schlanken Lookup-Index pflegen:
+Zusätzlich einen schlanken Lookup-Index pflegen (verbindlich, script-basiert):
 
 - `data/mail-desk/final-location-index.json`
 - Zweck: schnelle Auflösung von `Message-ID` → finaler Ordner + zuletzt gesehene Envelope-ID
 - Keine Mailinhalte speichern
 - Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
 - JSON-Struktur und Feldregeln für den Index sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
-- Für schnellen Zugriff den Index über Skripte bedienen (nicht vollständig lesen):
+- Für schnellen Zugriff den Index über Skripte bedienen (nicht vollständig lesen, nicht manuell editieren):
   - `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
   - `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin` (Payload via STDIN)
   - `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin` (Payload via STDIN)
@@ -176,9 +205,14 @@ Keine Doppelstruktur wie `open` + später separate `closed`-Zeile für dieselbe 
 
 Schemas siehe `references/log-schema.md`.
 
+## Zusätzliche Erkennungsregeln (verbindlich)
+
+1. **Interner Forward + starker Fachbetreff ⇒ Metadata-Check ist Pflicht**
+   Wenn eine Mail von internen Kernkontakten (z. B. `@example.org`) weitergeleitet wird und der Betreff starke Fachsignale trägt (z. B. `MC`, `Micro-Credentials`, `KI Tutor`, `AI Tutor`, `Focus Group`, `Fokusgruppe`), dann nicht nur routen: immer prüfen, ob `memory/references/` aktualisiert werden muss.
+
 ## Entscheidungskriterien
 
-Starke Projekt-Signale:
+Starke Project-Signale:
 
 - spezifische Projekt-ID / Akronym im Betreff
 - Projektkontakt oder klarer Partner
@@ -207,11 +241,24 @@ Kein Antwortbedarf:
 Beim Verarbeiten einer Mail immer beides erledigen:
 
 1. **Mail routen/ablegen** gemäß `mail-desk`-Zielordnerregeln.
-2. **Wissenspflege prüfen und bei Bedarf umsetzen** (siehe nächster Abschnitt).
+2. **Passende `memory/references/` sofort aktualisieren**, wenn die Mail neue belastbare Informationen enthält.
 
-Nicht bei Mail-Ablage stehen bleiben. Reines Logging in `data/mail-desk/` reicht nicht.
+Nicht bei Mail-Ablage stehen bleiben. Neue Informationen müssen in die bestehende Projekt-/Topic-Struktur integriert werden; reines Logging in `data/mail-desk/` reicht nicht.
 
 ## Wissenspflege aus Mails
+
+### Subtopic-/Workpackage-Regel (verbindlich)
+
+Wenn eine Mail explizite, belastbare Information zu einem **Subtopic** (bei Topics) oder **Workpackage** (bei Projekten) enthält, diese Information nicht nur auf Projekt-/Topic-Ebene belassen, sondern zusätzlich in den **entsprechenden Subtopic-/Workpackage-Dateien** ergänzen.
+
+Konkret:
+
+- Topic-Fall: passende Datei unter `memory/references/topics/<slug>/subtopics/` aktualisieren.
+- Projekt-Fall: passende Workpackage-Referenz unter `memory/references/projects/<slug>/workpackages/` (bzw. projektspezifische WP-Struktur) aktualisieren.
+- Immer mit Quellenbezug arbeiten (`message_id` bzw. dokumentierter Fallback-Key).
+- Bei bestehenden event-/reisebezogenen Subtopics auch operative Updates (Fristen, Abrechnungs-/Formvorgaben, Statusänderungen) direkt dort nachziehen.
+- Bei bestehenden Workpackages ebenfalls operative Updates (Fristen, Deliverable-/Survey-Status, konkrete ToDo-Änderungen) direkt in der passenden WP-Referenz nachziehen.
+- Nur belastbare Fakten übernehmen; bei Unsicherheit Review notieren statt Struktur zu raten.
 
 Neue belastbare Erkenntnisse aus Mails sollen nicht im Mail-Log versanden. Wenn eine Mail klare, dauerhafte Informationen zu einem Projekt oder Topic enthält, integriere sie in die passende `memory/references/`-Struktur.
 
@@ -227,7 +274,9 @@ Regeln:
 - Bestehende `signals.md`, `evidence/YYYY-MM.md`, `contacts.md`, `index.md` und Katalogfelder gezielt aktualisieren.
 - Mailinhalte knapp zusammenfassen; keine langen Mailtexte in Referenzen kopieren.
 - Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Zielordner. Envelope-ID höchstens als `envelope_id` erwähnen.
-- Beim Schreiben von Projekt-/Topic-Referenzen die Message-ID immer explizit als Quellenbezug mitführen (z. B. `message_id`; bei mehreren Mails `message_ids`). Nur wenn keine Message-ID existiert, den Fallback-Key als Quellenbezug verwenden.
+- Beim Schreiben von Projekt-/Topic-Referenzen die Message-ID immer explizit als Quellenbezug mitführen (z. B. `message_id`; bei mehreren Mails `message_ids`).
+- **Harte Regel:** Ohne `message_id`/`message_ids` (oder dokumentierten Fallback mit Grund, warum keine Message-ID verfügbar ist) gilt eine Referenznotiz als unvollständig und darf nicht als „erledigt“ gemeldet werden.
+- Nur wenn keine Message-ID verfügbar ist, den Fallback-Key als Quellenbezug verwenden und den Grund kurz dazuschreiben.
 - Katalogfelder (`aliases`, `keywords`, `contacts`, `typical_subject_patterns`, Workpackages/Subtopics) nur ändern, wenn die Mail dafür ein klares Signal liefert.
 - Bei unsicherer oder struktureller Änderung erst Review notieren oder den User fragen.
 - `data/mail-desk/action-log.jsonl` bleibt nur Bearbeitungslog; dauerhafte Erkenntnisse gehören in `memory/references/projects/...` oder `memory/references/topics/...`.
@@ -244,7 +293,7 @@ Nach jeder bearbeiteten Mail im Bericht kurz nennen:
 
 - wohin die Mail geroutet/abgelegt wurde
 - welche `memory/references/`-Dateien aktualisiert wurden
-- falls keine Wissenspflege erfolgte: warum nicht (z. B. keine belastbare neue Information)
+- falls keine Wissenspflege erfolgte: warum nicht
 
 ## Review statt Aktion
 
@@ -257,6 +306,19 @@ Review notieren, wenn:
 - Antwortbedarf unsicher, aber möglich ist
 
 Review gehört in `data/mail-desk/pending-review.jsonl`, nicht in `pending-decisions.json`, außer der User muss tatsächlich eine strukturelle Entscheidung treffen.
+
+## Abschluss-Checkliste (operativ, verpflichtend)
+
+Vor Abschluss eines Mail-Schritts:
+
+1. Zielordner-Aktion verifiziert (z. B. per `envelope list` im Zielordner).
+2. `action-log.jsonl` aktualisiert.
+3. Falls Antwortbedarf: `replies-needed.jsonl` aktualisiert.
+4. Falls Review-Fall: `pending-review.jsonl` aktualisiert.
+5. Final-Index über `final_index_upsert.py` aktualisiert.
+6. Final-Index über `final_index_lookup.py` gegengeprüft.
+7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
+8. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben.
 
 ## Ausgabe an den User
 
