@@ -38,6 +38,12 @@ Regeln:
 - **Keine Einzeldatei `memory/references/projects/<slug>.md` als Hauptreferenz.**
 - Falls eine alte Einzeldatei existiert: nur als kurzer Redirect/Deprecation-Hinweis verwenden.
 
+Frontmatter-Regel:
+
+- Katalog-/domänenspezifische Frontmatter-Metadaten sind erlaubt.
+- Bedeutung und Felddefinitionen werden in `memory/references/frontmatter-spec-*.md` gepflegt.
+- Bei Unklarheiten zuerst die passende `frontmatter-spec-*.md` prüfen, dann schreiben.
+
 ## Arbeitsmodus
 
 1. Modus ermitteln:
