@@ -148,7 +148,9 @@ Am Ende der Bearbeitung einer Mail immer einen kompakten Compliance-Block ausgeb
 - `routing: ok|fail`
 - `metadata: ok|fail`
 - `final-index-script: ok|fail`
-- `reference-source-id: ok|fail`
+- `reference-source-id: ok|fail|n/a`
+
+`reference-source-id` ist `n/a`, wenn keine Wissenspflege in `memory/references/*` nötig war.
 
 Ohne diesen Block gilt die Bearbeitung als unvollständig.
 
@@ -176,11 +178,8 @@ Zusätzlich einen schlanken Lookup-Index pflegen (verbindlich, script-basiert):
 - Zweck: schnelle Auflösung von `Message-ID` → finaler Ordner + zuletzt gesehene Envelope-ID
 - Keine Mailinhalte speichern
 - Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
-- JSON-Struktur und Feldregeln für den Index sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
-- Für schnellen Zugriff den Index über Skripte bedienen (nicht vollständig lesen, nicht manuell editieren):
-  - `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
-  - `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin` (Payload via STDIN)
-  - `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin` (Payload via STDIN)
+- JSON-Struktur und Feldregeln sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
+- Bedienung ausschließlich über die oben definierten Skripte (`lookup`, `upsert-final`, `patch`).
 
 ## Erledigungsregel und Archivierung
 
@@ -305,7 +304,9 @@ Review notieren, wenn:
 - Zielordner fehlt
 - Antwortbedarf unsicher, aber möglich ist
 
-Review gehört in `data/mail-desk/pending-review.jsonl`, nicht in `pending-decisions.json`, außer der User muss tatsächlich eine strukturelle Entscheidung treffen.
+Review gehört in `data/mail-desk/pending-review.jsonl`.
+
+`pending-decisions` ist kein Mail-Log von `mail-desk`, sondern ein separater Entscheidungs-Backlog (z. B. aus `mail-processor`) für echte strukturelle User-Entscheidungen. Nur solche Fälle dorthin eskalieren.
 
 ## Abschluss-Checkliste (operativ, verpflichtend)
 
@@ -318,7 +319,7 @@ Vor Abschluss eines Mail-Schritts:
 5. Final-Index über `final_index_upsert.py` aktualisiert.
 6. Final-Index über `final_index_lookup.py` gegengeprüft.
 7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
-8. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben.
+8. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
 
 ## Ausgabe an den User
 
