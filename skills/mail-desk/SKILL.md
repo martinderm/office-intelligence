@@ -140,6 +140,29 @@ Ausschließlich zulässig sind die vorgesehenen Skripte:
 - `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
 - `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin`
 - `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin`
+- `python skills/mail-desk/scripts/final_index_upsert_many.py --mode upsert-final --file <batch.jsonl>`
+- `python skills/mail-desk/scripts/final_index_upsert_many.py --mode patch --file <batch.jsonl>`
+
+### Verbindliche Semantik für `envelope_id` im Final-Index
+
+Für **alle** Final-Index-Skripte gilt:
+
+- `envelope_id` ist **immer** die Envelope-ID der **finalen Destination**.
+- Niemals die Envelope-ID aus der Quell-INBOX, aus einem Suchlauf vor dem Routing oder aus einem Zwischenordner in den Final-Index schreiben.
+- Bei BOKU/GroupWise nach `message copy` das **Ziel** erneut prüfen (`envelope list -f "<Zielordner>"`, bei Bedarf `message read -f "<Zielordner>" <ID>`), erst dann die dort sichtbare Envelope-ID in den Final-Index übernehmen.
+- Wenn die finale Destination-Envelope-ID noch nicht verifiziert ist, **kein** `upsert-final` ausführen. Erst Zielordner prüfen, dann `upsert-final`; spätere Korrekturen nur über `patch` bzw. einen verifizierten Batch.
+
+### Batch-Dateien für `final_index_upsert_many.py`
+
+JSONL-Batch-Dateien unter `data/mail-desk/final-index-batch-*.jsonl` dienen als **Input-Artefakte** für `final_index_upsert_many.py`.
+
+Regeln:
+
+- Jede Zeile ist ein Payload für genau einen Final-Index-Eintrag.
+- Batch-Dateien sind **nicht** die Source of Truth; maßgeblich ist nur der verifizierte Zielordnerzustand in der Mailbox.
+- Batch-Dateien nur erzeugen/verwenden, wenn die `envelope_id` pro Zeile bereits als Envelope-ID der **final destination** geprüft wurde.
+- Wenn ein Batch zunächst mit vorläufigen oder falschen IDs erzeugt wurde, diesen Batch **nicht erneut blind ausführen**; zuerst korrigieren oder mit separatem verifiziertem Patch-Batch überschreiben.
+- Nach erfolgreichem Import die verwendeten `final-index-batch-*.jsonl` wieder löschen; sie sind temporäre Input-Artefakte und sollen nicht liegen bleiben.
 
 ### Pflicht-Output pro verarbeiteter Mail
 
