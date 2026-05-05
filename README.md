@@ -51,11 +51,52 @@ Knowledge-Architektur innerhalb von office-intelligence (verbindlich):
 - **Wissens- und Arbeitsdokumentation:** `memory/references/projects/<slug>/` (mit `index.md` als Einstieg)
 - `reference_md` zeigt auf `memory/references/projects/<slug>/index.md`
 
+Hinweis für verteilte Arbeitskontexte:
+
+- Wenn parallel an mehreren Orten/Workspaces an `memory/references` gearbeitet wird, sollte `memory/references` ggf. als eigenes Repository geführt werden (oder als Submodule/Subtree sauber versioniert), um Konflikte, Drift und uneinheitliche Katalogstände zu vermeiden.
+
 Agent-Deploy-Konvention:
 
 - Agent-spezifische Mailbox/Proxy/Pfade stehen in `<agent-workspace>/.env`.
 - Skill-Runner dürfen diese Werte nicht hardcoden.
 - Siehe `docs/INSTALL-INTO-AGENT.md`.
+
+## Installation der Skills in VS Code (alternativer Shim-Weg)
+
+Wenn `office-intelligence` als Teil eines größeren Arbeitsbereichs liegt, kannst du statt Kopieren auch **Workspace-Shims** unter `.github/skills` anlegen, die direkt auf die Skill-Ordner im Repo zeigen.
+
+Vorteile:
+
+- keine Duplikate der Skill-Dateien
+- Änderungen im Repo sind sofort im Agent-Skillpfad sichtbar
+- sehr schneller Rollout für lokale VS-Code-Workspaces
+
+Beispiel (Workspace-Root mit `skills/office-intelligence`):
+
+```bash
+mkdir -p .github/skills
+ln -sfn ../../skills/office-intelligence/skills/mail-desk .github/skills/mail-desk
+ln -sfn ../../skills/office-intelligence/skills/project-catalog-entry .github/skills/project-catalog-entry
+ln -sfn ../../skills/office-intelligence/skills/topic-catalog-entry .github/skills/topic-catalog-entry
+```
+
+Optional (nur Legacy/Experiment):
+
+```bash
+ln -sfn ../../skills/office-intelligence/skills/mail-processor .github/skills/mail-processor
+```
+
+Prüfen:
+
+```bash
+ls -l .github/skills
+```
+
+Hinweise:
+
+- Dieser Weg ist ideal für lokale Entwicklung im selben Workspace.
+- Für reproduzierbare, entkoppelte Agent-Deployments (z. B. getrennte Agent-Workspaces) bleibt der Copy-Ansatz aus `docs/INSTALL-INTO-AGENT.md` die Referenz.
+- Auf Windows ohne Symlink-Rechte nutze stattdessen den Copy-Ansatz.
 
 ## Mail-Denkmodell: processor vs desk
 
