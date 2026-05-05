@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,7 +40,26 @@ def normalize_message_id(value: str) -> str:
 
 
 def default_index_path() -> Path:
-    return Path(__file__).resolve().parents[3] / "data" / "mail-desk" / "final-location-index.json"
+    env_index = os.environ.get("MAIL_DESK_FINAL_INDEX_PATH", "").strip()
+    if env_index:
+        return Path(env_index).expanduser()
+
+    env_data_dir = os.environ.get("MAIL_DESK_DATA_DIR", "").strip()
+    if env_data_dir:
+        return Path(env_data_dir).expanduser() / "final-location-index.json"
+
+    preferred = Path.cwd() / "data" / "mail-desk" / "final-location-index.json"
+    legacy = Path(__file__).resolve().parents[3] / "data" / "mail-desk" / "final-location-index.json"
+
+    if preferred.exists() or preferred.parent.exists():
+        return preferred
+    if legacy.exists() or legacy.parent.exists():
+        return legacy
+
+    raise FileNotFoundError(
+        "Could not resolve final-location-index.json. "
+        "Use --index, set MAIL_DESK_FINAL_INDEX_PATH, or set MAIL_DESK_DATA_DIR."
+    )
 
 
 def validate_payload(payload: dict[str, Any], mode: str) -> None:

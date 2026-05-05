@@ -137,11 +137,21 @@ Wenn einer der Punkte fehlt: Status ist **nicht erledigt**.
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert werden.
 Ausschließlich zulässig sind die vorgesehenen Skripte:
 
-- `python skills/mail-desk/scripts/final_index_lookup.py --message-id "<...>"`
-- `python skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin`
-- `python skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin`
-- `python skills/mail-desk/scripts/final_index_upsert_many.py --mode upsert-final --file <batch.jsonl>`
-- `python skills/mail-desk/scripts/final_index_upsert_many.py --mode patch --file <batch.jsonl>`
+- `python3 skills/mail-desk/scripts/final_index_lookup.py --message-id '<...>'`
+- `python3 skills/mail-desk/scripts/final_index_upsert.py --mode upsert-final --stdin`
+- `python3 skills/mail-desk/scripts/final_index_upsert.py --mode patch --stdin`
+- `python3 skills/mail-desk/scripts/final_index_upsert_many.py --mode upsert-final --file <batch.jsonl>`
+- `python3 skills/mail-desk/scripts/final_index_upsert_many.py --mode patch --file <batch.jsonl>`
+
+Zusätzlich erlaubt für die Index-Location:
+
+- Standardpfad: `data/mail-desk/final-location-index.json` (empfohlen)
+- optionaler Env-Override via `.env`/Umgebung:
+  - `MAIL_DESK_DATA_DIR=/abs/path/to/data/mail-desk`
+  - oder `MAIL_DESK_FINAL_INDEX_PATH=/abs/path/to/final-location-index.json`
+
+Hinweis: Message-IDs mit `$` immer in **Single Quotes** übergeben, damit die Shell nichts expandiert.
+Hinweis: Für die Skriptaufrufe sind `python3` **und** `python` erlaubt; verwende die Variante, die lokal verfügbar ist.
 
 ### Verbindliche Semantik für `envelope_id` im Final-Index
 

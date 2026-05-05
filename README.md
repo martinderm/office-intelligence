@@ -119,6 +119,7 @@ Typisch instanzspezifisch und daher immer explizit zu setzen/prüfen:
 - `PROJECTS_JSON_PATH` (dein Projektkatalog im jeweiligen Workspace)
 - `TOPICS_JSON_PATH` (dein Topic-Katalog im jeweiligen Workspace)
 - `MAIL_PROCESSOR_DATA_DIR` (pro Instanz/Agent eigener Datenpfad)
+- `MAIL_DESK_DATA_DIR` (optionaler Override für `mail-desk`-Datenpfad; Standard bleibt `./data/mail-desk`)
 - optional `HIMALAYA_ACCOUNT`, falls der gleiche `himalaya`-Binary mehrere Accounts kennt und die Folder-Sync/Reads explizit auf eine Mailbox gebunden werden sollen
 - Gateway-Zugang für das OpenClaw-Tool (`OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY` für agentgebundenes Modellverhalten), falls tool-basierte Klassifikation genutzt wird
 - `MAIL_SOURCE_FOLDER`, wenn nicht `INBOX`
