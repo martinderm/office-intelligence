@@ -93,6 +93,55 @@ Optional helper index for reply work. Use only if `needs_reply=true`. Active fil
 }
 ```
 
+## sent-index.jsonl
+
+Leichter Header-/Routing-Index für gesendete Mails, um bei alten `needs_reply`-Fällen schnell zu prüfen, ob bereits geantwortet wurde.
+
+Path:
+
+```text
+data/mail-desk/sent-index.jsonl
+```
+
+Minimalfelder:
+
+```json
+{
+  "schema_version": 1,
+  "at": "2026-04-24T13:00:00Z",
+  "updated_at": "2026-04-24T13:05:00Z",
+  "mailbox": "MAIN-MAILBOX",
+  "message_id": "<sent@id>",
+  "in_reply_to": "<source@id>",
+  "subject": "Re: ...",
+  "from": "user@example.org",
+  "to": ["partner@example.org"],
+  "folder": "Sent Items",
+  "sent_envelope_id": "4711",
+  "project_id": "meshe",
+  "topic_id": "netzwerke",
+  "source_message_id": "<inbox@id>",
+  "confidence": "high"
+}
+```
+
+Optionale Zusatzfelder:
+
+- `references` (array)
+- `thread_key`
+- `keywords_matched` (array)
+- `has_attachments` (boolean)
+- `note` (kurz)
+
+Regeln:
+
+- Keine Mailinhalte speichern (nur Header-/Routingmetadaten).
+- `project_id`/`topic_id` kann einzeln oder gemeinsam gesetzt sein.
+- `source_message_id` setzen, wenn die Zuordnung zur beantworteten Inbox-Mail belastbar ist.
+- `confidence` setzen, wenn Zuordnung heuristisch erfolgte.
+- `updated_at` dokumentiert die letzte Datenaktualisierung des Eintrags.
+- `sent_envelope_id` ist die zuletzt verifizierte Envelope-ID im `Sent Items`-Ordner.
+
 ## Closing an item
 
 Do not add a separate closed row next to an open row for the same mail. Update the original item and then archive it.
