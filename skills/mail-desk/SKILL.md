@@ -9,20 +9,23 @@ Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht 
 
 ## Verbindlicher Ablauf (immer in dieser Reihenfolge prüfen)
 
-1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag).
+1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag; kleine, explizit beauftragte Datums-/Folder-Batches sind zulässig, solange pro Mail derselbe komplette Compliance-Flow eingehalten wird).
 2. Mail lesen und stabile Identität erfassen (Message-ID, sonst Fallback-Key).
 3. Projekt-/Topic-Kontext laden und klassifizieren.
 4. Mögliche Todos aus der Mail ableiten und dafür bei Bedarf den Skill `todoist-api` samt `memory/references/todos/` heranziehen.
-5. Erst danach prüfen, ob zusätzlich `needs_reply` vorliegt; ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen.
-6. Mail routen/ablegen (oder Review statt Aktion).
-7. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
-8. Leichte `data/`-Pflege durchführen:
+5. Erst danach separat prüfen:
+   - erzeugt die Mail eine konkrete, nachverfolgbare Aufgabe (`todo`)?
+   - erzeugt die Mail zusätzlich oder stattdessen einen echten Antwortbedarf (`needs_reply`)?
+6. ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen; beides kann gleichzeitig, nur eines von beidem oder keines von beidem zutreffen.
+7. Mail routen/ablegen (oder Review statt Aktion).
+8. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
+9. Leichte `data/`-Pflege durchführen:
    - `data/mail-desk/action-log.jsonl` aktualisieren
    - offene Review-Fälle in `data/mail-desk/pending-review.jsonl` führen
    - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
    - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
    - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
-9. Kurzbericht mit Routing + Wissenspflege liefern.
+10. Kurzbericht mit Routing + Wissenspflege liefern.
 
 Schritt 5 ist konditional, aber die Prüfung ist verpflichtend.
 
@@ -80,16 +83,19 @@ Wenn eine Katalogdatei fehlt oder nicht lesbar ist: keine Mailbox-Aktion ausfüh
 6. Erst danach Projekt-/Topic-Kandidaten bestimmen.
 7. Relevante Projekt-/Topic-Referenz bei Bedarf laden (`reference_md`, `index.md`, `signals.md`, `contacts.md`).
 8. Moegliche Todos aus der Mail ableiten; fuer Todoist-Routing bei Bedarf den Skill `todoist-api` und `memory/references/todos/` heranziehen.
-9. Erst danach separat `needs_reply` beurteilen; ein Todo ersetzt keinen Antwortbedarf und umgekehrt.
-10. Entscheidung treffen:
+9. Danach zwei getrennte Kurzentscheidungen treffen:
+   - `todo`: ja/nein
+   - `needs_reply`: ja/nein
+10. Ein Todo ersetzt keinen Antwortbedarf und `needs_reply` ersetzt kein Todo.
+11. Entscheidung treffen:
    - `project`
    - `topic`
    - `inbox-review`
    - `ignore/archive`
-11. Zielordner bestimmen.
-12. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
-13. Aktion ausführen oder Review notieren.
-14. Ergebnis als JSONL in `data/mail-desk/` loggen.
+12. Zielordner bestimmen.
+13. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
+14. Aktion ausführen oder Review notieren.
+15. Ergebnis als JSONL in `data/mail-desk/` loggen.
 
 ## Regelbetrieb: Sent-Items-Auswertung (verbindlich)
 
@@ -341,6 +347,8 @@ Regeln:
 - Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Zielordner. Envelope-ID höchstens als `envelope_id` erwähnen.
 - Beim Schreiben von Projekt-/Topic-Referenzen die Message-ID immer explizit als Quellenbezug mitführen (z. B. `message_id`; bei mehreren Mails `message_ids`).
 - **Harte Regel:** Ohne `message_id`/`message_ids` (oder dokumentierten Fallback mit Grund, warum keine Message-ID verfügbar ist) gilt eine Referenznotiz als unvollständig und darf nicht als „erledigt“ gemeldet werden.
+- **Zusätzliche harte Regel fuer Evidence-Logs:** Wenn eine Mail neue belastbare Erkenntnisse in `memory/references/*` ausloest, muss die Aussage auch im passenden `evidence/YYYY-MM.md` auffindbar sein, inklusive `message_id`/`message_ids` (oder dokumentiertem Fallback mit Grund). Ein Update nur in `index.md`, `signals.md` oder `contacts.md` reicht dann nicht aus.
+- Der Evidence-Eintrag muss mindestens enthalten: Datum, Absender, Betreff, `message_id`/`message_ids`, Kurzinhalt, fachliche Einordnung und sofern geroutet den Zielordner; Envelope-ID nur optional als nachrangige Verifikationshilfe.
 - Nur wenn keine Message-ID verfügbar ist, den Fallback-Key als Quellenbezug verwenden und den Grund kurz dazuschreiben.
 - Katalogfelder (`aliases`, `keywords`, `contacts`, `typical_subject_patterns`, Workpackages/Subtopics) nur ändern, wenn die Mail dafür ein klares Signal liefert.
 - Bei unsicherer oder struktureller Änderung erst Review notieren oder den User fragen.
@@ -385,7 +393,8 @@ Vor Abschluss eines Mail-Schritts:
 5. Final-Index über `final_index_upsert.py` aktualisiert.
 6. Final-Index über `final_index_lookup.py` gegengeprüft.
 7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
-8. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
+8. Wenn Wissenspflege aus Mailinhalt erfolgte: passendes `evidence/YYYY-MM.md` aktualisiert und dort dieselbe Aussage mit `message_id`/`message_ids` auffindbar.
+9. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
 
 ## Ausgabe an den User
 
