@@ -19,12 +19,12 @@ Do not invent permanent folder names if a catalog entry exists. If a catalog ent
 | Topic, no reply | `<topic.mailbox_folder>` |
 | Unclear + needs reply | `INBOX/_Needs-Reply` or review |
 | Unclear, no reply | leave in INBOX + review |
-| BOKU IronPort spam notification, no legit signal visible in listed quarantined mail | `Junk` |
-| BOKU IronPort spam notification, plausible legit signal visible in listed quarantined mail | leave in `INBOX` + review |
+| Spam quarantine notification, no legit signal visible in listed quarantined mail | `Junk` |
+| Spam quarantine notification, plausible legit signal visible in listed quarantined mail | leave in `INBOX` + review |
 
-## BOKU/GroupWise convention
+## GroupWise-like backend convention
 
-The mailbox-specific Himalaya skill owns the exact command syntax and backend caveats. For BOKU GroupWise, the important operational consequence is:
+The mailbox-specific Himalaya skill owns the exact command syntax and backend caveats. For GroupWise-like backends, the important operational consequence is:
 
 - `message copy <target> <id>` often behaves like a move.
 - Use exactly one target per mail.

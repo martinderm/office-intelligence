@@ -35,12 +35,12 @@ Schritt 5 ist konditional, aber die Prüfung ist verpflichtend.
 
 Für konkrete Befehle immer den passenden Mailbox-Skill verwenden, z. B.:
 
-- `himalaya-account-main` für `user@example.org`
+- `himalaya-account-<id>` für `user@example.org`
 - andere mailbox-spezifische Himalaya-/IMAP-Skills, falls vorhanden
 
 Nicht doppeln:
 
-- Gate-Pfade, Himalaya-Syntax und BOKU-GroupWise-Details bleiben im jeweiligen Himalaya-Skill.
+- Gate-Pfade, Himalaya-Syntax und backend-spezifische Details bleiben im jeweiligen Himalaya-Skill.
 - Projekt-/Topic-Katalogpflege bleibt in `project-catalog-entry` und `topic-catalog-entry`.
 - `mail-desk` orchestriert die Bearbeitung und führt leichte Logs.
 
@@ -53,11 +53,11 @@ Nicht doppeln:
 - Envelope-ID nur als kurzfristiger Bediengriff für die aktuelle Himalaya-Operation verwenden (`message read`, `message copy`).
 - Nach Copy/Move kann GroupWise neue Envelope-IDs vergeben; deshalb Envelope-ID nie als Primärschlüssel, Close-Key, Idempotenz-Key oder Referenz-Key verwenden.
 - Keine Antwort senden ohne explizite Freigabe.
-- Mailbox-Schreibaktionen nur nach klarer Entscheidung; bei BOKU/GroupWise `message copy` als de-facto Move behandeln.
+- Mailbox-Schreibaktionen nur nach klarer Entscheidung; bei GroupWise-aehnlichen Backends `message copy` als de-facto Move behandeln.
 
 ## Fast-Path fuer Spam-Quarantaene-Benachrichtigungen
 
-Fuer IronPort- oder aehnliche Spam-Quarantaene-Notifications mit:
+Fuer Spam-Gateway- oder aehnliche Quarantaene-Notifications mit:
 
 - systemischem Quarantaene-/Notification-Absender
 - Betreff vom Typ `Spam Quarantine Notification`
@@ -177,7 +177,7 @@ Allgemein:
 - Unklar + Antwort nötig → `INBOX/_Needs-Reply` oder Review, je nach Risiko
 - Unklar ohne Antwortbedarf → in INBOX lassen und Review notieren
 
-Bei BOKU/GroupWise gilt laut mailbox-spezifischem Himalaya-Skill: `message copy` wirkt de-facto oft wie ein Move. Daher nur **ein** Ziel pro Mail verwenden.
+Bei GroupWise-aehnlichen Backends gilt laut mailbox-spezifischem Himalaya-Skill: `message copy` wirkt de-facto oft wie ein Move. Daher nur **ein** Ziel pro Mail verwenden.
 
 Details siehe `references/folder-rules.md`.
 
@@ -218,7 +218,7 @@ Für **alle** Final-Index-Skripte gilt:
 
 - `envelope_id` ist **immer** die Envelope-ID der **finalen Destination**.
 - Niemals die Envelope-ID aus der Quell-INBOX, aus einem Suchlauf vor dem Routing oder aus einem Zwischenordner in den Final-Index schreiben.
-- Bei BOKU/GroupWise nach `message copy` das **Ziel** erneut prüfen (`envelope list -f "<Zielordner>"`, bei Bedarf `message read -f "<Zielordner>" <ID>`), erst dann die dort sichtbare Envelope-ID in den Final-Index übernehmen.
+- Bei GroupWise-aehnlichen Backends nach `message copy` das **Ziel** erneut pruefen (`envelope list -f "<Zielordner>"`, bei Bedarf `message read -f "<Zielordner>" <ID>`), erst dann die dort sichtbare Envelope-ID in den Final-Index uebernehmen.
 - Wenn die finale Destination-Envelope-ID noch nicht verifiziert ist, **kein** `upsert-final` ausführen. Erst Zielordner prüfen, dann `upsert-final`; spätere Korrekturen nur über `patch` bzw. einen verifizierten Batch.
 
 ### Batch-Dateien für `final_index_upsert_many.py`
@@ -305,7 +305,7 @@ Schemas siehe `references/log-schema.md`.
 ## Zusätzliche Erkennungsregeln (verbindlich)
 
 1. **Interner Forward + starker Fachbetreff ⇒ Metadata-Check ist Pflicht**
-   Wenn eine Mail von internen Kernkontakten (z. B. `@example.org`) weitergeleitet wird und der Betreff starke Fachsignale trägt (z. B. `MC`, `Micro-Credentials`, `KI Tutor`, `AI Tutor`, `Focus Group`, `Fokusgruppe`), dann nicht nur routen: immer prüfen, ob `memory/references/` aktualisiert werden muss.
+   Wenn eine Mail von internen Kernkontakten (z. B. eigene Organisations-Domain) weitergeleitet wird und der Betreff starke Fachsignale traegt (z. B. `MC`, `Micro-Credentials`, `KI Tutor`, `AI Tutor`, `Focus Group`, `Fokusgruppe`), dann nicht nur routen: immer pruefen, ob `memory/references/` aktualisiert werden muss.
 
 ## Entscheidungskriterien
 

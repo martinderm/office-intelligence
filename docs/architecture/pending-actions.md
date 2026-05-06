@@ -42,7 +42,7 @@ It must not contain:
 - extracted facts
 - summaries
 - suggested reference edits
-- decisions requiring Martin
+- decisions requiring a human operator
 
 ### `pending-decisions.json`
 
@@ -76,7 +76,7 @@ mail_postprocess:<stableId>:<fileId>
 
 ## Routing Rule
 
-For BOKU GroupWise, Himalaya `message copy` has been observed to behave effectively like a move. Therefore `MAIL_COPY_SEMANTICS=acts_like_move` must be treated as a single-target operation.
+For GroupWise-like backends, Himalaya `message copy` has been observed to behave effectively like a move. Therefore `MAIL_COPY_SEMANTICS=acts_like_move` must be treated as a single-target operation.
 
 Needs-reply handling is consequently a needs-reply move in that environment:
 
@@ -100,4 +100,4 @@ A later processor should:
 5. perform or propose the actual post-processing
 6. remove the item from `pending-actions.json`
 7. append the result to `logs/actions/YYYY-Www.json`
-8. create/update `pending-decisions.json` only if Martin needs to decide something
+8. create/update `pending-decisions.json` only if a human operator needs to decide something

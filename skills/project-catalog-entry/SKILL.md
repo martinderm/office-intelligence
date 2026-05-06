@@ -68,7 +68,7 @@ Frontmatter-Regel:
   "project_reference": "string",
   "laufzeit": "string",
   "gesamtbudget": "string",
-  "boku_budget": "string",
+  "institution_budget": "string",
   "reference_md": "string",
   "aliases": ["string"],
   "keywords": ["string"],

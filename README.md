@@ -567,7 +567,7 @@ Konsequenzen für `mail-processor`:
 Empfehlung:
 
 - Wenn du so ein Backend hast: **Single-Target-Routing** erzwingen (oder klare Priorität: „best match wins“).
-- BOKU/GroupWise: `MAIL_COPY_SEMANTICS=acts_like_move` setzen.
+- Bei GroupWise-aehnlichen Backends: `MAIL_COPY_SEMANTICS=acts_like_move` setzen.
 - Needs-Reply ist dort ein Move in genau einen Zielordner:
   - Project + `needs_reply=true` → `<project.mailbox_folder>/_Needs-Reply`
   - Topic ohne Project + `needs_reply=true` → `<topic.mailbox_folder>/_Needs-Reply`
@@ -587,7 +587,7 @@ Zweck:
 Abgrenzung:
 
 - `pending-actions.json` = operative Queue für Mail-Postprocessing
-- `pending-decisions.json` = Entscheidungen, die Martin treffen muss
+- `pending-decisions.json` = Entscheidungen, die ein Mensch/Operator treffen muss
 - `logs/actions/YYYY-Www.json` = erledigte/verwerfene Actions
 
 CLI-Helfer:

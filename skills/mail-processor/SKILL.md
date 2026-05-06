@@ -73,7 +73,7 @@ Minimal (aktueller Stand):
 - `NEEDS_REPLY_NEGATIVE_HINTS=no-reply,newsletter,autoreply`
 - `PENDING_ACTIONS_FILE=./data/mail-processor/pending-actions.json`
 - `ACTION_LOG_DIR=./data/mail-processor/logs/actions`
-- `MAIL_COPY_SEMANTICS=acts_like_move` bei BOKU/GroupWise, weil `copy` dort de-facto wie `move` wirkt
+- `MAIL_COPY_SEMANTICS=acts_like_move` bei GroupWise-aehnlichen Backends, weil `copy` dort de-facto wie `move` wirken kann
 
 Sicherer Start:
 - `MAIL_ROUTING_ENABLED=false`  (Shadow-Mode)
@@ -137,7 +137,7 @@ Hinweis: Agent-Runner nutzen standardmäßig die vorhandene `dist/cli.js` und ba
 ### 6) Needs-Reply-Routing
 
 - Bei normaler Copy-Semantik kann eine Mail in Parent-Ordner **und** `_Needs-Reply`-Unterordner landen.
-- Bei `MAIL_COPY_SEMANTICS=acts_like_move` (BOKU/GroupWise) gilt Single-Target-Routing:
+- Bei `MAIL_COPY_SEMANTICS=acts_like_move` (GroupWise-aehnliche Backends) gilt Single-Target-Routing:
   - Project + `needs_reply=true` → `<project.mailbox_folder>/_Needs-Reply`
   - Topic ohne Project + `needs_reply=true` → `<topic.mailbox_folder>/_Needs-Reply`
   - kein Project/Topic + `needs_reply=true` → `Inbox/_Needs-Reply`

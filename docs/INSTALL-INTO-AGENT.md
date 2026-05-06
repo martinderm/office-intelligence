@@ -1,6 +1,6 @@
 # Install office-intelligence into existing Agent (Operator Runbook)
 
-Ziel: Ein Main-Agent installiert/aktualisiert die relevanten `office-intelligence`-Skills in einem bestehenden Agent-Workspace reproduzierbar und sicher. Für einen bestehenden Mail-Agenten umfasst der Standard-Rollout bis auf Weiteres drei Skill-Verzeichnisse:
+Ziel: Ein Operator-Agent installiert/aktualisiert die relevanten `office-intelligence`-Skills in einem bestehenden Agent-Workspace reproduzierbar und sicher. Für einen bestehenden Mail-Agenten umfasst der Standard-Rollout bis auf Weiteres drei Skill-Verzeichnisse:
 
 - `skills/mail-desk`
 - `skills/project-catalog-entry`
@@ -12,10 +12,10 @@ Wichtig: `mail-desk` ist der bevorzugte leichte Agenten-Workflow für Einzelmail
 
 ## 1) Voraussetzungen
 
-- Mail-Agent-Workspace existiert (z. B. `D:/users/dagobert/.openclaw/agents/<agent-id>/workspace`)
+- Mail-Agent-Workspace existiert (z. B. `<agent-workspace>/`)
 - Himalaya-Zugriff ist für **genau eine Mailbox** verfügbar (direkt oder via Gate)
 - Projekt ist lokal verfügbar unter:
-  - `C:/Users/dagobert-ai/.openclaw/workspace/projects/office-intelligence`
+  - `<workspace>/projects/office-intelligence`
 
 ## 2) Skill-Dateien im Ziel-Agent bereitstellen
 
@@ -32,10 +32,10 @@ Nicht standardmäßig kopieren:
 - `skills/mail-processor/` — nur auf expliziten Wunsch für Legacy-/Experiment-Pipeline.
 
 Hinweis zu mailbox-gebundenem Himalaya-Aufruf:
+
 - Empfohlen ist ein Gate (fixe Account-/Command-Policy).
 - Alternativ kann ein `.mjs`-Wrapper genutzt werden.
 - Für allgemeine Wrapper-Erzeugung liegt ein Beispiel im Projekt: `scripts/create-himalaya-account-proxy.mjs`.
-
 
 Legacy-Hinweis zu `mail-processor`:
 
@@ -45,6 +45,7 @@ Legacy-Hinweis zu `mail-processor`:
 - Für den normalen Mail-Desk-Betrieb ist das alles nicht erforderlich.
 
 Empfohlene `.env`-Felder im Agent-Workspace für Legacy-`mail-processor` nur bei expliziter Nutzung:
+
 - `MAIL_PROCESSOR_PROJECT_DIR=<pfad-zum-office-intelligence-projekt>`
 - `HIMALAYA_COMMAND=<agent-spezifischer command/gate oder node-wrapper>`
 - `MAILBOX_KEY=<kurzer stabiler key>`
@@ -53,7 +54,7 @@ Empfohlene `.env`-Felder im Agent-Workspace für Legacy-`mail-processor` nur bei
 - `MAIL_PROCESSOR_DATA_DIR=<agent-workspace>/data/mail-processor`
 - optional explizit: `PENDING_ACTIONS_FILE=<agent-workspace>/data/mail-processor/pending-actions.json`
 - optional explizit: `ACTION_LOG_DIR=<agent-workspace>/data/mail-processor/logs/actions`
-- bei BOKU/GroupWise: `MAIL_COPY_SEMANTICS=acts_like_move` setzen, weil Himalaya `message copy` dort de-facto wie ein Move wirkt
+- bei GroupWise-aehnlichen Backends: `MAIL_COPY_SEMANTICS=acts_like_move` setzen, weil Himalaya `message copy` dort de-facto wie ein Move wirken kann
 - `OPENCLAW_BASE_URL`, `OPENCLAW_GATEWAY_TOKEN`, optional `OPENCLAW_SESSION_KEY`, `LLM_TIMEOUT_MS` (Gateway-Zugang für `mail-classify`; mit Session-Key kann gezielt das Modell des Ziel-Agents genutzt werden; das Plugin selbst hält den eingebetteten Modellaufruf bewusst minimal und setzt keine harten Sampling-/Format-Parameter wie `temperature` oder `responseFormat`)
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL` nur dann, wenn zusätzlich Discovery/Suggestion-Pfade genutzt werden
 

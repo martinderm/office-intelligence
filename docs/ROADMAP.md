@@ -5,6 +5,7 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 ## Priorität Hoch
 
 1) **Mail-Desk als leichten Zielpfad etablieren**
+
 - Entscheidung 2026-04-24: Für operative Einzelmail-Bearbeitung den neuen Skill `mail-desk` bevorzugen statt den `mail-processor` weiter aufzublasen.
 - Zielbild:
   - Agent interagiert direkt über mailbox-spezifischen Himalaya-Skill mit Mails
@@ -13,7 +14,8 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - Mailbox-Aktion nur bei klarer Entscheidung
 - `mail-processor` bleibt als Legacy/Experiment/Batch-Pipeline erhalten, ist aber nicht mehr der bevorzugte erste Ansatz.
 
-2) **OpenClaw-Tool-basierte Klassifikation als neuer Zielpfad einführen**
+1) **OpenClaw-Tool-basierte Klassifikation als neuer Zielpfad einführen**
+
 - Entscheidung: Für operative Mail-Klassifikation künftig **Variante A** verfolgen.
 - Das bedeutet:
   - `mail-processor` bleibt deterministischer Orchestrator
@@ -28,7 +30,8 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - **Paket 6:** Altpfad und Discovery neu ordnen
 - Referenz: `docs/architecture/agent-classification.md`
 
-2) **Ambiguität robuster behandeln (Tie-Break-Regel)**
+1) **Ambiguität robuster behandeln (Tie-Break-Regel)**
+
 - Problem: ähnliche Scores können zu unsicherem Routing führen.
 - Vorschlag:
   - zusätzlicher Abstandswert zwischen Top-1 und Top-2 Kandidat (`delta`, z. B. `>= 0.15`)
@@ -36,14 +39,16 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 - Ziel: weniger False Positives bei ähnlichen Projekten.
 - Hinweis: Diese Logik muss mit der künftigen Fusion aus Heuristik + Tool-Resultat zusammengedacht werden.
 
-3) **Crash-Fenster COPY → State absichern**
+1) **Crash-Fenster COPY → State absichern**
+
 - Problem: COPY kann erfolgreich sein, bevor `state.jsonl` geschrieben wird.
 - Vorschlag:
   - Nachverifikation im Zielordner (Message-ID/Hash), bevor erneut geroutet wird
   - oder explizites Duplikat-Handling mit Markierung im State
 - Ziel: idempotentes Verhalten auch bei Prozessabbruch.
 
-4) **Thread-Kontext für Klassifizierung nutzen**
+1) **Thread-Kontext für Klassifizierung nutzen**
+
 - Problem: Einzelmail ohne Verlauf ist oft semantisch dünn.
 - Vorschlag:
   - `In-Reply-To`/`References` auswerten
@@ -52,8 +57,9 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 - Ziel: bessere Zuordnung bei Reply-Ketten.
 - Hinweis: Thread-Kontext soll sowohl der Heuristik als auch dem OpenClaw-Klassifikationstool zugeliefert werden.
 
-5) **Prozessrobustheit für hängende Runs verbessern**
-- Befund 2026-04-24: Ein `run-shadow` aus `boku-martin:main` blieb nach Verarbeitung von Envelope `8871` mit Lock stehen; ein erneuter gezielter Lauf erkannte die Mail korrekt als `already_processed`.
+1) **Prozessrobustheit für hängende Runs verbessern**
+
+- Befund 2026-04-24: Ein `run-shadow` aus einem lokalen Haupt-Workspace blieb nach Verarbeitung von Envelope `8871` mit Lock stehen; ein erneuter gezielter Lauf erkannte die Mail korrekt als `already_processed`.
 - Vorschlag:
   - Lock beim Start auf lebende PID prüfen; tote PID bzw. abgelaufene TTL automatisch als stale entfernen
   - Lock optional mit `heartbeatAt` aktualisieren, damit lange, aber aktive Runs erkennbar bleiben
@@ -65,7 +71,8 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 
 ## Priorität Mittel
 
-5) **Umsetzungspakete sequentiell abarbeiten**
+1) **Umsetzungspakete sequentiell abarbeiten**
+
 - Reihenfolge:
   - zuerst Paket 1, dann Paket 2, dann Paket 3
   - produktive Wirkung erst nach Paket 4 und Paket 5
@@ -89,7 +96,8 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
   - Confidence-Semantik des Tool-Contracts auf `0..100` vereinheitlicht
   - Paket 4 erweitert: Shadow-Beobachtbarkeit pro Mail (`classificationComparison`) in Artefakt und `state.jsonl`; Vergleichsdaten bleiben strukturiert, auch wenn der Legacy-Pfad nicht mehr aktiv genutzt wird
 
-6) **Reviewbarer Suggestion-Flow für Projektkatalog**
+1) **Reviewbarer Suggestion-Flow für Projektkatalog**
+
 - Problem: Wissen über Projekte altert, manuelle Pflege ist aufwändig.
 - Vorschlag:
   - Vorschläge (Aliases/Keywords/Contacts) als Review-Artefakt sammeln
@@ -97,8 +105,9 @@ Kuratierte, noch sinnvolle nächste Schritte für `mail-processor`.
 - Ziel: bessere Datenqualität ohne unkontrollierte Auto-Edits.
 - Perspektive: später als getrennte Tool-Funktion denkbar, aber nicht mit der Routing-Klassifikation vermischen.
 
-7) **Testplan für neue Auswahl/Retry-Features (C + D)**
-- Kontext: In boku-martin Shadow-Run mit `fetch-limit=20` triggerten die neuen Pfade nicht, weil
+1) **Testplan für neue Auswahl/Retry-Features (C + D)**
+
+- Kontext: In einem lokalen Shadow-Run mit `fetch-limit=20` triggerten die neuen Pfade nicht, weil
   - genug Envelopes schon auf Page 1 gefunden wurden (kein dynamisches Hochdrehen sichtbar), und
   - keine transienten Read-Fehler auftraten (Retry-Queue blieb leer).
 - Zusätzliches Detail: Runner überschreibt Shell-Env-Overrides, weil `run-shadow.mjs` `envFromFile` **nach** `process.env` merged.

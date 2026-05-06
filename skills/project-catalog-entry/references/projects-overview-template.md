@@ -15,7 +15,7 @@ Referenz: Diese Datei wird in `<workspace>/AGENTS.md` in der Workspace-File-Map 
 - Project Reference:
 - Laufzeit:
 - Gesamtbudget:
-- BOKU-Budget:
+- Institutions-Budget:
 - Pfad: `memory/references/projects/<slug>/index.md`
 
 Hinweis zum Feldabgleich:
@@ -36,7 +36,7 @@ Hinweis zum Feldabgleich:
 - Project Reference:
 - Laufzeit:
 - Gesamtbudget:
-- BOKU-Budget:
+- Institutions-Budget:
 - Pfad: `memory/references/projects/<slug>/index.md`
 
 ## Historische Projekte

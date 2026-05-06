@@ -29,6 +29,7 @@ Zentrale Doku für die Kataloge unter `memory/references/`.
 - `memory/references/projects/changelog.md` — Änderungsprotokoll
 
 Env:
+
 - `PROJECTS_JSON_PATH=./memory/references/projects/projects.json`
 - `TOPICS_JSON_PATH=./memory/references/topics/topics.json`
 
@@ -58,7 +59,7 @@ Env:
     "project_reference": "k. A.",
     "laufzeit": "k. A.",
     "gesamtbudget": "k. A.",
-    "boku_budget": "k. A.",
+    "institution_budget": "k. A.",
     "aliases": ["USAGE NG"],
     "keywords": ["usage"],
     "domains": ["usage-ng.example.org"],
@@ -83,6 +84,7 @@ Env:
 ```
 
 Pflicht pro Projekt:
+
 - `id`, `title`, `mailbox_folder`
 
 ## Minimal-Schema: topics.json
@@ -121,9 +123,11 @@ Pflicht pro Projekt:
 ```
 
 Pflicht pro Topic:
+
 - `id`, `title`, `mailbox_folder`
 
 Empfohlen (Default bei Neuanlage):
+
 - `reference_md` → `memory/references/topics/<slug>/index.md`
 
 ## Review-Flow

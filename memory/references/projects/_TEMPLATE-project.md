@@ -21,7 +21,7 @@ project_website: <https://... | k. A.>
 project_reference: <... | k. A.>
 laufzeit: <... | k. A.>
 gesamtbudget: <... | k. A.>
-boku_budget: <... | k. A.>
+institution_budget: <... | k. A.>
 ---
 
 # <id> — <title>

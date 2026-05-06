@@ -23,7 +23,7 @@
 ## gesamtbudget
 <!-- optional, z. B. EUR 490,980 oder k. A. -->
 
-## boku_budget
+## institution_budget
 <!-- optional, z. B. EUR 85,000 oder k. A. -->
 
 ## reference_md
@@ -32,32 +32,40 @@
 ## description
 
 ## aliases
-- 
+
+-
 
 ## keywords
-- 
+
+-
 
 ## domains
-- 
+
+-
 
 ## contacts
-- name: 
-  email: 
+
+- name:
+  email:
 
 ## typical_subject_patterns
-- 
+
+-
 
 ## workpackages
-- id: 
-  title: 
+
+- id:
+  title:
   aliases: []
   keywords: []
   contacts: []
   status: active
 
 ## routing_priority
+
 50
 
 ## do_not_route_if
+
 - newsletter
 - no-reply

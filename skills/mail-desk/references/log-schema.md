@@ -4,7 +4,7 @@ All files are JSONL under `data/mail-desk/`. Keep entries small. Active files co
 
 ## Durable mail identity
 
-Envelope-ID is not durable. It may change after copy/move, especially on GroupWise.
+Envelope-ID is not durable. It may change after copy/move, especially on some IMAP backends.
 
 Rules:
 
@@ -35,7 +35,7 @@ Use for current handling notes. Completed handling records should be moved to th
   "key_type": "message_id",
   "envelope_id": "8871",
   "subject": "Wtrlt: ...",
-  "from": "Sender Name <...>",
+  "from": "Sender Name <sender@example.org>",
   "decision": {
     "kind": "project|topic|archive|ignore",
     "id": "aixlll",
