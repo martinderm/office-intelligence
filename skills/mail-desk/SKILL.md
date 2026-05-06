@@ -12,15 +12,17 @@ Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht 
 1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag).
 2. Mail lesen und stabile Identität erfassen (Message-ID, sonst Fallback-Key).
 3. Projekt-/Topic-Kontext laden und klassifizieren.
-4. Mail routen/ablegen (oder Review statt Aktion).
-5. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
-6. Leichte `data/`-Pflege durchführen:
+4. Mögliche Todos aus der Mail ableiten und dafür bei Bedarf den Skill `todoist-api` samt `memory/references/todos/` heranziehen.
+5. Erst danach prüfen, ob zusätzlich `needs_reply` vorliegt; ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen.
+6. Mail routen/ablegen (oder Review statt Aktion).
+7. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
+8. Leichte `data/`-Pflege durchführen:
    - `data/mail-desk/action-log.jsonl` aktualisieren
    - offene Review-Fälle in `data/mail-desk/pending-review.jsonl` führen
    - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
    - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
    - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
-7. Kurzbericht mit Routing + Wissenspflege liefern.
+9. Kurzbericht mit Routing + Wissenspflege liefern.
 
 Schritt 5 ist konditional, aber die Prüfung ist verpflichtend.
 
@@ -77,15 +79,17 @@ Wenn eine Katalogdatei fehlt oder nicht lesbar ist: keine Mailbox-Aktion ausfüh
    - `memory/references/topics/topics.json`
 6. Erst danach Projekt-/Topic-Kandidaten bestimmen.
 7. Relevante Projekt-/Topic-Referenz bei Bedarf laden (`reference_md`, `index.md`, `signals.md`, `contacts.md`).
-8. Entscheidung treffen:
+8. Moegliche Todos aus der Mail ableiten; fuer Todoist-Routing bei Bedarf den Skill `todoist-api` und `memory/references/todos/` heranziehen.
+9. Erst danach separat `needs_reply` beurteilen; ein Todo ersetzt keinen Antwortbedarf und umgekehrt.
+10. Entscheidung treffen:
    - `project`
    - `topic`
    - `inbox-review`
    - `ignore/archive`
-9. Zielordner bestimmen.
-10. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
-11. Aktion ausführen oder Review notieren.
-12. Ergebnis als JSONL in `data/mail-desk/` loggen.
+11. Zielordner bestimmen.
+12. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
+13. Aktion ausführen oder Review notieren.
+14. Ergebnis als JSONL in `data/mail-desk/` loggen.
 
 ## Regelbetrieb: Sent-Items-Auswertung (verbindlich)
 

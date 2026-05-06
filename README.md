@@ -45,6 +45,11 @@ Schlanke agentische Mailbearbeitung als Alternative zur schweren Pipeline:
 
 - `skills/mail-desk/SKILL.md`
 
+Ergänzende API-Skills für angrenzende Arbeitsflüsse:
+
+- `fireflies-api` für Meeting- und Transcript-Arbeit: [martinderm/fireflies-api](https://github.com/martinderm/fireflies-api)
+- `todoist-api` für Todoist-Integration und Task-Routing: [martinderm/todoist-api](https://github.com/martinderm/todoist-api)
+
 Knowledge-Architektur innerhalb von office-intelligence (verbindlich):
 
 - **Routing-Metadaten für Mail-Verarbeitung:** `memory/references/projects/projects.json`
