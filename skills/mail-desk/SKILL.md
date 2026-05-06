@@ -55,6 +55,33 @@ Nicht doppeln:
 - Keine Antwort senden ohne explizite Freigabe.
 - Mailbox-Schreibaktionen nur nach klarer Entscheidung; bei BOKU/GroupWise `message copy` als de-facto Move behandeln.
 
+## Fast-Path fuer Spam-Quarantaene-Benachrichtigungen
+
+Fuer IronPort- oder aehnliche Spam-Quarantaene-Notifications mit:
+
+- systemischem Quarantaene-/Notification-Absender
+- Betreff vom Typ `Spam Quarantine Notification`
+
+gilt ein frueher Sonderpfad vor normaler Projekt-/Topic-Triage:
+
+1. Notification kurz lesen.
+2. Im Mailtext die gelistete quarantänisierte Mail auf sichtbare Signale pruefen, insbesondere:
+   - sichtbarer Absender
+   - sichtbare Betreffzeile
+   - offensichtliche Projekt-, Topic-, Kontakt- oder Arbeitssignale
+3. Wenn **kein** plausibles Legit-/Arbeits-Signal erkennbar ist:
+   - Notification direkt nach `Junk` routen
+   - keine normale Projekt-/Topic-Klassifikation durchlaufen
+4. Wenn **ein plausibles Legit-Signal** erkennbar ist:
+   - Notification in `INBOX` lassen
+   - als Review-/Prueffall behandeln, damit die Quarantaene bewusst gesichtet werden kann
+
+Wichtig:
+
+- Es geht hier nur um die **Benachrichtigung**, nicht um die quarantänisierte Originalmail.
+- Ein rein generischer Absendername oder generischer Werbebetreff zaehlt nicht als Legit-Signal.
+- Bei sichtbaren Fach-/Projekt-/Kontakt-Signalen konservativ bleiben und die Notification nicht automatisch nach `Junk` verschieben.
+
 ## Verbindliche Kontextladung vor Klassifikation
 
 Vor jeder inhaltlichen Mail-Klassifikation müssen mindestens diese beiden Katalogdateien geladen werden:

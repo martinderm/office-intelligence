@@ -19,6 +19,8 @@ Do not invent permanent folder names if a catalog entry exists. If a catalog ent
 | Topic, no reply | `<topic.mailbox_folder>` |
 | Unclear + needs reply | `INBOX/_Needs-Reply` or review |
 | Unclear, no reply | leave in INBOX + review |
+| BOKU IronPort spam notification, no legit signal visible in listed quarantined mail | `Junk` |
+| BOKU IronPort spam notification, plausible legit signal visible in listed quarantined mail | leave in `INBOX` + review |
 
 ## BOKU/GroupWise convention
 
