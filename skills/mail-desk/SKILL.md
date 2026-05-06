@@ -17,7 +17,7 @@ Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht 
    - erzeugt die Mail eine konkrete, nachverfolgbare Aufgabe (`todo`)?
    - erzeugt die Mail zusätzlich oder stattdessen einen echten Antwortbedarf (`needs_reply`)?
 6. ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen; beides kann gleichzeitig, nur eines von beidem oder keines von beidem zutreffen.
-7. Mail routen/ablegen (oder Review statt Aktion).
+7. Vor Routing den Folder-Preflight sicherstellen (Default: nur bei Katalogänderung; bei Bedarf `--always`/`--force`), dann Mail routen/ablegen (oder Review statt Aktion).
 8. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
 9. Leichte `data/`-Pflege durchführen:
    - `data/mail-desk/action-log.jsonl` aktualisieren
@@ -37,6 +37,25 @@ Für konkrete Befehle immer den passenden Mailbox-Skill verwenden, z. B.:
 
 - `himalaya-account-<id>` für `user@example.org`
 - andere mailbox-spezifische Himalaya-/IMAP-Skills, falls vorhanden
+
+Optionaler Preflight-Helfer:
+
+- `python3 skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py`
+- Exit `0`: alle Katalog-Zielordner vorhanden
+- Exit `2`: mindestens ein Katalog-Zielordner fehlt oder ist falsch geschrieben
+
+Kompakt (Script + Usage):
+
+- Script: `skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py`
+- Usage: `python3 skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py`
+- Optional explizite Pfade:
+  `python3 skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py --projects memory/references/projects/projects.json --topics memory/references/topics/topics.json`
+- Default/Normalbetrieb (ohne Flag): läuft nur bei Katalog-Änderung
+  (nutzt `data/mail-desk/preflight-state.json`, vergleicht Änderungszeit/Dateigröße statt Hash)
+- Immer prüfen:
+  `python3 skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py --always`
+- Erzwingen (auch bei Cache/Unklarheit):
+  `python3 skills/office-intelligence/skills/mail-desk/scripts/mailbox_preflight.py --force`
 
 Nicht doppeln:
 
