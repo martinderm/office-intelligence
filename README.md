@@ -151,8 +151,8 @@ Falls nur Skills/Katalogpflege und Dokumentation genutzt werden, ist kein Build 
 
 Ergaenzende API-Skills fuer angrenzende Workflows koennen weiterhin separat genutzt werden, zum Beispiel:
 
-- fireflies-api fuer Meeting- und Transcript-Arbeit
-- todoist-api fuer Task-Routing
+- fireflies-api fuer Meeting- und Transcript-Arbeit: [martinderm/fireflies-api](https://github.com/martinderm/fireflies-api)
+- todoist-api fuer Task-Routing: [martinderm/todoist-api](https://github.com/martinderm/todoist-api)
 
 ## Migrationshinweis
 
