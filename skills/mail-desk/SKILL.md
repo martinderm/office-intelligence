@@ -60,6 +60,7 @@ Kompakt (Script + Usage):
 Nicht doppeln:
 
 - Gate-Pfade, Himalaya-Syntax und backend-spezifische Details bleiben im jeweiligen Himalaya-Skill.
+- Wenn im Workspace eine lokale `HIMALAYA.md` vorhanden ist, diese fuer konkrete Himalaya-Aufrufe, Argumentreihenfolgen, Folder-Besonderheiten und backend-/installationsspezifische Hinweise als massgebliche Laufzeitreferenz verwenden.
 - Projekt-/Topic-Katalogpflege bleibt in `project-catalog-entry` und `topic-catalog-entry`.
 - `mail-desk` orchestriert die Bearbeitung und führt leichte Logs.
 
@@ -387,6 +388,7 @@ Verwende dafür die zuständigen Skills:
 Regeln:
 
 - Nur belastbare Erkenntnisse übernehmen, keine bloßen Vermutungen.
+- Im Zweifel zwischen `gar keine Wissenspflege` und `kleine, belastbare Wissenspflege` gilt: **eher knapp in `memory/references/*` ergänzen** (z. B. Evidence-Notiz, Stub in bestehender Register-/Subtopic-Datei), solange die Aussage quellengebunden und als vorläufig begrenzt formuliert ist.
 - Neue Informationen in bestehende Seiten integrieren, nicht einfach neue Log-Blöcke anhängen.
 - Bestehende `signals.md`, `evidence/YYYY-MM.md`, `contacts.md`, `index.md` und Katalogfelder gezielt aktualisieren.
 - Mailinhalte knapp zusammenfassen; keine langen Mailtexte in Referenzen kopieren.
