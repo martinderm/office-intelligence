@@ -5,29 +5,39 @@ description: Schlanke agentische Mail-Triage innerhalb von office-intelligence. 
 
 # mail-desk
 
+## Modell- und Edit-Hinweis
+
+Dieser Skill ist fuer inhaltlich anspruchsvolle Mailverarbeitung mit mehreren gekoppelten Entscheidungen gedacht: Lesegrad, Routing, Reply-Bedarf, Todo-Ableitung, Wissenspflege und Compliance muessen zusammenpassen.
+
+Daraus folgen zwei Regeln:
+
+- Kleine oder schwache Modelle sollen **nicht** so tun, als waere dieser Skill ein Leichtgewichts-Workflow. Wenn die noetige Sorgfalt, Konsistenz oder Kontextverarbeitung voraussichtlich nicht gehalten werden kann, ist eine **Warnung** auszugeben und der Fall an ein leistungsfaehigeres Modell oder an den User zur bewussten Fortsetzung zu eskalieren.
+- Edits an diesem Skill selbst immer mit Vorsicht vornehmen: kleine, gezielte Aenderungen; keine stillen Verhaltensverschiebungen; bestehende harte Compliance-, Quellen- oder Final-Index-Regeln nicht nebenbei aufweichen; Dopplungen lieber bewusst abbauen als neue Parallelregeln einzufuehren.
+
 Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht loggen, dann nur bei klarer Lage verschieben/kopieren.
 
 ## Verbindlicher Ablauf (immer in dieser Reihenfolge prüfen)
 
 1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag; kleine, explizit beauftragte Datums-/Folder-Batches sind zulässig, solange pro Mail derselbe komplette Compliance-Flow eingehalten wird).
-2. Mail lesen und stabile Identität erfassen (Message-ID, sonst Fallback-Key).
-3. Projekt-/Topic-Kontext laden und klassifizieren.
-4. Mögliche Todos aus der Mail ableiten und dafür bei Bedarf den Skill `todoist-api` samt `memory/references/todos/` heranziehen.
-5. Erst danach separat prüfen:
+2. Mail zunächst im Minimalzugriff lesen und einen `Lesegrad` festlegen (`structural`, `selective`, `full`).
+3. Nur im gewählten Lesegrad weiterlesen, stabile Identität erfassen (Message-ID, sonst Fallback-Key) und danach mit einer knappen Arbeitsverdichtung weiterarbeiten.
+4. Projekt-/Topic-Kontext laden und klassifizieren.
+5. Mögliche Todos aus der Mail ableiten und dafür bei Bedarf den Skill `todoist-api` samt `memory/references/todos/` heranziehen.
+6. Erst danach separat prüfen:
    - erzeugt die Mail eine konkrete, nachverfolgbare Aufgabe (`todo`)?
    - erzeugt die Mail zusätzlich oder stattdessen einen echten Antwortbedarf (`needs_reply`)?
-6. ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen; beides kann gleichzeitig, nur eines von beidem oder keines von beidem zutreffen.
-7. Vor Routing den Folder-Preflight sicherstellen (Default: nur bei Katalogänderung; bei Bedarf `--always`/`--force`), dann Mail routen/ablegen (oder Review statt Aktion).
-8. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
-9. Leichte `data/`-Pflege durchführen:
+7. ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen; beides kann gleichzeitig, nur eines von beidem oder keines von beidem zutreffen.
+8. Vor Routing den Folder-Preflight sicherstellen (Default: nur bei Katalogänderung; bei Bedarf `--always`/`--force`), dann Mail routen/ablegen (oder Review statt Aktion).
+9. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
+10. Leichte `data/`-Pflege durchführen:
    - `data/mail-desk/action-log.jsonl` aktualisieren
    - offene Review-Fälle in `data/mail-desk/pending-review.jsonl` führen
    - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
    - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
    - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
-10. Kurzbericht mit Routing + Wissenspflege liefern.
+11. Kurzbericht mit Routing + Wissenspflege liefern.
 
-Schritt 5 ist konditional, aber die Prüfung ist verpflichtend.
+Schritt 6 ist konditional, aber die Prüfung ist verpflichtend.
 
 ## Abgrenzung
 
@@ -102,6 +112,84 @@ Wichtig:
 - Ein rein generischer Absendername oder generischer Werbebetreff zaehlt nicht als Legit-Signal.
 - Bei sichtbaren Fach-/Projekt-/Kontakt-Signalen konservativ bleiben und die Notification nicht automatisch nach `Junk` verschieben.
 
+## Lesegrad-Entscheid vor Inhaltsauswertung
+
+Vor der eigentlichen Body-Lektuere wird jede Mail zunaechst nur in einem Minimalzugriff geoeffnet:
+
+- Header
+- Betreff
+- Absender
+- Datum
+- kurzer Preview
+- sichtbare Hinweise auf Links, Attachments oder Thread-Typ
+
+Danach wird ein `Lesegrad` festgelegt. Zulaessige Modi:
+
+- `structural`
+- `selective`
+- `full`
+
+Der Lesegrad wird nicht ueber starre Keyword-Trigger bestimmt, sondern ueber vier Bewertungsachsen:
+
+1. `Strukturklarheit`
+   - Ist die Mail aus Form, Absender, Betreff und Preview bereits weitgehend selbsterklaerend?
+2. `Informationsort`
+   - Liegt der wahrscheinliche Arbeitswert eher in der Struktur oder im Fliesstext?
+3. `Wissenspotenzial`
+   - Kann die Mail neues dauerhaftes Arbeitswissen erzeugen, z. B. Fristen, Entscheidungen, Zustaendigkeiten, Referenz-Evidence, Reply-Bedarf oder Todos?
+4. `Fehlerrisiko`
+   - Wie teuer waere es, die Mail mit zu geringer Lesetiefe falsch zu verstehen?
+
+Ableitung:
+
+- `structural`
+  - wenn Strukturklarheit hoch ist, der Informationswert ueberwiegend strukturell ist, das Wissenspotenzial niedrig ist und das Fehlerrisiko niedrig ist
+- `full`
+  - wenn Wissenspotenzial oder Fehlerrisiko hoch sind oder der Arbeitswert klar im Fliesstext liegt
+- `selective`
+  - in gemischten Faellen
+
+`selective` bedeutet:
+
+- nicht den ganzen Body lesen
+- gezielt nur die Passage(n) oeffnen, die fuer Routing, Reply, Todo oder Referenzpflege relevant sind
+- wenn das nicht reicht, auf `full` eskalieren
+
+Eskalationsregel:
+
+- `structural -> selective -> full`
+- niemals umgekehrt auf Basis bloesser Bequemlichkeit zurueckstufen
+
+Default-Heuristik pro Mailklasse:
+
+- typisch `structural`
+  - Spam-Quarantaene-Notifications
+  - Mitteilungsblatt
+  - Standard-Newsletter
+  - einfache Systemnotifications
+  - einfache Reminder
+- typisch `selective`
+  - Netzwerkmails
+  - Event-/Survey-Kommunikation
+  - interne Replies
+  - Forwards mit unklarem Arbeitsgehalt
+- typisch `full`
+  - Projektkoordination
+  - Partnerkommunikation
+  - Zahlungs-, Reise-, Vertrags- oder Freigabefaelle
+  - Mails mit wahrscheinlicher Referenzpflege
+
+Pflicht nach jeder inhaltlichen Lektuere:
+
+- sofort eine knappe Arbeitsverdichtung erzeugen:
+  - Kernaussage
+  - Aktion / keine Aktion
+  - Reply?
+  - Todo?
+  - Referenzwert?
+  - Frist / Risiko?
+- ab diesem Punkt moeglichst mit der Verdichtung weiterarbeiten statt mit dem Rohbody
+
 ## Verbindliche Kontextladung vor Klassifikation
 
 Vor jeder inhaltlichen Mail-Klassifikation müssen mindestens diese beiden Katalogdateien geladen werden:
@@ -121,28 +209,30 @@ Wenn eine Katalogdatei fehlt oder nicht lesbar ist: keine Mailbox-Aktion ausfüh
 ## Arbeitsfluss: triage-one
 
 1. Über den Mailbox-Skill oberste/gewünschte Mail listen.
-2. Mail per Envelope-ID lesen.
-3. Message-ID, Betreff, Absender, Datum extrahieren. Falls keine Message-ID vorhanden ist, einen stabilen Fallback-Key bilden und als `key_type="fallback_hash"` markieren.
-4. Prüfen, ob die Message-ID bzw. der Fallback-Key in aktiven **und archivierten** `data/mail-desk`-JSONL-Dateien bereits vorkommt.
-5. **Verbindlich** Projekt- und Topic-Katalog laden:
+2. Mail zunaechst im Minimalzugriff lesen (Header + kurzer Preview) und einen `Lesegrad` festlegen (`structural`, `selective`, `full`).
+3. Nur im gewaehlten Lesegrad weiterlesen; bei Bedarf auf `selective` oder `full` eskalieren.
+4. Message-ID, Betreff, Absender, Datum extrahieren. Falls keine Message-ID vorhanden ist, einen stabilen Fallback-Key bilden und als `key_type="fallback_hash"` markieren.
+5. Pruefen, ob die Message-ID bzw. der Fallback-Key in aktiven **und archivierten** `data/mail-desk`-JSONL-Dateien bereits vorkommt.
+6. **Verbindlich** Projekt- und Topic-Katalog laden:
    - `memory/references/projects/projects.json`
    - `memory/references/topics/topics.json`
-6. Erst danach Projekt-/Topic-Kandidaten bestimmen.
-7. Relevante Projekt-/Topic-Referenz bei Bedarf laden (`reference_md`, `index.md`, `signals.md`, `contacts.md`).
-8. Moegliche Todos aus der Mail ableiten; fuer Todoist-Routing bei Bedarf den Skill `todoist-api` und `memory/references/todos/` heranziehen.
-9. Danach zwei getrennte Kurzentscheidungen treffen:
+7. Erst danach Projekt-/Topic-Kandidaten bestimmen.
+8. Relevante Projekt-/Topic-Referenz bei Bedarf laden (`reference_md`, `index.md`, `signals.md`, `contacts.md`).
+9. Nach der inhaltlichen Lektuere eine kurze Arbeitsverdichtung bilden und ab hier bevorzugt mit dieser statt mit dem Rohtext weiterarbeiten.
+10. Moegliche Todos aus der Mail ableiten; fuer Todoist-Routing bei Bedarf den Skill `todoist-api` und `memory/references/todos/` heranziehen.
+11. Danach zwei getrennte Kurzentscheidungen treffen:
    - `todo`: ja/nein
    - `needs_reply`: ja/nein
-10. Ein Todo ersetzt keinen Antwortbedarf und `needs_reply` ersetzt kein Todo.
-11. Entscheidung treffen:
+12. Ein Todo ersetzt keinen Antwortbedarf und `needs_reply` ersetzt kein Todo.
+13. Entscheidung treffen:
    - `project`
    - `topic`
    - `inbox-review`
    - `ignore/archive`
-12. Zielordner bestimmen.
-13. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
-14. Aktion ausführen oder Review notieren.
-15. Ergebnis als JSONL in `data/mail-desk/` loggen.
+14. Zielordner bestimmen.
+15. Vor externer Mailbox-Aktion kurz prüfen: Ist die Entscheidung klar genug?
+16. Aktion ausführen oder Review notieren.
+17. Ergebnis als JSONL in `data/mail-desk/` loggen.
 
 ## Regelbetrieb: Sent-Items-Auswertung (verbindlich)
 
@@ -211,6 +301,13 @@ Eine Mail darf nur dann als **„verarbeitet/erledigt“** gemeldet werden, wenn
 
 Wenn einer der Punkte fehlt: Status ist **nicht erledigt**.
 
+Die Verifikation soll dabei immer mit dem **kleinstmoeglichen belastbaren Nachweis** erfolgen:
+
+- nur die tatsaechlich betroffenen Zielordner pruefen
+- nur so grosse Folder-Listen wie noetig verwenden
+- keine grossen Mailbox-Zustaende in den Arbeitskontext ziehen, wenn ein kleiner verifizierender Ausschnitt reicht
+- fuer stark strukturierte oder triviale Mailklassen darf die Nachweisfuehrung schlank sein, sofern Zielordner, `message_id`-Bezug und Final-Index korrekt verifiziert bleiben
+
 ### Harte Regel: kein manueller Final-Index-Write
 
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert werden.
@@ -250,6 +347,7 @@ Regeln:
 - Jede Zeile ist ein Payload für genau einen Final-Index-Eintrag.
 - Batch-Dateien sind **nicht** die Source of Truth; maßgeblich ist nur der verifizierte Zielordnerzustand in der Mailbox.
 - Batch-Dateien nur erzeugen/verwenden, wenn die `envelope_id` pro Zeile bereits als Envelope-ID der **final destination** geprüft wurde.
+- Batch-Dateien schlank halten und nur fuer den gerade betroffenen Mailsatz erzeugen; keine Sammel-Batches aus unbeteiligten Faellen aufbauen.
 - Wenn ein Batch zunächst mit vorläufigen oder falschen IDs erzeugt wurde, diesen Batch **nicht erneut blind ausführen**; zuerst korrigieren oder mit separatem verifiziertem Patch-Batch überschreiben.
 - Nach erfolgreichem Import die verwendeten `final-index-batch-*.jsonl` wieder löschen; sie sind temporäre Input-Artefakte und sollen nicht liegen bleiben.
 
@@ -285,6 +383,12 @@ data/mail-desk/
 
 Keine großen Mailarchive standardmäßig anlegen. Bei Bedarf kurze Auszüge oder Pfade auf Anhänge notieren, aber nicht die komplette Mail duplizieren.
 
+Kontextsparend arbeiten:
+
+- fuer Schema-, Dedupe- oder Formatpruefungen nur kleine, gezielte Ausschnitte lesen
+- Regeldateien innerhalb derselben Session nicht pro Mail erneut voll laden, wenn sich der Falltyp nicht wesentlich geaendert hat
+- nach erster belastbarer Auswertung bevorzugt mit `message_id` plus Arbeitsverdichtung weiterarbeiten statt mit mehrfach wiederholtem Rohmaterial
+
 Zusätzlich einen schlanken Lookup-Index pflegen (verbindlich, script-basiert):
 
 - `data/mail-desk/final-location-index.json`
@@ -317,6 +421,8 @@ Vorgehen:
 6. Aktive Datei ohne den erledigten Eintrag zurückschreiben.
 
 Aktive Dateien enthalten nur offene bzw. noch relevante Einträge. Alles Erledigte wandert ins Wochenarchiv nach ISO-Kalenderwoche.
+
+Beim Schliessen oder Archivieren nur den fuer den konkreten Fall noetigen Eintrag und den noetigen Kontext lesen; keine breiten aktiven Dateistaende mitschleppen, wenn ein gezielter Lookup reicht.
 
 Keine Doppelstruktur wie `open` + später separate `closed`-Zeile für dieselbe Mail. Das war eine Falle. Eine kleine, aber sie beißt.
 
@@ -434,15 +540,16 @@ Review gehört in `data/mail-desk/pending-review.jsonl`.
 
 Vor Abschluss eines Mail-Schritts:
 
-1. Zielordner-Aktion verifiziert (z. B. per `envelope list` im Zielordner).
+1. Zielordner-Aktion mit dem kleinstmoeglichen belastbaren Nachweis verifiziert (z. B. kleiner `envelope list`-Ausschnitt im Zielordner).
 2. `action-log.jsonl` aktualisiert.
 3. Falls Antwortbedarf: `replies-needed.jsonl` aktualisiert.
 4. Falls Review-Fall: `pending-review.jsonl` aktualisiert.
-5. Final-Index über `final_index_upsert.py` aktualisiert.
-6. Final-Index über `final_index_lookup.py` gegengeprüft.
+5. Final-Index über `final_index_upsert.py` oder den passenden Batch-Import aktualisiert.
+6. Final-Index über `final_index_lookup.py` oder einen gleichwertig gezielten Index-Check gegengeprüft.
 7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
 8. Wenn Wissenspflege aus Mailinhalt erfolgte: passendes `evidence/YYYY-MM.md` aktualisiert und dort dieselbe Aussage mit `message_id`/`message_ids` auffindbar.
-9. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
+9. Für die Abschlussprüfung keine unnötigen Wiederholungen derselben Rohmail, Regeldateien oder breiten Folder-/Log-Listen erzeugen.
+10. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
 
 ## Ausgabe an den User
 
