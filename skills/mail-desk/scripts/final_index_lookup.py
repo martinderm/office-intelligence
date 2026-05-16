@@ -12,9 +12,19 @@ from typing import Any
 
 def normalize_message_id(value: str) -> str:
     s = value.strip()
-    while s.startswith("<") and s.endswith(">") and len(s) >= 2:
-        s = s[1:-1].strip()
     return s.lower()
+
+
+def validate_lookup_message_id(value: str) -> str:
+    s = value.strip()
+    if not s:
+        raise ValueError("--message-id must not be empty")
+    if s.startswith("<") or s.endswith(">"):
+        raise ValueError(
+            "--message-id must be passed in normalized form without angle brackets, "
+            "e.g. 4DB7DEC0-E705-4F5C-85E7-0BA35CBDF068@boku.ac.at"
+        )
+    return normalize_message_id(s)
 
 
 def default_index_path() -> Path:
@@ -54,11 +64,15 @@ def load_index(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Lookup a message in final-location-index.json")
-    parser.add_argument("--message-id", required=True, help="Raw or normalized Message-ID")
+    parser.add_argument(
+        "--message-id",
+        required=True,
+        help="Normalized Message-ID without angle brackets",
+    )
     parser.add_argument("--index", help="Path to final-location-index.json")
     args = parser.parse_args()
 
-    message_id_norm = normalize_message_id(args.message_id)
+    message_id_norm = validate_lookup_message_id(args.message_id)
     index_path = Path(args.index) if args.index else default_index_path()
 
     data = load_index(index_path)
