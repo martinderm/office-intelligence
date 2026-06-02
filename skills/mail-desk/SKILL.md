@@ -47,6 +47,7 @@ Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht 
    - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
    - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
    - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
+   - Schreibzugriffe auf gemeinsame `data/mail-desk/`-Dateien immer **seriell**, nie parallel ausführen; das gilt besonders für `.jsonl`-Logs und `final-location-index.json`
 16. Kurzbericht mit Routing + Wissenspflege liefern.
 
 Schritt 10 ist konditional, aber die Prüfung ist verpflichtend.
@@ -96,6 +97,10 @@ Nicht doppeln:
 - Nach Copy/Move kann GroupWise neue Envelope-IDs vergeben; deshalb Envelope-ID nie als Primärschlüssel, Close-Key, Idempotenz-Key oder Referenz-Key verwenden.
 - Keine Antwort senden ohne explizite Freigabe.
 - Mailbox-Schreibaktionen nur nach klarer Entscheidung; bei GroupWise-aehnlichen Backends `message copy` als de-facto Move behandeln.
+- Wenn mehrere Mails in einem kleinen Batch bearbeitet werden, duerfen Lesen und Preview-Pruefungen parallelisiert werden, **Schreibschritte** aber nicht:
+  - keine parallelen Appends an dieselbe `.jsonl`
+  - keine parallelen Aufrufe von `final_index_upsert.py`
+  - erst Routing/Verifikation, dann `data/`-Pflege Mail fuer Mail
 
 ## Fast-Path fuer Spam-Quarantaene-Benachrichtigungen
 
