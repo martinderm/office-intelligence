@@ -37,6 +37,7 @@ Relevante Kernbereiche:
 - skills/mail-desk
 - skills/project-catalog-entry
 - skills/topic-catalog-entry
+- skills/event-documentation
 - memory/references/projects/projects.json
 - memory/references/topics/topics.json
 - data/mail-desk
@@ -104,6 +105,17 @@ Source of truth:
 
 - memory/references/topics/topics.json
 
+### event-documentation
+
+Pfad:
+
+- skills/event-documentation/SKILL.md
+
+Zweck:
+
+- Dokumentation und Ordnerstrukturpflege für größere Konferenzen und Events
+- Programm-Extraktion, Transcript-Verarbeitung, Action-Items Triage und Todoist-Fristensynchronisation
+
 ## Installation in Agent-Workspaces
 
 Standard-Rollout:
@@ -111,10 +123,11 @@ Standard-Rollout:
 - skills/mail-desk
 - skills/project-catalog-entry
 - skills/topic-catalog-entry
+- skills/event-documentation
 
 Minimaler Rollout:
 
-1. die drei Skill-Ordner in den Ziel-Agent-Workspace kopieren
+1. die vier Skill-Ordner in den Ziel-Agent-Workspace kopieren
 2. sicherstellen, dass `memory/references/projects/projects.json` und `memory/references/topics/topics.json` vorhanden sind
 3. pro Mail den Workflow aus `skills/mail-desk/SKILL.md` verwenden
 
