@@ -27,6 +27,7 @@ Lege für neue Projekte an:
 - `memory/references/projects/<slug>/signals.md`
 - `memory/references/projects/<slug>/workpackages/` (Ordner)
 - optional: `memory/references/projects/<slug>/evidence/` (Ordner)
+- optional: `memory/references/projects/<slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
 
 Regeln:
 

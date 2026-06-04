@@ -27,6 +27,7 @@ Lege für neue Topics an:
 - `memory/references/topics/<slug>/signals.md`
 - `memory/references/topics/<slug>/subtopics/` (Ordner)
 - optional: `memory/references/topics/<slug>/evidence/` (Ordner)
+- optional: `memory/references/topics/<slug>/subtopics/<subtopic-slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
 
 Regeln:
 
