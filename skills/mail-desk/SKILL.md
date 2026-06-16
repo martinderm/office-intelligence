@@ -30,10 +30,14 @@ Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht 
 7. Erst danach Projekt-/Topic-Kontext laden und klassifizieren; relevante Referenzdateien bei Bedarf gezielt nachziehen (`reference_md`, `index.md`, `signals.md`, `contacts.md`, passende `evidence/`-Dateien).
 8. Nach der inhaltlichen Lektuere eine knappe Arbeitsverdichtung bilden und ab hier bevorzugt mit dieser statt mit dem Rohtext weiterarbeiten.
 9. Mögliche Todos aus der Mail ableiten und dafür bei Bedarf den Skill `todoist-api` samt `memory/references/todos/` heranziehen.
+   - Wenn `todoist-api` verfügbar ist, die jeweils relevanten offenen Todos zum Mailkontext mitladen und prüfen, ob ein bestehender Task aktualisiert, ergänzt oder geschlossen werden sollte, statt blind einen neuen anzulegen.
+   - Relevanter Kontext kann sich z. B. über `message_id`, Threadbezug, Projekt-/Topic-Zuordnung, Frist, Absender oder bereits bekannte operative Folgeaufgaben ergeben.
 10. Erst danach separat prüfen:
    - erzeugt die Mail eine konkrete, nachverfolgbare Aufgabe (`todo`)?
    - erzeugt die Mail zusätzlich oder stattdessen einen echten Antwortbedarf (`needs_reply`)?
 11. ToDo-Ableitung und Antwortbedarf sind getrennte Entscheidungen; beides kann gleichzeitig, nur eines von beidem oder keines von beidem zutreffen.
+    - Default-Regel: Wenn `needs_reply=true` und der Skill `todoist-api` verfügbar ist, soll in der Regel auch ein Todo angelegt werden, damit der offene Antwortfall persönlich nachverfolgbar bleibt.
+    - Ausnahmen von dieser Default-Regel sind kurz zu begründen, insbesondere wenn die Antwort im selben Flow bereits vollständig erledigt wurde, kein sinnvoll nachverfolgbarer Task entsteht oder Todoist im aktuellen Kontext nicht nutzbar ist.
 12. Zielentscheidung treffen:
    - `project`
    - `topic`
