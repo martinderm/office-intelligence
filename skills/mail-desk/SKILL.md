@@ -98,6 +98,8 @@ Nicht doppeln:
 - Bei Unsicherheit nicht verschieben, sondern Review notieren oder kurz fragen.
 - Dauerhafte Identität ist immer `Message-ID`/normalisierte Message-ID **ohne `< >`**, niemals Envelope-ID.
 - Envelope-ID nur als kurzfristiger Bediengriff für die aktuelle Himalaya-Operation verwenden (`message read`, `message copy`).
+- `last_seen_envelope_id` ist nur ein flüchtiger Snapshot aus der zuletzt gelesenen Mailbox-Sicht; nach `message copy`/`move` kann er in Zielordnern abweichen und darf nicht als dauerhafte Referenz, Close-Key oder Wahrheitsquelle verwendet werden.
+- Nach jeder Routing-Aktion die Zielordner-Envelope-ID erneut im Zielordner ermitteln und die operative Log-/Finder-Info darauf aktualisieren, damit die Mail wieder auffindbar bleibt; diese aktualisierte Envelope-ID bleibt trotzdem nur operativ und nie identitätsstiftend.
 - Nach Copy/Move kann GroupWise neue Envelope-IDs vergeben; deshalb Envelope-ID nie als Primärschlüssel, Close-Key, Idempotenz-Key oder Referenz-Key verwenden.
 - Keine Antwort senden ohne explizite Freigabe.
 - Mailbox-Schreibaktionen nur nach klarer Entscheidung; bei GroupWise-aehnlichen Backends `message copy` als de-facto Move behandeln.
