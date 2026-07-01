@@ -324,6 +324,29 @@ Zusätzlich erlaubt für die Index-Location:
 Hinweis: Message-IDs fuer Skript-Lookups immer in normalisierter Form **ohne `< >`** uebergeben; Message-IDs mit `$` dabei in **Single Quotes** setzen, damit die Shell nichts expandiert.
 Hinweis: Für die Skriptaufrufe sind `python3` **und** `python` erlaubt; verwende die Variante, die lokal verfügbar ist.
 
+### Automatisierte Hilfsskripte (Workflows)
+
+Zusätzlich zu den Kernskripten stehen folgende Automatisierungswerkzeuge in `scripts/` bereit:
+
+1. **Abfragen des Final-Location-Index (`final_index_query.py`):**
+   Filtert und durchsucht den Index nach Ordnern, Message-IDs oder Freitext.
+   `python3 scripts/final_index_query.py --folder 'Projekte/EVOLVE'`
+   `python3 scripts/final_index_query.py --query 'MFHEA'`
+
+2. **Kombiniertes Verschieben und Patchen (`mail_desk_move_and_patch.py`):**
+   Führt den Himalaya-Verschiebebefehl aus, ermittelt die neue Envelope-ID im Zielordner und trägt die Mail automatisch mit der korrekten finalen `envelope_id` in den Index ein.
+   `python3 scripts/mail_desk_move_and_patch.py --message-id '...' --target-folder 'Projekte/EVOLVE'`
+   *Hinweis:* Verwendet standardmäßig 3 parallele Threads für die schnelle Envelope-Verifikation.
+
+3. **Optimierte Mailbox-Suche (`mailbox_search_by_id.py`):**
+   Sucht eine Message-ID schnell über parallele Verbindungen in der Mailbox.
+   `python3 scripts/mailbox_search_by_id.py --message-id '...'`
+   *Hinweis:* Sucht standardmäßig in `INBOX` und `Sent Items`. Optionale Suche in allen Ordnern mit `--all-folders`. Verwendet maximal 3 parallele Threads und bricht sofort nach einem Treffer ab (`os._exit(0)`), um Join-Wartezeiten zu vermeiden.
+
+4. **Lösen und Archivieren offener Antwortfälle (`mail_desk_resolve_case.py`):**
+   Archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` direkt unter dem wochenbasierten Pfad `archive/YYYY-Www/` und aktualisiert den Status.
+   `python3 scripts/mail_desk_resolve_case.py --message-id '...' --status 'resolved' --resolution '...'`
+
 ### Verbindliche Semantik für `envelope_id` im Final-Index
 
 Für **alle** Final-Index-Skripte gilt:
@@ -414,6 +437,8 @@ Vorgehen:
 4. Aktualisierten erledigten Eintrag aus der aktiven Datei entfernen.
 5. Erledigten Eintrag in `data/mail-desk/archive/YYYY-Www/<dateiname>.jsonl` anhängen.
 6. Aktive Datei ohne den erledigten Eintrag zurückschreiben.
+
+*Hinweis:* Dieser gesamte Ablauf (Schritte 1–6) wird vollständig automatisiert durch Aufruf von `python3 scripts/mail_desk_resolve_case.py --message-id '...' --status 'resolved' --resolution '...'`.
 
 Aktive Dateien enthalten nur offene bzw. noch relevante Einträge. Alles Erledigte wandert ins Wochenarchiv nach ISO-Kalenderwoche.
 
