@@ -135,6 +135,7 @@ def main() -> int:
                         "envelope_id": res,
                     }
                     print(json.dumps(output, ensure_ascii=False, indent=2))
+                    sys.stdout.flush()
                     os._exit(0)
             
             if found_folder:
