@@ -106,3 +106,21 @@ Als Agent musst du folgende Abläufe bei der Arbeit mit Cloud-Speichern beachten
 ### C. Unicode-Sicherheit
 * Dateipfade und Terminalausgaben werden auf Windows-Systemen intern in UTF-8 verarbeitet, um Abstürze durch macOS-dekomponierte Sonderzeichen (NFD-Normalisierung, z. B. combining diaeresis `\u0308`) zu verhindern.
 * In allen erzeugten Markdown-Dateien müssen echte deutsche Umlaute (`ä`, `ö`, `ü`, `Ä`, `Ö`, `Ü`, `ß`) anstelle von Umschreibungen verwendet werden.
+
+---
+
+## 5. Pflicht bei Integration in Agent-Workspaces
+
+Bei der Erstinstallation des Skills in einem Agent-Workspace müssen die folgenden Regeln zwingend in die `AGENTS.md` des Ziel-Workspaces übernommen werden (z. B. unter den Arbeitsregeln für den Projektmodus):
+
+### Vorlage für die Ziel-`AGENTS.md`
+```markdown
+### Hybrid-Modell für Cloud-Filemaps
+
+Um die Dateiverteilung in den Cloud-Speichern sauber zu dokumentieren, wird für die Cloud-Ablagen ein strukturiertes Hybrid-Modell genutzt:
+* **Source of Truth & View**: Eine `filemap.json` speichert Dateimetadaten und manuelle Beschreibungen (`"description"`), woraus eine Markdown-Tabelle (`filemap.md`) generiert wird.
+* **Lokale Spiegelung**: Konvertierte Markdown-Kopien (z. B. von PDFs via `markitdown`) werden im lokalen Ordner `memory/references/projects/<project>/cloud/` gehalten (niemals direkt im Cloud-Speicher).
+* **Automatisierung (24h-Regel & Cleanups)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Änderungen, die 24-stündige Gültigkeitskontrolle und die Bereinigung verwaister Dateien erfolgen vollautomatisch über den Skill **`cloud-atlas`**.
+* **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/boku-user/.agents/skills/cloud-atlas/SKILL.md).
+```
+

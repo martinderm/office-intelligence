@@ -141,7 +141,8 @@ Minimaler Rollout:
 
 1. die fünf Skill-Ordner in den Ziel-Agent-Workspace kopieren
 2. sicherstellen, dass `memory/references/projects/projects.json` und `memory/references/topics/topics.json` vorhanden sind
-3. pro Mail den Workflow aus `skills/mail-desk/SKILL.md` verwenden
+3. **Erweiterung der `AGENTS.md`**: Bei Installation von `cloud-atlas` müssen die Regeln zum Hybrid-Modell für Cloud-Filemaps in die `AGENTS.md` des Ziel-Workspaces übernommen werden (Vorlagen-Text siehe [skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md)).
+4. pro Mail den Workflow aus `skills/mail-desk/SKILL.md` verwenden
 
 ## Katalog- und Referenzmodell
 
