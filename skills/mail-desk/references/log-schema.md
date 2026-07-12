@@ -4,12 +4,12 @@ All files are JSONL under `data/mail-desk/`. Keep entries small. Active files co
 
 ## Durable mail identity
 
-Envelope-ID is not durable. It may change after copy/move, especially on some IMAP backends.
+Backend locators are not durable cross-backend identities. An Envelope-ID may change after copy/move, especially on some IMAP backends; a Gmail message or thread ID is specific to Gmail.
 
 Rules:
 
-- Never use Envelope-ID as primary key, close key, idempotency key, or reference key.
-- Store it only as `envelope_id` for operational traceability.
+- Never use a backend locator as primary key, close key, idempotency key, or reference key.
+- Store a Himalaya locator only as `envelope_id`; store Gmail locators as `gmail_message_id` and optional `gmail_thread_id`.
 - Durable keys are `message_id` or fallback `message_key` with `key_type="fallback_hash"`.
 - When closing or updating an item, match by `message_id`/`message_key`, not Envelope-ID.
 
@@ -31,6 +31,7 @@ Use for current handling notes. Completed handling records should be moved to th
   "schema_version": 1,
   "at": "2026-04-24T13:00:00Z",
   "mailbox": "MAIN-MAILBOX",
+  "backend": "himalaya|gmail",
   "message_id": "69e789bb020000f1000d1629@mail.example.org",
   "key_type": "message_id",
   "envelope_id": "8871",
@@ -43,8 +44,8 @@ Use for current handling notes. Completed handling records should be moved to th
     "needs_reply": true
   },
   "action": {
-    "type": "copy_as_move|move|copy|none",
-    "target_folder": "Themen/AIxLLL/_Needs-Reply"
+    "type": "copy_as_move|move|copy|label|archive|none",
+    "target": "Themen/AIxLLL/_Needs-Reply"
   },
   "notes": "Short operational note."
 }
@@ -61,7 +62,7 @@ Use when the agent should not decide alone. Active file contains only unresolved
   "mailbox": "MAIN-MAILBOX",
   "message_id": "...",
   "key_type": "message_id",
-  "envelope_id": "8871",
+  "backend_locator": "8871|gmail-message-id",
   "subject": "...",
   "from": "...",
   "reason": "ambiguous_target|missing_folder|possible_catalog_gap|unclear_reply_need|other",
@@ -84,7 +85,7 @@ Optional helper index for reply work. Use only if `needs_reply=true`. Active fil
   "mailbox": "MAIN-MAILBOX",
   "message_id": "...",
   "key_type": "message_id",
-  "envelope_id": "8871",
+  "backend_locator": "8871|gmail-message-id",
   "subject": "...",
   "from": "...",
   "folder": "Themen/AIxLLL/_Needs-Reply",
@@ -117,7 +118,7 @@ Minimalfelder:
   "from": "user@example.org",
   "to": ["partner@example.org"],
   "folder": "Sent Items",
-  "sent_envelope_id": "4711",
+  "backend_locator": "4711|gmail-message-id",
   "project_id": "meshe",
   "topic_id": "netzwerke",
   "source_message_id": "<inbox@id>",
@@ -140,7 +141,7 @@ Regeln:
 - `source_message_id` setzen, wenn die Zuordnung zur beantworteten Inbox-Mail belastbar ist.
 - `confidence` setzen, wenn Zuordnung heuristisch erfolgte.
 - `updated_at` dokumentiert die letzte Datenaktualisierung des Eintrags.
-- `sent_envelope_id` ist die zuletzt verifizierte Envelope-ID im `Sent Items`-Ordner.
+- `backend_locator` ist die zuletzt verifizierte, backend-spezifische Kennung im Sent-Bereich.
 
 ## Closing an item
 
@@ -182,8 +183,8 @@ data/mail-desk/final-location-index.json
 
 Zweck:
 
-- `message_id` schnell auf finalen Ordner mappen
-- zuletzt gesehene Envelope-ID für den Zielordner behalten
+- `message_id` schnell auf finale Backend-Location mappen
+- zuletzt gesehenen Backend-Locator für die finale Location behalten
 - optional Thread-Bezug ohne Mailinhalt über `in_reply_to` und `references`
 
 Minimalstruktur:
@@ -196,8 +197,11 @@ Minimalstruktur:
     "normalized-message-id": {
       "message_id": "<id@host>",
       "mailbox": "MAIN-MAILBOX",
+      "backend": "gmail",
       "final_folder": "Projekte/XYZ",
-      "envelope_id": "4711",
+      "final_label": "Projekte/XYZ",
+      "gmail_message_id": "gmail-message-id",
+      "gmail_thread_id": "gmail-thread-id",
       "updated_at": "2026-04-27T11:14:00Z",
       "in_reply_to": "<parent@host>",
       "references": ["<root@host>", "<parent@host>"]
@@ -209,7 +213,7 @@ Minimalstruktur:
 Regeln:
 
 - Keine Mailinhalte im Index speichern.
-- Envelope-ID nur zusammen mit dem `final_folder` interpretieren.
+- Backend-spezifische Locator-Felder nur zusammen mit der jeweiligen finalen Location interpretieren.
 - Schlüssel pro Eintrag ist die normalisierte `message_id`.
 - Bei fehlender Message-ID optional analog über `message_key` arbeiten.
 
@@ -217,7 +221,8 @@ CLI-Helfer (`skills/mail-desk/scripts/`):
 
 - `final_index_lookup.py --message-id ...`
 - `final_index_upsert.py --mode upsert-final --stdin`
-  - Pflichtfelder im Payload: `message_id`, `final_folder`, `envelope_id`
+  - Himalaya-/IMAP-Payload: `message_id`, `final_folder`, `envelope_id`
+  - Gmail-Payload: `message_id`, `backend: "gmail"`, `final_label`, `gmail_message_id`
 - `final_index_upsert.py --mode patch --stdin`
   - Pflichtfeld im Payload: `message_id`
   - patcht nur bestehende Einträge

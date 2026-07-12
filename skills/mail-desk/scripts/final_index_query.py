@@ -47,7 +47,7 @@ def load_index(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Query/filter final-location-index.json")
-    parser.add_argument("--folder", help="Substring filter on final_folder (case-insensitive)")
+    parser.add_argument("--folder", help="Substring filter on final_folder or final_label (case-insensitive)")
     parser.add_argument("--query", help="Keyword query on all fields (case-insensitive)")
     parser.add_argument("--index", help="Path to final-location-index.json")
     args = parser.parse_args()
@@ -63,8 +63,8 @@ def main() -> int:
 
         # Filter by folder
         if args.folder:
-            folder = val.get("final_folder", "")
-            if args.folder.lower() not in folder.lower():
+            location = str(val.get("final_folder") or val.get("final_label") or "")
+            if args.folder.lower() not in location.lower():
                 continue
 
         # Filter by query

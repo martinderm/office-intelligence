@@ -83,6 +83,15 @@ Frontmatter-Regel:
   "typical_subject_patterns": ["string"],
   "routing_priority": 70,
   "do_not_route_if": ["newsletter", "no-reply"],
+  "cloud_sync": {
+    // Immer als Dictionary von Cloud-Speichern (z. B. {"default": {...}} bei einem Speicher):
+    "<storage_id>": {
+      "scan_dir": "string",
+      "output_json": "string",
+      "output_md": "string",
+      "output_dir": "string"
+    }
+  },
   "updated_at": "YYYY-MM-DD",
   "schema_version": 1
 }

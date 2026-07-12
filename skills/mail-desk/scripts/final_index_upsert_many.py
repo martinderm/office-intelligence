@@ -20,8 +20,12 @@ from typing import Any
 ALLOWED_FIELDS = {
     "message_id",
     "mailbox",
+    "backend",
     "final_folder",
+    "final_label",
     "envelope_id",
+    "gmail_message_id",
+    "gmail_thread_id",
     "in_reply_to",
     "references",
     "updated_at",
@@ -70,8 +74,10 @@ def validate_payload(payload: dict[str, Any], mode: str) -> None:
     if unknown:
         raise ValueError(f"Unsupported fields: {', '.join(sorted(unknown))}")
 
+    backend = str(payload.get("backend", "himalaya")).strip().lower()
     if mode == "upsert-final":
-        for field in ("final_folder", "envelope_id"):
+        required_fields = ("final_label", "gmail_message_id") if backend == "gmail" else ("final_folder", "envelope_id")
+        for field in required_fields:
             if field not in payload or not str(payload[field]).strip():
                 raise ValueError(f"'{field}' is required in mode=upsert-final")
 
@@ -142,6 +148,8 @@ def main() -> int:
         created = existing is None
         entry = dict(existing or {})
         entry["message_id"] = msg_norm
+        if "backend" not in payload and "backend" not in entry:
+            entry["backend"] = "himalaya"
         for key, value in payload.items():
             if key == "message_id":
                 continue
