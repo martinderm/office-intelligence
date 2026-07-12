@@ -116,6 +116,17 @@ Zweck:
 - Dokumentation und Ordnerstrukturpflege für größere Konferenzen und Events
 - Programm-Extraktion, Transcript-Verarbeitung, Action-Items Triage und Todoist-Fristensynchronisation
 
+### cloud-atlas
+
+Pfad:
+
+- [skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md)
+
+Zweck:
+
+- Kartografierung von Cloud-Speicher Junctions und vollautomatische Synchronisation lokaler Markdown-Spiegelungen (Mirrors).
+- Ausführliche CLI- und Prozessdokumentation siehe interne `SKILL.md`.
+
 ## Installation in Agent-Workspaces
 
 Standard-Rollout:
@@ -124,10 +135,11 @@ Standard-Rollout:
 - skills/project-catalog-entry
 - skills/topic-catalog-entry
 - skills/event-documentation
+- skills/cloud-atlas
 
 Minimaler Rollout:
 
-1. die vier Skill-Ordner in den Ziel-Agent-Workspace kopieren
+1. die fünf Skill-Ordner in den Ziel-Agent-Workspace kopieren
 2. sicherstellen, dass `memory/references/projects/projects.json` und `memory/references/topics/topics.json` vorhanden sind
 3. pro Mail den Workflow aus `skills/mail-desk/SKILL.md` verwenden
 
