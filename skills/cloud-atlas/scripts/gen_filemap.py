@@ -97,7 +97,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_dir": f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/cloud",
             "is_topic": is_topic
         }
-        kuerzel = meta.get("kuerzel") if meta else project_id
+        kuerzel = (meta.get("kuerzel") or project_id) if meta else project_id
         folder_candidates = [
             os.path.join("data", "cloud", kuerzel),
             os.path.join("data", "cloud", project_id),
