@@ -76,6 +76,14 @@ Frontmatter-Regel:
       "aliases": ["string"],
       "keywords": ["string"],
       "contacts": [{ "email": "string" }],
+      "cloud_sync": {
+        "<storage_id>": {
+          "scan_dir": "string",
+          "output_json": "string",
+          "output_md": "string",
+          "output_dir": "string"
+        }
+      },
       "status": "active"
     }
   ],
@@ -138,6 +146,7 @@ Vor Ausgabe prüfen:
 - keine doppelten Domains/Kontakte
 - `contacts[].email` syntaktisch plausibel
 - `subtopics[].id` ebenfalls slug
+- Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen und bei plausibler Relevanz dessen Filemap oder passende Spiegelungen prüfen; zusätzliche, ausschließlich subtopic-spezifische Speicher dürfen als `subtopics[].cloud_sync` im Cloud-Atlas-Schema gepflegt werden.
 - `schema_version = 1`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)
 

@@ -38,6 +38,17 @@ Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintra
 }
 ```
 
+### Subtopic-Auflösung und Speicherzuordnung
+
+Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen. Er kann relevante Dokumente enthalten, auch wenn sie nicht auf Ebene des Subtopics abgelegt oder benannt sind. Bei plausibler Relevanz den Topic-Filemap-Kontext oder passende übergeordnete Cloud-Spiegelungen prüfen.
+
+Ein Cloud-Speicher kann bei Bedarf ausschließlich einem Subtopic zugeordnet werden. Dazu ist innerhalb des betreffenden `subtopics[]`-Eintrags ein eigenes `cloud_sync`-Dictionary im selben Schema zulässig. Die wirksamen Speicher eines Subtopics sind die Vereinigung aus:
+
+1. den Speichern des übergeordneten Topics und
+2. seinen explizit definierten Subtopic-Speichern.
+
+Gleiche `storage_id`-Werte sind nur zulässig, wenn das Subtopic den Topic-Eintrag bewusst erweitert oder überschreibt; dies ist im Subtopic-Index kurz zu dokumentieren. Für klar abgegrenzte Inhalte bevorzugt einen eigenen `storage_id` und getrennte Filemap- sowie Mirror-Ausgabepfade.
+
 * **Namenskonventionen bei mehreren Speichern**: Wenn mehrere Speicher existieren (z. B. `"bokudrive"` und `"onedrive-legacy"`), sollten die Ausgabedateien (`filemap-bokudrive.json`/`.md` etc.) und Unterverzeichnisse (`cloud/bokudrive/`, `cloud/onedrive-legacy/`) getrennt benannt werden, um Dateikollisionen zu vermeiden.
 
 ---
@@ -123,4 +134,3 @@ Um die Dateiverteilung in den Cloud-Speichern sauber zu dokumentieren, wird für
 * **Automatisierung (24h-Regel & Cleanups)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Änderungen, die 24-stündige Gültigkeitskontrolle und die Bereinigung verwaister Dateien erfolgen vollautomatisch über den Skill **`cloud-atlas`**.
 * **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/boku-user/.agents/skills/cloud-atlas/SKILL.md).
 ```
-
