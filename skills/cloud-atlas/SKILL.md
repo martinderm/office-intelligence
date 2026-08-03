@@ -24,6 +24,12 @@ Die Synchronisationsparameter werden kanonisch im globalen Katalog des Workspace
 * Für Projekte in: `memory/references/projects/projects.json` (ID-basiert)
 * Für Topics in: `memory/references/topics/topics.json` (ID-basiert)
 
+### Workspace-Anbindung der Cloud-Speicher
+
+Cloud-Speicher sollen im Agent-Workspace als Link oder Junction unter `data/cloud/` eingebunden werden. Verwende dafür einen stabilen, sprechenden Namen nach dem Muster `data/cloud/<speicher-name>/`; der Name soll Herkunft oder Zweck des Speichers klar erkennen lassen.
+
+Die konkrete technische Einrichtung des Links bzw. der Junction erfolgt im Workspace-Bootstrap oder durch die zuständige lokale Administration. `cloud_sync.scan_dir` verweist anschließend ausschließlich mit einem relativen Workspace-Pfad auf den eingebundenen Speicher. Lokale Markdown-Spiegelungen gehören nie in die verlinkte Cloud-Ablage, sondern in den konfigurierten lokalen `output_dir`.
+
 ### Das `cloud_sync`-Schema
 Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintrag `cloud_sync` muss **immer** ein Dictionary von Speicher-Konfigurationen sein (auch bei nur einem Speicher, z. B. mit der ID `"default"` oder `"meshe-teams"`):
 
