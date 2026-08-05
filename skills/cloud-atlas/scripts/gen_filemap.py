@@ -165,6 +165,45 @@ def get_file_info(filepath):
             
     return size_str, mtime, version
 
+def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id):
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
+    topics_file = os.path.normpath(os.path.join(workspace_root, "memory/references/topics/topics.json"))
+    
+    target_files = [topics_file, projects_file] if is_topic else [projects_file, topics_file]
+    
+    for json_file in target_files:
+        if not os.path.exists(json_file):
+            continue
+        try:
+            with open(json_file, "r", encoding="utf-8") as f:
+                items = json.load(f)
+            
+            if not isinstance(items, list):
+                continue
+                
+            updated = False
+            for item in items:
+                if isinstance(item, dict) and item.get("id") == target_id:
+                    cloud_sync = item.get("cloud_sync")
+                    if isinstance(cloud_sync, dict):
+                        if storage_id in cloud_sync and isinstance(cloud_sync[storage_id], dict):
+                            cloud_sync[storage_id]["last_synced_at"] = now_str
+                            updated = True
+                        elif storage_id == "default" and len(cloud_sync) == 1:
+                            first_key = list(cloud_sync.keys())[0]
+                            if isinstance(cloud_sync[first_key], dict):
+                                cloud_sync[first_key]["last_synced_at"] = now_str
+                                updated = True
+            
+            if updated:
+                with open(json_file, "w", encoding="utf-8") as f:
+                    json.dump(items, f, indent=2, ensure_ascii=False)
+                print(f"Updated 'last_synced_at' timestamp for '{storage_id}' in {json_file}")
+                break
+        except Exception as e:
+            print(f"Warning: Could not update last_synced_at in {json_file}: {e}")
+
 def main():
     args = parse_args()
     workspace_root = find_workspace_root()
@@ -305,6 +344,9 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
         with open(output_md_abs, "w", encoding="utf-8") as f:
             f.write(md_content)
         print(f"Updated {output_md_abs}")
+        
+        # Update last_synced_at in projects.json / topics.json
+        update_config_last_synced_at(workspace_root, project_id, is_topic, sid)
 
 if __name__ == "__main__":
     main()

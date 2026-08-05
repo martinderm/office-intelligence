@@ -30,6 +30,9 @@ Cloud-Speicher sollen im Agent-Workspace als Link oder Junction unter `data/clou
 
 Die konkrete technische Einrichtung des Links bzw. der Junction erfolgt im Workspace-Bootstrap oder durch die zuständige lokale Administration. `cloud_sync.scan_dir` verweist anschließend ausschließlich mit einem relativen Workspace-Pfad auf den eingebundenen Speicher. Lokale Markdown-Spiegelungen gehören nie in die verlinkte Cloud-Ablage, sondern in den konfigurierten lokalen `output_dir`.
 
+> [!IMPORTANT]
+> **.gitignore-Pflicht**: Das Verzeichnis `data/cloud/` (wo die Cloud-Junctions bzw. Symlinks liegen) muss zwingend sofort in die `.gitignore` des Ziel-Workspaces aufgenommen werden (`data/cloud/`), um zu verhindern, dass externe Cloud-Dateien oder Junction-Inhalte versehentlich in Git gestaged oder versioniert werden.
+
 ### Das `cloud_sync`-Schema
 Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintrag `cloud_sync` muss **immer** ein Dictionary von Speicher-Konfigurationen sein (auch bei nur einem Speicher, z. B. mit der ID `"default"` oder `"meshe-teams"`):
 
@@ -39,7 +42,8 @@ Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintra
     "scan_dir": "Relative path to cloud directory junction (e.g. data/cloud/MESHE)",
     "output_json": "Relative path to output filemap.json",
     "output_md": "Relative path to output filemap.md",
-    "output_dir": "Relative path to local markdown mirror directory (e.g. memory/references/projects/meshe/cloud)"
+    "output_dir": "Relative path to local markdown mirror directory (e.g. memory/references/projects/meshe/cloud)",
+    "last_synced_at": "Automated timestamp of last successful sync (e.g. 2026-08-05 21:09:12)"
   }
 }
 ```
@@ -115,12 +119,19 @@ Als Agent musst du folgende Abläufe bei der Arbeit mit Cloud-Speichern beachten
   * Ist eine gespiegelte Markdown-Datei älter als 24 Stunden (gemessen an `last_verified_date`), muss vor der Arbeit mit ihr geprüft werden, ob im Cloud-Speicher eine neuere Version des Original-PDFs vorliegt.
   * Das Skript `convert_cloud_docs.py` erledigt dies automatisch: Bei unveränderten Quelldateien aktualisiert es lediglich das `last_verified_date` auf den aktuellen Prüfzeitpunkt, ohne das Dokument unnötig neu zu konvertieren.
 
-### B. Manuelle Dokumentenbeschreibungen
+### B. Task-gebundene Zeitstempel-Prüfung (`last_synced_at`)
+* **Aufgaben-gekoppelte Aktualitätsprüfung**: Sobald eine Aufgabe den Zugriff auf Dokumente aus einem Cloud-Speicher erfordert, ist vor der Dokumentenanalyse der Zeitstempel `last_synced_at` im `cloud_sync`-Objekt (`projects.json` / `topics.json`) zu prüfen.
+* **Gültigkeitsfenster & Re-Sync Trigger**:
+  * Für dynamische Arbeits- und Posteingangsverzeichnisse: Ist `last_synced_at` älter als 6 Stunden, führe vor dem Zugriff auf die Dokumente eine Synchronisation durch (`sync_project_cloud.py`).
+  * Für statische Referenz- und Archivspeicher: Ist `last_synced_at` älter als 12 bis 24 Stunden, führe vorab eine Synchronisation durch.
+* **Fokussierte Ausführung**: Die Prüfung erfolgt ausschließlich task-gebunden beim konkreten Arbeiten mit Cloud-Dokumenten, nicht bei allgemeinen Workspace-Interaktionen ohne Cloud-Bezug.
+
+### C. Manuelle Dokumentenbeschreibungen
 * Die Datei `filemap.json` dient als Source of Truth für Dateimetadaten.
 * **Arbeitsregel**: Wenn du eine Datei aus dem Cloud-Speicher analysiert oder verarbeitet hast, trage eine kurze, prägnante Zusammenfassung der Datei in `filemap.json` unter dem Schlüssel `"description"` beim jeweiligen Pfad ein.
 * Generiere die Filemap anschließend neu (durch Aufruf von `sync_project_cloud.py`). Deine Beschreibung wird automatisch in die Tabelle der `filemap.md` übernommen.
 
-### C. Unicode-Sicherheit
+### D. Unicode-Sicherheit
 * Dateipfade und Terminalausgaben werden auf Windows-Systemen intern in UTF-8 verarbeitet, um Abstürze durch macOS-dekomponierte Sonderzeichen (NFD-Normalisierung, z. B. combining diaeresis `\u0308`) zu verhindern.
 * In allen erzeugten Markdown-Dateien müssen echte deutsche Umlaute (`ä`, `ö`, `ü`, `Ä`, `Ö`, `Ü`, `ß`) anstelle von Umschreibungen verwendet werden.
 
@@ -132,11 +143,12 @@ Bei der Erstinstallation des Skills in einem Agent-Workspace müssen die folgend
 
 ### Vorlage für die Ziel-`AGENTS.md`
 ```markdown
-### Hybrid-Modell für Cloud-Filemaps
+### Hybrid-Modell für Cloud-Filemaps (`cloud-atlas`)
 
-Um die Dateiverteilung in den Cloud-Speichern sauber zu dokumentieren, wird für die Cloud-Ablagen ein strukturiertes Hybrid-Modell genutzt:
+Um Dateiverteilungen in den Cloud-Speichern sauber zu dokumentieren, nutzt dieser Workspace das `cloud-atlas`-Modell:
 * **Source of Truth & View**: Eine `filemap.json` speichert Dateimetadaten und manuelle Beschreibungen (`"description"`), woraus eine Markdown-Tabelle (`filemap.md`) generiert wird.
-* **Lokale Spiegelung**: Konvertierte Markdown-Kopien (z. B. von PDFs via `markitdown`) werden im lokalen Ordner `memory/references/projects/<project>/cloud/` gehalten (niemals direkt im Cloud-Speicher).
-* **Automatisierung (24h-Regel & Cleanups)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Änderungen, die 24-stündige Gültigkeitskontrolle und die Bereinigung verwaister Dateien erfolgen vollautomatisch über den Skill **`cloud-atlas`**.
-* **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/boku-user/.agents/skills/cloud-atlas/SKILL.md).
+* **Lokale Spiegelung**: Konvertierte Markdown-Kopien (via `markitdown`) liegen lokal unter `memory/references/` (niemals direkt im Cloud-Speicher).
+* **.gitignore-Schutz**: Das Verzeichnis `data/cloud/` für Cloud-Junctions wird zwingend in `.gitignore` eingetragen (`data/cloud/`).
+* **Automatisierung (24h-Regel & Cleanups)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Quelländerungen, die task-gebundene Zeitstempel-Kontrolle (`last_synced_at` >6h/12h bei Cloud-Zugriff) und die Bereinigung verwaister Dateien erfolgen über den Skill **`cloud-atlas`**.
+* **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/mayr-ps/.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md).
 ```

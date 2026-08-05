@@ -95,7 +95,8 @@ Frontmatter-Regel:
       "scan_dir": "string",
       "output_json": "string",
       "output_md": "string",
-      "output_dir": "string"
+      "output_dir": "string",
+      "last_synced_at": "string (optional/automatisch, z. B. YYYY-MM-DD HH:MM:SS)"
     }
   },
   "updated_at": "YYYY-MM-DD",
