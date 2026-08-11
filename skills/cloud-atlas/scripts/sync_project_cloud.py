@@ -12,6 +12,8 @@ def parse_args():
     parser.add_argument("--force", action="store_true", help="Alle Konvertierungen erzwingen")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic")
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
+    parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
+    parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
     return parser.parse_args()
 
 def main():
@@ -25,7 +27,9 @@ def main():
     cmd_convert = [
         sys.executable,
         os.path.join(scripts_dir, "convert_cloud_docs.py"),
-        target_flag, target_id
+        target_flag, target_id,
+        "--file-timeout", str(args.file_timeout),
+        "--jobs", str(args.jobs)
     ]
     if args.force:
         cmd_convert.append("--force")

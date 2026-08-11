@@ -12,7 +12,7 @@ Dieser Skill verwaltet die Synchronisation, Konvertierung und Erstellung von Dat
 ## 1. Übersicht
 
 Der Skill kapselt drei zusammenhängende Aufgaben:
-1. **Dokumenten-Konvertierung**: Scannt einen Cloud-Speicher nach Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und konvertiert sie mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory.
+1. **Dokumenten-Konvertierung & Hänge-Schutz**: Scannt einen Cloud-Speicher nach Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und konvertiert sie mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory. Konvertierungen laufen prozessual isoliert auf mehreren CPU-Kernen (Standard: 2 Kerne, `--jobs 2`) mit individuellem Datei-Timeout (`--file-timeout 60`).
 2. **Filemap-Generierung**: Erstellt eine strukturierte JSON-Datenbank (`filemap.json`) und eine lesbare Markdown-Tabelle (`filemap.md`) mit Metadaten (Größe, Version, Änderungsdatum, Beschreibung, Mirror-Link).
 3. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen (wenn das Original-PDF in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse.
 
@@ -96,6 +96,15 @@ Standardmäßig werden nur neue oder geänderte Dokumente konvertiert. Um alle D
 ```bash
 python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --project-id meshe --force
 ```
+
+#### 5. Timeout & Parallelisierung (Multi-Core & Hänge-Schutz)
+Standardmäßig verarbeitet der Konvertierungsprozess Dokumente mit 2 parallelen Jobs (`--jobs 2`) und einem maximalen Timeout von 60 Sekunden pro Einzeldatei (`--file-timeout 60`).
+Diese Parameter können frei angepasst werden:
+```bash
+python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --project-id meshe --file-timeout 120 --jobs 4
+```
+* **Hänge-Schutz (`--file-timeout`):** Jede Konvertierung wird prozessual isoliert. Bei Zeitüberschreitung (z. B. durch 90-seitige PDF-Gutachten oder komplexe Tabellen) wird der jeweilige Worker-Prozess hart beendet (`terminate()`/`kill()`), eine Warnung ausgegeben und die betroffene Datei sauber übersprungen.
+* **Multi-Core Parallelisierung (`--jobs N` / `-j N`):** Verarbeitet bis zu `N` Dokumente zeitgleich auf `N` CPU-Kernen (Standard: 2).
 
 ---
 

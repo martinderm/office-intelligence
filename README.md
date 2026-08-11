@@ -124,7 +124,7 @@ Pfad:
 
 Zweck:
 
-- Kartografierung von Cloud-Speicher Junctions und vollautomatische Synchronisation lokaler Markdown-Spiegelungen (Mirrors).
+- Kartografierung von Cloud-Speicher Junctions und vollautomatische Synchronisation lokaler Markdown-Spiegelungen (Mirrors) mit Multi-Core-Verarbeitung (`--jobs 2`) und Hänge-Schutz (`--file-timeout 60`).
 - Ausführliche CLI- und Prozessdokumentation siehe interne `SKILL.md`.
 
 ## Installation in Agent-Workspaces

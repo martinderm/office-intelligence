@@ -5,6 +5,8 @@ import re
 import json
 import argparse
 import subprocess
+import time
+import multiprocessing
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -29,6 +31,8 @@ def parse_args():
     parser.add_argument("--force", action="store_true", help="Alle Konvertierungen erzwingen")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic (Standard: Auto-Erkennung)")
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
+    parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
+    parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
     return parser.parse_args()
 
 # Setup markitdown conversion
@@ -65,6 +69,126 @@ def convert_to_markdown(src_abs):
             raise RuntimeError("Neither 'markitdown' Python package nor CLI tool was found. Please run 'pip install markitdown'.")
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
+
+def format_size(bytes_size):
+    if bytes_size < 1024 * 1024:
+        return f"{bytes_size / 1024:.1f} KB"
+    return f"{bytes_size / (1024 * 1024):.1f} MB"
+
+def _convert_worker_target(src_abs, conn):
+    try:
+        res = convert_to_markdown(src_abs)
+        conn.send(("ok", res))
+    except Exception as e:
+        conn.send(("error", str(e)))
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, total_count=None):
+    if total_count is None:
+        total_count = len(tasks)
+        
+    results = {}
+    if not tasks:
+        return results
+
+    pending_tasks = list(tasks)
+    active_jobs = []
+    task_counter = 0
+
+    while pending_tasks or active_jobs:
+        while pending_tasks and len(active_jobs) < max_jobs:
+            task = pending_tasks.pop(0)
+            task_counter += 1
+            idx = task.get("task_num", task_counter)
+            src_rel = task["src_rel"]
+            size_str = format_size(task["stat"].st_size)
+            
+            print(f"[{idx}/{total_count}] Converting {src_rel} ({size_str}) ...", flush=True)
+            
+            parent_conn, child_conn = multiprocessing.Pipe()
+            proc = multiprocessing.Process(target=_convert_worker_target, args=(task["src_abs"], child_conn))
+            proc.start()
+            child_conn.close()
+            
+            active_jobs.append({
+                "task": task,
+                "proc": proc,
+                "parent_conn": parent_conn,
+                "start_time": time.time(),
+                "index": idx
+            })
+
+        finished_jobs = []
+        for job in active_jobs:
+            proc = job["proc"]
+            parent_conn = job["parent_conn"]
+            task = job["task"]
+            src_rel = task["src_rel"]
+            dest_rel = task["dest_rel"]
+            idx = job["index"]
+            elapsed = time.time() - job["start_time"]
+
+            if parent_conn.poll(0.02):
+                try:
+                    status, payload = parent_conn.recv()
+                    parent_conn.close()
+                    proc.join(timeout=1)
+                    if status == "ok":
+                        results[src_rel] = {"success": True, "markdown_body": payload, "error": None}
+                        print(f"[{idx}/{total_count}] Fertig: {src_rel} -> {dest_rel}", flush=True)
+                    else:
+                        results[src_rel] = {"success": False, "markdown_body": None, "error": payload}
+                        print(f"[{idx}/{total_count}] Error converting {src_rel}: {payload}", flush=True)
+                except Exception as e:
+                    results[src_rel] = {"success": False, "markdown_body": None, "error": str(e)}
+                    print(f"[{idx}/{total_count}] Error reading output for {src_rel}: {e}", flush=True)
+                finished_jobs.append(job)
+            elif not proc.is_alive():
+                if parent_conn.poll(0.01):
+                    try:
+                        status, payload = parent_conn.recv()
+                        parent_conn.close()
+                        proc.join()
+                        if status == "ok":
+                            results[src_rel] = {"success": True, "markdown_body": payload, "error": None}
+                            print(f"[{idx}/{total_count}] Fertig: {src_rel} -> {dest_rel}", flush=True)
+                        else:
+                            results[src_rel] = {"success": False, "markdown_body": None, "error": payload}
+                            print(f"[{idx}/{total_count}] Error converting {src_rel}: {payload}", flush=True)
+                    except Exception as e:
+                        results[src_rel] = {"success": False, "markdown_body": None, "error": str(e)}
+                        print(f"[{idx}/{total_count}] Error converting {src_rel}: {e}", flush=True)
+                else:
+                    parent_conn.close()
+                    proc.join()
+                    err_msg = f"Worker process terminated unexpectedly (exit code {proc.exitcode})."
+                    results[src_rel] = {"success": False, "markdown_body": None, "error": err_msg}
+                    print(f"[{idx}/{total_count}] Error converting {src_rel}: {err_msg}", flush=True)
+                finished_jobs.append(job)
+            elif elapsed > file_timeout:
+                print(f"[TIMEOUT] Konvertierung fuer {src_rel} nach {file_timeout}s abgebrochen! Skipping.", file=sys.stderr, flush=True)
+                try:
+                    proc.terminate()
+                    proc.join(timeout=2)
+                    if proc.is_alive():
+                        proc.kill()
+                        proc.join()
+                except Exception as e:
+                    print(f"Warning terminating process for {src_rel}: {e}", file=sys.stderr, flush=True)
+                parent_conn.close()
+                results[src_rel] = {"success": False, "markdown_body": None, "error": f"Timeout nach {file_timeout}s"}
+                finished_jobs.append(job)
+
+        for fj in finished_jobs:
+            active_jobs.remove(fj)
+
+        time.sleep(0.05)
+
+    return results
 
 # Regex patterns for version extraction
 version_patterns = [
@@ -245,7 +369,6 @@ def main():
             print(f"Error: Cloud directory '{cloud_path_abs}' does not exist.")
             continue
             
-        # Load filemap.json
         filemap_data = {}
         if os.path.exists(filemap_json_abs):
             try:
@@ -254,7 +377,6 @@ def main():
             except Exception as e:
                 print(f"Warning: Could not read filemap.json: {e}")
                 
-        # Initialize filemap_data if empty to fix write bug
         if not filemap_data:
             filemap_data = {
                 "project": project_id,
@@ -266,7 +388,7 @@ def main():
         processed_mirrors = set()
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # Scan cloud directory
+        candidate_tasks = []
         for root, dirs, filenames in os.walk(cloud_path_abs):
             for f in filenames:
                 ext = os.path.splitext(f)[1].lower()
@@ -278,7 +400,6 @@ def main():
                 src_abs = os.path.join(root, f)
                 src_rel_workspace = os.path.relpath(src_abs, workspace_root).replace("\\", "/")
                 
-                # Determine output markdown path
                 rel_to_cloud = os.path.relpath(src_abs, cloud_path_abs)
                 dest_rel_workspace = os.path.join(output_dir, os.path.splitext(rel_to_cloud)[0] + ".md").replace("\\", "/")
                 dest_abs = os.path.normpath(os.path.join(workspace_root, dest_rel_workspace))
@@ -289,7 +410,6 @@ def main():
                 src_mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                 src_version = get_file_version(f)
                 
-                # Check if conversion is needed
                 needs_conversion = args.force or not os.path.exists(get_safe_path(dest_abs))
                 existing_meta = None
                 
@@ -314,33 +434,83 @@ def main():
                     else:
                         needs_conversion = True
                         
-                if needs_conversion:
-                    print(f"Converting {src_rel_workspace} -> {dest_rel_workspace}...")
-                    try:
-                        markdown_body = convert_to_markdown(src_abs)
-                        metadata = {
-                            "original_file": src_rel_workspace,
-                            "version": src_version,
-                            "conversion_date": now_str,
-                            "file_date": src_mtime,
-                            "last_verified_date": now_str
-                        }
-                        write_markdown_file(dest_abs, metadata, markdown_body)
-                    except Exception as e:
-                        print(f"Error converting {src_rel_workspace}: {e}")
-                        continue
-                        
+                candidate_tasks.append({
+                    "src_abs": src_abs,
+                    "src_rel": src_rel_workspace,
+                    "dest_abs": dest_abs,
+                    "dest_rel": dest_rel_workspace,
+                    "src_mtime": src_mtime,
+                    "src_version": src_version,
+                    "stat": stat,
+                    "needs_conversion": needs_conversion
+                })
+
+        total_files = len(candidate_tasks)
+        tasks_to_convert = []
+        count_skipped = 0
+        count_converted = 0
+        count_failed = 0
+
+        for task_idx, t in enumerate(candidate_tasks, 1):
+            t["task_num"] = task_idx
+            if t["needs_conversion"]:
+                tasks_to_convert.append(t)
+            else:
+                count_skipped += 1
+                src_rel_workspace = t["src_rel"]
+                dest_rel_workspace = t["dest_rel"]
                 if src_rel_workspace in files_in_json:
                     files_in_json[src_rel_workspace]["markdown_mirror"] = dest_rel_workspace
                 else:
                     files_in_json[src_rel_workspace] = {
-                        "version": src_version,
-                        "mtime": src_mtime,
-                        "size": f"{stat.st_size / 1024:.1f} KB",
+                        "version": t["src_version"],
+                        "mtime": t["src_mtime"],
+                        "size": f"{t['stat'].st_size / 1024:.1f} KB",
                         "description": "-",
                         "markdown_mirror": dest_rel_workspace
                     }
-                    
+
+        if tasks_to_convert:
+            results = run_conversion_tasks(
+                tasks_to_convert,
+                file_timeout=args.file_timeout,
+                max_jobs=args.jobs,
+                total_count=total_files
+            )
+
+            for t in tasks_to_convert:
+                src_rel_workspace = t["src_rel"]
+                dest_rel_workspace = t["dest_rel"]
+                dest_abs = t["dest_abs"]
+                res = results.get(src_rel_workspace, {"success": False, "error": "Unknown error"})
+
+                if res["success"]:
+                    count_converted += 1
+                    metadata = {
+                        "original_file": src_rel_workspace,
+                        "version": t["src_version"],
+                        "conversion_date": now_str,
+                        "file_date": t["src_mtime"],
+                        "last_verified_date": now_str
+                    }
+                    os.makedirs(os.path.dirname(get_safe_path(dest_abs)), exist_ok=True)
+                    write_markdown_file(dest_abs, metadata, res["markdown_body"])
+
+                    if src_rel_workspace in files_in_json:
+                        files_in_json[src_rel_workspace]["markdown_mirror"] = dest_rel_workspace
+                    else:
+                        files_in_json[src_rel_workspace] = {
+                            "version": t["src_version"],
+                            "mtime": t["src_mtime"],
+                            "size": f"{t['stat'].st_size / 1024:.1f} KB",
+                            "description": "-",
+                            "markdown_mirror": dest_rel_workspace
+                        }
+                else:
+                    count_failed += 1
+
+        print(f"\nZusammenfassung fuer {sid}: {count_converted} erfolgreich konvertiert, {count_skipped} aktuell (uebersprungen), {count_failed} fehlgeschlagen/Timeout.")
+
         # Clean up orphaned markdown mirrors (where original PDF is deleted)
         if os.path.exists(output_path_abs):
             for root, dirs, filenames in os.walk(output_path_abs):
