@@ -109,11 +109,13 @@ def convert_to_markdown_raw(src_abs):
 
 def convert_to_markdown(src_abs, enable_ocr=True):
     text = convert_to_markdown_raw(src_abs)
+    ocr_applied = False
     if enable_ocr and src_abs.lower().endswith(".pdf") and len(text.strip()) < 30:
         ocr_success, msg = run_ocr_on_pdf(src_abs)
         if ocr_success:
             text = convert_to_markdown_raw(src_abs)
-    return text
+            ocr_applied = True
+    return text, ocr_applied
 
 
 def format_size(bytes_size):
@@ -123,8 +125,8 @@ def format_size(bytes_size):
 
 def _convert_worker_target(src_abs, conn, enable_ocr=True):
     try:
-        res = convert_to_markdown(src_abs, enable_ocr=enable_ocr)
-        conn.send(("ok", res))
+        res_text, ocr_applied = convert_to_markdown(src_abs, enable_ocr=enable_ocr)
+        conn.send(("ok", {"text": res_text, "ocr_applied": ocr_applied}))
     except Exception as e:
         conn.send(("error", str(e)))
     finally:
@@ -184,13 +186,19 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
                     parent_conn.close()
                     proc.join(timeout=1)
                     if status == "ok":
-                        results[src_rel] = {"success": True, "markdown_body": payload, "error": None}
-                        print(f"[{idx}/{total_count}] Fertig: {src_rel} -> {dest_rel}", flush=True)
+                        results[src_rel] = {
+                            "success": True,
+                            "markdown_body": payload["text"],
+                            "ocr_applied": payload["ocr_applied"],
+                            "error": None
+                        }
+                        ocr_flag = " [OCR]" if payload["ocr_applied"] else ""
+                        print(f"[{idx}/{total_count}] Fertig{ocr_flag}: {src_rel} -> {dest_rel}", flush=True)
                     else:
-                        results[src_rel] = {"success": False, "markdown_body": None, "error": payload}
+                        results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": payload}
                         print(f"[{idx}/{total_count}] Error converting {src_rel}: {payload}", flush=True)
                 except Exception as e:
-                    results[src_rel] = {"success": False, "markdown_body": None, "error": str(e)}
+                    results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": str(e)}
                     print(f"[{idx}/{total_count}] Error reading output for {src_rel}: {e}", flush=True)
                 finished_jobs.append(job)
             elif not proc.is_alive():
@@ -200,19 +208,25 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
                         parent_conn.close()
                         proc.join()
                         if status == "ok":
-                            results[src_rel] = {"success": True, "markdown_body": payload, "error": None}
-                            print(f"[{idx}/{total_count}] Fertig: {src_rel} -> {dest_rel}", flush=True)
+                            results[src_rel] = {
+                                "success": True,
+                                "markdown_body": payload["text"],
+                                "ocr_applied": payload["ocr_applied"],
+                                "error": None
+                            }
+                            ocr_flag = " [OCR]" if payload["ocr_applied"] else ""
+                            print(f"[{idx}/{total_count}] Fertig{ocr_flag}: {src_rel} -> {dest_rel}", flush=True)
                         else:
-                            results[src_rel] = {"success": False, "markdown_body": None, "error": payload}
+                            results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": payload}
                             print(f"[{idx}/{total_count}] Error converting {src_rel}: {payload}", flush=True)
                     except Exception as e:
-                        results[src_rel] = {"success": False, "markdown_body": None, "error": str(e)}
+                        results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": str(e)}
                         print(f"[{idx}/{total_count}] Error converting {src_rel}: {e}", flush=True)
                 else:
                     parent_conn.close()
                     proc.join()
                     err_msg = f"Worker process terminated unexpectedly (exit code {proc.exitcode})."
-                    results[src_rel] = {"success": False, "markdown_body": None, "error": err_msg}
+                    results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": err_msg}
                     print(f"[{idx}/{total_count}] Error converting {src_rel}: {err_msg}", flush=True)
                 finished_jobs.append(job)
             elif elapsed > file_timeout:
@@ -226,7 +240,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
                 except Exception as e:
                     print(f"Warning terminating process for {src_rel}: {e}", file=sys.stderr, flush=True)
                 parent_conn.close()
-                results[src_rel] = {"success": False, "markdown_body": None, "error": f"Timeout nach {file_timeout}s"}
+                results[src_rel] = {"success": False, "markdown_body": None, "ocr_applied": False, "error": f"Timeout nach {file_timeout}s"}
                 finished_jobs.append(job)
 
         for fj in finished_jobs:
@@ -543,6 +557,10 @@ def main():
                         "file_date": t["src_mtime"],
                         "last_verified_date": now_str
                     }
+                    if res.get("ocr_applied"):
+                        metadata["ocr_applied"] = "true"
+                        metadata["ocr_notice"] = "Hinweis: Text wurde mittels OCR aus einem Bild-PDF erfasst. Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
+
                     os.makedirs(os.path.dirname(get_safe_path(dest_abs)), exist_ok=True)
                     write_markdown_file(dest_abs, metadata, res["markdown_body"])
 
