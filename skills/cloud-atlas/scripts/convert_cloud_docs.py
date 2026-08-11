@@ -464,6 +464,9 @@ def main():
                     if existing_meta:
                         if existing_meta.get("file_date") != src_mtime:
                             needs_conversion = True
+                        elif len(body.strip()) < 10:
+                            # Re-convert if previous conversion produced an empty/truncated mirror
+                            needs_conversion = True
                         else:
                             last_verified_str = existing_meta.get("last_verified_date")
                             if last_verified_str:
