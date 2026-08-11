@@ -1,0 +1,2 @@
+markitdown>=0.1.0
+ocrmypdf>=17.0.0

@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
+    parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
     return parser.parse_args()
 
 # Setup markitdown conversion
@@ -48,7 +49,44 @@ def get_safe_path(filepath):
         return "\\\\?\\" + os.path.normpath(os.path.abspath(filepath))
     return filepath
 
-def convert_to_markdown(src_abs):
+def ensure_tesseract_path():
+    import platform
+    if platform.system() == "Windows":
+        candidates = [
+            r"C:\Users\dagobert-ai\AppData\Local\Programs\Tesseract-OCR",
+            r"C:\Program Files\Tesseract-OCR",
+            r"C:\Program Files (x86)\Tesseract-OCR",
+            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR")
+        ]
+        path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+        for cand in candidates:
+            if os.path.exists(os.path.join(cand, "tesseract.exe")) and cand not in path_dirs:
+                os.environ["PATH"] = cand + os.pathsep + os.environ.get("PATH", "")
+                break
+
+def run_ocr_on_pdf(src_abs, timeout=120):
+    safe_src = get_safe_path(src_abs)
+    ensure_tesseract_path()
+    try:
+        res = subprocess.run(
+            ["ocrmypdf", "-l", "deu", "--skip-text", safe_src, safe_src],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=timeout
+        )
+        if res.returncode == 0:
+            return True, "OCR succeeded"
+        else:
+            return False, res.stderr or f"Exit code {res.returncode}"
+    except FileNotFoundError:
+        return False, "ocrmypdf executable not found."
+    except subprocess.TimeoutExpired:
+        return False, f"ocrmypdf timed out after {timeout}s"
+    except Exception as e:
+        return False, str(e)
+
+def convert_to_markdown_raw(src_abs):
     safe_src = get_safe_path(src_abs)
     if use_library:
         try:
@@ -58,7 +96,6 @@ def convert_to_markdown(src_abs):
         except Exception as e:
             raise RuntimeError(f"MarkItDown library conversion failed: {e}")
     else:
-        # Fallback to CLI command
         try:
             res = subprocess.run(["markitdown", safe_src], capture_output=True, text=True, encoding="utf-8")
             if res.returncode == 0:
@@ -70,14 +107,23 @@ def convert_to_markdown(src_abs):
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
 
+def convert_to_markdown(src_abs, enable_ocr=True):
+    text = convert_to_markdown_raw(src_abs)
+    if enable_ocr and src_abs.lower().endswith(".pdf") and len(text.strip()) < 30:
+        ocr_success, msg = run_ocr_on_pdf(src_abs)
+        if ocr_success:
+            text = convert_to_markdown_raw(src_abs)
+    return text
+
+
 def format_size(bytes_size):
     if bytes_size < 1024 * 1024:
         return f"{bytes_size / 1024:.1f} KB"
     return f"{bytes_size / (1024 * 1024):.1f} MB"
 
-def _convert_worker_target(src_abs, conn):
+def _convert_worker_target(src_abs, conn, enable_ocr=True):
     try:
-        res = convert_to_markdown(src_abs)
+        res = convert_to_markdown(src_abs, enable_ocr=enable_ocr)
         conn.send(("ok", res))
     except Exception as e:
         conn.send(("error", str(e)))
@@ -87,7 +133,7 @@ def _convert_worker_target(src_abs, conn):
         except Exception:
             pass
 
-def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, total_count=None):
+def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, total_count=None):
     if total_count is None:
         total_count = len(tasks)
         
@@ -110,7 +156,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, total_count=None):
             print(f"[{idx}/{total_count}] Converting {src_rel} ({size_str}) ...", flush=True)
             
             parent_conn, child_conn = multiprocessing.Pipe()
-            proc = multiprocessing.Process(target=_convert_worker_target, args=(task["src_abs"], child_conn))
+            proc = multiprocessing.Process(target=_convert_worker_target, args=(task["src_abs"], child_conn, enable_ocr))
             proc.start()
             child_conn.close()
             
@@ -475,6 +521,7 @@ def main():
                 tasks_to_convert,
                 file_timeout=args.file_timeout,
                 max_jobs=args.jobs,
+                enable_ocr=not args.no_ocr,
                 total_count=total_files
             )
 

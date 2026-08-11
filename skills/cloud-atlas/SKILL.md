@@ -106,6 +106,18 @@ python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --project-id mes
 * **Hänge-Schutz (`--file-timeout`):** Jede Konvertierung wird prozessual isoliert. Bei Zeitüberschreitung (z. B. durch 90-seitige PDF-Gutachten oder komplexe Tabellen) wird der jeweilige Worker-Prozess hart beendet (`terminate()`/`kill()`), eine Warnung ausgegeben und die betroffene Datei sauber übersprungen.
 * **Multi-Core Parallelisierung (`--jobs N` / `-j N`):** Verarbeitet bis zu `N` Dokumente zeitgleich auf `N` CPU-Kernen (Standard: 2).
 
+#### 6. Automatisches OCR-Fallback für gescannte PDFs
+Reine Bild-Scans (z. B. iOS Kamera-Scans/Dateien-App) besitzen initial keine Textschicht. `convert_cloud_docs.py` erkennt dies automatisch:
+* **Automatisches OCR:** Sobald aus einer PDF-Datei weniger als 30 Zeichen extrahiert werden können, führt das Skript im Hintergrund automatisch `ocrmypdf -l deu --skip-text` auf der Quelldatei aus.
+* **Original-PDF Anreicherung:** Die OCR-Textschicht wird unsichtbar direkt im Original-PDF hinterlegt (Sandwich-PDF). Das visuelle Erscheinungsbild bleibt zu 100 % unverändert, aber das Original-PDF ist ab sofort im gesamten System durchsuchbar und wird vollständig in Markdown gespiegelt.
+* **OCR deaktivieren (`--no-ocr`):** Über das Flag `--no-ocr` kann die automatische OCR-Texterkennung bei Bedarf deaktiviert werden.
+
+### Systemvoraussetzungen / Requirements
+* **Python-Pakete:** `markitdown>=0.1.0`, `ocrmypdf>=17.0.0` (siehe `requirements.txt`).
+* **OCR-Engine:** Tesseract OCR v5+ mit deutschem Sprachpaket (`tessdata/deu.traineddata`).
+  * *Windows:* `winget install UB-Mannheim.TesseractOCR` (wird automatisch in den Standardpfaden erkannt).
+  * *Linux / WSL:* `sudo apt install ocrmypdf tesseract-ocr-deu`.
+
 ---
 
 ## 4. Operative Arbeitsregeln & Automatismen

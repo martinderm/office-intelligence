@@ -14,6 +14,7 @@ def parse_args():
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
+    parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
     return parser.parse_args()
 
 def main():
@@ -37,6 +38,8 @@ def main():
         cmd_convert.append("--topic")
     if args.storage_id:
         cmd_convert.extend(["--storage-id", args.storage_id])
+    if args.no_ocr:
+        cmd_convert.append("--no-ocr")
         
     print(f"=== Schritt 1: Konvertiere Cloud-Dokumente fuer ID '{target_id}' ===")
     res_convert = subprocess.run(cmd_convert)
