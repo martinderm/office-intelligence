@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
-import sys
 from pathlib import Path
-from datetime import datetime, timezone
+import sys
+
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
+
+from core import run_himalaya, utc_now_iso
 
 
 def load_json(path: Path):
@@ -21,13 +25,10 @@ def load_json(path: Path):
 
 
 def list_imap_folders() -> set[str]:
-    proc = subprocess.run(
-        ["himalaya", "-o", "json", "folder", "list"],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    folders = json.loads(proc.stdout)
+    raw = run_himalaya(["-o", "json", "folder", "list"])
+    if "[" in raw:
+        raw = raw[raw.find("["):]
+    folders = json.loads(raw)
     return {x["name"] for x in folders if "name" in x}
 
 
@@ -140,7 +141,7 @@ def main() -> int:
     state_path.parent.mkdir(parents=True, exist_ok=True)
     state_payload = {
         "ok": result["ok"],
-        "checked_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "checked_at": utc_now_iso(),
         "catalog": current_catalog,
         "result": {
             "missing_count": result["missing_count"],
@@ -154,14 +155,12 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except subprocess.CalledProcessError as exc:
+    except Exception as exc:  # noqa: BLE001
         print(
             json.dumps(
                 {
                     "ok": False,
-                    "error": "himalaya command failed",
-                    "returncode": exc.returncode,
-                    "stderr": exc.stderr,
+                    "error": str(exc),
                 },
                 ensure_ascii=False,
                 indent=2,

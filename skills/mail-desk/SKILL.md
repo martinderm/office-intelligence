@@ -286,9 +286,9 @@ Die Verifikation soll dabei immer mit dem **kleinstmoeglichen belastbaren Nachwe
 ### Harte Regel: kein manueller Final-Index-Write
 
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert werden.
-Ausschließlich zulässig sind die vorgesehenen Skripte:
+Ausschließlich zulässig sind die vorgesehenen Skripte bzw. der Batch-Runner:
 
-- `python3 scripts/final_index_lookup.py --message-id '4DB7DEC0-E705-4F5C-85E7-0BA35CBDF068@boku.ac.at'`
+- `python3 scripts/final_index_lookup.py --message-id 'msg-2026-001@example.org'`
 - `python3 scripts/final_index_upsert.py --mode upsert-final --stdin`
 - `python3 scripts/final_index_upsert.py --mode patch --stdin`
 - `python3 scripts/final_index_upsert_many.py --mode upsert-final --file <batch.jsonl>`
@@ -301,28 +301,35 @@ Zusätzlich erlaubt für die Index-Location:
   - `MAIL_DESK_DATA_DIR=/abs/path/to/data/mail-desk`
   - oder `MAIL_DESK_FINAL_INDEX_PATH=/abs/path/to/final-location-index.json`
 
-Hinweis: Message-IDs fuer Skript-Lookups immer in normalisierter Form **ohne `< >`** uebergeben; Message-IDs mit `$` dabei in **Single Quotes** setzen, damit die Shell nichts expandiert.
+Hinweis: Message-IDs für Skript-Lookups immer in normalisierter Form **ohne `< >`** übergeben; Message-IDs mit `$` dabei in **Single Quotes** setzen, damit die Shell nichts expandiert.
 Hinweis: Für die Skriptaufrufe sind `python3` **und** `python` erlaubt; verwende die Variante, die lokal verfügbar ist.
 
-### Automatisierte Hilfsskripte (Workflows)
+### Automatisierte Hilfsskripte & Modulare Architektur
 
-Zusätzlich zu den Kernskripten stehen folgende Automatisierungswerkzeuge in `scripts/` bereit:
+Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/core/`):
+- `core/himalaya.py`: Robuste CLI-Ausführung, Header-/Preview-Extraktion, Encoding-Schutz und Parallelsuche.
+- `core/index.py`: Atomares Lesen, Schreiben, Filtern und Lookup für `final-location-index.json`.
+- `core/action_log.py`: Protokollierung in `action-log.jsonl`, `replies-needed.jsonl` und Case-Archivierung.
+- `core/evidence.py`: Aktualisierung von Markdown-Evidenzen (`evidence/YYYY-MM.md`) mit Dublettenerkennung.
 
 1. **Abfragen des Final-Location-Index (`final_index_query.py`):**
    Filtert und durchsucht den Index nach Ordnern, Message-IDs oder Freitext.
-   `python3 scripts/final_index_query.py --folder 'Projekte/EVOLVE'`
-   `python3 scripts/final_index_query.py --query 'MFHEA'`
+   `python3 scripts/final_index_query.py --folder 'Projekte/Project-Alpha'`
+   `python3 scripts/final_index_query.py --query 'Statusbericht'`
 
 2. **Lösen und Archivieren offener Antwortfälle (`mail_desk_resolve_case.py`):**
    Archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` direkt unter dem wochenbasierten Pfad `archive/YYYY-Www/` und aktualisiert den Status.
-   `python3 scripts/mail_desk_resolve_case.py --message-id '...' --status 'resolved' --resolution '...'`
+   `python3 scripts/mail_desk_resolve_case.py --message-id 'msg-2026-001@example.org' --status 'resolved' --resolution 'Abstimmung im Meeting erfolgt.'`
 
-3. **Batch-Runner für Inspizieren & Ausführen (`mail_desk_batch_runner.py`):**
-   Führt komplexe Batch-Operationen (Parallel-Inspektion oder gekoppelte Ausführung aus Routing, Envelope-Verifikation, Index-Upsert, Action-Log und Evidence-Pflege) über ein temporäres JSON-Manifest in `data/mail-desk/` aus. Das temporäre Input-File wird bei bestätigtem Erfolg automatisch gelöscht, sodass für den gesamten Batch-Lauf genau ein Shell-Befehl im Agent-Harness freigegeben werden muss.
+3. **Einheitlicher Batch-Runner (`mail_desk_batch_runner.py`):**
+   Führt komplexe Batch-Operationen (Parallel-Inspektion, gekoppelte Ausführung aus Routing/Verifikation/Index/Log/Evidence, Integritätsprüfung, globale Suche und Batch-Resolution) über ein temporäres JSON-Manifest in `data/mail-desk/` aus. Das temporäre Input-File wird bei bestätigtem Erfolg automatisch gelöscht, sodass für jeden Vorgang genau ein Shell-Befehl im Agent-Harness freigegeben werden muss.
    - Ausführliche Dokumentation und JSON-Schemas: [`references/batch-runner.md`](references/batch-runner.md)
-   - Standard-Dateinamen: Input `data/mail-desk/batch-inspect.json` (Inspektion) / `data/mail-desk/batch-manifest.json` (Ausführung)
-   - Batch-Inspektion: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json`
-   - Batch-Ausführung: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json` (oder ohne Argumente bei Standard-Dateinamen)
+   - Standard-Dateinamen: `batch-inspect.json`, `batch-manifest.json`, `batch-verify.json`, `batch-search.json`, `batch-resolve.json`
+   - **Inspektion:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json`
+   - **Ausführung:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json` (oder ohne Argumente bei Standard-Manifest)
+   - **Verifikation:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-verify.json`
+   - **Globale Suche:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-search.json`
+   - **Batch-Lösung / Archivierung:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-resolve.json`
 
 ### Final-Index- und Batch-Regeln
 

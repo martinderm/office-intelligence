@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Unified batch runner for mail-desk (inspect and execute workflows).
+"""Unified batch runner for mail-desk operations.
 
-Enables flexible, token-efficient batch mail handling with a single shell invocation.
-Supports reading/inspecting mailbox envelopes in parallel and executing batches of
-routing, index updates, action logging, and evidence maintenance via a temporary JSON manifest.
+Supports 5 modes:
+1. inspect: Parallel header & preview fetching with deduplication check
+2. execute: Coupled routing, target verification, index upsert, logging, evidence
+3. verify:  Consistency check across final index, action log, evidence, and folders
+4. search:  Global mailbox search by query or message_ids
+5. resolve: Batch resolution and archival of replies-needed and review cases
 """
 
 from __future__ import annotations
@@ -11,177 +14,102 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
-import os
-import subprocess
-import sys
-import tempfile
-from datetime import datetime, timezone
 from pathlib import Path
+import sys
 from typing import Any
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8")
+# Add parent directory to sys.path if invoked directly
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
 
-
-
-# ==============================================================================
-# Helper Functions & Normalization
-# ==============================================================================
-
-def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def normalize_message_id(value: str) -> str:
-    s = value.strip()
-    while s.startswith("<") and s.endswith(">") and len(s) >= 2:
-        s = s[1:-1].strip()
-    return s.lower()
-
-
-def run_himalaya(args: list[str], account: str | None = None, timeout: int = 30) -> str:
-    env_vars = os.environ.copy()
-    env_vars["PAGER"] = "cat"
-    cmd = ["himalaya"] + args
-    if account:
-        cmd.extend(["-a", account])
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=env_vars, timeout=timeout)
-    if res.returncode != 0:
-        raise RuntimeError(f"Himalaya failed: {' '.join(cmd)}\nStderr: {res.stderr.strip()}")
-    return res.stdout
-
-
-def resolve_data_dir(custom: str | None = None) -> Path:
-    if custom:
-        return Path(custom).expanduser().resolve()
-    env_dir = os.environ.get("MAIL_DESK_DATA_DIR", "").strip()
-    if env_dir:
-        return Path(env_dir).expanduser().resolve()
-    cwd_data = Path.cwd() / "data" / "mail-desk"
-    if cwd_data.exists() or cwd_data.parent.exists():
-        return cwd_data.resolve()
-    # fallback to script-relative
-    fallback = Path(__file__).resolve().parents[3] / "data" / "mail-desk"
-    return fallback.resolve()
-
-
-def resolve_final_index_path(custom_path: str | None = None, data_dir: Path | None = None) -> Path:
-    if custom_path:
-        return Path(custom_path).expanduser().resolve()
-    env_index = os.environ.get("MAIL_DESK_FINAL_INDEX_PATH", "").strip()
-    if env_index:
-        return Path(env_index).expanduser().resolve()
-    dd = data_dir or resolve_data_dir()
-    return dd / "final-location-index.json"
-
-
-def load_final_index(index_path: Path) -> dict[str, Any]:
-    if not index_path.exists():
-        return {"schema_version": 1, "updated_at": None, "items": {}}
-    with index_path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict):
-        return {"schema_version": 1, "updated_at": None, "items": {}}
-    data.setdefault("items", {})
-    return data
-
-
-def save_final_index_atomic(index_path: Path, data: dict[str, Any]) -> None:
-    index_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        newline="\n",
-        dir=index_path.parent,
-        prefix=index_path.name + ".",
-        suffix=".tmp",
-        delete=False,
-    ) as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
-        temp_path = Path(f.name)
-    temp_path.replace(index_path)
+from core import (
+    append_action_log_entry,
+    append_replies_needed_entry,
+    get_single_email_details,
+    load_final_index,
+    normalize_message_id,
+    resolve_case,
+    resolve_data_dir,
+    resolve_final_index_path,
+    run_himalaya,
+    save_final_index_atomic,
+    search_mailbox,
+    update_evidence_file,
+    utc_now_iso,
+    verify_in_target_folder,
+)
 
 
 # ==============================================================================
-# Inspect / Fetch Workflow
+# Inspect Mode
 # ==============================================================================
 
-def get_single_email_details(
-    env_id: str,
-    folder: str = "INBOX",
-    account: str | None = None,
-    preview_lines: int = 30,
-) -> dict[str, Any]:
-    args = [
-        "message", "read", "--preview",
-        "-H", "Message-Id", "-H", "In-Reply-To", "-H", "References",
-        "-H", "From", "-H", "To", "-H", "Cc", "-H", "Date", "-H", "Subject",
-        "-f", folder, str(env_id),
-    ]
-    try:
-        stdout = run_himalaya(args, account=account, timeout=30)
-        headers: dict[str, str] = {}
-        body_lines: list[str] = []
-        in_headers = True
-        cur_header: str | None = None
+def get_oldest_envelope_ids(folder: str, count: int, account: str | None = None) -> list[str]:
+    page_size = 50
+    page = 1
+    # Step 1: probe exponentially
+    while True:
+        try:
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(page)], account=account, timeout=15)
+            if "[" in out:
+                out = out[out.find("["):]
+            envs = json.loads(out)
+            if not envs:
+                break
+            page *= 2
+        except Exception:
+            break
 
-        for line in stdout.splitlines():
-            if in_headers:
-                if not line.strip():
-                    in_headers = False
-                    continue
-                if line.startswith(" ") or line.startswith("\t"):
-                    if cur_header:
-                        headers[cur_header] += " " + line.strip()
-                elif ":" in line:
-                    k, v = line.split(":", 1)
-                    cur_header = k.strip().lower()
-                    headers[cur_header] = v.strip()
+    # Step 2: binary search
+    low = max(1, page // 2)
+    high = page
+    last_valid_page = 1
+    last_page_envs = []
+    while low <= high:
+        mid = (low + high) // 2
+        try:
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(mid)], account=account, timeout=15)
+            if "[" in out:
+                out = out[out.find("["):]
+            envs = json.loads(out)
+            if envs:
+                last_valid_page = mid
+                last_page_envs = envs
+                low = mid + 1
             else:
-                body_lines.append(line)
+                high = mid - 1
+        except Exception:
+            high = mid - 1
 
-        raw_mid = headers.get("message-id", "")
-        norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+    # Step 3: collect envelopes
+    collected = list(last_page_envs)
+    curr_page = last_valid_page - 1
+    while len(collected) < count and curr_page >= 1:
+        try:
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(curr_page)], account=account, timeout=15)
+            if "[" in out:
+                out = out[out.find("["):]
+            envs = json.loads(out)
+            collected = envs + collected
+            curr_page -= 1
+        except Exception:
+            break
 
-        return {
-            "envelope_id": str(env_id),
-            "folder": folder,
-            "message_id": norm_mid,
-            "raw_message_id": raw_mid,
-            "subject": headers.get("subject", ""),
-            "from": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "date": headers.get("date", ""),
-            "in_reply_to": headers.get("in-reply-to", ""),
-            "references": headers.get("references", ""),
-            "preview": "\n".join(body_lines[:preview_lines]),
-            "error": None,
-        }
-    except Exception as e:
-        return {
-            "envelope_id": str(env_id),
-            "folder": folder,
-            "message_id": "",
-            "raw_message_id": "",
-            "subject": "",
-            "from": "",
-            "to": "",
-            "date": "",
-            "in_reply_to": "",
-            "references": "",
-            "preview": "",
-            "error": str(e),
-        }
+    oldest = collected[-count:] if count < len(collected) else collected
+    oldest.reverse()
+    return [str(e["id"]) for e in oldest]
 
 
-def run_inspect_mode(config: dict[str, Any], account: str | None, data_dir: Path) -> dict[str, Any]:
+def run_inspect_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
     order = str(config.get("order", "newest")).lower()
-    threads = int(config.get("threads", 5))
+    threads = min(int(config.get("threads", 3)), 3)
     preview_lines = int(config.get("preview_lines", 30))
     explicit_ids = config.get("envelope_ids")
     output_file = config.get("output_file")
@@ -191,19 +119,15 @@ def run_inspect_mode(config: dict[str, Any], account: str | None, data_dir: Path
 
     if explicit_ids and isinstance(explicit_ids, list):
         target_env_ids = [str(x) for x in explicit_ids]
+    elif order == "oldest":
+        target_env_ids = get_oldest_envelope_ids(folder, count, account=account)
     else:
-        out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", "1000"], account=account)
+        out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(count)], account=account, timeout=30)
         if "[" in out:
             out = out[out.find("["):]
         envelopes = json.loads(out)
-        if order == "oldest":
-            selected = envelopes[-count:] if count < len(envelopes) else envelopes
-            selected.reverse()
-        else:
-            selected = envelopes[:count]
-        target_env_ids = [str(env["id"]) for env in selected]
+        target_env_ids = [str(env["id"]) for env in envelopes[:count]]
 
-    # Fetch message headers in parallel
     results_map: dict[str, dict[str, Any]] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
         futures = {
@@ -214,297 +138,188 @@ def run_inspect_mode(config: dict[str, Any], account: str | None, data_dir: Path
             res = fut.result()
             results_map[res["envelope_id"]] = res
 
-    ordered_results = [results_map[eid] for eid in target_env_ids if eid in results_map]
+    ordered_emails = [results_map[eid] for eid in target_env_ids if eid in results_map]
 
-    # Check known status
+    # Check known / processed status against final-location-index.json
+    known_count = 0
     if check_known:
-        index_path = resolve_final_index_path(data_dir=data_dir)
-        index_data = load_final_index(index_path)
-        items = index_data.get("items", {})
+        dd = data_dir or resolve_data_dir()
+        index_data = load_final_index(resolve_final_index_path(data_dir=dd))
+        known_items = index_data.get("items", {})
 
-        action_log_path = data_dir / "action-log.jsonl"
-        logged_ids: set[str] = set()
-        if action_log_path.exists():
-            with action_log_path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    try:
-                        row = json.loads(line)
-                        m = normalize_message_id(row.get("message_id", ""))
-                        if m:
-                            logged_ids.add(m)
-                    except Exception:
-                        pass
+        for email in ordered_emails:
+            mid = email.get("message_id")
+            if mid and mid in known_items:
+                email["is_known"] = True
+                email["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
+                known_count += 1
+            else:
+                email["is_known"] = False
+                email["known_location"] = None
 
-        for item in ordered_results:
-            mid = item.get("message_id", "")
-            in_idx = mid in items if mid else False
-            in_log = mid in logged_ids if mid else False
-            final_f = items[mid].get("final_folder") if in_idx else None
-            item["known_status"] = {
-                "in_index": in_idx,
-                "in_action_log": in_log,
-                "final_folder": final_f,
-                "is_new": not (in_idx or in_log),
-            }
-
-    output_payload = {
+    output_data = {
         "ok": True,
         "mode": "inspect",
         "folder": folder,
-        "total_fetched": len(ordered_results),
-        "items": ordered_results,
+        "total_inspected": len(ordered_emails),
+        "known_count": known_count,
+        "emails": ordered_emails,
     }
 
     if output_file:
         out_path = Path(output_file).expanduser().resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("w", encoding="utf-8") as f:
-            json.dump(output_payload, f, ensure_ascii=False, indent=2)
-        output_payload["output_file"] = str(out_path)
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+            f.write("\n")
 
-    return output_payload
+    return output_data
 
 
 # ==============================================================================
-# Execute Workflow
+# Execute Mode
 # ==============================================================================
-
-def verify_in_target_folder(
-    target_folder: str,
-    target_msg_id: str,
-    subject: str = "",
-    from_addr: str = "",
-    date_str: str = "",
-    account: str | None = None,
-) -> str | None:
-    try:
-        out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "100"], account=account)
-        if "[" in out:
-            out = out[out.find("["):]
-        envelopes = json.loads(out)
-    except Exception:
-        return None
-
-    norm_target = normalize_message_id(target_msg_id)
-    candidates: list[str] = []
-
-    # 1. Filter candidates by matching subject or date
-    for env in envelopes:
-        env_subj = env.get("subject", "").strip()
-        env_date = env.get("date", "").strip()
-        if (subject and env_subj == subject.strip()) or (date_str and date_str[:10] in env_date):
-            candidates.append(str(env["id"]))
-
-    # 2. Check candidate headers
-    for cid in candidates:
-        try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account)
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    m_id = normalize_message_id(line.split(":", 1)[1])
-                    if m_id == norm_target:
-                        return cid
-        except Exception:
-            pass
-
-    # 3. Fallback: check last 3 newly added envelopes in target folder
-    for env in envelopes[-3:]:
-        cid = str(env["id"])
-        if cid in candidates:
-            continue
-        try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account)
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    m_id = normalize_message_id(line.split(":", 1)[1])
-                    if m_id == norm_target:
-                        return cid
-        except Exception:
-            pass
-
-    # If envelopes exist and subject exactly matched first envelope, return that id as heuristic fallback
-    if candidates:
-        return candidates[0]
-    return envelopes[-1]["id"] if envelopes else None
-
-
-def update_evidence_file(evidence_spec: dict[str, Any], msg_id: str) -> bool:
-    file_path = Path(evidence_spec.get("file", "")).expanduser()
-    entry = evidence_spec.get("entry", "").strip()
-    if not file_path or not entry:
-        return False
-
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    norm_mid = normalize_message_id(msg_id)
-
-    if file_path.exists():
-        content = file_path.read_text(encoding="utf-8")
-        if norm_mid in content.lower():
-            return True  # Already present
-        if not content.endswith("\n"):
-            content += "\n"
-        content += entry + "\n"
-        file_path.write_text(content, encoding="utf-8")
-    else:
-        # Create new evidence log
-        # Determine title from path
-        parts = file_path.parts
-        proj_name = parts[-3] if len(parts) >= 3 else "reference"
-        year_month = file_path.stem
-        header = f"---\ntype: Evidence Log\n---\n\n# Evidence log — {proj_name} — {year_month}\n\n"
-        file_path.write_text(header + entry + "\n", encoding="utf-8")
-
-    return True
-
 
 def run_execute_mode(
     config: dict[str, Any],
-    account: str | None,
-    data_dir: Path,
-    index_path: Path,
+    account: str | None = None,
+    data_dir: Path | None = None,
+    index_path: Path | None = None,
 ) -> dict[str, Any]:
-    items = config.get("items", [])
-    mailbox = config.get("mailbox") or os.environ.get("HIMALAYA_MAILBOX") or os.environ.get("MAIL_DESK_MAILBOX", "primary")
-    backend = config.get("backend", "himalaya")
+    dd = data_dir or resolve_data_dir()
+    idx_p = index_path or resolve_final_index_path(data_dir=dd)
+    items: list[dict[str, Any]] = config.get("items", [])
+    workspace_root = dd.parent.parent
 
-    index_data = load_final_index(index_path)
+    index_data = load_final_index(idx_p)
     index_items = index_data.setdefault("items", {})
-
-    action_log_path = data_dir / "action-log.jsonl"
-    action_log_path.parent.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
     all_succeeded = True
 
     for item in items:
-        env_id = str(item.get("envelope_id", ""))
+        env_id = str(item["envelope_id"])
         source_folder = item.get("source_folder", "INBOX")
-        raw_mid = item.get("raw_message_id") or item.get("message_id", "")
+        raw_mid = item.get("message_id") or item.get("raw_message_id", "")
         norm_mid = normalize_message_id(raw_mid)
         subject = item.get("subject", "")
-        from_info = item.get("from", "")
+        from_str = item.get("from", "")
         date_str = item.get("date", "")
-
-        action = item.get("action", {})
-        action_type = action.get("type", "copy_as_move")
-        target_folder = action.get("target_folder")
-
+        action_spec = item.get("action", {})
+        action_type = action_spec.get("type", "copy_as_move")
+        target_folder = action_spec.get("target_folder")
         decision = item.get("decision", {})
         notes = item.get("notes", "")
         evidence_spec = item.get("evidence")
 
         routing_ok = False
-        new_env_id = env_id
-
-        # 1. Routing action
-        if target_folder and target_folder != source_folder and action_type in ("copy_as_move", "copy", "move"):
-            try:
-                run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
-                routing_ok = True
-            except Exception as e:
-                # Check if already in target folder
-                verified = verify_in_target_folder(target_folder, norm_mid, subject, from_info, date_str, account=account)
-                if verified:
-                    new_env_id = verified
-                    routing_ok = True
-                else:
-                    routing_ok = False
-
-            if routing_ok:
-                verified = verify_in_target_folder(target_folder, norm_mid, subject, from_info, date_str, account=account)
-                if verified:
-                    new_env_id = verified
-        elif target_folder == source_folder or action_type in ("none", "archive"):
-            routing_ok = True
-            target_folder = target_folder or source_folder
-        else:
-            routing_ok = True
-            target_folder = source_folder
-
+        meta_ok = False
+        index_ok = False
+        ref_source_status = "not-applicable"
+        new_env_id = None
         final_folder = target_folder or source_folder
 
-        # 2. Final location index update
-        index_ok = False
+        # 1. Routing
+        if action_type == "copy_as_move" and target_folder and target_folder != source_folder:
+            try:
+                # Idempotent check: check if already in target folder
+                new_env_id = verify_in_target_folder(
+                    target_folder,
+                    norm_mid,
+                    subject=subject,
+                    from_addr=from_str,
+                    date_str=date_str,
+                    account=account,
+                )
+                if not new_env_id:
+                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
+                    new_env_id = verify_in_target_folder(
+                        target_folder,
+                        norm_mid,
+                        subject=subject,
+                        from_addr=from_str,
+                        date_str=date_str,
+                        account=account,
+                    )
+                if new_env_id:
+                    routing_ok = True
+                    try:
+                        run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                    except Exception:
+                        pass
+                else:
+                    routing_ok = False
+            except Exception:
+                routing_ok = False
+        elif action_type == "keep_in_folder" or not target_folder or target_folder == source_folder:
+            new_env_id = env_id
+            routing_ok = True
+        elif action_type == "delete":
+            try:
+                run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                routing_ok = True
+                final_folder = "Trash"
+                new_env_id = env_id
+            except Exception:
+                routing_ok = True
+                final_folder = "Trash"
+                new_env_id = env_id
+
+        # 2. Evidence update
+        if evidence_spec and norm_mid:
+            try:
+                ev_ok = update_evidence_file(evidence_spec, norm_mid, workspace_root=workspace_root)
+                ref_source_status = "ok" if ev_ok else "fail"
+            except Exception:
+                ref_source_status = "fail"
+
+        # 3. Final location index entry
         if routing_ok and norm_mid:
-            index_items[norm_mid] = {
+            idx_entry = {
                 "message_id": norm_mid,
-                "mailbox": mailbox,
-                "backend": backend,
+                "backend": "himalaya",
                 "final_folder": final_folder,
-                "envelope_id": str(new_env_id),
+                "envelope_id": str(new_env_id) if new_env_id else str(env_id),
+                "in_reply_to": item.get("in_reply_to", ""),
+                "references": item.get("references", []),
                 "updated_at": utc_now_iso(),
             }
-            if item.get("in_reply_to"):
-                index_items[norm_mid]["in_reply_to"] = item["in_reply_to"]
-            if item.get("references"):
-                refs = item["references"]
-                index_items[norm_mid]["references"] = refs if isinstance(refs, list) else refs.split()
+            index_items[norm_mid] = idx_entry
             index_ok = True
 
-        # 3. Action log entry
-        meta_ok = False
-        try:
-            formatted_mid = f"<{raw_mid}>" if raw_mid and not raw_mid.startswith("<") else raw_mid
-            action_entry = {
-                "schema_version": 1,
-                "at": utc_now_iso(),
-                "mailbox": mailbox,
-                "backend": backend,
-                "message_id": formatted_mid,
-                "key_type": "message_id",
-                "envelope_id": str(new_env_id),
+        # 4. Action logging
+        if routing_ok:
+            log_entry = {
+                "timestamp": utc_now_iso(),
+                "envelope_id": env_id,
+                "message_id": norm_mid,
                 "subject": subject,
-                "from": from_info,
-                "decision": decision,
+                "from": from_str,
                 "action": {
                     "type": action_type,
+                    "source_folder": source_folder,
                     "target_folder": final_folder,
+                    "new_envelope_id": str(new_env_id) if new_env_id else str(env_id),
                 },
+                "decision": decision,
                 "notes": notes,
             }
-            with action_log_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(action_entry, ensure_ascii=False) + "\n")
+            append_action_log_entry(dd, log_entry)
             meta_ok = True
-        except Exception:
-            meta_ok = False
 
-        # 4. Evidence logging if requested
-        ref_source_status = "n/a"
-        if evidence_spec:
-            ref_ok = True
-            if isinstance(evidence_spec, list):
-                for ev in evidence_spec:
-                    if not update_evidence_file(ev, norm_mid):
-                        ref_ok = False
-            elif isinstance(evidence_spec, dict):
-                ref_ok = update_evidence_file(evidence_spec, norm_mid)
-            ref_source_status = "ok" if ref_ok else "fail"
-        elif decision.get("kind") in ("project", "topic") and decision.get("id") not in ("none", ""):
-            ref_source_status = "ok"
-
-        # 5. Replies needed tracking
-        if decision.get("needs_reply"):
-            replies_path = data_dir / "replies-needed.jsonl"
-            try:
+            # If needs reply, append to replies-needed.jsonl
+            if decision.get("needs_reply"):
                 rep_entry = {
-                    "schema_version": 1,
-                    "at": utc_now_iso(),
-                    "mailbox": mailbox,
-                    "message_id": formatted_mid,
-                    "key_type": "message_id",
-                    "backend_locator": str(new_env_id),
+                    "timestamp": utc_now_iso(),
+                    "envelope_id": str(new_env_id) if new_env_id else str(env_id),
+                    "message_id": norm_mid,
                     "subject": subject,
-                    "from": from_info,
+                    "from": from_str,
                     "folder": final_folder,
                     "reply_status": "needed",
                     "reply_note": notes,
                 }
-                with replies_path.open("a", encoding="utf-8") as f:
-                    f.write(json.dumps(rep_entry, ensure_ascii=False) + "\n")
-            except Exception:
-                pass
+                append_replies_needed_entry(dd, rep_entry)
 
         item_success = routing_ok and index_ok and meta_ok
         if not item_success:
@@ -526,7 +341,7 @@ def run_execute_mode(
     # Save index atomically once for the whole batch
     if index_items:
         index_data["updated_at"] = utc_now_iso()
-        save_final_index_atomic(index_path, index_data)
+        save_final_index_atomic(idx_p, index_data)
 
     return {
         "ok": all_succeeded,
@@ -538,14 +353,243 @@ def run_execute_mode(
 
 
 # ==============================================================================
+# Verify Mode
+# ==============================================================================
+
+def run_verify_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+    index_path: Path | None = None,
+) -> dict[str, Any]:
+    dd = data_dir or resolve_data_dir()
+    idx_p = index_path or resolve_final_index_path(data_dir=dd)
+    check_folders = bool(config.get("check_folders", False))
+    output_file = config.get("output_file")
+
+    target_items: list[dict[str, Any]] = []
+    if "items" in config and isinstance(config["items"], list):
+        target_items = config["items"]
+    elif "message_ids" in config and isinstance(config["message_ids"], list):
+        target_items = [{"message_id": mid} for mid in config["message_ids"]]
+    elif "batch_file" in config:
+        bf = Path(config["batch_file"]).expanduser().resolve()
+        if bf.exists():
+            with bf.open("r", encoding="utf-8") as f:
+                bdata = json.load(f)
+                if isinstance(bdata, list):
+                    target_items = bdata
+                elif isinstance(bdata, dict):
+                    target_items = bdata.get("items") or bdata.get("results") or []
+
+    index_data = load_final_index(idx_p)
+    index_items = index_data.get("items", {})
+
+    action_log_path = dd / "action-log.jsonl"
+    action_log_map: dict[str, dict[str, Any]] = {}
+    if action_log_path.exists():
+        with action_log_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                    m = normalize_message_id(row.get("message_id", ""))
+                    if m:
+                        action_log_map[m] = row
+                except Exception:
+                    pass
+
+    workspace_root = dd.parent.parent
+    references_root = workspace_root / "memory" / "references"
+
+    results: list[dict[str, Any]] = []
+    all_consistent = True
+
+    for item in target_items:
+        raw_mid = item.get("message_id") or item.get("raw_message_id", "")
+        norm_mid = normalize_message_id(raw_mid)
+        if not norm_mid:
+            continue
+
+        subject = item.get("subject", "")
+        expected_folder = item.get("final_folder") or item.get("target_folder")
+
+        # 1. Index check
+        idx_entry = index_items.get(norm_mid)
+        in_index = idx_entry is not None
+        indexed_folder = idx_entry.get("final_folder") if idx_entry else None
+        indexed_env_id = idx_entry.get("envelope_id") if idx_entry else None
+
+        # 2. Action log check
+        log_entry = action_log_map.get(norm_mid)
+        in_log = log_entry is not None
+        logged_folder = log_entry.get("action", {}).get("target_folder") if log_entry else None
+
+        # 3. Evidence check
+        in_evidence: bool | None = None
+        evidence_file = item.get("evidence", {}).get("file") if isinstance(item.get("evidence"), dict) else item.get("evidence_file")
+        if evidence_file:
+            ev_path = (workspace_root / evidence_file).resolve() if not Path(evidence_file).is_absolute() else Path(evidence_file)
+            if ev_path.exists():
+                try:
+                    ev_text = ev_path.read_text(encoding="utf-8")
+                    in_evidence = norm_mid in ev_text.lower()
+                except Exception:
+                    in_evidence = False
+            else:
+                in_evidence = False
+        elif references_root.exists():
+            found_ev = False
+            for md_file in references_root.glob("**/evidence/*.md"):
+                try:
+                    if norm_mid in md_file.read_text(encoding="utf-8").lower():
+                        found_ev = True
+                        break
+                except Exception:
+                    pass
+            in_evidence = found_ev if found_ev else None
+
+        # 4. Folder verification if requested
+        folder_verified: bool | None = None
+        current_env_id: str | None = None
+        if check_folders and indexed_folder:
+            verified = verify_in_target_folder(indexed_folder, norm_mid, subject=subject, account=account)
+            folder_verified = verified is not None
+            current_env_id = verified
+
+        consistent = in_index and in_log
+        if expected_folder and indexed_folder and expected_folder != indexed_folder:
+            consistent = False
+        if check_folders and folder_verified is False:
+            consistent = False
+
+        if not consistent:
+            all_consistent = False
+
+        results.append({
+            "message_id": norm_mid,
+            "subject": subject or (log_entry.get("subject") if log_entry else ""),
+            "in_index": in_index,
+            "indexed_folder": indexed_folder,
+            "indexed_envelope_id": indexed_env_id,
+            "in_action_log": in_log,
+            "logged_folder": logged_folder,
+            "in_evidence": in_evidence,
+            "folder_verified": folder_verified,
+            "current_envelope_id": current_env_id,
+            "consistent": consistent,
+        })
+
+    out = {
+        "ok": all_consistent,
+        "mode": "verify",
+        "total_checked": len(results),
+        "all_consistent": all_consistent,
+        "results": results,
+    }
+
+    if output_file:
+        out_path = Path(output_file).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    return out
+
+
+# ==============================================================================
+# Search Mode
+# ==============================================================================
+
+def run_search_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    query = config.get("query", "").strip()
+    raw_mids = config.get("message_ids", [])
+    folders = config.get("folders")
+    page_size = int(config.get("page_size", 50))
+    threads = int(config.get("threads", 4))
+    output_file = config.get("output_file")
+
+    matches = search_mailbox(
+        query=query,
+        message_ids=raw_mids,
+        folders=folders,
+        page_size=page_size,
+        threads=threads,
+        account=account,
+    )
+
+    out = {
+        "ok": True,
+        "mode": "search",
+        "total_found": len(matches),
+        "matches": matches,
+    }
+
+    if output_file:
+        out_path = Path(output_file).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w", encoding="utf-8") as f:
+            json.dump(out, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+
+    return out
+
+
+# ==============================================================================
+# Resolve Mode
+# ==============================================================================
+
+def run_resolve_mode(
+    config: dict[str, Any],
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    dd = data_dir or resolve_data_dir()
+    items = config.get("items", [])
+    if "message_id" in config:
+        items.append({
+            "message_id": config["message_id"],
+            "status": config.get("status", "resolved"),
+            "resolution": config.get("resolution", ""),
+            "resolved_by": config.get("resolved_by_message_id"),
+        })
+
+    resolved_results: list[dict[str, Any]] = []
+    all_resolved = True
+
+    for item in items:
+        mid = item.get("message_id", "")
+        status = item.get("status", "resolved")
+        resolution = item.get("resolution", "")
+        resolved_by = item.get("resolved_by_message_id") or item.get("resolved_by")
+        res = resolve_case(dd, mid, status=status, resolution=resolution, resolved_by=resolved_by)
+        resolved_results.append(res)
+        if not res.get("resolved"):
+            all_resolved = False
+
+    return {
+        "ok": all_resolved,
+        "mode": "resolve",
+        "total_processed": len(resolved_results),
+        "all_resolved": all_resolved,
+        "results": resolved_results,
+    }
+
+
+# ==============================================================================
 # Main Entry Point
 # ==============================================================================
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Unified batch runner for mail-desk (inspect and execute)."
+        description="Unified batch runner for mail-desk (inspect, execute, verify, search, resolve)."
     )
-    parser.add_argument("--input", "-i", help="Path to input JSON file in data/ (defaults to batch-manifest.json or batch-inspect.json)")
+    parser.add_argument("--input", "-i", help="Path to input JSON file in data/")
     parser.add_argument("--stdin", action="store_true", help="Read JSON configuration from stdin")
     parser.add_argument("--account", "-a", help="Himalaya account override")
     parser.add_argument("--data-dir", help="Override path to data/mail-desk/")
@@ -572,26 +616,31 @@ def main() -> int:
             config = json.load(f)
     else:
         # Default auto-discovery in data/mail-desk/
-        default_manifest = data_dir / "batch-manifest.json"
-        default_inspect = data_dir / "batch-inspect.json"
-        if default_manifest.exists():
-            input_path = default_manifest
-            with input_path.open("r", encoding="utf-8") as f:
-                config = json.load(f)
-        elif default_inspect.exists():
-            input_path = default_inspect
-            with input_path.open("r", encoding="utf-8") as f:
-                config = json.load(f)
-        else:
+        candidates = [
+            data_dir / "batch-manifest.json",
+            data_dir / "batch-inspect.json",
+            data_dir / "batch-verify.json",
+            data_dir / "batch-search.json",
+            data_dir / "batch-resolve.json",
+        ]
+        found_input = False
+        for cand in candidates:
+            if cand.exists():
+                input_path = cand
+                with input_path.open("r", encoding="utf-8") as f:
+                    config = json.load(f)
+                found_input = True
+                break
+        if not found_input:
+            candidate_names = ", ".join(c.name for c in candidates)
             err_msg = (
                 "Neither --input nor --stdin was provided, and no default input file "
-                f"({default_manifest.name} or {default_inspect.name}) was found in {data_dir}."
+                f"({candidate_names}) was found in {data_dir}."
             )
             print(json.dumps({"ok": False, "error": err_msg}, ensure_ascii=False, indent=2))
             return 1
 
     mode = config.get("mode", "execute").lower()
-    data_dir = resolve_data_dir(args.data_dir)
     index_path = resolve_final_index_path(args.index, data_dir=data_dir)
     account = args.account or config.get("account")
 
@@ -599,6 +648,12 @@ def main() -> int:
         out = run_inspect_mode(config, account=account, data_dir=data_dir)
     elif mode in ("execute", "process"):
         out = run_execute_mode(config, account=account, data_dir=data_dir, index_path=index_path)
+    elif mode in ("verify", "validate", "check"):
+        out = run_verify_mode(config, account=account, data_dir=data_dir, index_path=index_path)
+    elif mode in ("search", "locate", "find"):
+        out = run_search_mode(config, account=account, data_dir=data_dir)
+    elif mode in ("resolve", "archive"):
+        out = run_resolve_mode(config, data_dir=data_dir)
     else:
         print(json.dumps({"ok": False, "error": f"Unsupported mode: {mode}"}, ensure_ascii=False, indent=2))
         return 1

@@ -22,6 +22,9 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Inspektions-Ergebnis (Output)** | `data/mail-desk/batch-inspected.json` | `inspect` | Standard-Ausgabedatei mit extrahierten Headern, Previews und Bekanntheitsstatus. |
 | **Ausführungs-Manifest (Input)** | `data/mail-desk/batch-manifest.json` | `execute` | Temporäres Arbeitsmanifest mit Routing-, Logging- und Evidenzentscheidungen; wird nach erfolgreicher Ausführung automatisch gelöscht. |
 | **Ausführungs-Ergebnis (Output)** | `data/mail-desk/batch-result.json` | `execute` | Optionales / standardisiertes Protokoll des ausgeführten Batch-Laufs. |
+| **Verifikations-Anforderung (Input)** | `data/mail-desk/batch-verify.json` | `verify` | Temporäre Liste von Message-IDs / Batch-Files zur Konsistenzprüfung (Index, Log, Evidenz, Ordner). |
+| **Such-Anforderung (Input)** | `data/mail-desk/batch-search.json` | `search` | Suchauftrag nach Text oder Message-IDs über mehrere Mailbox-Ordner hinweg. |
+| **Falllösungs-Anforderung (Input)** | `data/mail-desk/batch-resolve.json` | `resolve` | Schließt und archiviert offene Fälle aus `replies-needed.jsonl` / `pending-review.jsonl`. |
 
 ---
 
@@ -380,8 +383,216 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
 
 ---
 
+## Modus 3: `verify` (Integritäts- & Konsistenzprüfung)
+
+### Beschreibung
+Prüft für eine gegebene Liste von Message-IDs (oder ein zuvor ausgeführtes Manifest/Ergebnis) die Konsistenz über alle Speicher- und Protokollebenen:
+1. Ist der Eintrag in `final-location-index.json` vorhanden und stimmt der finale Ordner?
+2. Ist die Aktion in `action-log.jsonl` dokumentiert?
+3. Ist der Nachweis in der entsprechenden `evidence/*.md` Datei festgehalten?
+4. *(Optional via `check_folders: true`)*: Befindet sich die Mail tatsächlich mit einer gültigen Envelope-ID im Zielordner der Mailbox?
+
+### Schema: Input Manifest (`batch-verify.json`)
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MailDeskBatchVerifyRequest",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string", "enum": ["verify", "validate", "check"] },
+    "message_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "batch_file": { "type": "string" },
+    "check_folders": { "type": "boolean", "default": false },
+    "delete_input_on_success": { "type": "boolean", "default": true },
+    "output_file": { "type": "string" }
+  },
+  "required": ["mode"]
+}
+```
+
+### Beispiel Aufruf & Input
+```json
+{
+  "mode": "verify",
+  "message_ids": [
+    "msg-2026-001@partner.example.org"
+  ],
+  "check_folders": false
+}
+```
+
+### Beispiel Output
+```json
+{
+  "ok": true,
+  "mode": "verify",
+  "total_checked": 1,
+  "all_consistent": true,
+  "results": [
+    {
+      "message_id": "msg-2026-001@partner.example.org",
+      "subject": "Statusbericht Arbeitspaket 4",
+      "in_index": true,
+      "indexed_folder": "Projekte/Project-Alpha",
+      "indexed_envelope_id": "205",
+      "in_action_log": true,
+      "logged_folder": "Projekte/Project-Alpha",
+      "in_evidence": true,
+      "folder_verified": null,
+      "current_envelope_id": null,
+      "consistent": true
+    }
+  ]
+}
+```
+
+---
+
+## Modus 4: `search` (Globales Finden & Lokalisieren)
+
+### Beschreibung
+Durchsucht parallel mehrere (oder alle) Mailbox-Ordner nach bestimmten Suchbegriffen (Betreff/Absender) oder gezielt nach einer Liste von `Message-ID`s. Ermöglicht schnelles Wiederfinden verschobener Nachrichten und Auslesen der aktuellen `envelope_id`.
+
+### Schema: Input Manifest (`batch-search.json`)
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MailDeskBatchSearchRequest",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string", "enum": ["search", "locate", "find"] },
+    "query": { "type": "string" },
+    "message_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "folders": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "page_size": { "type": "integer", "default": 50 },
+    "threads": { "type": "integer", "default": 4 },
+    "output_file": { "type": "string" },
+    "delete_input_on_success": { "type": "boolean", "default": true }
+  },
+  "required": ["mode"]
+}
+```
+
+### Beispiel Aufruf & Input
+```json
+{
+  "mode": "search",
+  "query": "Statusbericht",
+  "folders": ["INBOX", "Projekte/Project-Alpha", "Newsletter"]
+}
+```
+
+### Beispiel Output
+```json
+{
+  "ok": true,
+  "mode": "search",
+  "total_found": 1,
+  "matches": [
+    {
+      "folder": "Projekte/Project-Alpha",
+      "envelope_id": "205",
+      "message_id": "msg-2026-001@partner.example.org",
+      "subject": "Statusbericht Arbeitspaket 4",
+      "from": "Dr. Alex Beispiel alex@partner.example.org",
+      "date": "2026-01-06 14:20+01:00"
+    }
+  ]
+}
+```
+
+---
+
+## Modus 5: `resolve` (Batch-Fallauflösung & Archivierung)
+
+### Beschreibung
+Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` im Batch. Aktualisierte Einträge werden mit Timestamp, Status und Begründung in das kalenderwochenbasierte Archiv (`data/mail-desk/archive/YYYY-Www/`) verschoben und aus den aktiven Trackingdateien entfernt.
+
+### Schema: Input Manifest (`batch-resolve.json`)
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MailDeskBatchResolveRequest",
+  "type": "object",
+  "properties": {
+    "mode": { "type": "string", "enum": ["resolve", "archive"] },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "message_id": { "type": "string" },
+          "status": { "type": "string", "default": "resolved" },
+          "resolution": { "type": "string" },
+          "resolved_by_message_id": { "type": "string" }
+        },
+        "required": ["message_id", "resolution"]
+      }
+    },
+    "delete_input_on_success": { "type": "boolean", "default": true }
+  },
+  "required": ["mode", "items"]
+}
+```
+
+### Beispiel Aufruf & Input
+```json
+{
+  "mode": "resolve",
+  "items": [
+    {
+      "message_id": "msg-2026-001@partner.example.org",
+      "status": "resolved",
+      "resolution": "Abstimmung telefonisch am 14.01. erfolgt, keine weitere Aktion nötig.",
+      "resolved_by_message_id": null
+    }
+  ]
+}
+```
+
+### Beispiel Output
+```json
+{
+  "ok": true,
+  "mode": "resolve",
+  "total_processed": 1,
+  "all_resolved": true,
+  "results": [
+    {
+      "ok": true,
+      "resolved": true,
+      "message_id": "msg-2026-001@partner.example.org",
+      "source_file": "replies-needed.jsonl",
+      "archived_to": "data/mail-desk/archive/2026-W03/replies-needed.jsonl",
+      "item": {
+        "timestamp": "2026-01-12T10:00:00Z",
+        "envelope_id": "205",
+        "message_id": "msg-2026-001@partner.example.org",
+        "subject": "Statusbericht Arbeitspaket 4",
+        "status": "resolved",
+        "resolution": "Abstimmung telefonisch am 14.01. erfolgt, keine weitere Aktion nötig.",
+        "closed_at": "2026-01-14T15:30:00Z"
+      }
+    }
+  ],
+  "input_file_deleted": true
+}
+```
+
+---
+
 ## Fehlerbehandlung & Sicherheit
 
 1. **Kein Datenverlust:** Schlägt auch nur ein Einzelschritt (z. B. Routing oder Index-Write) fehl, gibt das Skript `ok: false` zurück und das Eingabemanifest **bleibt zur Fehleranalyse erhalten** (wird nicht gelöscht).
 2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine temporäre Zwischendatei (`.tmp`) geschrieben und anschließend atomar ersetzt, um Korruption bei Prozessabbrüchen zu verhindern.
 3. **Plattformunabhängiges UTF-8:** Standard-Streams (`stdout`/`stderr`) und Dateilese-/schreiboperationen sind strikt auf UTF-8 konfiguriert (verhindert Windows `charmap`-Codierungsfehler bei Umlauten oder Sonderzeichen).
+4. **Fehlertolerante Subprozess-Ausführung:** `subprocess.run(..., errors="replace")` und Timeouts auf Einzelebene stellen sicher, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze nicht den gesamten Batch-Lauf blockieren.
