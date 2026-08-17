@@ -12,13 +12,32 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ---
 
+## Einheitliche Standard-Dateinamen
+
+Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende standardisierte Dateinamen:
+
+| Dateityp | Standard-Pfad | Modus | Zweck & Lebenszyklus |
+|---|---|---|---|
+| **Inspektions-Anforderung (Input)** | `data/mail-desk/batch-inspect.json` | `inspect` | Temporäres Eingabemanifest zum Vorfiltern; wird nach erfolgreicher Ausführung automatisch gelöscht. |
+| **Inspektions-Ergebnis (Output)** | `data/mail-desk/batch-inspected.json` | `inspect` | Standard-Ausgabedatei mit extrahierten Headern, Previews und Bekanntheitsstatus. |
+| **Ausführungs-Manifest (Input)** | `data/mail-desk/batch-manifest.json` | `execute` | Temporäres Arbeitsmanifest mit Routing-, Logging- und Evidenzentscheidungen; wird nach erfolgreicher Ausführung automatisch gelöscht. |
+| **Ausführungs-Ergebnis (Output)** | `data/mail-desk/batch-result.json` | `execute` | Optionales / standardisiertes Protokoll des ausgeführten Batch-Laufs. |
+
+---
+
 ## CLI-Aufrufe & Parameter
 
 ```bash
-# Modus 1: Datei-basiertes Manifest (empfohlen)
+# Standard 1: Batch-Ausführung mit Standard-Manifest (Input wird automatisch gefunden)
+python3 scripts/mail_desk_batch_runner.py
+
+# Standard 2: Expliziter Pfad für Batch-Ausführung
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json
 
-# Modus 2: STDIN-Übergabe
+# Standard 3: Batch-Inspektion
+python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json
+
+# Modus 4: STDIN-Übergabe
 cat data/mail-desk/batch-manifest.json | python3 scripts/mail_desk_batch_runner.py --stdin
 
 # Zusätzliche Optionen
@@ -34,7 +53,7 @@ python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.
 
 | Argument | Kurzform | Beschreibung |
 |---|---|---|
-| `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (z. B. in `data/mail-desk/`). |
+| `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (Standard: `batch-manifest.json` bzw. `batch-inspect.json`). |
 | `--stdin` | | Liest das JSON-Manifest direkt aus der Standardeingabe. |
 | `--account <NAME>` | `-a` | Optionaler Backend-/Himalaya-Account-Override. |
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |

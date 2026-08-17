@@ -320,8 +320,9 @@ Zusätzlich zu den Kernskripten stehen folgende Automatisierungswerkzeuge in `sc
 3. **Batch-Runner für Inspizieren & Ausführen (`mail_desk_batch_runner.py`):**
    Führt komplexe Batch-Operationen (Parallel-Inspektion oder gekoppelte Ausführung aus Routing, Envelope-Verifikation, Index-Upsert, Action-Log und Evidence-Pflege) über ein temporäres JSON-Manifest in `data/mail-desk/` aus. Das temporäre Input-File wird bei bestätigtem Erfolg automatisch gelöscht, sodass für den gesamten Batch-Lauf genau ein Shell-Befehl im Agent-Harness freigegeben werden muss.
    - Ausführliche Dokumentation und JSON-Schemas: [`references/batch-runner.md`](references/batch-runner.md)
-   - Batch-Inspektion: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/inspect.json`
-   - Batch-Ausführung: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json`
+   - Standard-Dateinamen: Input `data/mail-desk/batch-inspect.json` (Inspektion) / `data/mail-desk/batch-manifest.json` (Ausführung)
+   - Batch-Inspektion: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json`
+   - Batch-Ausführung: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json` (oder ohne Argumente bei Standard-Dateinamen)
 
 ### Final-Index- und Batch-Regeln
 

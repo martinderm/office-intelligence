@@ -545,7 +545,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Unified batch runner for mail-desk (inspect and execute)."
     )
-    parser.add_argument("--input", "-i", help="Path to input JSON file in data/")
+    parser.add_argument("--input", "-i", help="Path to input JSON file in data/ (defaults to batch-manifest.json or batch-inspect.json)")
     parser.add_argument("--stdin", action="store_true", help="Read JSON configuration from stdin")
     parser.add_argument("--account", "-a", help="Himalaya account override")
     parser.add_argument("--data-dir", help="Override path to data/mail-desk/")
@@ -553,6 +553,7 @@ def main() -> int:
     parser.add_argument("--keep-input", action="store_true", help="Do not delete input file on success")
     args = parser.parse_args()
 
+    data_dir = resolve_data_dir(args.data_dir)
     input_path: Path | None = None
     config: dict[str, Any] = {}
 
@@ -570,8 +571,24 @@ def main() -> int:
         with input_path.open("r", encoding="utf-8") as f:
             config = json.load(f)
     else:
-        print(json.dumps({"ok": False, "error": "Either --input or --stdin must be specified."}, ensure_ascii=False, indent=2))
-        return 1
+        # Default auto-discovery in data/mail-desk/
+        default_manifest = data_dir / "batch-manifest.json"
+        default_inspect = data_dir / "batch-inspect.json"
+        if default_manifest.exists():
+            input_path = default_manifest
+            with input_path.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+        elif default_inspect.exists():
+            input_path = default_inspect
+            with input_path.open("r", encoding="utf-8") as f:
+                config = json.load(f)
+        else:
+            err_msg = (
+                "Neither --input nor --stdin was provided, and no default input file "
+                f"({default_manifest.name} or {default_inspect.name}) was found in {data_dir}."
+            )
+            print(json.dumps({"ok": False, "error": err_msg}, ensure_ascii=False, indent=2))
+            return 1
 
     mode = config.get("mode", "execute").lower()
     data_dir = resolve_data_dir(args.data_dir)
