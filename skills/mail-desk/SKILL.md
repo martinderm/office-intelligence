@@ -260,6 +260,7 @@ Allgemein:
 - Topic + Antwort nötig → `<topic.mailbox_folder>/_Needs-Reply`
 - Project ohne Antwortbedarf → `<project.mailbox_folder>`
 - Topic ohne Antwortbedarf → `<topic.mailbox_folder>`
+
 - Unklar + Antwort nötig → `INBOX/_Needs-Reply` oder Review, je nach Risiko
 - Unklar ohne Antwortbedarf → in INBOX lassen und Review notieren
 
@@ -315,6 +316,12 @@ Zusätzlich zu den Kernskripten stehen folgende Automatisierungswerkzeuge in `sc
 2. **Lösen und Archivieren offener Antwortfälle (`mail_desk_resolve_case.py`):**
    Archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` direkt unter dem wochenbasierten Pfad `archive/YYYY-Www/` und aktualisiert den Status.
    `python3 scripts/mail_desk_resolve_case.py --message-id '...' --status 'resolved' --resolution '...'`
+
+3. **Batch-Runner für Inspizieren & Ausführen (`mail_desk_batch_runner.py`):**
+   Führt komplexe Batch-Operationen (Parallel-Inspektion oder gekoppelte Ausführung aus Routing, Envelope-Verifikation, Index-Upsert, Action-Log und Evidence-Pflege) über ein temporäres JSON-Manifest in `data/mail-desk/` aus. Das temporäre Input-File wird bei bestätigtem Erfolg automatisch gelöscht, sodass für den gesamten Batch-Lauf genau ein Shell-Befehl im Agent-Harness freigegeben werden muss.
+   - Ausführliche Dokumentation und JSON-Schemas: [`references/batch-runner.md`](references/batch-runner.md)
+   - Batch-Inspektion: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/inspect.json`
+   - Batch-Ausführung: `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json`
 
 ### Final-Index- und Batch-Regeln
 
