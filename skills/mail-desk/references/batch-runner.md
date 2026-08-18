@@ -9,6 +9,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 2. **Rechte-/Freigabeprozesse im Agent-Harness zu optimieren:** Der Nutzer muss für einen gesamten Batchlauf genau **einen** Shell-Befehl freigeben.
 3. **Idempotenz und atomare Konsistenz sicherzustellen:** Gekoppeltes Routing, Verifikation im Zielordner, atomarer Index-Upsert (`final-location-index.json`), Protokollierung (`action-log.jsonl`) und Evidence-Pflege (`evidence/YYYY-MM.md`) in einer geschlossenen Transaktionskette.
 4. **Automatische Aufräumlogik:** Das als Eingabe dienende temporäre JSON-Manifest unter `data/mail-desk/` wird nach bestätigter, fehlerfreier Ausführung automatisch gelöscht (`delete_input_on_success: true`).
+5. **Autonome Pipeline & Drafts:** Ermöglicht das automatisierte Nachladen unverarbeiteter E-Mails (`skip_known: true`), regelbasiertes Erstellen von Manifest-Entwürfen (`draft`) sowie autonome End-to-End-Verarbeitungsdurchläufe (`pipeline`).
 
 ---
 
@@ -20,7 +21,9 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 |---|---|---|---|
 | **Inspektions-Anforderung (Input)** | `data/mail-desk/batch-inspect.json` | `inspect` | Temporäres Eingabemanifest zum Vorfiltern; wird nach erfolgreicher Ausführung automatisch gelöscht. |
 | **Inspektions-Ergebnis (Output)** | `data/mail-desk/batch-inspected.json` | `inspect` | Standard-Ausgabedatei mit extrahierten Headern, Previews und Bekanntheitsstatus. |
+| **Entwurf-Anforderung (Input)** | `data/mail-desk/batch-draft.json` | `draft` | Erzeugt einen vollständigen `batch-manifest.json`-Entwurf basierend auf Katalogen. |
 | **Ausführungs-Manifest (Input)** | `data/mail-desk/batch-manifest.json` | `execute` | Temporäres Arbeitsmanifest mit Routing-, Logging- und Evidenzentscheidungen; wird nach erfolgreicher Ausführung automatisch gelöscht. |
+| **Pipeline-Anforderung (Input)** | `data/mail-desk/batch-pipeline.json` | `pipeline` | Führt den gesamten Ablauf (Inspect -> Classify -> Execute -> Verify) autonom aus. |
 | **Ausführungs-Ergebnis (Output)** | `data/mail-desk/batch-result.json` | `execute` | Optionales / standardisiertes Protokoll des ausgeführten Batch-Laufs. |
 | **Verifikations-Anforderung (Input)** | `data/mail-desk/batch-verify.json` | `verify` | Temporäre Liste von Message-IDs / Batch-Files zur Konsistenzprüfung (Index, Log, Evidenz, Ordner). |
 | **Such-Anforderung (Input)** | `data/mail-desk/batch-search.json` | `search` | Suchauftrag nach Text oder Message-IDs über mehrere Mailbox-Ordner hinweg. |
@@ -37,32 +40,36 @@ python3 scripts/mail_desk_batch_runner.py
 # Standard 2: Expliziter Pfad für Batch-Ausführung
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json
 
-# Standard 3: Batch-Inspektion
+# Standard 3: Batch-Inspektion (JSON-gesteuert)
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json
 
-# Modus 4: STDIN-Übergabe
-cat data/mail-desk/batch-manifest.json | python3 scripts/mail_desk_batch_runner.py --stdin
+# Standard 4: Autonome Pipeline direkt per CLI (Standard: 20 älteste Mails)
+python3 scripts/mail_desk_batch_runner.py --pipeline 50 --order oldest
 
-# Zusätzliche Optionen
-python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json \
-  --account "primary" \
-  --data-dir data/mail-desk \
-  --index data/mail-desk/final-location-index.json \
-  --keep-input \
-  --threads 5
+# Standard 5: Manifest-Entwurf direkt per CLI
+python3 scripts/mail_desk_batch_runner.py --draft 50 --order oldest
+
+# Standard 6: Direkte Inspektion per CLI
+python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
 ```
 
 ### Argumente
 
 | Argument | Kurzform | Beschreibung |
 |---|---|---|
-| `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (Standard: `batch-manifest.json` bzw. `batch-inspect.json`). |
+| `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (Standard: `batch-manifest.json`, `batch-inspect.json`, etc.). |
+| `--pipeline [N]` | `-p` | Führt die End-to-End-Pipeline für N Mails aus (Inspect, Classify, Execute, Verify). |
+| `--draft [N]` | `-d` | Inspiziert N unverarbeitete Mails und schreibt einen `batch-manifest.json`-Entwurf. |
+| `--inspect [N]` | | Inspiziert N Mails und schreibt `batch-inspected.json`. |
+| `--order <oldest\|newest>` | | Verarbeitungsreihenfolge nach Alter (Standard: `oldest`). |
+| `--folder <ORDNER>` | `-f` | Quellordner im Postfach (Standard: `INBOX`). |
+| `--skip-known` / `--no-skip-known` | | Überspringt bereits verarbeitete E-Mails aus `final-location-index.json` (Standard: `True`). |
+| `--min-confidence <high\|medium\|low>` | | Minimale Konfidenz für automatische Ausführung im Pipeline-Modus (Standard: `high`). |
 | `--stdin` | | Liest das JSON-Manifest direkt aus der Standardeingabe. |
 | `--account <NAME>` | `-a` | Optionaler Backend-/Himalaya-Account-Override. |
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabe-Files bei Erfolg. |
-| `--threads <N>` | | Anzahl paralleler Worker für den `inspect`-Modus (Standard: 5). |
 
 ---
 

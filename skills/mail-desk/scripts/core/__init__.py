@@ -28,6 +28,12 @@ from .action_log import (
     resolve_case,
 )
 
+from .classifier import (
+    classify_email,
+    draft_manifest,
+    load_catalogs,
+)
+
 __all__ = [
     "normalize_message_id",
     "utc_now_iso",
@@ -48,4 +54,7 @@ __all__ = [
     "append_replies_needed_entry",
     "resolve_case",
     "update_evidence_file",
+    "classify_email",
+    "draft_manifest",
+    "load_catalogs",
 ]
