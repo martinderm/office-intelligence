@@ -16,9 +16,10 @@ def run_himalaya(args: list[str], account: str | None = None, timeout: int = 30)
     """Execute himalaya CLI command safely with UTF-8 replacement."""
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
-    cmd = ["himalaya"] + args
+    cmd = ["himalaya"]
     if account:
         cmd.extend(["-a", account])
+    cmd.extend(args)
     res = subprocess.run(
         cmd,
         capture_output=True,
@@ -38,8 +39,9 @@ def get_single_email_details(
     folder: str = "INBOX",
     account: str | None = None,
     preview_lines: int = 30,
+    fallback_envelope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Fetch headers and body preview for a single envelope."""
+    """Fetch headers and body preview for a single envelope with fallback support."""
     args = [
         "message", "read", "--preview",
         "-H", "Message-Id", "-H", "In-Reply-To", "-H", "References",
@@ -50,26 +52,51 @@ def get_single_email_details(
     last_err = None
     for attempt in range(2):
         try:
-            stdout = run_himalaya(args, account=account, timeout=30)
-            break
+            stdout = run_himalaya(args, account=account, timeout=20)
+            if stdout:
+                break
         except Exception as e:
             last_err = e
-            time.sleep(1)
+            time.sleep(0.5)
+
+    fb_from = ""
+    fb_subj = ""
+    fb_to = ""
+    fb_date = ""
+    if fallback_envelope:
+        fb_subj = fallback_envelope.get("subject", "")
+        f_info = fallback_envelope.get("from", {})
+        fb_from = f"{f_info.get('name', '')} <{f_info.get('addr', '')}>".strip() if isinstance(f_info, dict) else str(f_info)
+        t_info = fallback_envelope.get("to", {})
+        fb_to = f"{t_info.get('name', '')} <{t_info.get('addr', '')}>".strip() if isinstance(t_info, dict) else str(t_info)
+        fb_date = fallback_envelope.get("date", "")
 
     if stdout is None:
+        # Lightweight fallback: try reading just Message-ID
+        raw_mid = ""
+        try:
+            mid_out = run_himalaya(["message", "read", "-H", "Message-Id", "-f", folder, str(env_id)], account=account, timeout=10)
+            for line in mid_out.splitlines():
+                if line.lower().startswith("message-id:"):
+                    raw_mid = line.split(":", 1)[1].strip()
+                    break
+        except Exception:
+            pass
+
+        norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
         return {
             "envelope_id": str(env_id),
             "folder": folder,
-            "message_id": "",
-            "raw_message_id": "",
-            "subject": "",
-            "from": "",
-            "to": "",
-            "date": "",
+            "message_id": norm_mid,
+            "raw_message_id": raw_mid,
+            "subject": fb_subj,
+            "from": fb_from,
+            "to": fb_to,
+            "date": fb_date,
             "in_reply_to": "",
             "references": "",
             "preview": "",
-            "error": str(last_err),
+            "error": None if norm_mid else str(last_err),
         }
 
     try:
@@ -101,10 +128,10 @@ def get_single_email_details(
             "folder": folder,
             "message_id": norm_mid,
             "raw_message_id": raw_mid,
-            "subject": headers.get("subject", ""),
-            "from": headers.get("from", ""),
-            "to": headers.get("to", ""),
-            "date": headers.get("date", ""),
+            "subject": headers.get("subject", "") or fb_subj,
+            "from": headers.get("from", "") or fb_from,
+            "to": headers.get("to", "") or fb_to,
+            "date": headers.get("date", "") or fb_date,
             "in_reply_to": headers.get("in-reply-to", ""),
             "references": headers.get("references", ""),
             "preview": "\n".join(body_lines[:preview_lines]),
@@ -116,10 +143,10 @@ def get_single_email_details(
             "folder": folder,
             "message_id": "",
             "raw_message_id": "",
-            "subject": "",
-            "from": "",
-            "to": "",
-            "date": "",
+            "subject": fb_subj,
+            "from": fb_from,
+            "to": fb_to,
+            "date": fb_date,
             "in_reply_to": "",
             "references": "",
             "preview": "",

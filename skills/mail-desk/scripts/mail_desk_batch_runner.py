@@ -16,6 +16,7 @@ import concurrent.futures
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any
 
 # Add parent directory to sys.path if invoked directly
@@ -45,60 +46,26 @@ from core import (
 # Inspect Mode
 # ==============================================================================
 
+def get_oldest_envelopes(folder: str, count: int, account: str | None = None) -> list[dict[str, Any]]:
+    """Fetch the oldest envelopes from a folder reliably."""
+    for test_size in ["1000", "500", "200", "100", "50"]:
+        try:
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=30)
+            if "[" in out:
+                out = out[out.find("["):]
+            envs = json.loads(out)
+            if isinstance(envs, list) and envs:
+                oldest = envs[-count:] if count < len(envs) else envs
+                oldest.reverse()
+                return oldest
+        except Exception:
+            continue
+    return []
+
+
 def get_oldest_envelope_ids(folder: str, count: int, account: str | None = None) -> list[str]:
-    page_size = 50
-    page = 1
-    # Step 1: probe exponentially
-    while True:
-        try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(page)], account=account, timeout=15)
-            if "[" in out:
-                out = out[out.find("["):]
-            envs = json.loads(out)
-            if not envs:
-                break
-            page *= 2
-        except Exception:
-            break
-
-    # Step 2: binary search
-    low = max(1, page // 2)
-    high = page
-    last_valid_page = 1
-    last_page_envs = []
-    while low <= high:
-        mid = (low + high) // 2
-        try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(mid)], account=account, timeout=15)
-            if "[" in out:
-                out = out[out.find("["):]
-            envs = json.loads(out)
-            if envs:
-                last_valid_page = mid
-                last_page_envs = envs
-                low = mid + 1
-            else:
-                high = mid - 1
-        except Exception:
-            high = mid - 1
-
-    # Step 3: collect envelopes
-    collected = list(last_page_envs)
-    curr_page = last_valid_page - 1
-    while len(collected) < count and curr_page >= 1:
-        try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size), "-p", str(curr_page)], account=account, timeout=15)
-            if "[" in out:
-                out = out[out.find("["):]
-            envs = json.loads(out)
-            collected = envs + collected
-            curr_page -= 1
-        except Exception:
-            break
-
-    oldest = collected[-count:] if count < len(collected) else collected
-    oldest.reverse()
-    return [str(e["id"]) for e in oldest]
+    envs = get_oldest_envelopes(folder, count, account=account)
+    return [str(e["id"]) for e in envs]
 
 
 def run_inspect_mode(
@@ -109,34 +76,50 @@ def run_inspect_mode(
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
     order = str(config.get("order", "newest")).lower()
-    threads = min(int(config.get("threads", 3)), 3)
+    threads = min(int(config.get("threads", 2)), 2)
     preview_lines = int(config.get("preview_lines", 30))
     explicit_ids = config.get("envelope_ids")
     output_file = config.get("output_file")
     check_known = bool(config.get("check_known", True))
 
     target_env_ids: list[str] = []
+    envelope_map: dict[str, dict[str, Any]] = {}
 
     if explicit_ids and isinstance(explicit_ids, list):
         target_env_ids = [str(x) for x in explicit_ids]
     elif order == "oldest":
-        target_env_ids = get_oldest_envelope_ids(folder, count, account=account)
+        oldest_envs = get_oldest_envelopes(folder, count, account=account)
+        for env in oldest_envs:
+            eid = str(env.get("id"))
+            target_env_ids.append(eid)
+            envelope_map[eid] = env
     else:
         out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(count)], account=account, timeout=30)
         if "[" in out:
             out = out[out.find("["):]
         envelopes = json.loads(out)
-        target_env_ids = [str(env["id"]) for env in envelopes[:count]]
+        for env in envelopes[:count]:
+            eid = str(env.get("id"))
+            target_env_ids.append(eid)
+            envelope_map[eid] = env
 
     results_map: dict[str, dict[str, Any]] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {
-            executor.submit(get_single_email_details, eid, folder, account, preview_lines): eid
-            for eid in target_env_ids
-        }
-        for fut in concurrent.futures.as_completed(futures):
-            res = fut.result()
-            results_map[res["envelope_id"]] = res
+    if len(target_env_ids) > 20:
+        # Sequential with minor sleep to protect GroupWise IMAP rate limiter
+        for eid in target_env_ids:
+            fb = envelope_map.get(eid)
+            res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=fb)
+            results_map[eid] = res
+            time.sleep(0.05)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = {
+                executor.submit(get_single_email_details, eid, folder, account, preview_lines, envelope_map.get(eid)): eid
+                for eid in target_env_ids
+            }
+            for fut in concurrent.futures.as_completed(futures):
+                res = fut.result()
+                results_map[res["envelope_id"]] = res
 
     ordered_emails = [results_map[eid] for eid in target_env_ids if eid in results_map]
 
