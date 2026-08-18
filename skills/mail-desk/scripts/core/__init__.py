@@ -34,6 +34,7 @@ from .classifier import (
     load_catalogs,
 )
 from .sent_indexer import (
+    auto_resolve_replies_from_sent,
     check_if_replied,
     clean_subject,
     load_sent_index,
@@ -67,4 +68,5 @@ __all__ = [
     "sync_sent_items",
     "check_if_replied",
     "clean_subject",
+    "auto_resolve_replies_from_sent",
 ]

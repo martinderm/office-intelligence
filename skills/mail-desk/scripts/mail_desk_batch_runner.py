@@ -29,6 +29,7 @@ if str(_script_dir) not in sys.path:
 from core import (
     append_action_log_entry,
     append_replies_needed_entry,
+    auto_resolve_replies_from_sent,
     check_if_replied,
     classify_email,
     draft_manifest,
@@ -510,6 +511,8 @@ def run_execute_mode(
                     "reply_status": "needed",
                     "reply_note": notes,
                 }
+                if decision.get("reply_candidate"):
+                    rep_entry["reply_candidate"] = decision["reply_candidate"]
                 append_replies_needed_entry(dd, rep_entry)
 
         item_success = routing_ok and index_ok and meta_ok
@@ -857,28 +860,39 @@ def run_resolve_mode(
             "message_id": config["message_id"],
             "status": config.get("status", "resolved"),
             "resolution": config.get("resolution", ""),
-            "resolved_by": config.get("resolved_by_message_id"),
+            "resolved_by": config.get("resolved_by_message_id") or config.get("resolved_by"),
         })
 
-    resolved_results: list[dict[str, Any]] = []
-    all_resolved = True
+    # If specific items are specified, resolve those explicitly
+    if items:
+        resolved_results: list[dict[str, Any]] = []
+        all_resolved = True
 
-    for item in items:
-        mid = item.get("message_id", "")
-        status = item.get("status", "resolved")
-        resolution = item.get("resolution", "")
-        resolved_by = item.get("resolved_by_message_id") or item.get("resolved_by")
-        res = resolve_case(dd, mid, status=status, resolution=resolution, resolved_by=resolved_by)
-        resolved_results.append(res)
-        if not res.get("resolved"):
-            all_resolved = False
+        for item in items:
+            mid = item.get("message_id", "")
+            status = item.get("status", "resolved")
+            resolution = item.get("resolution", "")
+            resolved_by = item.get("resolved_by_message_id") or item.get("resolved_by")
+            res = resolve_case(dd, mid, status=status, resolution=resolution, resolved_by=resolved_by)
+            resolved_results.append(res)
+            if not res.get("resolved"):
+                all_resolved = False
 
+        return {
+            "ok": all_resolved,
+            "mode": "resolve",
+            "total_processed": len(resolved_results),
+            "all_resolved": all_resolved,
+            "results": resolved_results,
+        }
+
+    # Otherwise run automated audit against sent items
+    auto_res = auto_resolve_replies_from_sent(data_dir=dd)
     return {
-        "ok": all_resolved,
+        "ok": True,
         "mode": "resolve",
-        "total_processed": len(resolved_results),
-        "all_resolved": all_resolved,
-        "results": resolved_results,
+        "auto_audit": True,
+        **auto_res,
     }
 
 
@@ -902,6 +916,7 @@ def main() -> int:
     parser.add_argument("--draft", "-d", type=int, nargs="?", const=20, help="Inspect N items and draft batch-manifest.json")
     parser.add_argument("--inspect", nargs="?", const=20, type=int, help="Inspect N emails")
     parser.add_argument("--sync-sent", nargs="?", const=150, type=int, help="Fetch and index N recent Sent Items")
+    parser.add_argument("--resolve", "-r", action="store_true", help="Auto-audit and resolve replies-needed cases against Sent Items")
     parser.add_argument("--order", choices=["oldest", "newest"], default="oldest", help="Processing order (default: oldest)")
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
@@ -929,6 +944,11 @@ def main() -> int:
             "mode": "sync_sent",
             "count": args.sync_sent,
             "folder": "Sent Items",
+        }
+    elif args.resolve:
+        config = {
+            "mode": "resolve",
+            "auto_from_sent": True,
         }
     elif args.draft is not None:
         config = {

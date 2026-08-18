@@ -294,11 +294,18 @@ def classify_email(
     if sent_lookup and (needs_reply or decision.get("needs_reply")):
         reply_info = check_if_replied(email, sent_lookup)
         if reply_info:
-            needs_reply = False
-            decision["needs_reply"] = False
-            decision["replied_via_sent"] = reply_info
-            sent_date_short = str(reply_info.get("sent_date", ""))[:10]
-            notes = f"{notes} (Bereits beantwortet via Sent Items: {reply_info.get('sent_subject', '')})"
+            if reply_info.get("replied"):
+                needs_reply = False
+                decision["needs_reply"] = False
+                decision["replied_via_sent"] = reply_info
+                notes = f"{notes} (Bereits beantwortet via Sent Items: {reply_info.get('sent_subject', '')})"
+            elif reply_info.get("has_candidate"):
+                cand = reply_info.get("candidate", {})
+                decision["reply_candidate"] = cand
+                cand_subj = cand.get("sent_subject", "")
+                cand_date = str(cand.get("sent_date", ""))[:10]
+                cand_to = cand.get("matched_recipient", "")
+                notes = f"{notes} [Antwort-Kandidat: '{cand_subj}' am {cand_date} an {cand_to}]"
 
     action = {
         "type": "copy_as_move" if target_folder != "INBOX" else "keep_in_folder",

@@ -257,6 +257,34 @@ def sync_sent_items(
     return len(recent_dates), added
 
 
+def parse_date_to_datetime(s: str) -> datetime | None:
+    """Parse various email/ISO date formats to timezone-naive datetime."""
+    if not s:
+        return None
+    s_str = str(s).strip()
+    if len(s_str) >= 10 and s_str[4] == "-" and s_str[7] == "-":
+        try:
+            return datetime.strptime(s_str[:10], "%Y-%m-%d")
+        except Exception:
+            pass
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(s_str)
+        if dt:
+            return dt.replace(tzinfo=None)
+    except Exception:
+        pass
+    return None
+
+
+def extract_email_address(s: str) -> str:
+    """Extract raw email address from header string like 'Name <user@domain.com>'."""
+    if not s:
+        return ""
+    m = re.search(r"[\w\.-]+@[\w\.-]+", s)
+    return m.group(0).lower() if m else s.strip().lower()
+
+
 def check_if_replied(
     email: dict[str, Any],
     sent_lookup: dict[str, Any],
@@ -266,12 +294,13 @@ def check_if_replied(
     if not norm_mid:
         return None
 
-    # 1. Direct match on in_reply_to
+    # 1. Direct match on in_reply_to (unambiguous technical link, even if subject changed)
     irt_matches = sent_lookup.get("by_in_reply_to", {}).get(norm_mid, [])
     if irt_matches:
         latest = irt_matches[-1]
         return {
             "replied": True,
+            "confidence": "high",
             "match_type": "in_reply_to",
             "sent_message_id": latest.get("message_id", ""),
             "sent_date": latest.get("at", ""),
@@ -279,12 +308,13 @@ def check_if_replied(
             "sent_subject": latest.get("subject", ""),
         }
 
-    # 2. Match on references
+    # 2. Match on references (unambiguous thread link)
     ref_matches = sent_lookup.get("by_reference", {}).get(norm_mid, [])
     if ref_matches:
         latest = ref_matches[-1]
         return {
             "replied": True,
+            "confidence": "high",
             "match_type": "references",
             "sent_message_id": latest.get("message_id", ""),
             "sent_date": latest.get("at", ""),
@@ -301,6 +331,7 @@ def check_if_replied(
             latest = subj_matches[-1]
             return {
                 "replied": True,
+                "confidence": "high",
                 "match_type": "subject_clean",
                 "sent_message_id": latest.get("message_id", ""),
                 "sent_date": latest.get("at", ""),
@@ -308,4 +339,149 @@ def check_if_replied(
                 "sent_subject": latest.get("subject", ""),
             }
 
+    # 4. Context & Candidate Search:
+    # When In-Reply-To is missing and subject changed, check for candidate sent emails
+    # to the sender / partner in the same project context within 0-3 days.
+    from_raw = email.get("from", "")
+    from_addr = extract_email_address(from_raw)
+    all_sent = sent_lookup.get("all_entries", [])
+
+    if from_addr and all_sent:
+        sender_domain = from_addr.split("@")[-1] if "@" in from_addr else ""
+        stopwords = {"antwort", "betreff", "anfrage", "update", "fwd", "wtrlt", "2025", "2026", "boku", "mail"}
+        keywords = [w.lower() for w in re.split(r"[\s\-_:/]+", subj) if len(w) >= 4 and w.lower() not in stopwords]
+
+        in_date_raw = str(email.get("date") or email.get("at") or "")
+        in_dt = parse_date_to_datetime(in_date_raw)
+
+        best_candidate = None
+        for s_entry in all_sent:
+            to_field = s_entry.get("to", [])
+            if isinstance(to_field, str):
+                to_addrs = [extract_email_address(to_field)]
+            else:
+                to_addrs = [extract_email_address(t) for t in to_field]
+
+            direct_to_sender = from_addr in to_addrs
+            domain_to_sender = bool(sender_domain and sender_domain not in {"boku.ac.at", "gmail.com", "yahoo.com", "hotmail.com"} and any(sender_domain in t for t in to_addrs))
+
+            if not (direct_to_sender or domain_to_sender):
+                continue
+
+            s_date_raw = str(s_entry.get("at", ""))
+            s_dt = parse_date_to_datetime(s_date_raw)
+
+            # Temporal check: Sent email should be on/after incoming email within 30 days
+            if in_dt and s_dt:
+                delta_days = (s_dt - in_dt).days
+                if delta_days < -1 or delta_days > 30:
+                    continue
+                # If only recipient matched without keywords, require tighter window (<= 3 days)
+                if not any(kw in s_entry.get("subject", "").lower() for kw in keywords) and delta_days > 3:
+                    continue
+
+            s_subj = s_entry.get("subject", "")
+            s_subj_lower = s_subj.lower()
+            s_date_str = s_dt.strftime("%Y-%m-%d") if s_dt else s_date_raw[:10]
+
+            matched_kws = [kw for kw in keywords if kw in s_subj_lower]
+
+            if matched_kws or direct_to_sender:
+                candidate_confidence = "high" if (direct_to_sender and matched_kws) else "medium"
+                best_candidate = {
+                    "sent_message_id": s_entry.get("message_id", ""),
+                    "sent_date": s_entry.get("at", ""),
+                    "sent_envelope_id": s_entry.get("sent_envelope_id", ""),
+                    "sent_subject": s_subj,
+                    "matched_recipient": from_addr if direct_to_sender else to_addrs[0],
+                    "matched_keywords": matched_kws,
+                    "confidence": candidate_confidence,
+                    "reason": f"Gesendet an {from_addr} am {s_date_str} mit Betreff '{s_subj}' (Keywords: {', '.join(matched_kws) if matched_kws else 'Empfänger-Match'})",
+                }
+                if candidate_confidence == "high":
+                    break
+
+        if best_candidate:
+            return {
+                "replied": False,
+                "has_candidate": True,
+                "confidence": best_candidate["confidence"],
+                "candidate": best_candidate,
+            }
+
     return None
+
+
+def auto_resolve_replies_from_sent(data_dir: Path | None = None) -> dict[str, Any]:
+    """Audit replies-needed.jsonl against sent-index.jsonl and resolve answered cases."""
+    from .action_log import resolve_case
+
+    dd = data_dir or resolve_data_dir()
+    sent_idx = load_sent_index(dd)
+    rn_path = dd / "replies-needed.jsonl"
+
+    if not rn_path.exists():
+        return {
+            "ok": True,
+            "total_checked": 0,
+            "resolved_count": 0,
+            "resolved_items": [],
+            "remaining_open": [],
+        }
+
+    with rn_path.open("r", encoding="utf-8") as f:
+        entries = [json.loads(line.strip()) for line in f if line.strip()]
+
+    resolved_items: list[dict[str, Any]] = []
+    remaining_open: list[dict[str, Any]] = []
+    updated_entries: list[dict[str, Any]] = []
+    needs_rewrite = False
+
+    for entry in entries:
+        reply_info = check_if_replied(entry, sent_idx)
+        if reply_info and reply_info.get("replied"):
+            mid = normalize_message_id(entry.get("message_id", ""))
+            resolve_case(
+                data_dir=dd,
+                message_id=mid,
+                status="replied",
+                resolution=f"Beantwortet via Sent Items: {reply_info.get('sent_subject', '')}",
+                resolved_by=reply_info.get("sent_message_id"),
+            )
+            resolved_items.append({
+                "message_id": mid,
+                "subject": entry.get("subject", ""),
+                "sent_message_id": reply_info.get("sent_message_id"),
+                "sent_subject": reply_info.get("sent_subject"),
+                "status": "replied",
+            })
+            needs_rewrite = True
+        else:
+            cand = reply_info.get("candidate") if (reply_info and reply_info.get("has_candidate")) else None
+            if entry.get("reply_candidate") != cand:
+                if cand:
+                    entry["reply_candidate"] = cand
+                else:
+                    entry.pop("reply_candidate", None)
+                needs_rewrite = True
+            updated_entries.append(entry)
+            remaining_open.append({
+                "message_id": entry.get("message_id"),
+                "subject": entry.get("subject"),
+                "from": entry.get("from"),
+                "reply_candidate": entry.get("reply_candidate"),
+            })
+
+    if needs_rewrite:
+        with rn_path.open("w", encoding="utf-8", newline="\n") as f:
+            for e in updated_entries:
+                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+
+    return {
+        "ok": True,
+        "total_checked": len(entries),
+        "resolved_count": len(resolved_items),
+        "resolved_items": resolved_items,
+        "remaining_open_count": len(remaining_open),
+        "remaining_open": remaining_open,
+    }
