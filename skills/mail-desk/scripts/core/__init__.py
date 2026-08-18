@@ -33,6 +33,12 @@ from .classifier import (
     draft_manifest,
     load_catalogs,
 )
+from .sent_indexer import (
+    check_if_replied,
+    clean_subject,
+    load_sent_index,
+    sync_sent_items,
+)
 
 __all__ = [
     "normalize_message_id",
@@ -57,4 +63,8 @@ __all__ = [
     "classify_email",
     "draft_manifest",
     "load_catalogs",
+    "load_sent_index",
+    "sync_sent_items",
+    "check_if_replied",
+    "clean_subject",
 ]

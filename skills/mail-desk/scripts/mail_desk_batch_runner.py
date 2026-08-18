@@ -29,11 +29,13 @@ if str(_script_dir) not in sys.path:
 from core import (
     append_action_log_entry,
     append_replies_needed_entry,
+    check_if_replied,
     classify_email,
     draft_manifest,
     get_single_email_details,
     load_catalogs,
     load_final_index,
+    load_sent_index,
     normalize_message_id,
     resolve_case,
     resolve_data_dir,
@@ -41,6 +43,7 @@ from core import (
     run_himalaya,
     save_final_index_atomic,
     search_mailbox,
+    sync_sent_items,
     update_evidence_file,
     utc_now_iso,
     verify_in_target_folder,
@@ -304,7 +307,15 @@ def run_draft_mode(
             preview_lines=preview_lines,
         )
 
-    draft = draft_manifest(emails, workspace_root=workspace_root)
+    # Auto-sync sent items if requested
+    if config.get("sync_sent", True):
+        try:
+            sync_sent_items(count=int(config.get("sent_count", 150)), account=account, data_dir=dd, workspace_root=workspace_root)
+        except Exception:
+            pass
+
+    sent_lookup = load_sent_index(dd)
+    draft = draft_manifest(emails, workspace_root=workspace_root, sent_lookup=sent_lookup)
 
     out_path = Path(output_file).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +331,39 @@ def run_draft_mode(
         "total_drafted": len(draft.get("items", [])),
         "manifest_file": str(out_path),
         "draft": draft,
+    }
+
+
+# ==============================================================================
+# Sync Sent Mode
+# ==============================================================================
+
+def run_sync_sent_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Fetch recent Sent Items and index them into sent-index.jsonl."""
+    dd = data_dir or resolve_data_dir()
+    workspace_root = dd.parent.parent
+    count = int(config.get("count", 150))
+    folder = config.get("folder", "Sent Items")
+
+    total_examined, added = sync_sent_items(
+        count=count,
+        folder=folder,
+        account=account,
+        data_dir=dd,
+        workspace_root=workspace_root,
+    )
+
+    return {
+        "ok": True,
+        "mode": "sync_sent",
+        "folder": folder,
+        "total_envelopes_examined": total_examined,
+        "new_entries_indexed": added,
+        "sent_index_file": str(dd / "sent-index.jsonl"),
     }
 
 
@@ -688,8 +732,15 @@ def run_pipeline_mode(
             "review_needed_count": 0,
         }
 
-    # 2. Draft & Classify
-    draft = draft_manifest(emails, workspace_root=workspace_root)
+    # 2. Draft & Classify with Sent-Items check
+    if config.get("sync_sent", True):
+        try:
+            sync_sent_items(count=int(config.get("sent_count", 150)), account=account, data_dir=dd, workspace_root=workspace_root)
+        except Exception:
+            pass
+
+    sent_lookup = load_sent_index(dd)
+    draft = draft_manifest(emails, workspace_root=workspace_root, sent_lookup=sent_lookup)
     all_drafted_items = draft.get("items", [])
 
     # Filter by confidence threshold
@@ -850,6 +901,7 @@ def main() -> int:
     parser.add_argument("--pipeline", "-p", type=int, nargs="?", const=20, help="Run autonomous pipeline for N items")
     parser.add_argument("--draft", "-d", type=int, nargs="?", const=20, help="Inspect N items and draft batch-manifest.json")
     parser.add_argument("--inspect", nargs="?", const=20, type=int, help="Inspect N emails")
+    parser.add_argument("--sync-sent", nargs="?", const=150, type=int, help="Fetch and index N recent Sent Items")
     parser.add_argument("--order", choices=["oldest", "newest"], default="oldest", help="Processing order (default: oldest)")
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
@@ -871,6 +923,12 @@ def main() -> int:
             "skip_known": args.skip_known,
             "min_confidence": args.min_confidence,
             "verify": True,
+        }
+    elif args.sync_sent is not None:
+        config = {
+            "mode": "sync_sent",
+            "count": args.sync_sent,
+            "folder": "Sent Items",
         }
     elif args.draft is not None:
         config = {
@@ -907,10 +965,12 @@ def main() -> int:
         candidates = [
             data_dir / "batch-manifest.json",
             data_dir / "batch-pipeline.json",
+            data_dir / "batch-draft.json",
             data_dir / "batch-inspect.json",
             data_dir / "batch-verify.json",
             data_dir / "batch-search.json",
             data_dir / "batch-resolve.json",
+            data_dir / "batch-sync-sent.json",
         ]
         found_input = False
         for cand in candidates:
@@ -937,6 +997,8 @@ def main() -> int:
         out = run_inspect_mode(config, account=account, data_dir=data_dir)
     elif mode in ("draft", "propose"):
         out = run_draft_mode(config, account=account, data_dir=data_dir)
+    elif mode in ("sync_sent", "sync-sent", "sent"):
+        out = run_sync_sent_mode(config, account=account, data_dir=data_dir)
     elif mode in ("pipeline", "auto"):
         out = run_pipeline_mode(config, account=account, data_dir=data_dir, index_path=index_path)
     elif mode in ("execute", "process"):

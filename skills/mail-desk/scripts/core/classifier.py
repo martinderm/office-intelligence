@@ -8,60 +8,62 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id
+from .common import normalize_message_id, resolve_data_dir
+from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
 def parse_date_to_year_month(date_str: str) -> tuple[str, str]:
-    """Parse email date header into (YYYY-MM, YYYY-MM-DD)."""
-    # e.g., "Tue, 20 Jan 2026 10:49:09 +0100" or "2026-01-20"
+    """Parse date string into ('YYYY-MM', 'YYYY-MM-DD'). Default to current year-month if invalid."""
     if not date_str:
-        now = datetime.now()
-        return now.strftime("%Y-%m"), now.strftime("%Y-%m-%d")
+        return "2026-01", "2026-01-01"
 
-    # Try common formats
+    # Match standard formats like "Thu, 15 Jan 2026 13:11:40 +0000" or "2026-01-15"
     months = {
         "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
         "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
     }
 
-    match = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", date_str)
-    if match:
-        day, mon, year = match.groups()
-        mon_num = months.get(mon.lower(), "01")
-        day_str = f"{int(day):02d}"
-        return f"{year}-{mon_num}", f"{year}-{mon_num}-{day_str}"
-
+    # ISO format check
     iso_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", date_str)
     if iso_match:
-        year, mon, day = iso_match.groups()
-        return f"{year}-{mon}", f"{year}-{mon}-{day}"
+        y, m, d = iso_match.group(1), iso_match.group(2), iso_match.group(3)
+        return f"{y}-{m}", f"{y}-{m}-{d}"
 
-    now = datetime.now()
-    return now.strftime("%Y-%m"), now.strftime("%Y-%m-%d")
+    # RFC 2822 format check: "15 Jan 2026"
+    rfc_match = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", date_str)
+    if rfc_match:
+        d = int(rfc_match.group(1))
+        mon = rfc_match.group(2).lower()
+        y = rfc_match.group(3)
+        m = months.get(mon, "01")
+        return f"{y}-{m}", f"{y}-{m}-{d:02d}"
+
+    return "2026-01", "2026-01-01"
 
 
-def load_catalogs(workspace_root: Path | None = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Load projects.json and topics.json from workspace references."""
-    ws = workspace_root or Path.cwd()
-    proj_path = ws / "memory" / "references" / "projects" / "projects.json"
-    topic_path = ws / "memory" / "references" / "topics" / "topics.json"
+def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Load projects and topics from catalogs in workspace memory."""
+    projects_file = workspace_root / "memory" / "references" / "projects" / "projects.json"
+    topics_file = workspace_root / "memory" / "references" / "topics" / "topics.json"
 
     projects: list[dict[str, Any]] = []
     topics: list[dict[str, Any]] = []
 
-    if proj_path.exists():
+    if projects_file.exists():
         try:
-            with proj_path.open("r", encoding="utf-8") as f:
-                projects = json.load(f)
+            with projects_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                projects = data.get("projects", [])
         except Exception:
-            projects = []
+            pass
 
-    if topic_path.exists():
+    if topics_file.exists():
         try:
-            with topic_path.open("r", encoding="utf-8") as f:
-                topics = json.load(f)
+            with topics_file.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+                topics = data.get("topics", [])
         except Exception:
-            topics = []
+            pass
 
     return projects, topics
 
@@ -71,13 +73,20 @@ def classify_email(
     workspace_root: Path | None = None,
     projects: list[dict[str, Any]] | None = None,
     topics: list[dict[str, Any]] | None = None,
+    sent_lookup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Conservatively classify an email and propose routing, decision, notes, and evidence."""
+    """Classify a single email conservatively and determine recommended target folder and evidence."""
     ws = workspace_root or Path.cwd()
     if projects is None or topics is None:
-        p_cat, t_cat = load_catalogs(ws)
-        projects = projects if projects is not None else p_cat
-        topics = topics if topics is not None else t_cat
+        p, t = load_catalogs(ws)
+        projects = projects if projects is not None else p
+        topics = topics if topics is not None else t
+
+    if sent_lookup is None:
+        try:
+            sent_lookup = load_sent_index(ws / "data" / "mail-desk")
+        except Exception:
+            sent_lookup = None
 
     subject = str(email.get("subject", "")).strip()
     from_str = str(email.get("from", "")).strip()
@@ -246,27 +255,50 @@ def classify_email(
             }
             notes = f"BOKU-Organisation / IT-Meldung: {subject}."
 
-        # Check AIxLLL / Publications
-        elif "ejull" in full_text_lower or "ai tutor" in full_text_lower or "ai-tutor" in full_text_lower or "aucen" in full_text_lower:
-            target_folder = "Themen/AIxLLL"
-            decision = {
-                "kind": "topic",
-                "id": "aixlll",
-                "confidence": "high" if ("ejull" in full_text_lower or "ai tutor" in full_text_lower) else "medium",
-                "needs_reply": needs_reply,
-            }
-            notes = f"AIxLLL / Publikationsabstimmung (Betreff: {subject})."
-
-        # Check EUCEN / SAMUELE
-        elif "samuele" in full_text_lower or "eucen" in full_text_lower:
+        # Check EUCEN / EJULL / SAMUELE
+        elif "ejull" in full_text_lower or "eucen" in full_text_lower or "samuele" in full_text_lower:
             target_folder = "Themen/Netzwerke/EUCEN"
             decision = {
                 "kind": "topic",
                 "id": "netzwerke/eucen",
-                "confidence": "high" if "samuele" in full_text_lower else "medium",
+                "confidence": "high" if ("ejull" in full_text_lower or "eucen" in full_text_lower) else "medium",
                 "needs_reply": needs_reply,
             }
-            notes = f"EUCEN Netzwerkabstimmung (Betreff: {subject})."
+            notes = f"EUCEN / EJULL Netzwerk- & Publikationsabstimmung (Betreff: {subject})."
+
+        # Check AUCEN
+        elif "aucen" in full_text_lower or "office@aucen.ac.at" in from_str.lower():
+            target_folder = "Themen/Netzwerke/AUCEN"
+            decision = {
+                "kind": "topic",
+                "id": "netzwerke/aucen",
+                "confidence": "high",
+                "needs_reply": needs_reply,
+            }
+            notes = f"AUCEN Netzwerkabstimmung (Betreff: {subject})."
+
+        # Check AIxLLL
+        elif "ai tutor" in full_text_lower or "ai-tutor" in full_text_lower or "aixlll" in full_text_lower:
+            target_folder = "Themen/AIxLLL"
+            decision = {
+                "kind": "topic",
+                "id": "aixlll",
+                "confidence": "high",
+                "needs_reply": needs_reply,
+            }
+            notes = f"AIxLLL Abstimmung (Betreff: {subject})."
+
+    # --------------------------------------------------------------------------
+    # 3. Sent Items Reply Check
+    # --------------------------------------------------------------------------
+    if sent_lookup and (needs_reply or decision.get("needs_reply")):
+        reply_info = check_if_replied(email, sent_lookup)
+        if reply_info:
+            needs_reply = False
+            decision["needs_reply"] = False
+            decision["replied_via_sent"] = reply_info
+            sent_date_short = str(reply_info.get("sent_date", ""))[:10]
+            notes = f"{notes} (Bereits beantwortet via Sent Items: {reply_info.get('sent_subject', '')})"
 
     action = {
         "type": "copy_as_move" if target_folder != "INBOX" else "keep_in_folder",
@@ -295,14 +327,36 @@ def draft_manifest(
     emails: list[dict[str, Any]],
     workspace_root: Path | None = None,
     delete_input_on_success: bool = True,
+    sent_lookup: dict[str, Any] | None = None,
+    sync_sent: bool = True,
 ) -> dict[str, Any]:
     """Generate a batch manifest dictionary from a list of inspected emails."""
     ws = workspace_root or Path.cwd()
     projects, topics = load_catalogs(ws)
+    dd = ws / "data" / "mail-desk"
+
+    if sent_lookup is None:
+        if sync_sent and emails:
+            try:
+                batch_dates = [parse_date_to_year_month(str(e.get("date", "")))[1] for e in emails if e.get("date")]
+                if batch_dates:
+                    sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws)
+            except Exception:
+                pass
+        try:
+            sent_lookup = load_sent_index(dd)
+        except Exception:
+            sent_lookup = None
 
     items: list[dict[str, Any]] = []
     for email in emails:
-        item = classify_email(email, workspace_root=ws, projects=projects, topics=topics)
+        item = classify_email(
+            email,
+            workspace_root=ws,
+            projects=projects,
+            topics=topics,
+            sent_lookup=sent_lookup,
+        )
         items.append(item)
 
     return {
