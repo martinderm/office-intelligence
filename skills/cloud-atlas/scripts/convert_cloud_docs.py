@@ -64,21 +64,38 @@ def ensure_tesseract_path():
                 os.environ["PATH"] = cand + os.pathsep + os.environ.get("PATH", "")
                 break
 
+def decode_subprocess_output(raw_bytes):
+    if raw_bytes is None:
+        return ""
+    if isinstance(raw_bytes, str):
+        return raw_bytes
+    try:
+        return raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for enc in ["cp1252", "iso-8859-1", "cp850", sys.getfilesystemencoding(), "utf-16"]:
+        if enc:
+            try:
+                return raw_bytes.decode(enc)
+            except (UnicodeDecodeError, LookupError):
+                pass
+    return raw_bytes.decode("utf-8", errors="replace")
+
 def run_ocr_on_pdf(src_abs, timeout=120):
     safe_src = get_safe_path(src_abs)
     ensure_tesseract_path()
     try:
         res = subprocess.run(
-            ["ocrmypdf", "-l", "deu", "--skip-text", safe_src, safe_src],
+            ["ocrmypdf", "-l", "deu", "--redo-ocr", safe_src, safe_src],
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=timeout
         )
+        stdout_str = decode_subprocess_output(res.stdout)
+        stderr_str = decode_subprocess_output(res.stderr)
         if res.returncode == 0:
             return True, "OCR succeeded"
         else:
-            return False, res.stderr or f"Exit code {res.returncode}"
+            return False, stderr_str or f"Exit code {res.returncode}"
     except FileNotFoundError:
         return False, "ocrmypdf executable not found."
     except subprocess.TimeoutExpired:
@@ -97,15 +114,18 @@ def convert_to_markdown_raw(src_abs):
             raise RuntimeError(f"MarkItDown library conversion failed: {e}")
     else:
         try:
-            res = subprocess.run(["markitdown", safe_src], capture_output=True, text=True, encoding="utf-8")
+            res = subprocess.run(["markitdown", safe_src], capture_output=True)
+            stdout_str = decode_subprocess_output(res.stdout)
+            stderr_str = decode_subprocess_output(res.stderr)
             if res.returncode == 0:
-                return res.stdout
+                return stdout_str
             else:
-                raise RuntimeError(res.stderr or f"CLI returned exit code {res.returncode}")
+                raise RuntimeError(stderr_str or f"CLI returned exit code {res.returncode}")
         except FileNotFoundError:
             raise RuntimeError("Neither 'markitdown' Python package nor CLI tool was found. Please run 'pip install markitdown'.")
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
+
 
 def convert_to_markdown(src_abs, enable_ocr=True):
     text = convert_to_markdown_raw(src_abs)
@@ -372,7 +392,7 @@ def parse_markdown_file(filepath):
     if not os.path.exists(safe_path):
         return None, ""
     try:
-        with open(safe_path, "r", encoding="utf-8") as f:
+        with open(safe_path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
         if content.startswith("---"):
             parts = content.split("---", 2)
@@ -397,7 +417,7 @@ def write_markdown_file(filepath, metadata, body):
     frontmatter_lines.append("---")
     
     os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-    with open(safe_path, "w", encoding="utf-8") as f:
+    with open(safe_path, "w", encoding="utf-8", errors="replace") as f:
         f.write("\n".join(frontmatter_lines) + "\n\n" + body)
 
 def main():
@@ -478,8 +498,8 @@ def main():
                     if existing_meta:
                         if existing_meta.get("file_date") != src_mtime:
                             needs_conversion = True
-                        elif len(body.strip()) < 10:
-                            # Re-convert if previous conversion produced an empty/truncated mirror
+                        elif len(body.strip()) < 10 and existing_meta.get("ocr_applied") != "true":
+                            # Re-convert if previous conversion produced an empty/truncated mirror and OCR wasn't applied yet
                             needs_conversion = True
                         else:
                             last_verified_str = existing_meta.get("last_verified_date")
@@ -550,11 +570,18 @@ def main():
 
                 if res["success"]:
                     count_converted += 1
+                    file_mtime = t["src_mtime"]
+                    try:
+                        fresh_stat = os.stat(get_safe_path(t["src_abs"]))
+                        file_mtime = datetime.datetime.fromtimestamp(fresh_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        pass
+
                     metadata = {
                         "original_file": src_rel_workspace,
                         "version": t["src_version"],
                         "conversion_date": now_str,
-                        "file_date": t["src_mtime"],
+                        "file_date": file_mtime,
                         "last_verified_date": now_str
                     }
                     if res.get("ocr_applied"):
