@@ -61,3 +61,23 @@ def resolve_final_index_path(custom_path: str | Path | None = None, data_dir: Pa
         return Path(env_index).expanduser().resolve()
     dd = data_dir or resolve_data_dir()
     return dd / "final-location-index.json"
+
+
+def resolve_evidence_dir(kind: str, item_id: str, workspace_root: Path | None = None) -> Path:
+    """
+    Dual-Path evidence resolver (Dual-Evidence Standard):
+    1. If memory/evidence/<kind>/<item_id> exists, or memory/evidence exists, use memory/evidence/<kind>/<item_id>
+    2. Fallback to legacy memory/references/<kind>/<item_id>/evidence if it exists
+    3. Default to memory/evidence/<kind>/<item_id>
+    """
+    ws = workspace_root or Path.cwd()
+    new_path = ws / "memory" / "evidence" / kind / item_id
+    if new_path.exists() or (ws / "memory" / "evidence").exists():
+        return new_path
+
+    legacy_path = ws / "memory" / "references" / kind / item_id / "evidence"
+    if legacy_path.exists():
+        return legacy_path
+
+    return new_path
+

@@ -53,7 +53,7 @@ Erzeuge für jedes neue Event folgende Struktur:
   - **Qualitäts-Check (Summary)**: Wenn die importierte Zusammenfassung unzureichende Inhalte hat (z. B. leere Abschnitte, unvollständige Notizen aufgrund aufgebrauchter Fireflies-Credits), erstelle die Zusammenfassung **aktiv neu anhand des immer verfügbaren Transkripts** (gemäß den Formatregeln aus dem `fireflies-api` Skill).
   - Speichere das Transkript als `<YYYY-MM-DD>-<vortrag>.transcript.md` und die Zusammenfassung als `<YYYY-MM-DD>-<vortrag>.summary.md` im `recordings/`-Ordner des Events.
   - Verlinke die Zusammenfassung direkt im entsprechenden Programmpunkt in der `index.md` des Events.
-  - Trage eine Zusammenfassung des Meetings in das zentrale, monatliche Evidenz-Log des Topics/Projekts ein (z. B. `topics/<topic>/evidence/<YYYY-MM>.md`).
+  - Trage eine Zusammenfassung des Meetings in das zentrale, monatliche Evidenz-Log des Topics/Projekts ein (z. B. `memory/evidence/topics/<topic>/<YYYY-MM>.md` bzw. `memory/evidence/projects/<projekt>/<YYYY-MM>.md`).
   - **CRITICAL**: Aktualisiere den `summary_path` und `transcript_path` des entsprechenden Meetings in `memory/references/meetings/meetings.json` auf die neuen Speicherorte im Event-Verzeichnis, um die zentrale JSON-Registrierung konsistent zu halten.
 
 ### 4. Fristen & Action-Items Triage

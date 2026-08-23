@@ -7,16 +7,19 @@ description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von off
 
 Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`.
 
-## Zielbild (verbindlich)
+## Zielbild (verbindlich — Dual Evidence Standard)
 
-Unterscheide immer zwei Ebenen:
+Unterscheide immer die beiden Säulen des Dual-Evidence-Standards:
 
-1. **Strukturierte Projekt-Metadaten** → `memory/references/projects/projects.json`
-2. **Inhaltliche und operative Projektdoku** → `memory/references/projects/<slug>/`
+1. **Säule 1 (De Jure / Normativ & Struktur):**
+   - Strukturierte Projekt-Metadaten → `memory/references/projects/projects.json`
+   - Inhaltliche & projektbezogene Referenzdoku → `memory/references/projects/<slug>/` (`index.md`, `contacts.md`, `signals.md`, `workpackages/`)
+2. **Säule 2 (De Facto / Empirisch & Operativ):**
+   - Chronologische Evidenz-Logs & operative Nachweise → `memory/evidence/projects/<slug>/` (`YYYY-MM.md`)
 
 Diese Ebene gehört fachlich zu `office-intelligence`; `mail-processor` konsumiert davon nur die routing- und matchingrelevanten Teile.
 
-Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch **Projektordner-Struktur** anlegen.
+Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch **Projektordner-Struktur in beiden Säulen** anlegen.
 
 ## Verbindliche Ordnerstruktur bei Neuanlage
 
@@ -26,11 +29,13 @@ Lege für neue Projekte an:
 - `memory/references/projects/<slug>/contacts.md`
 - `memory/references/projects/<slug>/signals.md`
 - `memory/references/projects/<slug>/workpackages/` (Ordner)
-- optional: `memory/references/projects/<slug>/evidence/` (Ordner)
+- `memory/evidence/projects/<slug>/` (Ordner für chronologische Evidenz-Logs `YYYY-MM.md`)
 - optional: `memory/references/projects/<slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
 
-Regeln:
+Regeln & Dual-Path-Fallback:
 
+- **Dual-Path Lesezugriff:** Bei Lesezugriffen auf Evidenzen wird zuerst `memory/evidence/projects/<slug>/` geprüft. Existiert dieser nicht, greift als Abwärtskompatibilität der Fallback auf das Legacy-Verzeichnis `memory/references/projects/<slug>/evidence/`.
+- **Standard für Schreibzugriffe:** Neue Evidenzeinträge, Transkripte und Logs werden **stets in `memory/evidence/projects/<slug>/`** abgelegt.
 - `mailbox_folder` ist der fachliche Parent-Ordner des Projekts.
 - Antwortbedürftige Projektmails landen operativ im Child-Ordner `<mailbox_folder>/_Needs-Reply`.
 - Der `_Needs-Reply`-Child muss nicht in `projects.json` als eigenes Feld gepflegt werden; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.

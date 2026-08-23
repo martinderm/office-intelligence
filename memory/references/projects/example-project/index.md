@@ -16,8 +16,8 @@ Kurzbeschreibung: Demoeintrag für den Katalog.
 - Projekt ist als Beispielkatalog für Routing/Discovery aktiv.
 <!-- END:managed-summary -->
 
-## Referenzen
+## Referenzen & Evidenz
 
 - Signale: ./signals.md
-- Evidenz-Log: ./evidence/
 - Workpackages: ./workpackages/
+- Evidenz-Log: ../../../evidence/projects/example-project/

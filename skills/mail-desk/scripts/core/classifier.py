@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id, resolve_data_dir
+from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
@@ -133,32 +133,26 @@ def classify_email(
         "atael": {
             "folder": "Projekte/In Ausarbeitung/ATAEL",
             "id": "atael",
-            "evidence_dir": "memory/references/projects/atael/evidence",
         },
         "usage-ng": {
             "folder": "Projekte/USAGE-NG",
             "id": "usage-ng",
-            "evidence_dir": "memory/references/projects/usage-ng/evidence",
         },
         "usage ng": {
             "folder": "Projekte/USAGE-NG",
             "id": "usage-ng",
-            "evidence_dir": "memory/references/projects/usage-ng/evidence",
         },
         "meshe": {
             "folder": "Projekte/MESHE",
             "id": "meshe",
-            "evidence_dir": "memory/references/projects/meshe/evidence",
         },
         "evolve": {
             "folder": "Projekte/EVOLVE",
             "id": "evolve",
-            "evidence_dir": "memory/references/projects/evolve/evidence",
         },
         "li4lam": {
             "folder": "Projekte/LI4LAM",
             "id": "li4lam",
-            "evidence_dir": "memory/references/projects/li4lam/evidence",
         },
     }
 
@@ -183,7 +177,6 @@ def classify_email(
                     matched_project = {
                         "folder": mb_folder,
                         "id": p_id,
-                        "evidence_dir": f"memory/references/projects/{p_id}/evidence",
                     }
                     high_match = True
                     break
@@ -220,8 +213,12 @@ def classify_email(
         }
         notes = f"Projektbezogene Abstimmung zu {pid.upper()} (Betreff: {subject})."
 
-        ev_dir = ws / matched_project["evidence_dir"]
-        ev_file_rel = f"{matched_project['evidence_dir']}/{ym}.md"
+        ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
+        try:
+            ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
+        except ValueError:
+            ev_dir_rel = str(ev_dir.as_posix())
+        ev_file_rel = f"{ev_dir_rel}/{ym}.md"
         ev_entry = (
             f"- {ymd} — {subject}.\n"
             f"  - Message-ID: `{norm_mid}` ({from_str})\n"

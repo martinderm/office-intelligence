@@ -2,12 +2,13 @@
 
 Einmalige Workspace-Initialisierung (nicht Teil des regulären Projekt-Arbeitsmodus).
 
-Ziel: Mindeststruktur für Projektkatalog + kompakte Workspace-Übersicht sicherstellen.
+Ziel: Mindeststruktur für Projektkatalog + kompakte Workspace-Übersicht sicherstellen (Dual-Evidence-Standard).
 
 ## Scope
 
 - Workspace-Root
-- `memory/references/projects/`
+- `memory/references/projects/` (Säule 1)
+- `memory/evidence/projects/` (Säule 2)
 - Skill-Referenzen unter `skills/project-catalog-entry/references/`
 
 ## Reihenfolge (verbindlich)
@@ -20,12 +21,13 @@ Ziel: Mindeststruktur für Projektkatalog + kompakte Workspace-Übersicht sicher
    - Soll: Eintrag zu `PROJECTS.md` mit Kurzbeschreibung.
    - Wenn fehlt: minimal patchen (nur fehlende Zeile ergänzen).
 
-3. **Prüfen: Struktur für Projektwissen vorhanden**
+3. **Prüfen: Struktur für Projektwissen vorhanden (2-Säulen-Modell)**
    - `memory/references/projects/projects.json`
    - `memory/references/projects/<slug>/index.md` (bei Neuanlage)
    - `memory/references/projects/<slug>/contacts.md` (bei Neuanlage)
    - `memory/references/projects/<slug>/signals.md` (bei Neuanlage)
    - `memory/references/projects/<slug>/workpackages/` (bei Neuanlage)
+   - `memory/evidence/projects/<slug>/` (bei Neuanlage für Evidenz-Logs)
 
 4. **Review vor Write**
    - Geplante Dateiänderungen inkl. Initialisierungs-Ergebnis als Kurzblock anzeigen:

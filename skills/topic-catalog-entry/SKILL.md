@@ -7,16 +7,19 @@ description: Topic-Katalog- und Topic-Arbeitsstruktur-Pflege innerhalb von offic
 
 Pflege thematische Arbeitsstruktur, Topic-Routingdaten und Topic-Dokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`.
 
-## Zielbild (verbindlich)
+## Zielbild (verbindlich — Dual Evidence Standard)
 
-Unterscheide immer zwei Ebenen:
+Unterscheide immer die beiden Säulen des Dual-Evidence-Standards:
 
-1. **Strukturierte Topic-Metadaten** → `memory/references/topics/topics.json`
-2. **Inhaltliche und operative Topic-Doku** → `memory/references/topics/<slug>/`
+1. **Säule 1 (De Jure / Normativ & Struktur):**
+   - Strukturierte Topic-Metadaten → `memory/references/topics/topics.json`
+   - Inhaltliche & thematische Referenzdoku → `memory/references/topics/<slug>/` (`index.md`, `contacts.md`, `signals.md`, `subtopics/`)
+2. **Säule 2 (De Facto / Empirisch & Operativ):**
+   - Chronologische Evidenz-Logs & operative Nachweise → `memory/evidence/topics/<slug>/` (`YYYY-MM.md`)
 
 Diese Ebene gehört fachlich zu `office-intelligence`; `mail-processor` konsumiert davon nur die routing- und matchingrelevanten Teile.
 
-Für neue Topics gilt: **nicht nur JSON-Eintrag**, sondern auch **Topic-Ordner-Struktur** anlegen.
+Für neue Topics gilt: **nicht nur JSON-Eintrag**, sondern auch **Topic-Ordner-Struktur in beiden Säulen** anlegen.
 
 ## Verbindliche Ordnerstruktur bei Neuanlage
 
@@ -26,11 +29,13 @@ Lege für neue Topics an:
 - `memory/references/topics/<slug>/contacts.md`
 - `memory/references/topics/<slug>/signals.md`
 - `memory/references/topics/<slug>/subtopics/` (Ordner)
-- optional: `memory/references/topics/<slug>/evidence/` (Ordner)
+- `memory/evidence/topics/<slug>/` (Ordner für chronologische Evidenz-Logs `YYYY-MM.md`)
 - optional: `memory/references/topics/<slug>/subtopics/<subtopic-slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
 
-Regeln:
+Regeln & Dual-Path-Fallback:
 
+- **Dual-Path Lesezugriff:** Bei Lesezugriffen auf Evidenzen wird zuerst `memory/evidence/topics/<slug>/` geprüft. Existiert dieser nicht, greift als Abwärtskompatibilität der Fallback auf das Legacy-Verzeichnis `memory/references/topics/<slug>/evidence/`.
+- **Standard für Schreibzugriffe:** Neue Evidenzeinträge, Transkripte und Logs werden **stets in `memory/evidence/topics/<slug>/`** abgelegt.
 - `mailbox_folder` ist der fachliche Parent-Ordner des Topics.
 - Antwortbedürftige Topic-Mails landen operativ im Child-Ordner `<mailbox_folder>/_Needs-Reply`.
 - Der `_Needs-Reply`-Child muss nicht in `topics.json` als eigenes Feld gepflegt werden; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.

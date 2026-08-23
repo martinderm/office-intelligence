@@ -4,6 +4,7 @@ from .common import (
     get_iso_week_folder,
     normalize_message_id,
     resolve_data_dir,
+    resolve_evidence_dir,
     resolve_final_index_path,
     utc_now_iso,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "utc_now_iso",
     "get_iso_week_folder",
     "resolve_data_dir",
+    "resolve_evidence_dir",
     "resolve_final_index_path",
     "run_himalaya",
     "get_single_email_details",

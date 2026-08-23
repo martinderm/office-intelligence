@@ -1,11 +1,14 @@
 # Template — Project Folder Layout
 
-Für jedes Projekt wird ein eigener Ordner angelegt:
+Für jedes Projekt wird eine Struktur in beiden Säulen des Dual-Evidence-Standards angelegt:
 
-- `memory/references/projects/<id>/index.md`
-- `memory/references/projects/<id>/signals.md`
-- `memory/references/projects/<id>/evidence/` (monatliche Logs)
-- `memory/references/projects/<id>/workpackages/` (Workpackages)
+- **Säule 1 (Referenzen & Struktur):**
+  - `memory/references/projects/<id>/index.md`
+  - `memory/references/projects/<id>/signals.md`
+  - `memory/references/projects/<id>/contacts.md`
+  - `memory/references/projects/<id>/workpackages/` (Workpackages)
+- **Säule 2 (Evidenzen & Logs):**
+  - `memory/evidence/projects/<id>/` (monatliche Logs `YYYY-MM.md`)
 
 ---
 
@@ -42,11 +45,11 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 - Kurzstatus folgt aus klassifizierten Mails.
 <!-- END:managed-summary -->
 
-## Referenzen
+## Referenzen & Evidenz
 
 - Signale: ./signals.md
-- Evidenz-Log: ./evidence/
 - Workpackages: ./workpackages/
+- Evidenz-Log: ../../../evidence/projects/<id>/
 ```
 
 ## `signals.md` (Template)
@@ -86,9 +89,16 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 <!-- END:managed-signals -->
 ```
 
-## `evidence/YYYY-MM.md` (Template)
+## `memory/evidence/projects/<id>/YYYY-MM.md` (Template)
 
 ```md
+---
+document_type: evidence-log
+evidence_level: observed
+project: <id>
+timeframe: YYYY-MM
+---
+
 # Evidence — <id> — YYYY-MM
 
 <!-- BEGIN:managed-evidence -->

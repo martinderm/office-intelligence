@@ -474,7 +474,7 @@ Konkret:
 - Bei bestehenden Workpackages ebenfalls operative Updates (Fristen, Deliverable-/Survey-Status, konkrete ToDo-Änderungen) direkt in der passenden WP-Referenz nachziehen.
 - Nur belastbare Fakten übernehmen; bei Unsicherheit Review notieren statt Struktur zu raten.
 
-Neue belastbare Erkenntnisse aus Mails sollen nicht im Mail-Log versanden. Wenn eine Mail klare, dauerhafte Informationen zu einem Projekt oder Topic enthält, integriere sie in die passende `memory/references/`-Struktur.
+Neue belastbare Erkenntnisse aus Mails sollen nicht im Mail-Log versanden. Wenn eine Mail klare, dauerhafte Informationen zu einem Projekt oder Topic enthält, integriere sie in die passende `memory/references/`-Struktur (Säule 1) bzw. `memory/evidence/`-Struktur (Säule 2).
 
 Verwende dafür die zuständigen Skills:
 
@@ -484,32 +484,32 @@ Verwende dafür die zuständigen Skills:
 Regeln:
 
 - Nur belastbare Erkenntnisse übernehmen, keine bloßen Vermutungen.
-- Im Zweifel zwischen `gar keine Wissenspflege` und `kleine, belastbare Wissenspflege` gilt: **eher knapp in `memory/references/*` ergänzen** (z. B. Evidence-Notiz, Stub in bestehender Register-/Subtopic-Datei), solange die Aussage quellengebunden und als vorläufig begrenzt formuliert ist.
+- Im Zweifel zwischen `gar keine Wissenspflege` und `kleine, belastbare Wissenspflege` gilt: **eher knapp in `memory/references/*` bzw. `memory/evidence/*` ergänzen** (z. B. Evidence-Notiz, Stub in bestehender Register-/Subtopic-Datei), solange die Aussage quellengebunden und als vorläufig begrenzt formuliert ist.
 - Neue Informationen in bestehende Seiten integrieren, nicht einfach neue Log-Blöcke anhängen.
-- Bestehende `signals.md`, `evidence/YYYY-MM.md`, `contacts.md`, `index.md` und Katalogfelder gezielt aktualisieren.
+- Bestehende `signals.md`, Evidenz-Logs (`memory/evidence/.../YYYY-MM.md`), `contacts.md`, `index.md` und Katalogfelder gezielt aktualisieren.
 - Mailinhalte knapp zusammenfassen; keine langen Mailtexte in Referenzen kopieren.
-- Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Ziel. Operativ ist `message_id` die normalisierte Form ohne `< >`; in Freitext oder zitierten Headern darf die Rohform mit `< >` zusaetzlich erscheinen. Einen Backend-Locator nur als nachrangige Verifikationshilfe notieren.
+- Quelle nachvollziehbar notieren: Datum, Absender, Betreff, Message-ID bzw. Fallback-Key, ggf. Ziel. Operativ ist `message_id` die normalisierte Form ohne `< >`; in Freitext oder zitierten Headern darf die Rohform mit `< >` zusätzlich erscheinen. Einen Backend-Locator nur als nachrangige Verifikationshilfe notieren.
 - Beim Schreiben von Projekt-/Topic-Referenzen die Message-ID immer explizit als Quellenbezug mitführen (z. B. `message_id`; bei mehreren Mails `message_ids`).
 - **Harte Regel:** Ohne `message_id`/`message_ids` (oder dokumentierten Fallback mit Grund, warum keine Message-ID verfügbar ist) gilt eine Referenznotiz als unvollständig und darf nicht als „erledigt“ gemeldet werden.
-- **Zusätzliche harte Regel fuer Evidence-Logs:** Wenn eine Mail neue belastbare Erkenntnisse in `memory/references/*` ausloest, muss die Aussage auch im passenden `evidence/YYYY-MM.md` auffindbar sein, inklusive `message_id`/`message_ids` (oder dokumentiertem Fallback mit Grund). Ein Update nur in `index.md`, `signals.md` oder `contacts.md` reicht dann nicht aus.
+- **Zusätzliche harte Regel für Evidence-Logs:** Wenn eine Mail neue belastbare Erkenntnisse auslöst, muss die Aussage auch im passenden Evidenz-Log (`memory/evidence/topics/<slug>/YYYY-MM.md` bzw. `memory/evidence/projects/<slug>/YYYY-MM.md`, mit automatischem Fallback auf Legacy-Pfade beim Lesen) auffindbar sein, inklusive `message_id`/`message_ids` (oder dokumentiertem Fallback mit Grund). Ein Update nur in `index.md`, `signals.md` oder `contacts.md` reicht dann nicht aus.
 - Der Evidence-Eintrag muss mindestens enthalten: Datum, Absender, Betreff, `message_id`/`message_ids`, Kurzinhalt, fachliche Einordnung und sofern geroutet das Ziel; Backend-Locator nur optional als nachrangige Verifikationshilfe.
 - Nur wenn keine Message-ID verfügbar ist, den Fallback-Key als Quellenbezug verwenden und den Grund kurz dazuschreiben.
 - Katalogfelder (`aliases`, `keywords`, `contacts`, `typical_subject_patterns`, Workpackages/Subtopics) nur ändern, wenn die Mail dafür ein klares Signal liefert.
 - Bei unsicherer oder struktureller Änderung erst Review notieren oder den User fragen.
-- `data/mail-desk/action-log.jsonl` bleibt nur Bearbeitungslog; dauerhafte Erkenntnisse gehören in `memory/references/projects/...` oder `memory/references/topics/...`.
+- `data/mail-desk/action-log.jsonl` bleibt nur Bearbeitungslog; dauerhafte Erkenntnisse gehören in `memory/references/` (Säule 1: Normativ & Struktur) bzw. `memory/evidence/` (Säule 2: Empirisch & Operativ).
 
 Typische Integrationen:
 
 - neue Kontaktperson → bestehende `contacts.md` aktualisieren, ggf. Katalogkontakt nach Review
 - neues Schlagwort/Alias → bestehende Katalogfelder über zuständigen Skill gezielt ergänzen
 - Projekt-/Topic-Signal aus Mail → bestehende `signals.md` verdichten/ergänzen
-- wichtige Evidenz oder Verlauf → passende `evidence/YYYY-MM.md` fortschreiben
+- wichtige Evidenz oder Verlauf → passende `memory/evidence/topics/.../YYYY-MM.md` bzw. `memory/evidence/projects/.../YYYY-MM.md` fortschreiben
 - neue Workpackage-/Subtopic-Hinweise → zuständigen Skill verwenden und bestehende Struktur erweitern
 
 Nach jeder bearbeiteten Mail im Bericht kurz nennen:
 
 - wohin die Mail geroutet/abgelegt wurde
-- welche `memory/references/`-Dateien aktualisiert wurden
+- welche `memory/references/`- und `memory/evidence/`-Dateien aktualisiert wurden
 - falls keine Wissenspflege erfolgte: warum nicht
 
 ## Review statt Aktion
