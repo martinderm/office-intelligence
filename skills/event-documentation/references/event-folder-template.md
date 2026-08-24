@@ -1,28 +1,45 @@
 ---
-type: Template
+document_type: template
+evidence_level: normative
+status: accepted
+title: "Template — Event / Conference Folder Layout"
 ---
 
 # Template — Event / Conference Folder Layout
 
-Für jedes größere Event (z. B. Jahrestagung, Konferenz, mehrtägiges Seminar) wird ein eigener Ordner unter dem jeweiligen Subtopic angelegt:
+Für jedes größere Event (z. B. Jahrestagung, Konferenz, mehrtägiges Seminar) wird die Ablage nach dem Dual-Evidence-Standard sauber in Säule 1 (Normativ) und Säule 2 (Empirisch) gegliedert:
 
-- **Pfad:** `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/`
-  *(Oder entsprechend bei Projekten: `memory/references/projects/<projekt>/events/<event-slug>/`)*
-
----
-
-## Ordnerstruktur
-* `index.md` — Die zentrale Event-Übersicht (Programm, Keynotes, Metadaten und Verlinkungen).
-* `action-items.md` — Liste offener To-Dos und Folgeaufgaben aus Sitzungen (Vorstufe/Triage vor Todoist).
-* 📂 `recordings/` — Lokale Meeting-Zusammenfassungen und Transkripte des Events (z. B. `*.summary.md`).
-* 📂 `notes/` — Manuelle Notizen, Mitschriften oder Gedanken.
+- **Säule 1 (Programm & Offizielle Metadaten):**
+  `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/index.md`
+  *(Oder entsprechend bei Projekten: `memory/references/projects/<projekt>/events/<event-slug>/index.md`)*
+- **Säule 2 (Aufzeichnungen, Mitschriften & Aufgaben):**
+  `memory/evidence/topics/<topic>/events/<event-slug>/`
+  *(Oder entsprechend bei Projekten: `memory/evidence/projects/<projekt>/events/<event-slug>/`)*
 
 ---
 
-## `index.md` (Template)
+## 2-Säulen-Ordnerstruktur
+
+```
+memory/
+├── references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/
+│   └── index.md                # Die offizielle Event-Übersicht (Programm, Keynotes, Links)
+│
+└── evidence/topics/<topic>/events/<event-slug>/
+    ├── action-items.md         # Triage-Liste offener Aufgaben vor Todoist
+    ├── recordings/             # Lokale Meeting-Zusammenfassungen & Transkripte (*.summary.md)
+    └── notes/                  # Manuelle Notizen, Mitschriften & Beobachtungen
+```
+
+---
+
+## `index.md` (Template — Säule 1)
 
 ```md
 ---
+document_type: event-spec
+evidence_level: normative
+status: accepted
 title: "<Event-Titel>"
 date: "YYYY-MM-DD"
 location: "<Ort, Land>"
@@ -50,12 +67,12 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 ---
 
 ## 🗓️ Programmablauf & Aufzeichnungen
-*(Hier wird das Programm tageweise aufgelistet. Aufzeichnungen/Zusammenfassungen werden direkt beim jeweiligen Programmpunkt verlinkt)*
+*(Hier wird das Programm tageweise aufgelistet. Aufzeichnungen/Zusammenfassungen in Säule 2 werden relativ verlinkt)*
 
 ### Tag 1 — YYYY-MM-DD
 * **HH:MM Uhr:** <Programmpunkt-Name> (z. B. Eröffnung)
 * **HH:MM Uhr:** **Keynote 1:** <Vortragstitel> (Speaker: <Name>)  
-  ➡️ **Aufzeichnung:** [Meeting-Zusammenfassung](./recordings/YYYY-MM-DD-<slug>.summary.md) (ID: `<meeting-id>`)
+  ➡️ **Aufzeichnung:** [Meeting-Zusammenfassung](../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/YYYY-MM-DD-<slug>.summary.md) (ID: `<meeting-id>`)
 
 ---
 
@@ -75,21 +92,30 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 
 ---
 
-## `action-items.md` (Template)
+## `action-items.md` (Template — Säule 2)
 
 ```md
+---
+document_type: action-items
+evidence_level: observed
+status: draft
+topic: <topic>
+event: <event-slug>
+---
+
 # Action Items — <Event-Titel>
 
-Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage können diese nach Todoist übertragen werden.
+Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage werden Zukunftsfristen und Aktionspunkte nach Todoist übertragen.
 
 ## Aus Keynote/Vortrag <Name>
 - [ ] **<Aufgabe>:** <Detaillierte Beschreibung der Aktion>
+  * *Todoist-Sync:* `description: "Quelle: [EVID-YYYY-MM-DD-01] Event <Event-Titel> (Keynote <Name>)"`
 - [ ] **<Aufgabe>:** <Detaillierte Beschreibung der Aktion>
 ```
 
 ---
 
 ## Pfad- und Linkregeln
-1. **Workspace-Links:** Innerhalb des Workspace (z. B. von `index.md` auf `recordings/...` oder `action-items.md`) immer **relative** Pfade verwenden.
-2. **Agent-Share-Links:** Links to original documents (PDFs, large XMLs, etc.) on BokuDrive must begin with the system-neutral prefix `/Agent-Share/` (e.g. `/Agent-Share/LLL-Networks/...`).
-3. **Deadlines**: All deadlines in the future must be automatically entered into Todoist.
+1. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden (z. B. von Säule 1 `index.md` nach Säule 2 `recordings/...`).
+2. **Agent-Share-Links:** Links zu Originaldokumenten auf BokuDrive (`Agent-Share/`) beginnen mit dem systemneutralen Präfix `/Agent-Share/` (z. B. `/Agent-Share/LLL-Networks/...`).
+3. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.

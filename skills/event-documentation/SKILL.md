@@ -1,42 +1,47 @@
 ---
 name: event-documentation
-description: Event- und Konferenzdokumentation innerhalb von office-intelligence. Verwende diesen Skill, wenn größere Veranstaltungen (Konferenzen, Tagungen, Seminare) dokumentiert werden sollen. Er regelt das Erzeugen der Event-Ordnerstruktur (index.md, action-items.md, recordings/, notes/), das Extrahieren von Programmen, die Zusammenfassung von Vortrags-Transkripten und die Triage von Fristen (Todoist-Synchronisation).
+description: Event- und Konferenzdokumentation innerhalb von office-intelligence nach dem Dual-Evidence-Standard. Verwende diesen Skill, wenn größere Veranstaltungen (Konferenzen, Tagungen, Seminare) dokumentiert werden sollen. Er regelt die 2-Säulen-Ordnerstruktur (index.md in references/ vs. recordings/, notes/, action-items.md in evidence/), das Extrahieren von Programmen, die Aufbereitung von Vortrags-Transkripten und die Triage von Fristen mit Belegankern (Todoist-Synchronisation).
 ---
 
 # event-documentation
 
-Systematische Dokumentation, Aufzeichnungspflege und Action-Item-Triage für Events und Konferenzen.
+Systematische Dokumentation, Aufzeichnungspflege und Action-Item-Triage für Events und Konferenzen nach dem Dual-Evidence-Standard.
 
-## Zielbild (verbindlich)
+## Zielbild (2-Säulen-Architektur)
 
-Größere Veranstaltungen werden nicht flach abgelegt, sondern erhalten eine eigene, gekapselte Verzeichnisstruktur unter dem jeweiligen Subtopic eines Topics oder dem jeweiligen Projekt:
+Größere Veranstaltungen werden nach dem Dual-Evidence-Standard sauber in normative Vorgaben (Säule 1) und operative Aufzeichnungen/Ergebnisse (Säule 2) getrennt:
 
-- **Topic-Pfad:** `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/`
-- **Projekt-Pfad:** `memory/references/projects/<projekt>/events/<event-slug>/`
+### Säule 1: De Jure / Normativ (`memory/references/`)
+- **Topic-Pfad:** `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/index.md`
+- **Projekt-Pfad:** `memory/references/projects/<projekt>/events/<event-slug>/index.md`
+- **Inhalt:**
+  - `index.md` — Die offizielle Event-Übersicht (Programm, Keynotes, Metadaten, Session-Beschreibungen und Verlinkungen zu BokuDrive `/Agent-Share/...`).
 
-### Verbindliche Ordnerstruktur bei Neuanlage
+### Säule 2: De Facto / Empirisch (`memory/evidence/`)
+- **Topic-Pfad:** `memory/evidence/topics/<topic>/events/<event-slug>/`
+- **Projekt-Pfad:** `memory/evidence/projects/<projekt>/events/<event-slug>/`
+- **Inhalt:**
+  - `action-items.md` — Liste offener To-Dos und Folgeaufgaben aus Sitzungen (Triage vor Todoist).
+  - 📂 `recordings/` — Lokale Meeting-Zusammenfassungen und Transkripte des Events (`*.summary.md`, `*.transcript.md`).
+  - 📂 `notes/` — Manuelle Notizen, Mitschriften oder Beobachtungen.
+  - **Monats-Log:** Zusammenfassender Eintrag mit Beleganker (`### [EVID-...]`) in `memory/evidence/topics/<topic>/YYYY-MM.md`.
 
-Erzeuge für jedes neue Event folgende Struktur:
-
-1. `index.md` — Die zentrale Event-Übersicht (Programm, Keynotes, Metadaten und Verlinkungen).
-2. `action-items.md` — Liste offener To-Dos und Folgeaufgaben aus Sitzungen (Vorstufe/Triage vor Todoist).
-3. 📂 `recordings/` — Lokale Meeting-Zusammenfassungen und Transkripte des Events (z. B. `*.summary.md`, `*.transcript.md`).
-4. 📂 `notes/` — Manuelle Notizen, Mitschriften oder Gedanken.
+*(Hinweis: Zur Abwärtskompatibilität in noch nicht migrierten Legacy-Workspaces wird auch die Altablage im kombinierten Unterordner unter `memory/references/.../events/<event-slug>/` fehlerfrei erkannt.)*
 
 ---
 
 ## Pfad- und Linkregeln (CRITICAL)
 
-- **Workspace-Links**: Verweise innerhalb des Workspace (z. B. von der `index.md` auf `action-items.md` oder in `recordings/`) müssen **immer relativ** angegeben werden (z. B. `./action-items.md` oder `./recordings/2026-06-04-keynote.summary.md`).
-- **Agent-Share-Links**: Größere Originaldateien (wie Original-PDFs, Keynote-Audio/Video, XMLs) gehören auf das BokuDrive (`Agent-Share/`) und müssen **systemneutral** mit dem Präfix `/Agent-Share/...` verlinkt werden (z. B. `/Agent-Share/LLL-Networks/EUCEN-2026/program.pdf`). Verwende **niemals** absolute Pfade, die benutzerspezifische Home-Verzeichnisse (`/Users/martin/...`) enthalten!
+- **Workspace-Links**: Verweise zwischen Säule 1 (`index.md`) und Säule 2 (`recordings/`, `action-items.md`) müssen **relativ** angegeben werden (z. B. von `references/topics/<topic>/subtopics/<subtopic>/events/<slug>/index.md` nach `../../../../../evidence/topics/<topic>/events/<slug>/recordings/2026-06-04-keynote.summary.md`).
+- **Agent-Share-Links**: Größere Originaldateien (wie Original-PDFs, Keynote-Audio/Video, XMLs) gehören auf das BokuDrive (`Agent-Share/`) und müssen **systemneutral** mit dem Präfix `/Agent-Share/...` verlinkt werden (z. B. `/Agent-Share/LLL-Networks/EUCEN-2026/program.pdf`). Verwende **niemals** absolute Pfade mit benutzerspezifischen Home-Verzeichnissen!
 
 ---
 
 ## Arbeitsmodus & Workflow
 
 ### 1. Initialisierung
-- Lege das Verzeichnis gemäß der Pfadkonvention an.
-- Nutze die Vorlage unter `references/event-folder-template.md` als Basis für `index.md` und `action-items.md`.
+- Lege die Verzeichnisse gemäß der 2-Säulen-Konvention an.
+- Nutze die Vorlage unter `references/event-folder-template.md` als Basis für `index.md` (Säule 1) und `action-items.md` (Säule 2).
 - Trage alle grundlegenden Eckdaten (Datum, Ort, Webseite) im Frontmatter der `index.md` ein.
 
 ### 2. Programm-Extraktion & Archivierung
@@ -48,25 +53,30 @@ Erzeuge für jedes neue Event folgende Struktur:
 
 ### 3. Keynote- & Meeting-Verarbeitung
 - Für aufgezeichnete Vorträge/Sitzungen:
-  - **Erste Quelle (Intake)**: Lokalisiere die neu synchronisierten Meeting-Dateien an ihrem Standard-Speicherort gemäß `fireflies-api` Skill unter `memory/references/meetings/` (bzw. dem jeweiligen Channel-Unterordner wie `meetings/<channel-slug>/`).
-  - Verschiebe bzw. kopiere die Dateien (Transkript und Zusammenfassung) aus diesem Standardordner.
-  - **Qualitäts-Check (Summary)**: Wenn die importierte Zusammenfassung unzureichende Inhalte hat (z. B. leere Abschnitte, unvollständige Notizen aufgrund aufgebrauchter Fireflies-Credits), erstelle die Zusammenfassung **aktiv neu anhand des immer verfügbaren Transkripts** (gemäß den Formatregeln aus dem `fireflies-api` Skill).
+  - **Intake-Quelle**: Lokalisiere die neu synchronisierten Meeting-Dateien an ihrem Speicherort gemäß `fireflies-api` / `zoom-api` Skill unter `memory/evidence/meetings/` (bzw. Fallback `memory/references/meetings/`).
+  - Verschiebe bzw. kopiere die Dateien (Transkript und Zusammenfassung) aus diesem Intake-Ordner in den Event-Ordner `memory/evidence/topics/<topic>/events/<event-slug>/recordings/`.
+  - **Qualitäts-Check (Summary)**: Wenn die importierte Zusammenfassung unzureichende Inhalte hat (z. B. leere Abschnitte aufgrund aufgebrauchter Fireflies-Credits), erstelle die Zusammenfassung **aktiv neu anhand des immer verfügbaren Transkripts** (gemäß den Formatregeln aus dem `fireflies-api` Skill).
   - Speichere das Transkript als `<YYYY-MM-DD>-<vortrag>.transcript.md` und die Zusammenfassung als `<YYYY-MM-DD>-<vortrag>.summary.md` im `recordings/`-Ordner des Events.
-  - Verlinke die Zusammenfassung direkt im entsprechenden Programmpunkt in der `index.md` des Events.
-  - Trage eine Zusammenfassung des Meetings in das zentrale, monatliche Evidenz-Log des Topics/Projekts ein (z. B. `memory/evidence/topics/<topic>/<YYYY-MM>.md` bzw. `memory/evidence/projects/<projekt>/<YYYY-MM>.md`).
-  - **CRITICAL**: Aktualisiere den `summary_path` und `transcript_path` des entsprechenden Meetings in `memory/references/meetings/meetings.json` auf die neuen Speicherorte im Event-Verzeichnis, um die zentrale JSON-Registrierung konsistent zu halten.
+  - Verlinke die Zusammenfassung im entsprechenden Programmpunkt in der `index.md` des Events.
+  - Trage einen Belegeintrag in das zentrale Monats-Evidenz-Log ein (z. B. `memory/evidence/topics/<topic>/<YYYY-MM>.md` mit Anker `### [EVID-YYYY-MM-DD-XX]`).
+  - **CRITICAL**: Aktualisiere den `summary_path` und `transcript_path` des entsprechenden Meetings in `meetings.json` auf die neuen Speicherorte im Event-Verzeichnis.
 
-### 4. Fristen & Action-Items Triage
+### 4. Fristen & Action-Items Triage (Todoist-Integration)
 - **Zukunftsfristen**: Analysiere das Programm und Dokumente nach Fristen (Early Bird, Abstract Submission, Registrierung).
-  - Fristen, die in der Zukunft liegen, müssen **automatisch in Todoist** eingetragen werden.
+  - Fristen, die in der Zukunft liegen, werden **in Todoist** eingetragen (`todoist-api`).
   - Bereits abgelaufene Fristen werden nur dokumentiert, aber nicht synchronisiert.
-- **Action-Items**:
+- **Action-Items & Factored Attribution**:
   - Extrahiere Aufgaben und To-Dos aus Vorträgen und Meetings und halte sie in `action-items.md` fest.
-  - Nutze `action-items.md` als Triage-Station. Aufgaben, die dem User oder dem Agenten zugewiesen sind und konkrete Deadlines haben, können ebenfalls nach Todoist übertragen werden.
+  - Nutze `action-items.md` als Triage-Station.
+  - Aufgaben, die nach Todoist übertragen werden, **müssen im `description`-Feld stets den Herkunftsnachweis (Beleganker)** tragen:
+    ```markdown
+    Quelle: [EVID-YYYY-MM-DD-XX] Event "<Event-Titel>" (Vortrag: <Keynote-Titel>)
+    Meeting-ID: <fireflies_or_zoom_id>
+    ```
 
 ---
 
 ## Template-Referenz
 
 Das vollständige Markdown-Template für die Event-Ordnerstruktur befindet sich unter:
-`references/event-folder-template.md`
+[`references/event-folder-template.md`](references/event-folder-template.md)
