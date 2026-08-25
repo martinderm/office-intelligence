@@ -40,9 +40,9 @@ Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintra
 "cloud_sync": {
   "<storage_id>": {
     "scan_dir": "Relative path to cloud directory junction (e.g. data/cloud/MESHE)",
-    "output_json": "Relative path to output filemap.json",
-    "output_md": "Relative path to output filemap.md",
-    "output_dir": "Relative path to local markdown mirror directory (e.g. memory/references/projects/meshe/cloud)",
+    "output_json": "Relative path to output filemap.json (e.g. memory/cloud/projects/meshe/filemap.json)",
+    "output_md": "Relative path to output filemap.md (e.g. memory/cloud/projects/meshe/filemap.md)",
+    "output_dir": "Relative path to local markdown mirror directory (e.g. memory/cloud/projects/meshe/default oder memory/cloud/topics/<slug>/<storage_id>)",
     "last_synced_at": "Automated timestamp of last successful sync (e.g. 2026-08-05 21:09:12)"
   }
 }
@@ -168,7 +168,7 @@ Bei der Erstinstallation des Skills in einem Agent-Workspace müssen die folgend
 
 Um Dateiverteilungen in den Cloud-Speichern sauber zu dokumentieren, nutzt dieser Workspace das `cloud-atlas`-Modell:
 * **Source of Truth & View**: Eine `filemap.json` speichert Dateimetadaten und manuelle Beschreibungen (`"description"`), woraus eine Markdown-Tabelle (`filemap.md`) generiert wird.
-* **Lokale Spiegelung**: Konvertierte Markdown-Kopien (via `markitdown`) liegen lokal unter `memory/references/` (niemals direkt im Cloud-Speicher).
+* **Lokale Spiegelung**: Konvertierte Markdown-Kopien (via `markitdown`) liegen lokal unter `memory/cloud/` (niemals direkt im Cloud-Speicher).
 * **.gitignore-Schutz**: Das Verzeichnis `data/cloud/` für Cloud-Junctions wird zwingend in `.gitignore` eingetragen (`data/cloud/`).
 * **Automatisierung (24h-Regel & Cleanups)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Quelländerungen, die task-gebundene Zeitstempel-Kontrolle (`last_synced_at` >6h/12h bei Cloud-Zugriff) und die Bereinigung verwaister Dateien erfolgen über den Skill **`cloud-atlas`**.
 * **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/mayr-ps/.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md).

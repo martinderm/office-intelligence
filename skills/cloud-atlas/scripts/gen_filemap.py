@@ -92,9 +92,9 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
         configs["default"] = {
             "title": title,
             "scan_dir": f"data/cloud/{project_id.upper()}" if meta and meta.get("kuerzel") else f"data/cloud/{project_id}",
-            "output_json": f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/filemap.json",
-            "output_md": f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
-            "output_dir": f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/cloud",
+            "output_json": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.json",
+            "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
+            "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
             "is_topic": is_topic
         }
         kuerzel = (meta.get("kuerzel") or project_id) if meta else project_id
@@ -124,9 +124,9 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             configs[sid] = {
                 "title": stitle,
                 "scan_dir": scan_dir or (f"data/cloud/{project_id.upper()}" if meta and meta.get("kuerzel") else f"data/cloud/{project_id}"),
-                "output_json": output_json or f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.json",
-                "output_md": output_md or f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
-                "output_dir": output_dir or (f"memory/references/{'topics' if is_topic else 'projects'}/{project_id}/cloud" + (f"/{sid}" if sid != "default" else "")),
+                "output_json": output_json or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.json",
+                "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
+                "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
                 "is_topic": is_topic
             }
                 
