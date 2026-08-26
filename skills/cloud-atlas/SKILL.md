@@ -61,6 +61,10 @@ Gleiche `storage_id`-Werte sind nur zulässig, wenn das Subtopic den Topic-Eintr
 
 * **Namenskonventionen bei mehreren Speichern**: Wenn mehrere Speicher existieren (z. B. `"bokudrive"` und `"onedrive-legacy"`), sollten die Ausgabedateien (`filemap-bokudrive.json`/`.md` etc.) und Unterverzeichnisse (`cloud/bokudrive/`, `cloud/onedrive-legacy/`) getrennt benannt werden, um Dateikollisionen zu vermeiden.
 
+### Mirror-Pfad-Policy
+
+`output_dir` ist die autoritative Trust-Grenze für lokale Markdown-Spiegelungen. Bei jeder Filemap-Regeneration wird für unterstützte Quelldateien zuerst der kanonische, tatsächlich vorhandene Mirror unter `output_dir` gewählt. Ein abweichender manueller Mirror-Pfad bleibt nur erhalten, wenn die Datei existiert und ebenfalls innerhalb desselben `output_dir` liegt. Fehlende, unsichere oder zonenüberschreitende Altpfade werden nicht in die neue Filemap übernommen. Generierte Markdown-Linkziele werden URL-kodiert, damit Leerzeichen, Unicode, Klammern und Markdown-Sonderzeichen sicher aufgelöst werden. Manuelle Beschreibungen und andere benutzerdefinierte Metadaten bleiben davon unberührt.
+
 ---
 
 ## 3. CLI-Dokumentation (Ausführung)

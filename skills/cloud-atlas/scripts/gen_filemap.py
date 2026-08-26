@@ -4,6 +4,85 @@ import datetime
 import re
 import json
 import argparse
+from pathlib import Path, PurePosixPath
+from urllib.parse import quote
+
+
+MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx"}
+
+
+def normalize_workspace_relative_path(path_value):
+    """Return a safe, normalized workspace-relative POSIX path or None."""
+    if not isinstance(path_value, str) or not path_value.strip():
+        return None
+    raw = path_value.strip().replace("\\", "/")
+    if raw.startswith("/") or raw.startswith("//") or re.match(r"^[A-Za-z]:/", raw):
+        return None
+    normalized = PurePosixPath(raw)
+    if ".." in normalized.parts:
+        return None
+    return normalized.as_posix()
+
+
+def canonical_mirror_path(source_path, scan_dir, output_dir):
+    """Derive the converter's canonical mirror path for a supported source."""
+    source_rel = normalize_workspace_relative_path(source_path)
+    scan_rel = normalize_workspace_relative_path(scan_dir)
+    output_rel = normalize_workspace_relative_path(output_dir)
+    if not source_rel or not scan_rel or not output_rel:
+        return None
+
+    source = PurePosixPath(source_rel)
+    scan = PurePosixPath(scan_rel)
+    try:
+        relative_source = source.relative_to(scan)
+    except ValueError:
+        return None
+    if relative_source.suffix.lower() not in MIRROR_SOURCE_EXTENSIONS:
+        return None
+    return (PurePosixPath(output_rel) / relative_source.with_suffix(".md")).as_posix()
+
+
+def path_is_within(path_value, parent_value):
+    """Return True when both safe relative paths place path inside parent."""
+    path_rel = normalize_workspace_relative_path(path_value)
+    parent_rel = normalize_workspace_relative_path(parent_value)
+    if not path_rel or not parent_rel:
+        return False
+    try:
+        PurePosixPath(path_rel).relative_to(PurePosixPath(parent_rel))
+        return True
+    except ValueError:
+        return False
+
+
+def workspace_file_exists(workspace_root, relative_path):
+    normalized = normalize_workspace_relative_path(relative_path)
+    if not normalized:
+        return False
+    return (Path(workspace_root) / Path(*PurePosixPath(normalized).parts)).is_file()
+
+
+def encode_markdown_link_target(relative_path):
+    """Percent-encode a relative Markdown link target without encoding slashes."""
+    return quote(relative_path.replace("\\", "/"), safe="/-._~")
+
+
+def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, existing_info):
+    """Select an existing mirror without allowing stale or cross-zone paths.
+
+    The configured output_dir is authoritative. The converter's canonical path
+    wins when present. An intentional custom path remains supported only when it
+    exists and stays inside that same output directory.
+    """
+    canonical = canonical_mirror_path(source_path, scan_dir, output_dir)
+    if canonical and workspace_file_exists(workspace_root, canonical):
+        return canonical
+
+    existing = normalize_workspace_relative_path(existing_info.get("markdown_mirror"))
+    if existing and path_is_within(existing, output_dir) and workspace_file_exists(workspace_root, existing):
+        return existing
+    return None
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -223,6 +302,7 @@ def main():
         scan_dir = args.scan_dir or resolved["scan_dir"]
         output_json = args.output_json or resolved["output_json"]
         output_md = args.output_md or resolved["output_md"]
+        output_dir = resolved["output_dir"]
         
         # Convert relative paths to absolute paths
         scan_path_abs = os.path.normpath(os.path.join(workspace_root, scan_dir))
@@ -270,10 +350,21 @@ def main():
                     "description": desc
                 }
                 
-                # Preserve any other custom keys (like markdown_mirror)
+                # Preserve custom metadata, but resolve markdown_mirror against
+                # the configured output_dir trust boundary below.
                 for key, val in existing_info.items():
-                    if key not in files_data[rel_to_workspace_forward]:
+                    if key != "markdown_mirror" and key not in files_data[rel_to_workspace_forward]:
                         files_data[rel_to_workspace_forward][key] = val
+
+                markdown_mirror = select_markdown_mirror(
+                    workspace_root,
+                    rel_to_workspace_forward,
+                    scan_dir,
+                    output_dir,
+                    existing_info,
+                )
+                if markdown_mirror:
+                    files_data[rel_to_workspace_forward]["markdown_mirror"] = markdown_mirror
 
         # Save to JSON
         json_output_data = {
@@ -332,8 +423,9 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
                 output_md_dir = os.path.dirname(output_md_abs)
                 # Relative path from the output markdown directory to the mirror file
                 mirror_rel_link = os.path.relpath(mirror_abs, output_md_dir).replace("\\", "/")
+                mirror_link_target = encode_markdown_link_target(mirror_rel_link)
                 basename = os.path.basename(mirror_rel_to_workspace)
-                desc += f" (Spiegelung: [{basename}]({mirror_rel_link}))"
+                desc += f" (Spiegelung: [{basename}]({mirror_link_target}))"
                 
             row = f"| {path} | {info['version']} | {info['mtime']} | {info['size']} | {desc} |"
             table_rows.append(row)
