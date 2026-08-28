@@ -4,11 +4,12 @@ import datetime
 import re
 import json
 import argparse
+import hashlib
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 
-MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx"}
+MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
 
 
 def normalize_workspace_relative_path(path_value):
@@ -22,6 +23,21 @@ def normalize_workspace_relative_path(path_value):
     if ".." in normalized.parts:
         return None
     return normalized.as_posix()
+
+
+def calculate_sha256(filepath):
+    """Calculate SHA-256 hash of a file safely."""
+    path_obj = Path(filepath)
+    if not path_obj.is_file():
+        return None
+    hasher = hashlib.sha256()
+    try:
+        with open(path_obj, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                hasher.update(chunk)
+        return hasher.hexdigest()
+    except Exception:
+        return None
 
 
 def canonical_mirror_path(source_path, scan_dir, output_dir):
@@ -41,6 +57,25 @@ def canonical_mirror_path(source_path, scan_dir, output_dir):
     if relative_source.suffix.lower() not in MIRROR_SOURCE_EXTENSIONS:
         return None
     return (PurePosixPath(output_rel) / relative_source.with_suffix(".md")).as_posix()
+
+
+def canonical_derivative_path(source_path, scan_dir, output_dir):
+    """Derive the converter's canonical derivative path for a .doc source."""
+    source_rel = normalize_workspace_relative_path(source_path)
+    scan_rel = normalize_workspace_relative_path(scan_dir)
+    output_rel = normalize_workspace_relative_path(output_dir)
+    if not source_rel or not scan_rel or not output_rel:
+        return None
+
+    source = PurePosixPath(source_rel)
+    scan = PurePosixPath(scan_rel)
+    try:
+        relative_source = source.relative_to(scan)
+    except ValueError:
+        return None
+    if relative_source.suffix.lower() != ".doc":
+        return None
+    return (PurePosixPath(output_rel) / "_derivatives" / relative_source.with_suffix(".docx")).as_posix()
 
 
 def path_is_within(path_value, parent_value):
@@ -69,12 +104,7 @@ def encode_markdown_link_target(relative_path):
 
 
 def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, existing_info):
-    """Select an existing mirror without allowing stale or cross-zone paths.
-
-    The configured output_dir is authoritative. The converter's canonical path
-    wins when present. An intentional custom path remains supported only when it
-    exists and stays inside that same output directory.
-    """
+    """Select an existing mirror without allowing stale or cross-zone paths."""
     canonical = canonical_mirror_path(source_path, scan_dir, output_dir)
     if canonical and workspace_file_exists(workspace_root, canonical):
         return canonical
@@ -83,6 +113,61 @@ def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, ex
     if existing and path_is_within(existing, output_dir) and workspace_file_exists(workspace_root, existing):
         return existing
     return None
+
+
+AUTOMATED_METADATA_KEYS = {
+    "version", "mtime", "size", "sha256",
+    "markdown_mirror", "derivative",
+    "conversion_status", "conversion_error"
+}
+
+
+def merge_curated_metadata(existing_entry, new_entry):
+    """
+    Merge newly computed automatic fields into existing metadata,
+    ensuring manually maintained descriptions and custom keys are never lost.
+    """
+    if not isinstance(existing_entry, dict):
+        return new_entry
+    
+    result = dict(new_entry)
+    
+    # Preserve manual description if existing was not default/empty
+    existing_desc = existing_entry.get("description")
+    if existing_desc and existing_desc != "-":
+        result["description"] = existing_desc
+    elif "description" not in result:
+        result["description"] = existing_desc or "-"
+        
+    # Preserve all other non-automated keys
+    for k, v in existing_entry.items():
+        if k not in AUTOMATED_METADATA_KEYS and k not in result:
+            result[k] = v
+            
+    return result
+
+
+def select_derivative(workspace_root, source_path, scan_dir, output_dir, existing_info):
+    """Select an existing derivative for .doc files or derive from canonical location."""
+    canonical = canonical_derivative_path(source_path, scan_dir, output_dir)
+    if canonical and workspace_file_exists(workspace_root, canonical):
+        existing_deriv = existing_info.get("derivative")
+        deriv_dict = dict(existing_deriv) if isinstance(existing_deriv, dict) else {}
+        deriv_dict["path"] = canonical
+        if "sha256" not in deriv_dict:
+            full_deriv = Path(workspace_root) / Path(*PurePosixPath(canonical).parts)
+            deriv_dict["sha256"] = calculate_sha256(full_deriv)
+        if "format" not in deriv_dict:
+            deriv_dict["format"] = "docx"
+        return deriv_dict
+
+    existing = existing_info.get("derivative")
+    if isinstance(existing, dict) and existing.get("path"):
+        normalized = normalize_workspace_relative_path(existing["path"])
+        if normalized and path_is_within(normalized, output_dir) and workspace_file_exists(workspace_root, normalized):
+            return existing
+    return None
+
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -114,6 +199,13 @@ version_patterns = [
     re.compile(r"_v(\d+(?:[\._]\d+)*)", re.IGNORECASE),
     re.compile(r"[-_](final|def)\b", re.IGNORECASE)
 ]
+
+def get_file_version(filename):
+    for pattern in version_patterns:
+        match = pattern.search(filename)
+        if match:
+            return match.group(1).upper()
+    return "N/A"
 
 def find_workspace_root():
     current = os.path.abspath(os.getcwd())
@@ -234,15 +326,9 @@ def get_file_info(filepath):
         size_str = f"{size_bytes / (1024 * 1024):.1f} MB"
         
     filename = os.path.basename(filepath)
-    version = "N/A"
-    
-    for pattern in version_patterns:
-        match = pattern.search(filename)
-        if match:
-            version = match.group(1).upper()
-            break
-            
-    return size_str, mtime, version
+    version = get_file_version(filename)
+    sha256 = calculate_sha256(filepath)
+    return size_str, mtime, version, sha256
 
 def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id):
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -324,47 +410,97 @@ def main():
             except Exception as e:
                 print(f"Warning: Could not read existing JSON: {e}")
 
-        files_data = {}
-        
-        # Scan directory
+        # First pass: scan directory
+        raw_scanned_files = []
         for root, dirs, filenames in os.walk(scan_path_abs):
             for f in filenames:
                 if f.startswith(".") or f.startswith("~$") or f.lower() == "desktop.ini":
                     continue
                 full_path = os.path.join(root, f)
-                
-                # Path relative to workspace root
                 rel_to_workspace = os.path.relpath(full_path, workspace_root)
                 rel_to_workspace_forward = rel_to_workspace.replace("\\", "/")
-                
-                size_str, mtime, version = get_file_info(full_path)
-                
-                # Get existing file info if present to preserve descriptions and custom keys
-                existing_info = existing_files_data.get(rel_to_workspace_forward, {})
-                desc = existing_info.get("description", "-")
-                
-                files_data[rel_to_workspace_forward] = {
-                    "version": version,
+                size_str, mtime, version, sha256 = get_file_info(full_path)
+                raw_scanned_files.append({
+                    "full_path": full_path,
+                    "rel_to_workspace": rel_to_workspace_forward,
+                    "size_str": size_str,
                     "mtime": mtime,
-                    "size": size_str,
-                    "description": desc
-                }
-                
-                # Preserve custom metadata, but resolve markdown_mirror against
-                # the configured output_dir trust boundary below.
-                for key, val in existing_info.items():
-                    if key != "markdown_mirror" and key not in files_data[rel_to_workspace_forward]:
-                        files_data[rel_to_workspace_forward][key] = val
+                    "version": version,
+                    "sha256": sha256
+                })
 
-                markdown_mirror = select_markdown_mirror(
-                    workspace_root,
-                    rel_to_workspace_forward,
-                    scan_dir,
-                    output_dir,
-                    existing_info,
-                )
-                if markdown_mirror:
-                    files_data[rel_to_workspace_forward]["markdown_mirror"] = markdown_mirror
+        current_scanned_paths = {item["rel_to_workspace"] for item in raw_scanned_files}
+        
+        # Build index of unmapped existing entries by sha256 to track renames/moves
+        unmapped_by_sha256 = {}
+        for old_path, old_info in existing_files_data.items():
+            if old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256"):
+                unmapped_by_sha256.setdefault(old_info["sha256"], []).append((old_path, old_info))
+
+        files_data = {}
+        for item in raw_scanned_files:
+            rel_to_workspace_forward = item["rel_to_workspace"]
+            full_path = item["full_path"]
+            size_str = item["size_str"]
+            mtime = item["mtime"]
+            version = item["version"]
+            sha256 = item["sha256"]
+            
+            # Resolve existing metadata (by path or by sha256 rename)
+            if rel_to_workspace_forward in existing_files_data:
+                existing_info = existing_files_data[rel_to_workspace_forward]
+            elif sha256 in unmapped_by_sha256 and len(unmapped_by_sha256[sha256]) > 0:
+                old_path, existing_info = unmapped_by_sha256[sha256].pop(0)
+                print(f"Filemap: Uebernehme Metadaten von {old_path} -> {rel_to_workspace_forward} (SHA-256 Match)")
+            else:
+                existing_info = {}
+                
+            file_entry = {
+                "version": version,
+                "mtime": mtime,
+                "size": size_str,
+                "sha256": sha256,
+                "description": "-"
+            }
+            
+            markdown_mirror = select_markdown_mirror(
+                workspace_root,
+                rel_to_workspace_forward,
+                scan_dir,
+                output_dir,
+                existing_info,
+            )
+            if markdown_mirror:
+                file_entry["markdown_mirror"] = markdown_mirror
+
+            derivative = select_derivative(
+                workspace_root,
+                rel_to_workspace_forward,
+                scan_dir,
+                output_dir,
+                existing_info,
+            )
+            if derivative:
+                file_entry["derivative"] = derivative
+
+            # Status handling
+            if rel_to_workspace_forward.lower().endswith(".doc"):
+                if markdown_mirror and derivative:
+                    file_entry["conversion_status"] = "converted"
+                else:
+                    file_entry["conversion_status"] = existing_info.get("conversion_status", "conversion_required")
+                    file_entry["conversion_error"] = existing_info.get(
+                        "conversion_error",
+                        "No converter available or conversion not yet run"
+                    )
+            elif markdown_mirror:
+                file_entry["conversion_status"] = "converted"
+            elif existing_info.get("conversion_status"):
+                file_entry["conversion_status"] = existing_info["conversion_status"]
+                if existing_info.get("conversion_error"):
+                    file_entry["conversion_error"] = existing_info["conversion_error"]
+
+            files_data[rel_to_workspace_forward] = merge_curated_metadata(existing_info, file_entry)
 
         # Save to JSON
         json_output_data = {
@@ -414,20 +550,41 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
         table_rows = []
         for path in sorted_files:
             info = files_data[path]
-            desc = info['description']
+            desc = info.get('description', '-')
             
-            # If there's a markdown mirror, format a relative link to it
+            links = []
             if info.get("markdown_mirror"):
                 mirror_rel_to_workspace = info["markdown_mirror"]
                 mirror_abs = os.path.normpath(os.path.join(workspace_root, mirror_rel_to_workspace))
                 output_md_dir = os.path.dirname(output_md_abs)
-                # Relative path from the output markdown directory to the mirror file
                 mirror_rel_link = os.path.relpath(mirror_abs, output_md_dir).replace("\\", "/")
                 mirror_link_target = encode_markdown_link_target(mirror_rel_link)
                 basename = os.path.basename(mirror_rel_to_workspace)
-                desc += f" (Spiegelung: [{basename}]({mirror_link_target}))"
+                links.append(f"Spiegelung: [{basename}]({mirror_link_target})")
+
+            if info.get("derivative") and isinstance(info["derivative"], dict) and info["derivative"].get("path"):
+                deriv_rel_to_workspace = info["derivative"]["path"]
+                deriv_abs = os.path.normpath(os.path.join(workspace_root, deriv_rel_to_workspace))
+                if os.path.isfile(deriv_abs):
+                    output_md_dir = os.path.dirname(output_md_abs)
+                    deriv_rel_link = os.path.relpath(deriv_abs, output_md_dir).replace("\\", "/")
+                    deriv_link_target = encode_markdown_link_target(deriv_rel_link)
+                    deriv_basename = os.path.basename(deriv_rel_to_workspace)
+                    links.append(f"Derivat: [{deriv_basename}]({deriv_link_target})")
+
+            desc_parts = []
+            if info.get("conversion_status") == "conversion_required":
+                err = info.get("conversion_error", "Konvertierung erforderlich")
+                desc_parts.append(f"⚠️ **Konvertierung erforderlich** ({err})")
                 
-            row = f"| {path} | {info['version']} | {info['mtime']} | {info['size']} | {desc} |"
+            if desc and desc != "-":
+                desc_parts.append(desc)
+                
+            if links:
+                desc_parts.append(f"({', '.join(links)})")
+                
+            final_desc = " — ".join(desc_parts) if desc_parts else "-"
+            row = f"| {path} | {info['version']} | {info['mtime']} | {info['size']} | {final_desc} |"
             table_rows.append(row)
 
         md_content += "\n".join(table_rows) + "\n"

@@ -77,5 +77,36 @@ class MirrorPathPolicyTests(unittest.TestCase):
         )
 
 
+    def test_canonical_derivative_path_for_doc_file(self):
+        deriv = MODULE.canonical_derivative_path(
+            "data/cloud/source/contracts/archive.doc",
+            "data/cloud/source",
+            "memory/cloud/topics/example"
+        )
+        self.assertEqual("memory/cloud/topics/example/_derivatives/contracts/archive.docx", deriv)
+
+    def test_canonical_derivative_path_for_non_doc_returns_none(self):
+        self.assertIsNone(MODULE.canonical_derivative_path("data/cloud/source/doc.pdf", "data/cloud/source", "memory/cloud/topics/example"))
+
+    def test_select_derivative_picks_existing_canonical(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            deriv = root / "memory" / "cloud" / "topics" / "example" / "_derivatives" / "contracts" / "old.docx"
+            deriv.parent.mkdir(parents=True)
+            deriv.write_bytes(b"DERIVATIVE_DOCX")
+
+            selected = MODULE.select_derivative(
+                root,
+                "data/cloud/source/contracts/old.doc",
+                "data/cloud/source",
+                "memory/cloud/topics/example",
+                {}
+            )
+            self.assertIsNotNone(selected)
+            self.assertEqual("memory/cloud/topics/example/_derivatives/contracts/old.docx", selected["path"])
+            self.assertEqual("docx", selected["format"])
+            self.assertIsNotNone(selected["sha256"])
+
+
 if __name__ == "__main__":
     unittest.main()
