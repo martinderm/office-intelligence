@@ -191,6 +191,7 @@ def parse_args():
     parser.add_argument("--output-md", required=False, help="Relativer Pfad zur Ziel-Markdown-Datei (z. B. memory/references/projects/meshe/filemap.md)")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic (Standard: Auto-Erkennung)")
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
+    parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
     return parser.parse_args()
 
 # Regex patterns for version extraction
@@ -207,18 +208,32 @@ def get_file_version(filename):
             return match.group(1).upper()
     return "N/A"
 
-def find_workspace_root():
-    current = os.path.abspath(os.getcwd())
+def find_workspace_root(start_dir=None):
+    env_root = os.environ.get("CLOUD_ATLAS_WORKSPACE_ROOT")
+    if env_root and os.path.exists(env_root):
+        return os.path.abspath(env_root)
+
+    current = os.path.abspath(start_dir or os.getcwd())
     while True:
-        if (os.path.exists(os.path.join(current, ".git")) or
-            os.path.exists(os.path.join(current, "AGENTS.md")) or
-            any(f.endswith(".code-workspace") for f in os.listdir(current) if os.path.isfile(os.path.join(current, f)))):
-            return current
+        try:
+            if (os.path.exists(os.path.join(current, ".git")) or
+                os.path.exists(os.path.join(current, "AGENTS.md")) or
+                os.path.exists(os.path.join(current, ".workspace-root"))):
+                return current
+            try:
+                for entry in os.scandir(current):
+                    if entry.is_file() and entry.name.endswith(".code-workspace"):
+                        return current
+            except (PermissionError, OSError):
+                pass
+        except (PermissionError, OSError):
+            pass
+
         parent = os.path.dirname(current)
         if parent == current:
             break
         current = parent
-    return os.path.abspath(os.getcwd())
+    return os.path.abspath(start_dir or os.getcwd())
 
 def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None):
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
@@ -371,7 +386,7 @@ def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id
 
 def main():
     args = parse_args()
-    workspace_root = find_workspace_root()
+    workspace_root = os.path.abspath(args.workspace_root) if args.workspace_root else find_workspace_root()
     
     project_id = args.project_id or args.topic_id
     is_topic = args.topic or (args.topic_id is not None)

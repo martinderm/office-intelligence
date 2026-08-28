@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--force", action="store_true", help="Alle Konvertierungen erzwingen")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic")
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
+    parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
     parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
@@ -32,6 +33,8 @@ def main():
         "--file-timeout", str(args.file_timeout),
         "--jobs", str(args.jobs)
     ]
+    if args.workspace_root:
+        cmd_convert.extend(["--workspace-root", args.workspace_root])
     if args.force:
         cmd_convert.append("--force")
     if args.topic:
@@ -53,6 +56,8 @@ def main():
         os.path.join(scripts_dir, "gen_filemap.py"),
         target_flag, target_id
     ]
+    if args.workspace_root:
+        cmd_map.extend(["--workspace-root", args.workspace_root])
     if args.topic:
         cmd_map.append("--topic")
     if args.storage_id:

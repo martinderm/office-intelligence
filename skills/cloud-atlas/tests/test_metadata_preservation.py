@@ -47,6 +47,11 @@ class MetadataPreservationTests(unittest.TestCase):
         with open(self.projects_json, "w", encoding="utf-8") as f:
             json.dump(projects_data, f, indent=2)
             
+        # Mark workspace root
+        (self.root / "AGENTS.md").write_text("# Test Workspace\n", encoding="utf-8")
+        (self.root / ".workspace-root").touch()
+        os.environ["CLOUD_ATLAS_WORKSPACE_ROOT"] = str(self.root)
+        
         self.old_cwd = os.getcwd()
         os.chdir(self.root)
         
@@ -56,18 +61,19 @@ class MetadataPreservationTests(unittest.TestCase):
     def tearDown(self):
         os.chdir(self.old_cwd)
         self.temp_dir.cleanup()
+        os.environ.pop("CLOUD_ATLAS_WORKSPACE_ROOT", None)
         if "CLOUD_ATLAS_DOC_CONVERTER_MOCK" in os.environ:
             del os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"]
 
     def _run_full_sync(self, force=False):
         """Execute conversion then filemap generation."""
-        args_convert = ["convert_cloud_docs.py", "--project-id", "test_proj"]
+        args_convert = ["convert_cloud_docs.py", "--project-id", "test_proj", "--workspace-root", str(self.root)]
         if force:
             args_convert.append("--force")
         sys.argv = args_convert
         convert_cloud_docs.main()
         
-        sys.argv = ["gen_filemap.py", "--project-id", "test_proj"]
+        sys.argv = ["gen_filemap.py", "--project-id", "test_proj", "--workspace-root", str(self.root)]
         gen_filemap.main()
 
     def test_manual_description_and_custom_metadata_preservation_on_force(self):

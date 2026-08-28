@@ -47,6 +47,11 @@ class DocConversionTests(unittest.TestCase):
         with open(self.projects_json, "w", encoding="utf-8") as f:
             json.dump(projects_data, f, indent=2)
             
+        # Mark workspace root
+        (self.root / "AGENTS.md").write_text("# Test Workspace\n", encoding="utf-8")
+        (self.root / ".workspace-root").touch()
+        os.environ["CLOUD_ATLAS_WORKSPACE_ROOT"] = str(self.root)
+        
         self.old_cwd = os.getcwd()
         os.chdir(self.root)
         
@@ -58,6 +63,7 @@ class DocConversionTests(unittest.TestCase):
     def tearDown(self):
         os.chdir(self.old_cwd)
         self.temp_dir.cleanup()
+        os.environ.pop("CLOUD_ATLAS_WORKSPACE_ROOT", None)
         if "CLOUD_ATLAS_DOC_CONVERTER_MOCK" in os.environ:
             del os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"]
         if "CLOUD_ATLAS_MOCK_CORRUPT" in os.environ:

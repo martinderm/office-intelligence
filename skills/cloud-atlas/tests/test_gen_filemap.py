@@ -108,5 +108,38 @@ class MirrorPathPolicyTests(unittest.TestCase):
             self.assertIsNotNone(selected["sha256"])
 
 
+    def test_find_workspace_root_finds_marker_and_env(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            sub = root / "nested" / "deep"
+            sub.mkdir(parents=True)
+            (root / "AGENTS.md").write_text("# Root\n", encoding="utf-8")
+
+            found = MODULE.find_workspace_root(str(sub))
+            self.assertEqual(str(root.resolve()), str(Path(found).resolve()))
+
+            # Test env var override
+            custom_env_root = root / "custom_env"
+            custom_env_root.mkdir()
+            try:
+                import os
+                os.environ["CLOUD_ATLAS_WORKSPACE_ROOT"] = str(custom_env_root)
+                self.assertEqual(str(custom_env_root.resolve()), str(Path(MODULE.find_workspace_root(str(sub))).resolve()))
+            finally:
+                os.environ.pop("CLOUD_ATLAS_WORKSPACE_ROOT", None)
+
+    def test_find_workspace_root_permission_error_resilience(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            sub = root / "folder"
+            sub.mkdir()
+            
+            import unittest.mock as mock
+            with mock.patch("os.scandir", side_effect=PermissionError("Access denied")):
+                # Should not raise PermissionError
+                found = MODULE.find_workspace_root(str(sub))
+                self.assertIsNotNone(found)
+
+
 if __name__ == "__main__":
     unittest.main()
