@@ -12,26 +12,45 @@ from typing import Any
 from .common import normalize_message_id
 
 
-def run_himalaya(args: list[str], account: str | None = None, timeout: int = 30) -> str:
-    """Execute himalaya CLI command safely with UTF-8 replacement."""
+def run_himalaya(args: list[str], account: str | None = None, timeout: int = 30, max_retries: int = 3) -> str:
+    """Execute himalaya CLI command safely with UTF-8 replacement and retry on transient TLS errors."""
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
     cmd = ["himalaya"]
     if account:
         cmd.extend(["-a", account])
     cmd.extend(args)
-    res = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        env=env_vars,
-        timeout=timeout,
-    )
-    if res.returncode != 0:
-        raise RuntimeError(f"Himalaya failed: {' '.join(cmd)}\nStderr: {res.stderr.strip()}")
-    return res.stdout
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env_vars,
+                timeout=timeout,
+            )
+            if res.returncode != 0:
+                err_msg = res.stderr.strip()
+                # Check for transient connection errors
+                if "10054" in err_msg or "TLS stream" in err_msg or "cannot connect" in err_msg:
+                    last_err = RuntimeError(f"Himalaya transient error: {err_msg}")
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"Himalaya failed: {' '.join(cmd)}\nStderr: {err_msg}")
+            return res.stdout
+        except subprocess.TimeoutExpired as te:
+            last_err = te
+            time.sleep(1.0 * (attempt + 1))
+        except Exception as e:
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(1.0 * (attempt + 1))
+
+    raise last_err or RuntimeError(f"Himalaya failed after {max_retries} attempts: {' '.join(cmd)}")
 
 
 def get_single_email_details(

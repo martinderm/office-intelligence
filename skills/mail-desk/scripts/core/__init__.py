@@ -41,6 +41,7 @@ from .sent_indexer import (
     load_sent_index,
     sync_sent_items,
 )
+from .progress import BatchProgressTracker
 
 __all__ = [
     "normalize_message_id",
@@ -71,4 +72,5 @@ __all__ = [
     "check_if_replied",
     "clean_subject",
     "auto_resolve_replies_from_sent",
+    "BatchProgressTracker",
 ]

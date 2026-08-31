@@ -27,6 +27,7 @@ if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 from core import (
+    BatchProgressTracker,
     append_action_log_entry,
     append_replies_needed_entry,
     auto_resolve_replies_from_sent,
@@ -101,13 +102,16 @@ def get_unprocessed_emails(
     data_dir: Path | None = None,
     skip_known: bool = True,
     preview_lines: int = 30,
+    tracker: BatchProgressTracker | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Fetch target_count unprocessed (or all) emails in oldest or newest order reliably."""
     dd = data_dir or resolve_data_dir()
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
 
-    fetch_count = target_count + 40 if skip_known else target_count
+    fetch_count = max(target_count * 4, 150) if skip_known else target_count
+    if tracker:
+        tracker.step(f"listing_envelopes (fetch_count={fetch_count})")
     candidate_envs = get_oldest_envelopes(folder, fetch_count, account=account)
 
     if not candidate_envs:
@@ -121,6 +125,8 @@ def get_unprocessed_emails(
 
     for env in candidate_envs:
         eid = str(env.get("id"))
+        if tracker:
+            tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
         email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
         mid = email_res.get("message_id")
         is_known = bool(mid and mid in known_items)
@@ -130,12 +136,16 @@ def get_unprocessed_emails(
             email_res["is_known"] = True
             email_res["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
             if skip_known:
+                if tracker:
+                    tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
                 continue
         else:
             email_res["is_known"] = False
             email_res["known_location"] = None
 
         collected.append(email_res)
+        if tracker:
+            tracker.advance_item(envelope_id=eid, subject=email_res.get("subject", ""), step_name="inspected")
         time.sleep(0.02)
 
         if len(collected) >= target_count:
@@ -283,6 +293,12 @@ def run_draft_mode(
     output_file = config.get("output_file", str(dd / "batch-manifest.json"))
     inspected_file = config.get("inspected_file") or (dd / "batch-inspected.json")
 
+    tracker = BatchProgressTracker(
+        mode="draft",
+        total_items=count,
+        data_dir=dd,
+    )
+
     emails: list[dict[str, Any]] = []
 
     # Fast path: check if batch-inspected.json exists and has valid unhandled emails
@@ -306,15 +322,10 @@ def run_draft_mode(
             data_dir=dd,
             skip_known=True,
             preview_lines=preview_lines,
+            tracker=tracker,
         )
 
-    # Auto-sync sent items if requested
-    if config.get("sync_sent", True):
-        try:
-            sync_sent_items(count=int(config.get("sent_count", 150)), account=account, data_dir=dd, workspace_root=workspace_root)
-        except Exception:
-            pass
-
+    tracker.step("classifying_and_checking_sent")
     sent_lookup = load_sent_index(dd)
     draft = draft_manifest(emails, workspace_root=workspace_root, sent_lookup=sent_lookup)
 
@@ -323,6 +334,8 @@ def run_draft_mode(
     with out_path.open("w", encoding="utf-8") as f:
         json.dump(draft, f, ensure_ascii=False, indent=2)
         f.write("\n")
+
+    tracker.complete(f"Drafted {len(draft.get('items', []))} items to {out_path.name}")
 
     return {
         "ok": True,
@@ -382,6 +395,12 @@ def run_execute_mode(
     idx_p = index_path or resolve_final_index_path(data_dir=dd)
     items: list[dict[str, Any]] = config.get("items", [])
     workspace_root = dd.parent.parent
+
+    tracker = BatchProgressTracker(
+        mode="execute",
+        total_items=len(items),
+        data_dir=dd,
+    )
 
     index_data = load_final_index(idx_p)
     index_items = index_data.setdefault("items", {})
@@ -531,11 +550,22 @@ def run_execute_mode(
             "reference-source-id": ref_source_status,
             "success": item_success,
         })
+        tracker.advance_item(
+            envelope_id=env_id,
+            subject=subject,
+            step_name=f"routed to {final_folder}" if item_success else f"failed routing {env_id}",
+        )
 
     # Save index atomically once for the whole batch
     if index_items:
         index_data["updated_at"] = utc_now_iso()
         save_final_index_atomic(idx_p, index_data)
+
+    if all_succeeded:
+        tracker.complete(f"Executed batch of {len(results)} items successfully.")
+    else:
+        succ_cnt = sum(1 for r in results if r["success"])
+        tracker.complete(f"Executed batch: {succ_cnt}/{len(results)} succeeded.")
 
     return {
         "ok": all_succeeded,

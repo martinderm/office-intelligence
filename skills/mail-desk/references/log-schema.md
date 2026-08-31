@@ -227,6 +227,36 @@ CLI-Helfer (`skills/mail-desk/scripts/`):
   - Pflichtfeld im Payload: `message_id`
   - patcht nur bestehende Einträge
 
+## runner-progress.json
+
+Live-Fortschritts- und ETA-Statusdatei unter `data/mail-desk/runner-progress.json`. Wird vom Batch-Runner (`mail_desk_batch_runner.py`) bei jedem Bearbeitungsschritt atomar aktualisiert und dient der Echtzeit-Überwachung und adaptiven Timer-Steuerung (`30s -> 75% ETA`).
+
+```json
+{
+  "schema_version": 1,
+  "run_id": "execute_20260831_125605",
+  "mode": "draft|execute|pipeline|inspect",
+  "status": "running|completed|failed",
+  "started_at": "2026-08-31T12:56:05",
+  "updated_at": "2026-08-31T10:56:35Z",
+  "progress": {
+    "total_items": 20,
+    "completed_items": 11,
+    "percent": 55.0,
+    "current_step": "routed to Projekte/In Ausarbeitung/ATAEL",
+    "current_envelope_id": "7081",
+    "current_subject": "Antw: Re: ATAEL"
+  },
+  "timing": {
+    "elapsed_seconds": 183.2,
+    "avg_seconds_per_item": 16.6,
+    "estimated_remaining_seconds": 149.0,
+    "eta_timestamp": "2026-08-31 13:02:18"
+  },
+  "error": null
+}
+```
+
 ## Idempotency
 
 Before handling a mail, search active and archived JSONL files for the normalized `message_id` or fallback `message_key`:
