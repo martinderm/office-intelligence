@@ -193,12 +193,18 @@ def verify_in_target_folder(
     norm_target = normalize_message_id(target_msg_id)
     candidates: list[str] = []
 
-    # 1. Filter candidates by matching subject or date
+    # 1. Filter candidates by matching subject (exact or prefix)
     for env in envelopes:
         env_subj = env.get("subject", "").strip()
-        env_date = env.get("date", "").strip()
-        if (subject and env_subj == subject.strip()) or (date_str and date_str[:10] in env_date):
+        if subject and (env_subj.lower() == subject.strip().lower() or (len(subject.strip()) > 15 and env_subj.startswith(subject.strip()[:30]))):
             candidates.append(str(env["id"]))
+
+    # 1b. Fallback to date only if no subject candidate found
+    if not candidates and date_str:
+        for env in envelopes:
+            env_date = env.get("date", "").strip()
+            if date_str[:10] in env_date:
+                candidates.append(str(env["id"]))
 
     # 2. Check candidate headers
     for cid in candidates:

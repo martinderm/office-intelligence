@@ -234,15 +234,17 @@ def classify_email(
     # 2. Topic & System Matching
     # --------------------------------------------------------------------------
     if not matched_project:
-        # Check BOKU-Organisation / IT / Administration
+        # Check BOKU-Organisation / IT / Administration / Gremien
         is_spam_quarantine = "quarantine-notification@boku.ac.at" in from_str.lower() or "spam quarantine notification" in subject.lower()
         is_account_manager = "do_not_reply@boku.ac.at" in from_str.lower() and "accountmanager" in subject.lower()
-        is_boku_it = "boku-it" in from_str.lower() or "helpdesk.boku.ac.at" in from_str.lower() or "[ticket#" in subject.lower()
+        is_boku_it = "boku-it" in from_str.lower() or "helpdesk.boku.ac.at" in from_str.lower() or "[ticket#" in subject.lower() or "znuny" in full_text_lower or "[otrs-agents]" in subject.lower() or "wartungsarbeiten" in full_text_lower
         is_podcast = "leadinglights@boku.ac.at" in from_str.lower() or "boku leading lights" in subject.lower()
-        is_zoom = "eu.zoom.us" in from_str.lower() or "boku-lll zoom room" in subject.lower()
+        is_zoom = "eu.zoom.us" in from_str.lower() or "boku-lll zoom room" in subject.lower() or "zoom room" in subject.lower()
         is_hr_contract = "nt per" in subject.lower() or "dienstvertrag" in full_text_lower or "dienstverhältnis" in full_text_lower
+        is_org_bulletin = "mitteilungsblatt" in full_text_lower or "[mitarbeiter-" in subject.lower() or "gesunde boku" in full_text_lower
+        is_wb_ak = "wb ak" in full_text_lower or "weiterbildungsarbeitskreis" in full_text_lower or "lehrentwicklung" in full_text_lower or "klimaneutrale boku" in full_text_lower or "donau-uni.ac.at" in from_str.lower()
 
-        if is_spam_quarantine or is_account_manager or is_boku_it or is_podcast or is_zoom or is_hr_contract:
+        if is_spam_quarantine or is_account_manager or is_boku_it or is_podcast or is_zoom or is_hr_contract or is_org_bulletin or is_wb_ak:
             target_folder = "Themen/BOKU-Organisation"
             decision = {
                 "kind": "topic",

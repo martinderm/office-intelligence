@@ -331,16 +331,23 @@ Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/
    - **Globale Suche:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-search.json`
    - **Batch-Lösung / Archivierung:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-resolve.json`
 
-4. **Live-Fortschritts-Monitoring & Deterministische Zeitschätzung (`core/progress.py`):**
+4. **Deterministischer Manifest-Inspektor (`mail_desk_inspect_manifest.py`):**
+   - Prüft, filtert und fasst erstellte Entwurfs-Manifeste (`batch-manifest.json`) vor der Ausführung zusammen:
+   - **Übersicht:** `python3 scripts/mail_desk_inspect_manifest.py`
+   - **Unklare Fälle filtern:** `python3 scripts/mail_desk_inspect_manifest.py --filter-kind unknown`
+   - **Antwortbedarf filtern:** `python3 scripts/mail_desk_inspect_manifest.py --needs-reply`
+   - **Strukturiertes JSON:** `python3 scripts/mail_desk_inspect_manifest.py --json`
+
+5. **Live-Fortschritts-Monitoring & Deterministische Zeitschätzung (`core/progress.py`):**
    - Bei allen Batch-Läufen (`--draft`, `--execute`, `--pipeline`, `--inspect`) führt der Runner eine atomare Statusdatei [`data/mail-desk/runner-progress.json`](data/mail-desk/runner-progress.json) mit Zählern, Prozentwert, aktuellen Arbeitsschritten und deterministischer Restzeitschätzung (ETA).
    - Ungepuffertes Live-Streaming in stdout/`task.log`: Jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
-   - **Verbindliche Timer-Regel (30s $\rightarrow$ 75%-ETA-Formel):**
-     1. Batch im Hintergrund starten mit initialem Timer von **30 Sekunden** (Warmup-Phase für realistische $\bar{T}_{\text{item}}$-Messung).
+   - **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
+     1. Batch im Hintergrund starten mit initialem Timer von **60 Sekunden** (Warmup-Phase für realistische $\bar{T}_{\text{item}}$-Messung über mehrere IMAP-Operationen hinweg).
      2. Beim Aufwachen `runner-progress.json` lesen:
         - Wenn `status == "completed"` $\rightarrow$ Batch abgeschlossen, Vollzugsmeldung.
-        - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(15, \min(0.75 \times \text{estimated\_remaining\_seconds}, 180))$ Sekunden setzen.
+        - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 180))$ Sekunden setzen.
         - Wiederholen bis zum Abschluss.
-     3. Reduziert unnötiges Polling um > 80 % und schont Context Window und Systemressourcen bei maximaler Termintreue.
+     3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
 
 ### Final-Index- und Batch-Regeln
 

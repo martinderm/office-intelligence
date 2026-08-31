@@ -443,7 +443,21 @@ def run_execute_mode(
                     account=account,
                 )
                 if not new_env_id:
-                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
+                    # Dynamically resolve live source envelope id in case preceding moves shifted numbers
+                    curr_source_env = env_id
+                    if norm_mid:
+                        live_src_id = verify_in_target_folder(
+                            source_folder,
+                            norm_mid,
+                            subject=subject,
+                            from_addr=from_str,
+                            date_str=date_str,
+                            account=account,
+                        )
+                        if live_src_id:
+                            curr_source_env = live_src_id
+
+                    run_himalaya(["message", "copy", target_folder, curr_source_env, "-f", source_folder], account=account)
                     new_env_id = verify_in_target_folder(
                         target_folder,
                         norm_mid,
@@ -455,7 +469,20 @@ def run_execute_mode(
                 if new_env_id:
                     routing_ok = True
                     try:
-                        run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                        # Re-check live envelope in source before delete
+                        del_env_id = env_id
+                        if norm_mid:
+                            live_del_id = verify_in_target_folder(
+                                source_folder,
+                                norm_mid,
+                                subject=subject,
+                                from_addr=from_str,
+                                date_str=date_str,
+                                account=account,
+                            )
+                            if live_del_id:
+                                del_env_id = live_del_id
+                        run_himalaya(["message", "delete", del_env_id, "-f", source_folder], account=account)
                     except Exception:
                         pass
                 else:
