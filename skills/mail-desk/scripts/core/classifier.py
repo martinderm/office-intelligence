@@ -8,7 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir
+from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
+from .index import load_final_index
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
@@ -80,6 +81,7 @@ def classify_email(
     projects: list[dict[str, Any]] | None = None,
     topics: list[dict[str, Any]] | None = None,
     sent_lookup: dict[str, Any] | None = None,
+    final_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Classify a single email conservatively and determine recommended target folder and evidence."""
     ws = workspace_root or Path.cwd()
@@ -94,8 +96,17 @@ def classify_email(
         except Exception:
             sent_lookup = None
 
+    if final_index is None:
+        try:
+            idx_p = resolve_final_index_path(data_dir=ws / "data" / "mail-desk")
+            final_index = load_final_index(idx_p)
+        except Exception:
+            final_index = None
+
     subject = str(email.get("subject", "")).strip()
     from_str = str(email.get("from", "")).strip()
+    to_str = str(email.get("to", "")).strip()
+    cc_str = str(email.get("cc", "")).strip()
     preview = str(email.get("preview", "")).strip()
     date_str = str(email.get("date", "")).strip()
     envelope_id = str(email.get("envelope_id", "")).strip()
@@ -103,7 +114,7 @@ def classify_email(
     norm_mid = normalize_message_id(raw_mid)
 
     ym, ymd = parse_date_to_year_month(date_str)
-    full_text = f"{subject}\n{from_str}\n{preview}"
+    full_text = f"{subject}\n{from_str}\n{to_str}\n{cc_str}\n{preview}"
     full_text_lower = full_text.lower()
 
     # Default fallback
@@ -133,94 +144,230 @@ def classify_email(
         needs_reply = False
 
     # --------------------------------------------------------------------------
+    # 0. Thread-Inheritance Fast-Path (In-Reply-To & References against Master Index)
+    # --------------------------------------------------------------------------
+    thread_matched = False
+    in_reply_to_raw = email.get("in_reply_to", "")
+    references_raw = email.get("references", "")
+
+    raw_ref_strs = []
+    if isinstance(in_reply_to_raw, str) and in_reply_to_raw:
+        raw_ref_strs.append(in_reply_to_raw)
+    elif isinstance(in_reply_to_raw, list):
+        raw_ref_strs.extend([str(x) for x in in_reply_to_raw if str(x)])
+
+    if isinstance(references_raw, str) and references_raw:
+        raw_ref_strs.append(references_raw)
+    elif isinstance(references_raw, list):
+        raw_ref_strs.extend([str(x) for x in references_raw if str(x)])
+
+    ref_mids: list[str] = []
+    combined_refs = " ".join(raw_ref_strs)
+    if combined_refs:
+        for match in re.finditer(r"<([^>]+)>|([^\s<>]+@[^\s<>]+)", combined_refs):
+            cand = match.group(1) or match.group(2)
+            if cand:
+                nc = normalize_message_id(cand)
+                if nc and nc not in ref_mids:
+                    ref_mids.append(nc)
+
+    indexed_items = (final_index or {}).get("items", {})
+    parent_item = None
+    parent_mid = None
+    for r_mid in ref_mids:
+        if r_mid in indexed_items:
+            cand_parent = indexed_items[r_mid]
+            cand_folder = cand_parent.get("final_folder")
+            if cand_folder and cand_folder != "INBOX":
+                parent_item = cand_parent
+                parent_mid = r_mid
+                break
+
+    if parent_item:
+        parent_folder = parent_item.get("final_folder", "")
+        # Map parent folder to project or topic
+        matched_proj_obj = None
+        for proj in (projects or []):
+            p_id = proj.get("id", "").strip()
+            kuerzel = proj.get("kuerzel", "").strip()
+            mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
+            if mb_folder.lower() == parent_folder.lower():
+                matched_proj_obj = proj
+                break
+
+        matched_topic_obj = None
+        if not matched_proj_obj:
+            for top in (topics or []):
+                t_id = top.get("id", "").strip()
+                mb_folder = top.get("mailbox_folder") or f"Themen/{t_id}"
+                if mb_folder.lower() == parent_folder.lower():
+                    matched_topic_obj = top
+                    break
+
+        if matched_proj_obj:
+            pid = matched_proj_obj.get("id", "")
+            p_name = matched_proj_obj.get("kuerzel") or pid
+            target_folder = parent_folder
+            decision = {
+                "kind": "project",
+                "id": pid,
+                "confidence": "high",
+                "needs_reply": needs_reply,
+            }
+            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {p_name.upper()} ({parent_folder})."
+            ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
+            try:
+                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
+            except ValueError:
+                ev_dir_rel = str(ev_dir.as_posix())
+            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
+            ev_entry = (
+                f"- {ymd} — {subject}.\n"
+                f"  - Message-ID: `{norm_mid}`\n"
+                f"  - Beteiligte: {from_str}\n"
+            )
+            evidence_spec = {
+                "type": "project_evidence",
+                "target_file": ev_file_rel,
+                "entry": ev_entry,
+            }
+            thread_matched = True
+        elif matched_topic_obj:
+            tid = matched_topic_obj.get("id", "")
+            t_title = matched_topic_obj.get("title", tid)
+            target_folder = parent_folder
+            decision = {
+                "kind": "topic",
+                "id": tid,
+                "confidence": "high",
+                "needs_reply": needs_reply,
+            }
+            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {t_title} ({parent_folder})."
+            ev_dir = resolve_evidence_dir("topics", tid, workspace_root=ws)
+            try:
+                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
+            except ValueError:
+                ev_dir_rel = str(ev_dir.as_posix())
+            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
+            ev_entry = (
+                f"- {ymd} — {subject}.\n"
+                f"  - Message-ID: `{norm_mid}`\n"
+                f"  - Beteiligte: {from_str}\n"
+            )
+            evidence_spec = {
+                "type": "topic_evidence",
+                "target_file": ev_file_rel,
+                "entry": ev_entry,
+            }
+            thread_matched = True
+        else:
+            target_folder = parent_folder
+            decision = {
+                "kind": "other",
+                "id": parent_folder,
+                "confidence": "high",
+                "needs_reply": needs_reply,
+            }
+            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {parent_folder}."
+            thread_matched = True
+
+    # --------------------------------------------------------------------------
     # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     matched_project = None
     matched_proj_confidence = "low"
 
-    for proj in (projects or []):
-        p_id = proj.get("id", "").strip()
-        kuerzel = proj.get("kuerzel", "").strip()
-        aliases = [str(a).strip() for a in proj.get("aliases", []) if str(a).strip()]
-        keywords = [str(k).strip() for k in proj.get("keywords", []) if str(k).strip()]
-        typical_patterns = [str(p).strip() for p in proj.get("typical_subject_patterns", []) if str(p).strip()]
-        domains = [str(d).strip().lower() for d in proj.get("domains", []) if str(d).strip()]
-        contacts = [
-            str(c.get("email", "")).strip().lower()
-            for c in proj.get("contacts", [])
-            if isinstance(c, dict) and str(c.get("email", "")).strip()
-        ]
-        mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
+    if not thread_matched:
+        for proj in (projects or []):
+            p_id = proj.get("id", "").strip()
+            kuerzel = proj.get("kuerzel", "").strip()
+            aliases = [str(a).strip() for a in proj.get("aliases", []) if str(a).strip()]
+            keywords = [str(k).strip() for k in proj.get("keywords", []) if str(k).strip()]
+            typical_patterns = [str(p).strip() for p in proj.get("typical_subject_patterns", []) if str(p).strip()]
+            domains = [str(d).strip().lower() for d in proj.get("domains", []) if str(d).strip()]
+            contacts = [
+                str(c.get("email", "")).strip().lower()
+                for c in proj.get("contacts", [])
+                if isinstance(c, dict) and str(c.get("email", "")).strip()
+            ]
+            mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
 
-        # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
-        names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
-        subj_norm = re.sub(r"[-_]+", " ", subject)
-        for name in names:
-            name_norm = re.sub(r"[-_]+", " ", name)
-            if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+            # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
+            names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
+            subj_norm = re.sub(r"[-_]+", " ", subject)
+            for name in names:
+                name_norm = re.sub(r"[-_]+", " ", name)
+                if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+                    matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                    matched_proj_confidence = "high"
+                    break
+            if matched_project:
+                break
+
+            # 1b. Typical Subject Patterns in Subject
+            for pat in typical_patterns:
+                pat_norm = re.sub(r"[-_]+", " ", pat)
+                if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                    matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                    matched_proj_confidence = "high"
+                    break
+            if matched_project:
+                break
+
+            # 1c. Name in body with matching domain/contact or project keyword
+            parties = f"{from_str} {to_str} {cc_str}".lower()
+            external_contacts = [c for c in contacts if c and not c.endswith("@boku.ac.at")]
+            external_domains = [d for d in domains if d and d != "boku.ac.at"]
+            has_name_in_body = any(re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE) for n in names)
+            has_contact_match = any(c in parties for c in external_contacts if c)
+            has_domain_match = any(d in parties for d in external_domains if d)
+            has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
+
+            if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 break
-        if matched_project:
-            break
-
-        # 1b. Typical Subject Patterns in Subject
-        for pat in typical_patterns:
-            pat_norm = re.sub(r"[-_]+", " ", pat)
-            if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+            elif has_contact_match or (has_domain_match and not any(gen in parties for gen in ["boku.ac.at", "gmail.com", "outlook.com", "yahoo.com"])):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 break
+            elif has_kw_match and (has_contact_match or has_domain_match):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "medium"
+                break
+
         if matched_project:
-            break
+            target_folder = matched_project["folder"]
+            pid = matched_project["id"]
+            decision = {
+                "kind": "project",
+                "id": pid,
+                "confidence": matched_proj_confidence,
+                "needs_reply": needs_reply,
+            }
+            notes = f"Projektbezogene Abstimmung zu {matched_project['name'].upper()} (Betreff: {subject})."
 
-        # 1c. Name in body with matching domain/contact or project keyword
-        has_name_in_body = any(re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE) for n in names)
-        has_contact_match = any(c in from_str.lower() for c in contacts if c)
-        has_domain_match = any(d in from_str.lower() for d in domains if d)
-        has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
-
-        if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
-            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-            matched_proj_confidence = "high"
-            break
-        elif has_kw_match and (has_contact_match or has_domain_match):
-            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-            matched_proj_confidence = "medium"
-            break
-
-    if matched_project:
-        target_folder = matched_project["folder"]
-        pid = matched_project["id"]
-        decision = {
-            "kind": "project",
-            "id": pid,
-            "confidence": matched_proj_confidence,
-            "needs_reply": needs_reply,
-        }
-        notes = f"Projektbezogene Abstimmung zu {matched_project['name'].upper()} (Betreff: {subject})."
-
-        ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
-        try:
-            ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
-        except ValueError:
-            ev_dir_rel = str(ev_dir.as_posix())
-        ev_file_rel = f"{ev_dir_rel}/{ym}.md"
-        ev_entry = (
-            f"- {ymd} — {subject}.\n"
-            f"  - Message-ID: `{norm_mid}` ({from_str})\n"
-            f"  - Aussagekern: {notes}\n"
-            f"  - Einordnung: Dokumentation der laufenden Projektkommunikation zu {pid.upper()}."
-        )
-        evidence_spec = {
-            "file": ev_file_rel,
-            "entry": ev_entry,
-        }
+            ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
+            try:
+                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
+            except ValueError:
+                ev_dir_rel = str(ev_dir.as_posix())
+            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
+            ev_entry = (
+                f"- {ymd} — {subject}.\n"
+                f"  - Message-ID: `{norm_mid}` ({from_str})\n"
+                f"  - Aussagekern: {notes}\n"
+                f"  - Einordnung: Dokumentation der laufenden Projektkommunikation zu {pid.upper()}."
+            )
+            evidence_spec = {
+                "file": ev_file_rel,
+                "entry": ev_entry,
+            }
 
     # --------------------------------------------------------------------------
     # 2. Dynamic Topic Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
-    if not matched_project:
+    if not thread_matched and not matched_project:
         matched_topic = None
         matched_topic_confidence = "low"
         subj_norm = re.sub(r"[-_]+", " ", subject)
@@ -344,11 +491,19 @@ def draft_manifest(
     delete_input_on_success: bool = True,
     sent_lookup: dict[str, Any] | None = None,
     sync_sent: bool = True,
+    final_index: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a batch manifest dictionary from a list of inspected emails."""
     ws = workspace_root or Path.cwd()
     projects, topics = load_catalogs(ws)
     dd = ws / "data" / "mail-desk"
+
+    if final_index is None:
+        try:
+            idx_p = resolve_final_index_path(data_dir=dd)
+            final_index = load_final_index(idx_p)
+        except Exception:
+            final_index = None
 
     if sent_lookup is None:
         if sync_sent and emails:
@@ -371,6 +526,7 @@ def draft_manifest(
             projects=projects,
             topics=topics,
             sent_lookup=sent_lookup,
+            final_index=final_index,
         )
         items.append(item)
 

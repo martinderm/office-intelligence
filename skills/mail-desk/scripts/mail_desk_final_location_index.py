@@ -98,8 +98,12 @@ def execute_index_manifest(manifest: dict[str, Any], data_dir: Path | None = Non
                 query_str = op.get("query") or op.get("q")
                 limit = int(op.get("limit", 100))
                 q_res = query_final_index(index_path, folder=folder, query=query_str)
-                items = q_res.get("items", [])
-                total_matches = len(items)
+                items = q_res.get("items", {})
+                total_matches = len(items) if isinstance(items, dict) else len(items)
+                if isinstance(items, dict):
+                    sliced_items = dict(list(items.items())[:limit])
+                else:
+                    sliced_items = items[:limit]
                 res = {
                     "ok": True,
                     "action": "query",
@@ -107,7 +111,7 @@ def execute_index_manifest(manifest: dict[str, Any], data_dir: Path | None = Non
                     "query_filter": query_str,
                     "total_matches": total_matches,
                     "returned_count": min(total_matches, limit),
-                    "items": items[:limit],
+                    "items": sliced_items,
                 }
             elif action in ("upsert", "patch"):
                 mode = op.get("mode", "upsert-final")
@@ -227,8 +231,12 @@ def main() -> int:
 
     if args.subcommand == "query":
         q_res = query_final_index(index_path, folder=args.folder, query=args.query)
-        items = q_res.get("items", [])
-        total_matches = len(items)
+        items = q_res.get("items", {})
+        total_matches = len(items) if isinstance(items, dict) else len(items)
+        if isinstance(items, dict):
+            sliced_items = dict(list(items.items())[: args.limit])
+        else:
+            sliced_items = items[: args.limit]
         out = {
             "ok": True,
             "action": "query",
@@ -236,7 +244,7 @@ def main() -> int:
             "query_filter": args.query,
             "total_matches": total_matches,
             "returned_count": min(total_matches, args.limit),
-            "items": items[: args.limit],
+            "items": sliced_items,
         }
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0

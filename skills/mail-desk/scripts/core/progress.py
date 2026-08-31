@@ -66,7 +66,7 @@ class BatchProgressTracker:
 
         remaining_items = max(0, self.total_items - self.completed_items)
         remaining_sec = round(remaining_items * avg_sec, 1)
-        next_timer_sec = max(30, min(int(0.75 * remaining_sec), 180)) if remaining_sec > 0 else 0
+        next_timer_sec = max(30, min(int(0.75 * remaining_sec), 360)) if remaining_sec > 0 else 0
         eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
         pct = round((self.completed_items / self.total_items) * 100.0, 1)
 
@@ -91,7 +91,7 @@ class BatchProgressTracker:
                 "estimated_remaining_seconds": remaining_sec if self.status == "running" else 0.0,
                 "eta_timestamp": eta_dt.strftime("%Y-%m-%d %H:%M:%S") if self.status == "running" else None,
                 "recommended_next_timer_seconds": next_timer_sec if self.status == "running" else 0,
-                "timer_rule": "Delta_t = max(30, min(0.75 * remaining_sec, 180))",
+                "timer_rule": "Delta_t = max(30, min(0.75 * remaining_sec, 360))",
             },
             "error": error,
         }

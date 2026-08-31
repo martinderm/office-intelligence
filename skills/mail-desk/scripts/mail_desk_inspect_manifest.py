@@ -193,12 +193,28 @@ def main() -> int:
     manifest_path = Path(args.input)
 
     try:
-        data = load_manifest(manifest_path)
-        data["manifest_path"] = str(manifest_path)
+        input_data = load_manifest(manifest_path)
+        is_control_file = "action" in input_data and "manifest_path" in input_data
 
-        # Handle reclassify request
-        if args.reclassify:
-            ws_root = manifest_path.resolve().parent.parent.parent
+        target_manifest_path = manifest_path
+        if is_control_file:
+            target_manifest_path = Path(input_data["manifest_path"]).expanduser().resolve()
+            data = load_manifest(target_manifest_path)
+            do_reclassify = input_data.get("reclassify", args.reclassify)
+            needs_reply_only = input_data.get("needs_reply", args.needs_reply)
+            unindexed_only = input_data.get("unindexed", args.unindexed)
+            filter_kind = input_data.get("filter_kind", args.filter_kind)
+            output_json = input_data.get("json", args.json)
+        else:
+            data = input_data
+            do_reclassify = args.reclassify
+            needs_reply_only = args.needs_reply
+            unindexed_only = args.unindexed
+            filter_kind = args.filter_kind
+            output_json = args.json
+
+        if do_reclassify:
+            ws_root = target_manifest_path.resolve().parent.parent.parent
             projects, topics = load_catalogs(ws_root)
             reclassified_items = []
             for item in data.get("items", []):
@@ -210,18 +226,24 @@ def main() -> int:
                 )
                 reclassified_items.append(new_item)
             data["items"] = reclassified_items
-            with manifest_path.open("w", encoding="utf-8") as f:
+            with target_manifest_path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
                 f.write("\n")
 
         result = inspect_manifest(
             data,
-            needs_reply_only=args.needs_reply,
-            unindexed_only=args.unindexed,
-            filter_kind=args.filter_kind,
+            needs_reply_only=needs_reply_only,
+            unindexed_only=unindexed_only,
+            filter_kind=filter_kind,
         )
 
-        if args.json:
+        if is_control_file and input_data.get("delete_input_on_success", True) and manifest_path.exists():
+            try:
+                manifest_path.unlink()
+            except Exception:
+                pass
+
+        if output_json:
             envelope = {
                 "status": "success",
                 "data": result,

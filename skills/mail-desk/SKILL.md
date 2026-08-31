@@ -355,7 +355,7 @@ Die standardisierte Werkzeugleiste des Skills `mail-desk`:
      1. Batch im Hintergrund starten mit initialem Timer von **60 Sekunden** (Warmup-Phase für realistische $\bar{T}_{\text{item}}$-Messung über mehrere IMAP-Operationen hinweg).
      2. Beim Aufwachen `runner-progress.json` lesen:
         - Wenn `status == "completed"` $\rightarrow$ Batch abgeschlossen, Vollzugsmeldung.
-        - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 180))$ Sekunden setzen.
+        - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen.
         - Wiederholen bis zum Abschluss.
      3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
 
@@ -616,3 +616,7 @@ Kurz berichten:
 - welche Review offen bleibt
 
 Keine langen Mailinhalte zitieren, außer der User fragt danach.
+
+## Backlog & Anstehende Optimierungen
+
+- Offene Performance- und Architekturaufgaben sind im zentralen Backlog dokumentiert: [`TODO.md`](TODO.md).

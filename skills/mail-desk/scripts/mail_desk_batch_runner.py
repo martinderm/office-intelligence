@@ -73,9 +73,9 @@ def get_envelopes_list(folder: str, account: str | None = None, max_size: int = 
 
 def get_oldest_envelopes(folder: str, count: int, account: str | None = None) -> list[dict[str, Any]]:
     """Fetch the oldest envelopes from the active window of a folder reliably."""
-    for test_size in ["1000", "500", "200", "100", "50"]:
+    for test_size in [str(count), str(max(count, 150)), "200", "100"]:
         try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=45)
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=180, max_retries=2)
             if "[" in out:
                 out = out[out.find("["):]
             envs = json.loads(out)
@@ -442,7 +442,7 @@ def run_execute_mode(
         # 1. Routing
         if action_type == "copy_as_move" and target_folder and target_folder != source_folder:
             try:
-                # Idempotent check: check if already in target folder
+                run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
                 new_env_id = verify_in_target_folder(
                     target_folder,
                     norm_mid,
@@ -451,47 +451,10 @@ def run_execute_mode(
                     date_str=date_str,
                     account=account,
                 )
-                if not new_env_id:
-                    # Dynamically resolve live source envelope id in case preceding moves shifted numbers
-                    curr_source_env = env_id
-                    if norm_mid:
-                        live_src_id = verify_in_target_folder(
-                            source_folder,
-                            norm_mid,
-                            subject=subject,
-                            from_addr=from_str,
-                            date_str=date_str,
-                            account=account,
-                        )
-                        if live_src_id:
-                            curr_source_env = live_src_id
-
-                    run_himalaya(["message", "copy", target_folder, curr_source_env, "-f", source_folder], account=account)
-                    new_env_id = verify_in_target_folder(
-                        target_folder,
-                        norm_mid,
-                        subject=subject,
-                        from_addr=from_str,
-                        date_str=date_str,
-                        account=account,
-                    )
                 if new_env_id:
                     routing_ok = True
                     try:
-                        # Re-check live envelope in source before delete
-                        del_env_id = env_id
-                        if norm_mid:
-                            live_del_id = verify_in_target_folder(
-                                source_folder,
-                                norm_mid,
-                                subject=subject,
-                                from_addr=from_str,
-                                date_str=date_str,
-                                account=account,
-                            )
-                            if live_del_id:
-                                del_env_id = live_del_id
-                        run_himalaya(["message", "delete", del_env_id, "-f", source_folder], account=account)
+                        run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
                     except Exception:
                         pass
                 else:

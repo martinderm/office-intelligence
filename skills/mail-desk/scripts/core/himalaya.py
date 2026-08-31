@@ -70,14 +70,10 @@ def get_single_email_details(
     ]
     stdout = None
     last_err = None
-    for attempt in range(2):
-        try:
-            stdout = run_himalaya(args, account=account, timeout=20)
-            if stdout:
-                break
-        except Exception as e:
-            last_err = e
-            time.sleep(0.5)
+    try:
+        stdout = run_himalaya(args, account=account, timeout=12, max_retries=2)
+    except Exception as e:
+        last_err = e
 
     fb_from = ""
     fb_subj = ""
@@ -184,7 +180,7 @@ def verify_in_target_folder(
 ) -> str | None:
     """Verify presence of a message in target folder and return its new envelope_id."""
     try:
-        out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "100"], account=account, timeout=30)
+        out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "50"], account=account, timeout=60, max_retries=2)
         if "[" in out:
             out = out[out.find("["):]
         envelopes = json.loads(out)
@@ -208,9 +204,9 @@ def verify_in_target_folder(
                 candidates.append(str(env["id"]))
 
     # 2. Check candidate headers (newest first)
-    for cid in list(reversed(candidates))[:25]:
+    for cid in list(reversed(candidates))[:10]:
         try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12)
+            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12, max_retries=2)
             for line in h_out.splitlines():
                 if line.lower().startswith("message-id:"):
                     m_id = normalize_message_id(line.split(":", 1)[1])
