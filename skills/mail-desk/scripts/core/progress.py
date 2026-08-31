@@ -147,7 +147,7 @@ class BatchProgressTracker:
             remaining_items = max(0, self.total_items - self.completed_items)
             avg_sec = sum(self.item_durations) / len(self.item_durations)
             rem_sec = int(remaining_items * avg_sec)
-            next_timer_sec = max(30, min(int(0.75 * rem_sec), 180)) if rem_sec > 0 else 0
+            next_timer_sec = max(30, min(int(0.75 * rem_sec), 360)) if rem_sec > 0 else 0
             env_info = f"Env {envelope_id}: " if envelope_id else ""
             subj_info = f"'{subject[:35]}...' " if subject else ""
             sys.stdout.write(

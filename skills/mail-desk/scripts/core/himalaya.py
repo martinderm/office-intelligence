@@ -203,10 +203,10 @@ def verify_in_target_folder(
             if date_str[:10] in env_date:
                 candidates.append(str(env["id"]))
 
-    # 2. Check candidate headers (newest first)
-    for cid in list(reversed(candidates))[:10]:
+    # 2. Check candidate headers (newest first, limit to top 3)
+    for cid in list(reversed(candidates))[:3]:
         try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12, max_retries=2)
+            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)
             for line in h_out.splitlines():
                 if line.lower().startswith("message-id:"):
                     m_id = normalize_message_id(line.split(":", 1)[1])
@@ -215,12 +215,12 @@ def verify_in_target_folder(
         except Exception:
             pass
 
-    # 3. Quick fallback: only check top 3 newest envelopes if no candidates were found
+    # 3. Quick fallback: check top 2 newest envelopes if no candidates were found
     if not candidates:
-        for env in list(reversed(envelopes))[:3]:
+        for env in list(reversed(envelopes))[:2]:
             cid = str(env["id"])
             try:
-                h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12)
+                h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)
                 for line in h_out.splitlines():
                     if line.lower().startswith("message-id:"):
                         m_id = normalize_message_id(line.split(":", 1)[1])

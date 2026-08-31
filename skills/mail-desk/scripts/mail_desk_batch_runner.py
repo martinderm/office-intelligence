@@ -418,6 +418,10 @@ def run_execute_mode(
     pending_evidence: list[dict[str, Any]] = []
     all_succeeded = True
 
+    results: list[dict[str, Any]] = []
+    pending_evidence: list[dict[str, Any]] = []
+    all_succeeded = True
+
     for item in items:
         env_id = str(item["envelope_id"])
         source_folder = item.get("source_folder", "INBOX")
@@ -452,7 +456,7 @@ def run_execute_mode(
 
             if not routing_ok:
                 try:
-                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
+                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account, timeout=45, max_retries=2)
                     new_env_id = verify_in_target_folder(
                         target_folder,
                         norm_mid,
@@ -464,19 +468,23 @@ def run_execute_mode(
                     if new_env_id:
                         routing_ok = True
                         try:
-                            run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                            run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account, timeout=20, max_retries=2)
                         except Exception:
                             pass
                     else:
                         routing_ok = False
                 except Exception:
                     routing_ok = False
+
+            # Gentle socket pause for GroupWise IMAP agent stability
+            time.sleep(0.15)
+
         elif action_type == "keep_in_folder" or not target_folder or target_folder == source_folder:
             new_env_id = env_id
             routing_ok = True
         elif action_type == "delete":
             try:
-                run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account, timeout=20, max_retries=2)
                 routing_ok = True
                 final_folder = "Trash"
                 new_env_id = env_id
@@ -524,7 +532,6 @@ def run_execute_mode(
             append_action_log_entry(dd, log_entry)
             meta_ok = True
 
-            # If needs reply, append to replies-needed.jsonl
             if decision.get("needs_reply"):
                 rep_entry = {
                     "timestamp": utc_now_iso(),
