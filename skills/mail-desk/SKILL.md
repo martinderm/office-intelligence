@@ -336,6 +336,8 @@ Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/
    - **Übersicht:** `python3 scripts/mail_desk_inspect_manifest.py`
    - **Unklare Fälle filtern:** `python3 scripts/mail_desk_inspect_manifest.py --filter-kind unknown`
    - **Antwortbedarf filtern:** `python3 scripts/mail_desk_inspect_manifest.py --needs-reply`
+   - **Nicht-indexierte Mails filtern:** `python3 scripts/mail_desk_inspect_manifest.py --unindexed`
+   - **Manifest mit aktuellen Katalogen neu klassifizieren:** `python3 scripts/mail_desk_inspect_manifest.py --reclassify`
    - **Strukturiertes JSON:** `python3 scripts/mail_desk_inspect_manifest.py --json`
 
 5. **Live-Fortschritts-Monitoring & Deterministische Zeitschätzung (`core/progress.py`):**

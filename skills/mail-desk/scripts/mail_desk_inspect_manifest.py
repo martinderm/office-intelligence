@@ -21,9 +21,14 @@ import sys
 from typing import Any
 
 
+from core.classifier import classify_email, load_catalogs
+from core.common import normalize_message_id, resolve_data_dir, resolve_final_index_path
+from core.index import load_final_index
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inspect and summarize mail-desk batch manifests."
+        description="Inspect, filter, audit and re-classify mail-desk batch manifests."
     )
     parser.add_argument(
         "--input",
@@ -41,6 +46,16 @@ def parse_args() -> argparse.Namespace:
         "--needs-reply",
         action="store_true",
         help="Filter items that require reply (needs_reply == True).",
+    )
+    parser.add_argument(
+        "--unindexed",
+        action="store_true",
+        help="Filter items that are not yet recorded in final-location-index.json.",
+    )
+    parser.add_argument(
+        "--reclassify",
+        action="store_true",
+        help="Re-run classifier using updated catalogs on all items and overwrite the manifest.",
     )
     parser.add_argument(
         "--filter-kind",
@@ -62,14 +77,27 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 def inspect_manifest(
     manifest_data: dict[str, Any],
     needs_reply_only: bool = False,
+    unindexed_only: bool = False,
     filter_kind: str | None = None,
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
     raw_items = manifest_data.get("items", [])
     filtered_items = []
 
+    known_mids = set()
+    if unindexed_only:
+        dd = data_dir or resolve_data_dir()
+        idx_p = resolve_final_index_path(data_dir=dd)
+        idx_data = load_final_index(idx_p)
+        known_mids = set(idx_data.get("items", {}).keys())
+
     for item in raw_items:
         dec = item.get("decision", {})
+        norm_mid = normalize_message_id(item.get("message_id") or item.get("raw_message_id", ""))
+
         if needs_reply_only and not dec.get("needs_reply", False):
+            continue
+        if unindexed_only and norm_mid in known_mids:
             continue
         if filter_kind and dec.get("kind") != filter_kind:
             continue
@@ -167,9 +195,29 @@ def main() -> int:
     try:
         data = load_manifest(manifest_path)
         data["manifest_path"] = str(manifest_path)
+
+        # Handle reclassify request
+        if args.reclassify:
+            ws_root = manifest_path.resolve().parent.parent.parent
+            projects, topics = load_catalogs(ws_root)
+            reclassified_items = []
+            for item in data.get("items", []):
+                new_item = classify_email(
+                    item,
+                    workspace_root=ws_root,
+                    projects=projects,
+                    topics=topics,
+                )
+                reclassified_items.append(new_item)
+            data["items"] = reclassified_items
+            with manifest_path.open("w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+
         result = inspect_manifest(
             data,
             needs_reply_only=args.needs_reply,
+            unindexed_only=args.unindexed,
             filter_kind=args.filter_kind,
         )
 

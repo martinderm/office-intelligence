@@ -128,6 +128,10 @@ def classify_email(
             needs_reply = True
             break
 
+    # Automated / no-reply senders never require a manual reply
+    if "no-reply" in from_str.lower() or "do_not_reply" in from_str.lower() or "quarantine" in from_str.lower() or "mailer-daemon" in from_str.lower():
+        needs_reply = False
+
     # --------------------------------------------------------------------------
     # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
