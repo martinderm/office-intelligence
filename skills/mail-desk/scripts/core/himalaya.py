@@ -180,7 +180,7 @@ def verify_in_target_folder(
 ) -> str | None:
     """Verify presence of a message in target folder and return its new envelope_id."""
     try:
-        out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "50"], account=account, timeout=60, max_retries=2)
+        out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "25", "order", "by", "date", "desc"], account=account, timeout=30, max_retries=2)
         if "[" in out:
             out = out[out.find("["):]
         envelopes = json.loads(out)

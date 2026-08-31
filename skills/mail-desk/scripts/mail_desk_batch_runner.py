@@ -73,7 +73,23 @@ def get_envelopes_list(folder: str, account: str | None = None, max_size: int = 
 
 
 def get_oldest_envelopes(folder: str, count: int, account: str | None = None) -> list[dict[str, Any]]:
-    """Fetch the oldest envelopes from the active window of a folder reliably."""
+    """Fetch the absolute oldest envelopes from a folder reliably using order by date asc."""
+    try:
+        out = run_himalaya(
+            ["-o", "json", "envelope", "list", "-f", folder, "-s", str(count), "order", "by", "date", "asc"],
+            account=account,
+            timeout=90,
+            max_retries=2,
+        )
+        if "[" in out:
+            out = out[out.find("["):]
+        envs = json.loads(out)
+        if isinstance(envs, list) and envs:
+            return envs[:count]
+    except Exception:
+        pass
+
+    # Fallback to window-based slicing if server-side sort is unavailable
     for test_size in [str(count), str(max(count, 150)), "200", "100"]:
         try:
             out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=180, max_retries=2)
