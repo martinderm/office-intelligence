@@ -109,47 +109,53 @@ def get_unprocessed_emails(
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
 
-    fetch_count = max(target_count * 4, 150) if skip_known else target_count
-    if tracker:
-        tracker.step(f"listing_envelopes (fetch_count={fetch_count})")
-    candidate_envs = get_oldest_envelopes(folder, fetch_count, account=account)
-
-    if not candidate_envs:
-        return [], 0
-
-    if order != "oldest":
-        candidate_envs.reverse()
-
+    fetch_sizes = [max(target_count * 4, 150), 300, 600, 1000] if skip_known else [target_count]
     collected: list[dict[str, Any]] = []
     known_count = 0
 
-    for env in candidate_envs:
-        eid = str(env.get("id"))
+    for f_size in fetch_sizes:
         if tracker:
-            tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
-        email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
-        mid = email_res.get("message_id")
-        is_known = bool(mid and mid in known_items)
+            tracker.step(f"listing_envelopes (fetch_count={f_size})")
+        candidate_envs = get_oldest_envelopes(folder, f_size, account=account)
+        if not candidate_envs:
+            return [], 0
 
-        if is_known:
-            known_count += 1
-            email_res["is_known"] = True
-            email_res["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
-            if skip_known:
-                if tracker:
-                    tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
-                continue
-        else:
-            email_res["is_known"] = False
-            email_res["known_location"] = None
+        if order != "oldest":
+            candidate_envs.reverse()
 
-        collected.append(email_res)
-        if tracker:
-            tracker.advance_item(envelope_id=eid, subject=email_res.get("subject", ""), step_name="inspected")
-        time.sleep(0.02)
+        collected = []
+        known_count = 0
 
-        if len(collected) >= target_count:
-            break
+        for env in candidate_envs:
+            eid = str(env.get("id"))
+            if tracker:
+                tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
+            email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
+            mid = email_res.get("message_id")
+            is_known = bool(mid and mid in known_items)
+
+            if is_known:
+                known_count += 1
+                email_res["is_known"] = True
+                email_res["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
+                if skip_known:
+                    if tracker:
+                        tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
+                    continue
+            else:
+                email_res["is_known"] = False
+                email_res["known_location"] = None
+
+            collected.append(email_res)
+            if tracker:
+                tracker.advance_item(envelope_id=eid, subject=email_res.get("subject", ""), step_name="inspected")
+            time.sleep(0.02)
+
+            if len(collected) >= target_count:
+                return collected, known_count
+
+        if len(collected) >= target_count or len(candidate_envs) < f_size:
+            return collected, known_count
 
     return collected, known_count
 
@@ -587,6 +593,12 @@ def run_execute_mode(
     if index_items:
         index_data["updated_at"] = utc_now_iso()
         save_final_index_atomic(idx_p, index_data)
+
+    # Automatically audit and resolve any matching replies from Sent Items
+    try:
+        auto_resolve_replies_from_sent(data_dir=dd, workspace_root=workspace_root)
+    except Exception:
+        pass
 
     if all_succeeded:
         tracker.complete(f"Executed batch of {len(results)} items successfully.")
