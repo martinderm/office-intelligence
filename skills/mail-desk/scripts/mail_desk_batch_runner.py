@@ -441,26 +441,34 @@ def run_execute_mode(
 
         # 1. Routing
         if action_type == "copy_as_move" and target_folder and target_folder != source_folder:
-            try:
-                run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
-                new_env_id = verify_in_target_folder(
-                    target_folder,
-                    norm_mid,
-                    subject=subject,
-                    from_addr=from_str,
-                    date_str=date_str,
-                    account=account,
-                )
-                if new_env_id:
+            # O(1) RAM-Check: Check if message is already indexed at target location
+            if norm_mid and norm_mid in index_items:
+                known_entry = index_items[norm_mid]
+                if known_entry.get("final_folder") == target_folder:
+                    new_env_id = known_entry.get("envelope_id") or env_id
                     routing_ok = True
-                    try:
-                        run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
-                    except Exception:
-                        pass
-                else:
+
+            if not routing_ok:
+                try:
+                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account)
+                    new_env_id = verify_in_target_folder(
+                        target_folder,
+                        norm_mid,
+                        subject=subject,
+                        from_addr=from_str,
+                        date_str=date_str,
+                        account=account,
+                    )
+                    if new_env_id:
+                        routing_ok = True
+                        try:
+                            run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account)
+                        except Exception:
+                            pass
+                    else:
+                        routing_ok = False
+                except Exception:
                     routing_ok = False
-            except Exception:
-                routing_ok = False
         elif action_type == "keep_in_folder" or not target_folder or target_folder == source_folder:
             new_env_id = env_id
             routing_ok = True
