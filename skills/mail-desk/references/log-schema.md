@@ -219,13 +219,10 @@ Regeln:
 
 CLI-Helfer (`skills/mail-desk/scripts/`):
 
-- `final_index_lookup.py --message-id ...`
-- `final_index_upsert.py --mode upsert-final --stdin`
-  - Himalaya-/IMAP-Payload: `message_id`, `final_folder`, `envelope_id`
-  - Gmail-Payload: `message_id`, `backend: "gmail"`, `final_label`, `gmail_message_id`
-- `final_index_upsert.py --mode patch --stdin`
-  - Pflichtfeld im Payload: `message_id`
-  - patcht nur bestehende Einträge
+- `mail_desk_final_location_index.py stats`
+- `mail_desk_final_location_index.py lookup --mid '<message_id>'`
+- `mail_desk_final_location_index.py query --folder '<folder>' --limit 50`
+- `mail_desk_final_location_index.py --input data/mail-desk/index-op.json`
 
 ## runner-progress.json
 

@@ -26,6 +26,7 @@ def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35,
         try:
             res = subprocess.run(
                 cmd,
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
@@ -206,10 +207,10 @@ def verify_in_target_folder(
             if date_str[:10] in env_date:
                 candidates.append(str(env["id"]))
 
-    # 2. Check candidate headers
-    for cid in candidates:
+    # 2. Check candidate headers (newest first)
+    for cid in list(reversed(candidates))[:25]:
         try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=15)
+            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12)
             for line in h_out.splitlines():
                 if line.lower().startswith("message-id:"):
                     m_id = normalize_message_id(line.split(":", 1)[1])
@@ -218,20 +219,19 @@ def verify_in_target_folder(
         except Exception:
             pass
 
-    # 3. Fallback: check the 10 newest envelopes in target folder
-    for env in envelopes[:10]:
-        cid = str(env["id"])
-        if cid in candidates:
-            continue
-        try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=15)
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    m_id = normalize_message_id(line.split(":", 1)[1])
-                    if m_id == norm_target:
-                        return cid
-        except Exception:
-            pass
+    # 3. Quick fallback: only check top 3 newest envelopes if no candidates were found
+    if not candidates:
+        for env in list(reversed(envelopes))[:3]:
+            cid = str(env["id"])
+            try:
+                h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=12)
+                for line in h_out.splitlines():
+                    if line.lower().startswith("message-id:"):
+                        m_id = normalize_message_id(line.split(":", 1)[1])
+                        if m_id == norm_target:
+                            return cid
+            except Exception:
+                pass
 
     return None
 

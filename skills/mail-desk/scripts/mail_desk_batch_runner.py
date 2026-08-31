@@ -113,6 +113,7 @@ def get_unprocessed_emails(
     collected: list[dict[str, Any]] = []
     known_count = 0
 
+    inspected_eids: set[str] = set()
     for f_size in fetch_sizes:
         if tracker:
             tracker.step(f"listing_envelopes (fetch_count={f_size})")
@@ -123,11 +124,12 @@ def get_unprocessed_emails(
         if order != "oldest":
             candidate_envs.reverse()
 
-        collected = []
-        known_count = 0
-
         for env in candidate_envs:
             eid = str(env.get("id"))
+            if eid in inspected_eids:
+                continue
+            inspected_eids.add(eid)
+
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
             email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
@@ -435,6 +437,7 @@ def run_execute_mode(
         ref_source_status = "not-applicable"
         new_env_id = None
         final_folder = target_folder or source_folder
+        tracker.step(f"routing to {final_folder}", envelope_id=env_id, subject=subject)
 
         # 1. Routing
         if action_type == "copy_as_move" and target_folder and target_folder != source_folder:

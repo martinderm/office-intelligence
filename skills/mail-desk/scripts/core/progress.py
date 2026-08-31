@@ -66,6 +66,7 @@ class BatchProgressTracker:
 
         remaining_items = max(0, self.total_items - self.completed_items)
         remaining_sec = round(remaining_items * avg_sec, 1)
+        next_timer_sec = max(30, min(int(0.75 * remaining_sec), 180)) if remaining_sec > 0 else 0
         eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
         pct = round((self.completed_items / self.total_items) * 100.0, 1)
 
@@ -89,6 +90,8 @@ class BatchProgressTracker:
                 "avg_seconds_per_item": avg_sec,
                 "estimated_remaining_seconds": remaining_sec if self.status == "running" else 0.0,
                 "eta_timestamp": eta_dt.strftime("%Y-%m-%d %H:%M:%S") if self.status == "running" else None,
+                "recommended_next_timer_seconds": next_timer_sec if self.status == "running" else 0,
+                "timer_rule": "Delta_t = max(30, min(0.75 * remaining_sec, 180))",
             },
             "error": error,
         }
@@ -144,10 +147,11 @@ class BatchProgressTracker:
             remaining_items = max(0, self.total_items - self.completed_items)
             avg_sec = sum(self.item_durations) / len(self.item_durations)
             rem_sec = int(remaining_items * avg_sec)
+            next_timer_sec = max(30, min(int(0.75 * rem_sec), 180)) if rem_sec > 0 else 0
             env_info = f"Env {envelope_id}: " if envelope_id else ""
             subj_info = f"'{subject[:35]}...' " if subject else ""
             sys.stdout.write(
-                f"[{self.completed_items}/{self.total_items} - {pct}%] {env_info}{subj_info}({duration:.1f}s | ETA: {rem_sec}s)\n"
+                f"[{self.completed_items}/{self.total_items} - {pct}%] {env_info}{subj_info}({duration:.1f}s | ETA: {rem_sec}s | Next Timer: {next_timer_sec}s)\n"
             )
             sys.stdout.flush()
 

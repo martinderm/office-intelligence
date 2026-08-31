@@ -285,14 +285,13 @@ Die Verifikation soll dabei immer mit dem **kleinstmoeglichen belastbaren Nachwe
 
 ### Harte Regel: kein manueller Final-Index-Write
 
-`data/mail-desk/final-location-index.json` darf **niemals manuell** editiert werden.
-Ausschließlich zulässig sind die vorgesehenen Skripte bzw. der Batch-Runner:
+`data/mail-desk/final-location-index.json` darf **niemals manuell** editiert oder direkt im Rohtext gelesen werden.
+Ausschließlich zulässig ist das standardisierte Werkzeug `mail_desk_final_location_index.py` bzw. der Batch-Runner:
 
-- `python3 scripts/final_index_lookup.py --message-id 'msg-2026-001@example.org'`
-- `python3 scripts/final_index_upsert.py --mode upsert-final --stdin`
-- `python3 scripts/final_index_upsert.py --mode patch --stdin`
-- `python3 scripts/final_index_upsert_many.py --mode upsert-final --file <batch.jsonl>`
-- `python3 scripts/final_index_upsert_many.py --mode patch --file <batch.jsonl>`
+- `python3 scripts/mail_desk_final_location_index.py stats`
+- `python3 scripts/mail_desk_final_location_index.py lookup --mid 'msg-2026-001@example.org'`
+- `python3 scripts/mail_desk_final_location_index.py query --folder 'Projekte/EVOLVE' --limit 20`
+- `python3 scripts/mail_desk_final_location_index.py --input data/mail-desk/index-op.json`
 
 Zusätzlich erlaubt für die Index-Location:
 
@@ -311,18 +310,27 @@ Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/
 - `core/index.py`: Atomares Lesen, Schreiben, Filtern und Lookup für `final-location-index.json`.
 - `core/action_log.py`: Protokollierung in `action-log.jsonl`, `replies-needed.jsonl` und Case-Archivierung.
 - `core/evidence.py`: Aktualisierung von Markdown-Evidenzen (`evidence/YYYY-MM.md`) mit Dublettenerkennung.
+- `core/classifier.py`: Offline-Regel- und Katalog-Klassifikation mit Projekt-/Topic-Pattern-Matching.
 
-1. **Abfragen des Final-Location-Index (`final_index_query.py`):**
-   Filtert und durchsucht den Index nach Ordnern, Message-IDs oder Freitext.
-   `python3 scripts/final_index_query.py --folder 'Projekte/Project-Alpha'`
-   `python3 scripts/final_index_query.py --query 'Statusbericht'`
+Die standardisierte Werkzeugleiste des Skills `mail-desk`:
 
-2. **Lösen und Archivieren offener Antwortfälle (`mail_desk_resolve_case.py`):**
+1. **Batch-Runner (`mail_desk_batch_runner.py`):**
+   Zentraler Batch-Prozessor für Entwurf (`draft`), Routing, Verifikation, Indexierung, Evidenzfortschreibung und Echtzeit-Fortschrittstelemetrie. Aufruf standardisiert über `--input data/mail-desk/batch-manifest.json`.
+
+2. **Offline-Inspektion & Katalog-Reevaluierung (`mail_desk_inspect_manifest.py`):**
+   Prüft, filtert und reklassifiziert erstellte Batch-Manifeste offline gegen `projects.json` und `topics.json` vor der eigentlichen IMAP-Ausführung (`--reclassify`, `--unindexed`, `--unclassified`).
+
+3. **Himalaya & IMAP JSON-Client (`mail_desk_himalaya_client.py`):**
+   Standardisierter Client für alle IMAP-Operationen (Listen, Lesen, Kopieren, Verschieben, Löschen, Suchen, Ordnerprüfung) via `--input data/mail-desk/himalaya-op.json`.
+
+4. **Final Location Index Client (`mail_desk_final_location_index.py`):**
+   Kapselt alle Lese-, Schreib-, Lookup-, Statistik- und Filteroperationen auf `final-location-index.json`.
+
+5. **Erledigung und Fall-Archivierung (`mail_desk_resolve_case.py`):**
    Archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` direkt unter dem wochenbasierten Pfad `archive/YYYY-Www/` und aktualisiert den Status.
-   `python3 scripts/mail_desk_resolve_case.py --message-id 'msg-2026-001@example.org' --status 'resolved' --resolution 'Abstimmung im Meeting erfolgt.'`
 
-3. **Einheitlicher Batch-Runner (`mail_desk_batch_runner.py`):**
-   Führt komplexe Batch-Operationen (Parallel-Inspektion, gekoppelte Ausführung aus Routing/Verifikation/Index/Log/Evidence, Integritätsprüfung, globale Suche und Batch-Resolution) über ein temporäres JSON-Manifest in `data/mail-desk/` aus. Das temporäre Input-File wird bei bestätigtem Erfolg automatisch gelöscht, sodass für jeden Vorgang genau ein Shell-Befehl im Agent-Harness freigegeben werden muss.
+6. **Mailbox-Preflight-Check (`mailbox_preflight.py`):**
+   Validiert die Erreichbarkeit und Authentifizierung des konfigurierten Mailkontos vor komplexen Operationen.
    - Ausführliche Dokumentation und JSON-Schemas: [`references/batch-runner.md`](references/batch-runner.md)
    - Standard-Dateinamen: `batch-inspect.json`, `batch-manifest.json`, `batch-verify.json`, `batch-search.json`, `batch-resolve.json`
    - **Inspektion:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json`
@@ -350,6 +358,30 @@ Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/
         - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 180))$ Sekunden setzen.
         - Wiederholen bis zum Abschluss.
      3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
+
+6. **Deterministischer Himalaya-Client & JSON-Wrapper (`mail_desk_himalaya_client.py`):**
+   - Kapselt alle direkten IMAP-Operationen (Listing, Read, Copy, Move, Delete, Search) mit automatischer Socket-/TLS-10054-Fehlerbehandlung und strukturierten JSON-Envelopes.
+   - **STRIKTE REGEL: Aufruf IMMER per JSON-Input (`--input <file.json>`):**
+     Sowohl Einzeloperationen, Inspektionen als auch Multi-Operationen MÜSSEN immer über eine standardisierte JSON-Eingabedatei übergeben werden. Dadurch bleibt der CLI-Befehl für den Nutzer stets identisch, deterministisch und vorab per JSON-Review freigabefähig.
+     ```bash
+     python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
+     ```
+     Manifest-Format (`himalaya-op.json` wird bei gesetztem `delete_input_on_success: true` nach erfolgreicher Ausführung automatisch gelöscht):
+     ```json
+     {
+       "operations": [
+         { "action": "list_folders" },
+         { "action": "list_envelopes", "folder": "INBOX", "page_size": 20 },
+         { "action": "read", "folder": "INBOX", "envelope_id": "7195" },
+         { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
+         { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
+         { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
+         { "action": "search", "query": "USAGE-NG" }
+       ],
+       "delete_input_on_success": true
+     }
+     ```
+   - Direkte ad-hoc CLI-Subkommandos mit wechselnden Parametern sind im operativen Agenten-Workflow untersagt; stattdessen wird immer das temporäre JSON-Manifest erstellt und via `--input` ausgeführt.
 
 ### Final-Index- und Batch-Regeln
 
@@ -400,11 +432,23 @@ Kontextsparend arbeiten:
 Zusätzlich einen schlanken Lookup-Index pflegen (verbindlich, script-basiert):
 
 - `data/mail-desk/final-location-index.json`
-- Zweck: schnelle Auflösung von `Message-ID` → finale Backend-Location + zuletzt gesehener Backend-Locator
+- **STRIKTE REGEL: Zugriff ausschließlich über Python / CLI-Tool (`mail_desk_final_location_index.py` oder `core/index.py`):**
+  - Die Datei darf NIEMALS direkt mit Texteditoren, `view_file` oder `grep` geöffnet, gelesen oder manuell bearbeitet werden (Gefahr von Context-Window-Overflows, unvollständigem Lesen und Syntax-Korruption).
+  - Alle Lookups, Abfragen, Statistiken und Modifikationen MÜSSEN über Python-Tools laufen:
+    ```bash
+    # Statistiken & Zusammenfassung
+    python3 scripts/mail_desk_final_location_index.py stats
+    # Gezielter Einzel-Lookup per Message-ID
+    python3 scripts/mail_desk_final_location_index.py lookup --mid '<message_id>'
+    # Filtern nach Ordner/Suchbegriff
+    python3 scripts/mail_desk_final_location_index.py query -f 'Projekte/EVOLVE' -l 20
+    # Standardisierter JSON-Manifest-Aufruf (mit Bestätigung/Auto-Cleanup)
+    python3 scripts/mail_desk_final_location_index.py --input data/mail-desk/index-op.json
+    ```
+- Zweck: Schnelle, atomare $O(1)$-Auflösung von `Message-ID` → finale Backend-Location + zuletzt gesehener Backend-Locator
 - Keine Mailinhalte speichern
 - Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
 - JSON-Struktur und Feldregeln sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
-- Bedienung ausschließlich über die oben definierten Skripte (`lookup`, `upsert-final`, `patch`).
 
 Optional zusätzlich für schnelle Reply-Nachweise bei alten Fällen:
 
@@ -554,8 +598,8 @@ Vor Abschluss eines Mail-Schritts:
 2. `action-log.jsonl` aktualisiert.
 3. Falls Antwortbedarf: `replies-needed.jsonl` aktualisiert.
 4. Falls Review-Fall: `pending-review.jsonl` aktualisiert.
-5. Final-Index über `final_index_upsert.py` oder den passenden Batch-Import aktualisiert.
-6. Final-Index über `final_index_lookup.py` oder einen gleichwertig gezielten Index-Check gegengeprüft.
+5. Final-Index über `mail_desk_final_location_index.py` oder den Batch-Runner aktualisiert.
+6. Final-Index über `mail_desk_final_location_index.py lookup` oder gezielten Batch-Check gegengeprüft.
 7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
 8. Wenn Wissenspflege aus Mailinhalt erfolgte: passendes `evidence/YYYY-MM.md` aktualisiert und dort dieselbe Aussage mit `message_id`/`message_ids` auffindbar.
 9. Für die Abschlussprüfung keine unnötigen Wiederholungen derselben Rohmail, Regeldateien oder breiten Folder-/Log-Listen erzeugen.

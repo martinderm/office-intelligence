@@ -20,7 +20,7 @@ Use this adapter when the workspace uses the connected Gmail integration.
 
 - Sending, archiving, deleting, moving, or applying labels requires explicit user intent, as required by the Gmail integration.
 - Record Gmail routing in the final-location index with `backend: "gmail"`, `final_label`, `gmail_message_id`, and, when available, `gmail_thread_id`.
-- Use `final_index_upsert.py` or `final_index_upsert_many.py` for the index write; do not edit the index manually.
+- Use `mail_desk_final_location_index.py` for the index write; do not edit the index manually.
 - Search `SENT` and use thread context before leaving an old `needs_reply` case open.
 
 ## Do not use

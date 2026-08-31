@@ -167,7 +167,7 @@ def classify_email(
         # 1b. Typical Subject Patterns in Subject
         for pat in typical_patterns:
             pat_norm = re.sub(r"[-_]+", " ", pat)
-            if (pat and re.search(r"\b" + re.escape(pat) + r"\b", subject, re.IGNORECASE)) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+            if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 break
@@ -259,7 +259,7 @@ def classify_email(
             # 2b. Typical Subject Patterns in Subject
             for pat in typical_patterns:
                 pat_norm = re.sub(r"[-_]+", " ", pat)
-                if (pat and re.search(r"\b" + re.escape(pat) + r"\b", subject, re.IGNORECASE)) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
                     matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
                     matched_topic_confidence = "high"
                     break
