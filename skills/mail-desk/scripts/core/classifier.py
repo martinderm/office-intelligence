@@ -53,7 +53,10 @@ def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict
         try:
             with projects_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-                projects = data.get("projects", [])
+                if isinstance(data, list):
+                    projects = data
+                elif isinstance(data, dict):
+                    projects = data.get("projects", [])
         except Exception:
             pass
 
@@ -61,7 +64,10 @@ def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict
         try:
             with topics_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-                topics = data.get("topics", [])
+                if isinstance(data, list):
+                    topics = data
+                elif isinstance(data, dict):
+                    topics = data.get("topics", [])
         except Exception:
             pass
 
@@ -123,95 +129,72 @@ def classify_email(
             break
 
     # --------------------------------------------------------------------------
-    # 1. Project Catalog Matching (High / Medium confidence)
+    # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     matched_project = None
-    high_match = False
+    matched_proj_confidence = "low"
 
-    # Check known project acronyms / explicit identifiers
-    acronym_map = {
-        "atael": {
-            "folder": "Projekte/In Ausarbeitung/ATAEL",
-            "id": "atael",
-        },
-        "usage-ng": {
-            "folder": "Projekte/USAGE-NG",
-            "id": "usage-ng",
-        },
-        "usage ng": {
-            "folder": "Projekte/USAGE-NG",
-            "id": "usage-ng",
-        },
-        "meshe": {
-            "folder": "Projekte/MESHE",
-            "id": "meshe",
-        },
-        "evolve": {
-            "folder": "Projekte/EVOLVE",
-            "id": "evolve",
-        },
-        "li4lam": {
-            "folder": "Projekte/LI4LAM",
-            "id": "li4lam",
-        },
-    }
+    for proj in (projects or []):
+        p_id = proj.get("id", "").strip()
+        kuerzel = proj.get("kuerzel", "").strip()
+        aliases = [str(a).strip() for a in proj.get("aliases", []) if str(a).strip()]
+        keywords = [str(k).strip() for k in proj.get("keywords", []) if str(k).strip()]
+        typical_patterns = [str(p).strip() for p in proj.get("typical_subject_patterns", []) if str(p).strip()]
+        domains = [str(d).strip().lower() for d in proj.get("domains", []) if str(d).strip()]
+        contacts = [
+            str(c.get("email", "")).strip().lower()
+            for c in proj.get("contacts", [])
+            if isinstance(c, dict) and str(c.get("email", "")).strip()
+        ]
+        mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
 
-    # Subject explicit check first
-    for acr, meta in acronym_map.items():
-        if re.search(r"\b" + re.escape(acr) + r"\b", subject, re.IGNORECASE):
-            matched_project = meta
-            high_match = True
+        # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
+        names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
+        subj_norm = re.sub(r"[-_]+", " ", subject)
+        for name in names:
+            name_norm = re.sub(r"[-_]+", " ", name)
+            if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "high"
+                break
+        if matched_project:
             break
 
-    # If not in subject, check dynamic projects catalog
-    if not matched_project:
-        for proj in projects:
-            p_id = proj.get("id", "").lower()
-            kuerzel = proj.get("kuerzel", "").lower()
-            aliases = [a.lower() for a in proj.get("aliases", [])]
-            all_names = [p_id, kuerzel] + aliases
-
-            for name in all_names:
-                if name and re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE):
-                    mb_folder = proj.get("mailbox_folder", f"Projekte/{proj.get('kuerzel', p_id)}")
-                    matched_project = {
-                        "folder": mb_folder,
-                        "id": p_id,
-                    }
-                    high_match = True
-                    break
-            if matched_project:
+        # 1b. Typical Subject Patterns in Subject
+        for pat in typical_patterns:
+            pat_norm = re.sub(r"[-_]+", " ", pat)
+            if (pat and re.search(r"\b" + re.escape(pat) + r"\b", subject, re.IGNORECASE)) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "high"
                 break
+        if matched_project:
+            break
 
-    # If still not matched, check preview / full text for clear acronyms with partner context
-    if not matched_project:
-        for acr, meta in acronym_map.items():
-            if re.search(r"\b" + re.escape(acr) + r"\b", full_text, re.IGNORECASE):
-                # Check supporting signals
-                is_atael = acr == "atael" or "erasmus" in full_text_lower and ("africa" in full_text_lower or "partner" in full_text_lower)
-                is_usage = "usage" in acr and ("wp4" in full_text_lower or "wp2" in full_text_lower or "doh" in full_text_lower or "mandler" in full_text_lower)
-                is_meshe = "meshe" in acr or ("microcredentials" in full_text_lower and "eucen" in full_text_lower)
+        # 1c. Name in body with matching domain/contact or project keyword
+        has_name_in_body = any(re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE) for n in names)
+        has_contact_match = any(c in from_str.lower() for c in contacts if c)
+        has_domain_match = any(d in from_str.lower() for d in domains if d)
+        has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
 
-                if is_atael or is_usage or is_meshe:
-                    matched_project = meta
-                    high_match = True
-                    break
-                else:
-                    matched_project = meta
-                    high_match = False
-                    break
+        if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
+            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+            matched_proj_confidence = "high"
+            break
+        elif has_kw_match and (has_contact_match or has_domain_match):
+            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+            matched_proj_confidence = "medium"
+            break
 
     if matched_project:
         target_folder = matched_project["folder"]
         pid = matched_project["id"]
-        confidence = "high" if high_match else "medium"
         decision = {
             "kind": "project",
             "id": pid,
-            "confidence": confidence,
+            "confidence": matched_proj_confidence,
             "needs_reply": needs_reply,
         }
-        notes = f"Projektbezogene Abstimmung zu {pid.upper()} (Betreff: {subject})."
+        notes = f"Projektbezogene Abstimmung zu {matched_project['name'].upper()} (Betreff: {subject})."
 
         ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
         try:
@@ -231,61 +214,83 @@ def classify_email(
         }
 
     # --------------------------------------------------------------------------
-    # 2. Topic & System Matching
+    # 2. Dynamic Topic Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     if not matched_project:
-        # Check BOKU-Organisation / IT / Administration / Gremien
-        is_spam_quarantine = "quarantine-notification@boku.ac.at" in from_str.lower() or "spam quarantine notification" in subject.lower()
-        is_account_manager = "do_not_reply@boku.ac.at" in from_str.lower() and "accountmanager" in subject.lower()
-        is_boku_it = "boku-it" in from_str.lower() or "helpdesk.boku.ac.at" in from_str.lower() or "[ticket#" in subject.lower() or "znuny" in full_text_lower or "[otrs-agents]" in subject.lower() or "wartungsarbeiten" in full_text_lower
-        is_podcast = "leadinglights@boku.ac.at" in from_str.lower() or "boku leading lights" in subject.lower()
-        is_zoom = "eu.zoom.us" in from_str.lower() or "boku-lll zoom room" in subject.lower() or "zoom room" in subject.lower()
-        is_hr_contract = "nt per" in subject.lower() or "dienstvertrag" in full_text_lower or "dienstverhältnis" in full_text_lower
-        is_org_bulletin = "mitteilungsblatt" in full_text_lower or "[mitarbeiter-" in subject.lower() or "gesunde boku" in full_text_lower
-        is_wb_ak = "wb ak" in full_text_lower or "weiterbildungsarbeitskreis" in full_text_lower or "lehrentwicklung" in full_text_lower or "klimaneutrale boku" in full_text_lower or "donau-uni.ac.at" in from_str.lower()
+        matched_topic = None
+        matched_topic_confidence = "low"
+        subj_norm = re.sub(r"[-_]+", " ", subject)
 
-        if is_spam_quarantine or is_account_manager or is_boku_it or is_podcast or is_zoom or is_hr_contract or is_org_bulletin or is_wb_ak:
-            target_folder = "Themen/BOKU-Organisation"
+        for top in (topics or []):
+            t_id = top.get("id", "").strip()
+            title = top.get("title", "").strip()
+            aliases = [str(a).strip() for a in top.get("aliases", []) if str(a).strip()]
+            keywords = [str(k).strip() for k in top.get("keywords", []) if str(k).strip()]
+            typical_patterns = [str(p).strip() for p in top.get("typical_subject_patterns", []) if str(p).strip()]
+            domains = [str(d).strip().lower() for d in top.get("domains", []) if str(d).strip()]
+            contacts = [
+                str(c.get("email", "")).strip().lower()
+                for c in top.get("contacts", [])
+                if isinstance(c, dict) and str(c.get("email", "")).strip()
+            ]
+            mb_folder = top.get("mailbox_folder") or f"Themen/{title or t_id}"
+
+            # Check subtopics keywords & aliases as well
+            for sub in top.get("subtopics", []):
+                if isinstance(sub, dict):
+                    aliases.extend([str(a).strip() for a in sub.get("aliases", []) if str(a).strip()])
+                    keywords.extend([str(k).strip() for k in sub.get("keywords", []) if str(k).strip()])
+
+            # 2a. Match Title, ID, or Alias in Subject
+            t_names = [n for n in [title, t_id] + aliases if n and len(n) >= 3]
+            for name in t_names:
+                name_norm = re.sub(r"[-_]+", " ", name)
+                if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+                    matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
+                    matched_topic_confidence = "high"
+                    break
+            if matched_topic:
+                break
+
+            # 2b. Typical Subject Patterns in Subject
+            for pat in typical_patterns:
+                pat_norm = re.sub(r"[-_]+", " ", pat)
+                if (pat and re.search(r"\b" + re.escape(pat) + r"\b", subject, re.IGNORECASE)) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                    matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
+                    matched_topic_confidence = "high"
+                    break
+            if matched_topic:
+                break
+
+            # 2c. Keywords or domain/contact matching
+            has_kw_subj = any(
+                re.search(r"\b" + re.escape(kw) + r"\b", subject, re.IGNORECASE)
+                or re.search(r"\b" + re.escape(re.sub(r"[-_]+", " ", kw)) + r"\b", subj_norm, re.IGNORECASE)
+                for kw in keywords if len(kw) >= 3
+            )
+            has_kw_body = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
+            has_contact = any(c in from_str.lower() for c in contacts if c)
+            has_domain = any(d in from_str.lower() for d in domains if d)
+
+            if has_kw_subj:
+                matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
+                matched_topic_confidence = "high"
+                break
+            elif has_kw_body and (has_contact or has_domain):
+                matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
+                matched_topic_confidence = "medium"
+                break
+
+        if matched_topic:
+            target_folder = matched_topic["folder"]
+            tid = matched_topic["id"]
             decision = {
                 "kind": "topic",
-                "id": "boku-organisation",
-                "confidence": "high",
-                "needs_reply": False,
-            }
-            notes = f"BOKU-Organisation / IT-Meldung: {subject}."
-
-        # Check EUCEN / EJULL / SAMUELE
-        elif "ejull" in full_text_lower or "eucen" in full_text_lower or "samuele" in full_text_lower:
-            target_folder = "Themen/Netzwerke/EUCEN"
-            decision = {
-                "kind": "topic",
-                "id": "netzwerke/eucen",
-                "confidence": "high" if ("ejull" in full_text_lower or "eucen" in full_text_lower) else "medium",
+                "id": tid,
+                "confidence": matched_topic_confidence,
                 "needs_reply": needs_reply,
             }
-            notes = f"EUCEN / EJULL Netzwerk- & Publikationsabstimmung (Betreff: {subject})."
-
-        # Check AUCEN
-        elif "aucen" in full_text_lower or "office@aucen.ac.at" in from_str.lower():
-            target_folder = "Themen/Netzwerke/AUCEN"
-            decision = {
-                "kind": "topic",
-                "id": "netzwerke/aucen",
-                "confidence": "high",
-                "needs_reply": needs_reply,
-            }
-            notes = f"AUCEN Netzwerkabstimmung (Betreff: {subject})."
-
-        # Check AIxLLL
-        elif "ai tutor" in full_text_lower or "ai-tutor" in full_text_lower or "aixlll" in full_text_lower:
-            target_folder = "Themen/AIxLLL"
-            decision = {
-                "kind": "topic",
-                "id": "aixlll",
-                "confidence": "high",
-                "needs_reply": needs_reply,
-            }
-            notes = f"AIxLLL Abstimmung (Betreff: {subject})."
+            notes = f"Themenbezogene Zuordnung zu {matched_topic['title']} (Betreff: {subject})."
 
     # --------------------------------------------------------------------------
     # 3. Sent Items Reply Check
