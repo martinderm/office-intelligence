@@ -42,3 +42,55 @@ def update_evidence_file(
 
     target_md.write_text(new_content, encoding="utf-8")
     return True
+
+
+def flush_batch_evidence(
+    pending_evidence: list[dict[str, Any]],
+    workspace_root: Path | None = None,
+) -> dict[str, bool]:
+    """Atomically batch update evidence files grouped by file target."""
+    ws_root = workspace_root or Path.cwd()
+    grouped: dict[Path, list[tuple[str, str]]] = {}
+
+    for item in pending_evidence:
+        spec = item.get("evidence")
+        mid = item.get("message_id", "")
+        if not isinstance(spec, dict):
+            continue
+        rel_file = spec.get("file")
+        entry_text = spec.get("entry")
+        if not rel_file or not entry_text:
+            continue
+        target_md = (ws_root / rel_file).resolve() if not Path(rel_file).is_absolute() else Path(rel_file)
+        norm_id = normalize_message_id(mid)
+        grouped.setdefault(target_md, []).append((norm_id, entry_text.strip()))
+
+    results: dict[str, bool] = {}
+    for target_md, entries in grouped.items():
+        try:
+            target_md.parent.mkdir(parents=True, exist_ok=True)
+            existing_content = ""
+            existing_lower = ""
+            if target_md.exists():
+                existing_content = target_md.read_text(encoding="utf-8")
+                existing_lower = existing_content.lower()
+            else:
+                title = target_md.stem
+                existing_content = f"# Evidence — {title}\n\n"
+                existing_lower = existing_content.lower()
+
+            new_entries: list[str] = []
+            for norm_id, entry_str in entries:
+                if norm_id and norm_id in existing_lower:
+                    continue
+                new_entries.append(entry_str)
+                existing_lower += " " + (norm_id.lower() if norm_id else "")
+
+            if new_entries:
+                updated_content = existing_content.rstrip() + "\n\n" + "\n\n".join(new_entries) + "\n"
+                target_md.write_text(updated_content, encoding="utf-8")
+            results[str(target_md)] = True
+        except Exception:
+            results[str(target_md)] = False
+
+    return results

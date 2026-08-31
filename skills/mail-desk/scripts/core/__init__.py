@@ -8,7 +8,7 @@ from .common import (
     resolve_final_index_path,
     utc_now_iso,
 )
-from .evidence import update_evidence_file
+from .evidence import flush_batch_evidence, update_evidence_file
 from .himalaya import (
     get_single_email_details,
     run_himalaya,

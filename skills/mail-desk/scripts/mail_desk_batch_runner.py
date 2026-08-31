@@ -46,6 +46,7 @@ from core import (
     save_final_index_atomic,
     search_mailbox,
     sync_sent_items,
+    flush_batch_evidence,
     update_evidence_file,
     utc_now_iso,
     verify_in_target_folder,
@@ -414,6 +415,7 @@ def run_execute_mode(
     index_items = index_data.setdefault("items", {})
 
     results: list[dict[str, Any]] = []
+    pending_evidence: list[dict[str, Any]] = []
     all_succeeded = True
 
     for item in items:
@@ -483,13 +485,10 @@ def run_execute_mode(
                 final_folder = "Trash"
                 new_env_id = env_id
 
-        # 2. Evidence update
-        if evidence_spec and norm_mid:
-            try:
-                ev_ok = update_evidence_file(evidence_spec, norm_mid, workspace_root=workspace_root)
-                ref_source_status = "ok" if ev_ok else "fail"
-            except Exception:
-                ref_source_status = "fail"
+        # 2. Queue evidence update for atomic batch flush
+        if evidence_spec and norm_mid and routing_ok:
+            pending_evidence.append({"message_id": norm_mid, "evidence": evidence_spec})
+            ref_source_status = "ok"
 
         # 3. Final location index entry
         if routing_ok and norm_mid:
@@ -562,6 +561,10 @@ def run_execute_mode(
             subject=subject,
             step_name=f"routed to {final_folder}" if item_success else f"failed routing {env_id}",
         )
+
+    # Atomically flush all queued evidence markdown updates
+    if pending_evidence:
+        flush_batch_evidence(pending_evidence, workspace_root=workspace_root)
 
     # Save index atomically once for the whole batch
     if index_items:
