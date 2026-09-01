@@ -249,34 +249,34 @@ Diese Punkte dürfen erst nach den P0-/P1-Paketen umgesetzt werden und nicht als
 
 Jedes Paket ist so geschnitten, dass ein kleiner Coding Agent nur wenige Dateien und einen klaren Abnahmetest laden muss. Ein Paket soll typischerweise 30–90 Minuten dauern und höchstens einen fachlichen Zweck verändern.
 
-| ID | Paket | Dateien im Hauptscope | Abnahme | Abhängigkeit | Modell-Eignung |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `OI-01` | Kontrollierte In-place-OCR absichern | `convert_cloud_docs.py`, `cloud-atlas/SKILL.md`, `test_doc_conversion.py` | `ocr_policy` umgesetzt; Scan wird nachvollziehbar angereichert; kurze digitale und signierte PDFs bleiben unverändert; Fehler überschreibt nichts | keine | Luna/Flash implementiert; stärkeres Review wegen Cloud-Mutation |
-| `OI-02` | Mutations- und Lock-Vertrag dokumentieren | Root-`SKILL.md`, `cloud-atlas/SKILL.md`, `mail-desk/SKILL.md` | Jede mutierende Operation benennt Lock-Vorbedingung und Legacy-Grenze | keine | Luna/Flash |
-| `OI-03` | Gemeinsamen Lock-Guard entwerfen und testen | neuer kleiner Helper plus Tests | fremder/fehlender/eigener Lock deterministisch getestet; kein Force | `OI-02` | Luna/Flash implementiert; stärkeres Review |
-| `OI-04a` | Atomare Writes im Cloud-Konverter | `convert_cloud_docs.py`, direkte Tests | simulierte Unterbrechung beschädigt Mirror und Filemap nicht | `OI-03` | Luna/Flash |
-| `OI-04b` | Atomare Writes im Filemap-Generator | `gen_filemap.py`, direkte Tests | simulierte Unterbrechung beschädigt Filemap und Katalog nicht | `OI-03` | Luna/Flash |
-| `OI-05` | Atomare Writes in `mail-desk` | `core/evidence.py` und direkte Tests | bestehende Daten bleiben bei Write-Fehler intakt | `OI-03` | Luna/Flash |
-| `OI-06` | Kanonischen Metadaten-Builder ergänzen | kleiner Helper in `cloud-atlas`, Tests | erzeugte Cloud-Metadaten validieren gegen kanonisches Schema | `OI-01` | Luna/Flash |
-| `OI-07` | Dual-Read/Canonical-Write migrieren | `convert_cloud_docs.py`, Tests | alte Mirrors werden erkannt; neue Ausgabe enthält keine Legacy-Felder | `OI-06` | Luna/Flash |
-| `OI-08` | Filemap-Schema entscheiden und implementieren | neues Schema/Referenz, `gen_filemap.py`, Tests | Container und Artefaktmetadaten deterministisch validiert | `OI-06` | besser Terra/Sol für Design, Luna/Flash für Implementierung |
-| `OI-09a` | Envelope für Cloud-Sync-Wrapper | `sync_project_cloud.py`, Contract-Test | Success- und Error-Pfad sind kanonisch | `OI-04a`, `OI-04b` | Luna/Flash |
-| `OI-09b` | Envelope für Filemap-Generator | `gen_filemap.py`, Contract-Test | Human- und JSON-Modus sauber getrennt | `OI-04b` | Luna/Flash |
-| `OI-09c` | Envelope für Cloud-Konverter | `convert_cloud_docs.py`, Contract-Test | Fortschritt bleibt außerhalb des JSON-Envelopes | `OI-04a` | Luna/Flash |
-| `OI-10` | Mail-Desk Envelope-Helper | neuer Helper unter `mail-desk/scripts/core/`, Tests | Success- und Error-Envelope zentral getestet | keine | Luna/Flash |
-| `OI-11a` | Mail-Desk CLI-Gruppe A migrieren | `inspect_manifest`, `final_location_index`, `mailbox_preflight` | Contract-Tests grün | `OI-10` | Luna/Flash |
-| `OI-11b` | Mail-Desk CLI-Gruppe B migrieren | `resolve_case`, `move_and_patch`, `himalaya_client` | Contract-Tests grün | `OI-10` | Luna/Flash |
-| `OI-11c` | Batch-Runner-Envelope migrieren | `mail_desk_batch_runner.py`, Tests | alle Modi und Fehlerpfade kanonisch | `OI-10` | Luna/Flash mit hohem Kontext; sonst Terra |
-| `OI-12` | Legacy-CLI-Adapter und Deprecation | kleiner Adapter, Referenzdoku, Tests | bekannte `ok`-/`status`-Konsumenten bleiben über Opt-in funktionsfähig | `OI-09a/b/c`, `OI-11*` | Luna/Flash |
-| `OI-13a` | Bundle-Router und README synchronisieren | Root-`SKILL.md`, `README.md` | sieben Skills werden konsistent geroutet | keine | Luna/Flash |
-| `OI-13b` | Zentralen Skills-Katalog ergänzen | `../skills-catalog.yaml` im Parent-Repo | Trigger vollständig; Katalogvalidator grün | `OI-13a` | Luna/Flash; eigener Parent-Repo-Lock |
-| `OI-14a` | Mail-Desk-Inhalte klassifizieren | nur Analyse/Mapping-Dokument | jede Sektion hat Ziel `SKILL.md` oder konkrete Referenzdatei | keine | Luna/Flash |
-| `OI-14b` | Mail-Backenddetails auslagern | `mail-desk/SKILL.md`, Backend-Referenzen | Backendregeln vollständig verlinkt | `OI-14a` | Luna/Flash |
-| `OI-14c` | Manifest- und Compliance-Details auslagern | `mail-desk/SKILL.md`, neue Referenzen | Formate und Sicherheitsregeln ohne Verlust verlinkt | `OI-14b` | Luna/Flash |
-| `OI-14d` | Mail-Desk-Router final kürzen | `mail-desk/SKILL.md`, Linkprüfung | Zielgröße erreicht; progressive Disclosure vollständig | `OI-14c` | Luna/Flash |
-| `OI-15` | Cloud-Abhängigkeiten isolieren | `requirements.txt`, Cloud-Atlas-Doku, Fehlerpfade | Nicht-Cloud-Desks ohne Pakete nutzbar; fehlende Konverter strukturiert | `OI-09a/b/c` | Luna/Flash |
-| `OI-16` | Event-Speicher abstrahieren | Event-Skill und Template | neutraler Default plus getestete/dokumentierte Legacy-Abbildung | keine | Luna/Flash |
-| `OI-17` | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | stärkeres Modell oder unabhängiger Reviewer |
+| ID | Status | Paket | Dateien im Hauptscope | Abnahme | Abhängigkeit | Modell-Eignung |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| `OI-01` | ✅ abgeschlossen | Kontrollierte In-place-OCR absichern | `convert_cloud_docs.py`, `cloud-atlas/SKILL.md`, `test_doc_conversion.py` | `ocr_policy` umgesetzt; Scan wird nachvollziehbar angereichert; kurze digitale und signierte PDFs bleiben unverändert; Fehler überschreibt nichts | keine | Luna/Flash implementiert; stärkeres Review wegen Cloud-Mutation |
+| `OI-02` | ✅ abgeschlossen | Mutations- und Lock-Vertrag dokumentieren | Root-`SKILL.md`, `cloud-atlas/SKILL.md`, `mail-desk/SKILL.md` | Jede mutierende Operation benennt Lock-Vorbedingung und Legacy-Grenze | keine | Luna/Flash |
+| `OI-03` | ✅ abgeschlossen | Gemeinsamen Lock-Guard entwerfen und testen | neuer kleiner Helper plus Tests | fremder/fehlender/eigener Lock deterministisch getestet; kein Force | `OI-02` | Luna/Flash implementiert; stärkeres Review |
+| `OI-04a` | ✅ abgeschlossen | Atomare Writes im Cloud-Konverter | `convert_cloud_docs.py`, direkte Tests | simulierte Unterbrechung beschädigt Mirror und Filemap nicht | `OI-03` | Luna/Flash |
+| `OI-04b` | ✅ abgeschlossen | Atomare Writes im Filemap-Generator | `gen_filemap.py`, direkte Tests | simulierte Unterbrechung beschädigt Filemap und Katalog nicht | `OI-03` | Luna/Flash |
+| `OI-05` | ✅ abgeschlossen | Atomare Writes in `mail-desk` | `core/evidence.py` und direkte Tests | bestehende Daten bleiben bei Write-Fehler intakt | `OI-03` | Luna/Flash |
+| `OI-06` | ✅ abgeschlossen | Kanonischen Metadaten-Builder ergänzen | kleiner Helper in `cloud-atlas`, Tests | erzeugte Cloud-Metadaten validieren gegen kanonisches Schema | `OI-01` | Luna/Flash |
+| `OI-07` | ⬜ offen | Dual-Read/Canonical-Write migrieren | `convert_cloud_docs.py`, Tests | alte Mirrors werden erkannt; neue Ausgabe enthält keine Legacy-Felder | `OI-06` | Luna/Flash |
+| `OI-08` | ⬜ offen | Filemap-Schema entscheiden und implementieren | neues Schema/Referenz, `gen_filemap.py`, Tests | Container und Artefaktmetadaten deterministisch validiert | `OI-06` | besser Terra/Sol für Design, Luna/Flash für Implementierung |
+| `OI-09a` | ⬜ offen | Envelope für Cloud-Sync-Wrapper | `sync_project_cloud.py`, Contract-Test | Success- und Error-Pfad sind kanonisch | `OI-04a`, `OI-04b` | Luna/Flash |
+| `OI-09b` | ⬜ offen | Envelope für Filemap-Generator | `gen_filemap.py`, Contract-Test | Human- und JSON-Modus sauber getrennt | `OI-04b` | Luna/Flash |
+| `OI-09c` | ⬜ offen | Envelope für Cloud-Konverter | `convert_cloud_docs.py`, Contract-Test | Fortschritt bleibt außerhalb des JSON-Envelopes | `OI-04a` | Luna/Flash |
+| `OI-10` | ⬜ offen | Mail-Desk Envelope-Helper | neuer Helper unter `mail-desk/scripts/core/`, Tests | Success- und Error-Envelope zentral getestet | keine | Luna/Flash |
+| `OI-11a` | ⬜ offen | Mail-Desk CLI-Gruppe A migrieren | `inspect_manifest`, `final_location_index`, `mailbox_preflight` | Contract-Tests grün | `OI-10` | Luna/Flash |
+| `OI-11b` | ⬜ offen | Mail-Desk CLI-Gruppe B migrieren | `resolve_case`, `move_and_patch`, `himalaya_client` | Contract-Tests grün | `OI-10` | Luna/Flash |
+| `OI-11c` | ⬜ offen | Batch-Runner-Envelope migrieren | `mail_desk_batch_runner.py`, Tests | alle Modi und Fehlerpfade kanonisch | `OI-10` | Luna/Flash mit hohem Kontext; sonst Terra |
+| `OI-12` | ⬜ offen | Legacy-CLI-Adapter und Deprecation | kleiner Adapter, Referenzdoku, Tests | bekannte `ok`-/`status`-Konsumenten bleiben über Opt-in funktionsfähig | `OI-09a/b/c`, `OI-11*` | Luna/Flash |
+| `OI-13a` | ⬜ offen | Bundle-Router und README synchronisieren | Root-`SKILL.md`, `README.md` | sieben Skills werden konsistent geroutet | keine | Luna/Flash |
+| `OI-13b` | ⬜ offen | Zentralen Skills-Katalog ergänzen | `../skills-catalog.yaml` im Parent-Repo | Trigger vollständig; Katalogvalidator grün | `OI-13a` | Luna/Flash; eigener Parent-Repo-Lock |
+| `OI-14a` | ⬜ offen | Mail-Desk-Inhalte klassifizieren | nur Analyse/Mapping-Dokument | jede Sektion hat Ziel `SKILL.md` oder konkrete Referenzdatei | keine | Luna/Flash |
+| `OI-14b` | ⬜ offen | Mail-Backenddetails auslagern | `mail-desk/SKILL.md`, Backend-Referenzen | Backendregeln vollständig verlinkt | `OI-14a` | Luna/Flash |
+| `OI-14c` | ⬜ offen | Manifest- und Compliance-Details auslagern | `mail-desk/SKILL.md`, neue Referenzen | Formate und Sicherheitsregeln ohne Verlust verlinkt | `OI-14b` | Luna/Flash |
+| `OI-14d` | ⬜ offen | Mail-Desk-Router final kürzen | `mail-desk/SKILL.md`, Linkprüfung | Zielgröße erreicht; progressive Disclosure vollständig | `OI-14c` | Luna/Flash |
+| `OI-15` | ⬜ offen | Cloud-Abhängigkeiten isolieren | `requirements.txt`, Cloud-Atlas-Doku, Fehlerpfade | Nicht-Cloud-Desks ohne Pakete nutzbar; fehlende Konverter strukturiert | `OI-09a/b/c` | Luna/Flash |
+| `OI-16` | ⬜ offen | Event-Speicher abstrahieren | Event-Skill und Template | neutraler Default plus getestete/dokumentierte Legacy-Abbildung | keine | Luna/Flash |
+| `OI-17` | ⬜ offen | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | stärkeres Modell oder unabhängiger Reviewer |
 
 ### Paketvorlage für kleine Coding Agents
 
