@@ -2,10 +2,42 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from .common import normalize_message_id
+
+
+def _atomic_write_text(target: Path, content: str) -> None:
+    """Replace *target* with UTF-8 text only after a durable sibling write."""
+    file_descriptor = -1
+    temporary_path: Path | None = None
+    try:
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="") as handle:
+            file_descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        try:
+            if file_descriptor >= 0:
+                os.close(file_descriptor)
+        finally:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
 
 
 def update_evidence_file(
@@ -40,7 +72,7 @@ def update_evidence_file(
         header = f"# Evidence — {title}\n\n"
         new_content = header + entry_text.strip() + "\n"
 
-    target_md.write_text(new_content, encoding="utf-8")
+    _atomic_write_text(target_md, new_content)
     return True
 
 
@@ -88,7 +120,7 @@ def flush_batch_evidence(
 
             if new_entries:
                 updated_content = existing_content.rstrip() + "\n\n" + "\n\n".join(new_entries) + "\n"
-                target_md.write_text(updated_content, encoding="utf-8")
+                _atomic_write_text(target_md, updated_content)
             results[str(target_md)] = True
         except Exception:
             results[str(target_md)] = False
