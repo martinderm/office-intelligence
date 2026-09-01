@@ -160,3 +160,8 @@ Vor Ausgabe prüfen:
 - Nur minimal patchen.
 - Bei mehreren neuen Projekten: gesammelt als ein Patch.
 - Struktur zuerst konsistent planen, dann in einem sauberen Schritt schreiben.
+
+## Geplante Schema-Erweiterungen & Backlog (unter Vorbehalt)
+
+- Geplante Schema-Erweiterungen (Workpackages mit Tasks, Deliverables, Milestones) und Migrationspläne sind im zentralen Backlog dokumentiert: [`TODO.md`](TODO.md).
+
