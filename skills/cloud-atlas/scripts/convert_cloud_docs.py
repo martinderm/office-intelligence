@@ -9,6 +9,7 @@ import time
 import multiprocessing
 import hashlib
 import shutil
+import tempfile
 from pathlib import Path, PurePosixPath
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -39,7 +40,9 @@ def parse_args():
     parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
-    parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
+    parser.add_argument("--ocr-policy", choices=["enrich_source", "local_derivative", "disabled"], default="local_derivative", help="OCR-Policy fuer PDFs: 'local_derivative' (Standard: OCR-Ergebnis als PDF unter _derivatives/), 'enrich_source' (In-place Anreicherung) oder 'disabled'.")
+    parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback (entspricht --ocr-policy disabled)")
+    parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge Neuerstellung bestehender OCR-Ebenen (--redo-ocr)")
     return parser.parse_args()
 
 # Setup markitdown conversion
@@ -162,9 +165,9 @@ def convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=120):
     soffice = find_soffice_binary()
     if not soffice:
         return False, "LibreOffice executable not found"
-    
+
     os.makedirs(out_dir_abs, exist_ok=True)
-    
+
     import tempfile
     with tempfile.TemporaryDirectory(prefix="soffice_profile_") as profile_dir:
         profile_uri = "file:///" + profile_dir.replace("\\", "/")
@@ -201,11 +204,11 @@ def convert_doc_to_docx_word_com(src_abs, out_dir_abs, timeout=120):
     import platform
     if platform.system() != "Windows":
         return False, "MS Word COM is only supported on Windows"
-    
+
     os.makedirs(out_dir_abs, exist_ok=True)
     expected_filename = os.path.splitext(os.path.basename(src_abs))[0] + ".docx"
     expected_path = os.path.join(out_dir_abs, expected_filename)
-    
+
     ps_script = f"""
     $ErrorActionPreference = 'Stop'
     try {{
@@ -243,7 +246,7 @@ def convert_doc_file(src_abs, out_dir_abs, timeout=120):
     converter = get_doc_converter()
     if not converter:
         return False, "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)", None
-        
+
     if converter == "libreoffice-headless":
         ok, res = convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=timeout)
         return ok, res, "libreoffice-headless"
@@ -292,27 +295,174 @@ def decode_subprocess_output(raw_bytes):
                 pass
     return raw_bytes.decode("utf-8", errors="replace")
 
-def run_ocr_on_pdf(src_abs, timeout=120):
-    safe_src = get_safe_path(src_abs)
-    ensure_tesseract_path()
+def is_pdf_digitally_signed_bytes(data):
+    """Detect digital signatures in raw PDF bytes (checking for /ByteRange and signature dictionary)."""
+    if not isinstance(data, (bytes, bytearray)):
+        return False
+    has_byterange = b"/ByteRange" in data
+    has_sig = bool(
+        re.search(rb"/Type\s*/Sig\b", data) or
+        re.search(rb"/Subtype\s*/adbe\.pkcs7", data) or
+        re.search(rb"/Subtype\s*/ETSI\.CAdES", data) or
+        re.search(rb"/Type\s*/DocTimeStamp\b", data) or
+        b"/DocTimeStamp" in data
+    )
+    # A ByteRange plus a signature payload is a conservative signal as well.
+    return has_byterange and (has_sig or b"/Contents" in data)
+
+def is_digitally_signed_pdf(pdf_path):
+    """Check if a PDF file is digitally signed."""
+    safe_path = get_safe_path(pdf_path)
+    if not os.path.isfile(safe_path):
+        return None
     try:
-        res = subprocess.run(
-            ["ocrmypdf", "-l", "deu", "--redo-ocr", safe_src, safe_src],
-            capture_output=True,
-            timeout=timeout
-        )
+        with open(safe_path, "rb") as f:
+            data = f.read()
+        return is_pdf_digitally_signed_bytes(data)
+    except Exception:
+        # Callers that might mutate a source must treat unknown as protected.
+        return None
+
+def analyze_pdf_structure(pdf_path):
+    """Inspect PDF structure for fonts, images, text operators, and signatures."""
+    safe_path = get_safe_path(pdf_path)
+    if not os.path.isfile(safe_path):
+        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False}
+    try:
+        with open(safe_path, "rb") as f:
+            data = f.read()
+    except Exception:
+        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False}
+
+    is_signed = is_pdf_digitally_signed_bytes(data)
+    has_fonts = bool(
+        re.search(rb"/Type\s*/Font\b", data) or
+        re.search(rb"/FontDescriptor\b", data) or
+        re.search(rb"/TrueType\b", data) or
+        re.search(rb"/CIDFontType2\b", data) or
+        re.search(rb"/Type1\b", data)
+    )
+    has_images = bool(
+        re.search(rb"/Subtype\s*/Image\b", data) or
+        re.search(rb"/Image\b", data)
+    )
+    has_text_streams = bool(
+        re.search(rb"\bBT\b", data) and re.search(rb"\bET\b", data)
+    )
+    return {
+        "has_fonts": has_fonts,
+        "has_images": has_images,
+        "has_text_streams": has_text_streams,
+        "is_signed": is_signed
+    }
+
+def is_image_based_pdf(pdf_path, extracted_text=""):
+    """
+    Determines if a PDF is a scanned/image-based PDF requiring OCR.
+    Guards against misidentifying short digital 1-liner PDFs as scanned PDFs.
+    """
+    mock_scan = os.environ.get("CLOUD_ATLAS_MOCK_IS_SCAN")
+    if mock_scan is not None:
+        return mock_scan == "1"
+
+    text_clean = (extracted_text or "").strip()
+    if len(text_clean) >= 30:
+        return False
+
+    structure = analyze_pdf_structure(pdf_path)
+
+    # If it has digital fonts or text streams and some extracted text, it's a short digital document, not a scan
+    if (structure["has_fonts"] or structure["has_text_streams"]) and len(text_clean) > 0:
+        return False
+
+    # If it contains images and either no fonts or no extracted text, it is image-based
+    if structure["has_images"]:
+        if not structure["has_fonts"] or len(text_clean) == 0:
+            return True
+
+    # If there's 0 extracted text and no digital fonts, treat as image-based/scanned
+    if len(text_clean) == 0 and not structure["has_fonts"]:
+        return True
+
+    return False
+
+def _validate_and_promote_ocr_output(staged_path, final_path, expected_src_sha256=None, check_signature=False):
+    """Validate a same-directory staging file and atomically promote it."""
+    try:
+        if not os.path.isfile(staged_path) or os.path.getsize(staged_path) == 0:
+            return False, "OCR produced no output"
+        with open(staged_path, "rb+") as f:
+            if f.read(5) != b"%PDF-":
+                return False, "OCR output is not a PDF"
+            f.flush()
+            os.fsync(f.fileno())
+        if expected_src_sha256 and calculate_sha256(final_path) != expected_src_sha256:
+            return False, "Source changed while OCR was running"
+        if check_signature and is_digitally_signed_pdf(final_path) is not False:
+            return False, "Source signature could not be safely cleared for in-place OCR"
+        os.replace(staged_path, final_path)
+        return True, "OCR succeeded"
+    except Exception as e:
+        return False, str(e)
+    finally:
+        try:
+            if os.path.exists(staged_path):
+                os.unlink(staged_path)
+        except OSError:
+            pass
+
+
+def run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=False, timeout=120, expected_src_sha256=None, check_signature=False):
+    """
+    Run OCR on a PDF.
+    If dest_abs is specified and different from src_abs, writes output to dest_abs.
+    If dest_abs is None or equal to src_abs, performs atomic in-place OCR.
+    """
+    safe_src = get_safe_path(src_abs)
+    is_inplace = (dest_abs is None or os.path.abspath(dest_abs) == os.path.abspath(src_abs))
+    final_path = src_abs if is_inplace else dest_abs
+    final_dir = os.path.dirname(os.path.abspath(final_path))
+    os.makedirs(final_dir, exist_ok=True)
+    fd, target_output = tempfile.mkstemp(prefix=".ocr-stage-", suffix=".pdf", dir=final_dir)
+    os.close(fd)
+
+    mock_ocr = os.environ.get("CLOUD_ATLAS_OCR_MOCK")
+    if mock_ocr:
+        try:
+            if mock_ocr == "fail":
+                return False, "Mock OCR failure"
+            shutil.copyfile(safe_src, target_output)
+            with open(target_output, "ab") as f:
+                f.write(b"\n% MOCK_OCR_INPLACE_LAYER\n" if is_inplace else b"\n% MOCK_OCR_DERIVATIVE_LAYER\n")
+            return _validate_and_promote_ocr_output(target_output, safe_src if is_inplace else final_path, expected_src_sha256, check_signature)
+        finally:
+            if os.path.exists(target_output):
+                os.unlink(target_output)
+
+    ensure_tesseract_path()
+
+    cmd = ["ocrmypdf", "-l", "deu", "--output-type", "pdf", "--optimize", "0"]
+    if redo_ocr:
+        cmd.append("--redo-ocr")
+    cmd.extend([safe_src, get_safe_path(target_output)])
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, timeout=timeout)
         stdout_str = decode_subprocess_output(res.stdout)
         stderr_str = decode_subprocess_output(res.stderr)
+
         if res.returncode == 0:
-            return True, "OCR succeeded"
-        else:
-            return False, stderr_str or f"Exit code {res.returncode}"
+            return _validate_and_promote_ocr_output(target_output, safe_src if is_inplace else final_path, expected_src_sha256, check_signature)
+        return False, stderr_str or f"Exit code {res.returncode}"
     except FileNotFoundError:
         return False, "ocrmypdf executable not found."
     except subprocess.TimeoutExpired:
         return False, f"ocrmypdf timed out after {timeout}s"
     except Exception as e:
         return False, str(e)
+    finally:
+        if os.path.exists(target_output):
+            os.unlink(target_output)
 
 def convert_to_markdown_raw(src_abs):
     safe_src = get_safe_path(src_abs)
@@ -337,11 +487,12 @@ def convert_to_markdown_raw(src_abs):
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
 
-def convert_to_markdown(src_abs, enable_ocr=True):
+def convert_to_markdown(src_abs, enable_ocr=True, ocr_policy="local_derivative", redo_ocr=False):
     text = convert_to_markdown_raw(src_abs)
     ocr_applied = False
-    if enable_ocr and src_abs.lower().endswith(".pdf") and len(text.strip()) < 30:
-        ocr_success, msg = run_ocr_on_pdf(src_abs)
+    effective_policy = ocr_policy if enable_ocr else "disabled"
+    if effective_policy != "disabled" and src_abs.lower().endswith(".pdf") and is_image_based_pdf(src_abs, text):
+        ocr_success, msg = run_ocr_on_pdf(src_abs, redo_ocr=redo_ocr)
         if ocr_success:
             text = convert_to_markdown_raw(src_abs)
             ocr_applied = True
@@ -354,23 +505,26 @@ def format_size(bytes_size):
         return f"{bytes_size / 1024:.1f} KB"
     return f"{bytes_size / (1024 * 1024):.1f} MB"
 
-def _convert_worker_target(task, conn, enable_ocr=True):
+def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=False):
     """Worker process target that converts documents safely and communicates via pipe."""
     try:
         src_abs = task["src_abs"]
         is_doc = task.get("is_doc", False)
-        
+        is_pdf = task.get("is_pdf", False)
+        task_ocr_policy = task.get("ocr_policy", ocr_policy)
+        task_redo_ocr = task.get("redo_ocr", redo_ocr)
+
         if is_doc:
             derivative_abs = task["derivative_abs"]
             derivative_dir = os.path.dirname(derivative_abs)
             cloud_path_abs = task.get("cloud_path_abs")
-            
+
             # Safety assertion: Never write derivative into cloud directory
             if cloud_path_abs:
                 assert_not_in_cloud_dir(derivative_abs, cloud_path_abs)
-                
+
             os.makedirs(derivative_dir, exist_ok=True)
-            
+
             # Check mock failure hook for testing corrupted/failed files
             if os.environ.get("CLOUD_ATLAS_MOCK_CORRUPT") == "1":
                 conn.send(("conversion_required", {
@@ -386,7 +540,7 @@ def _convert_worker_target(task, conn, enable_ocr=True):
                     "sha256": task.get("src_sha256")
                 }))
                 return
-                
+
             actual_derivative_path = res
             if not os.path.isfile(actual_derivative_path) or os.path.getsize(actual_derivative_path) == 0:
                 conn.send(("conversion_required", {
@@ -394,33 +548,150 @@ def _convert_worker_target(task, conn, enable_ocr=True):
                     "sha256": task.get("src_sha256")
                 }))
                 return
-                
+
             derivative_sha256 = calculate_sha256(actual_derivative_path)
-            
+
             # Convert derivative (.docx) to Markdown
             try:
                 md_text = convert_to_markdown_raw(actual_derivative_path)
             except Exception:
                 md_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus .docx-Derivat extrahiert]\n"
-                
+
             quality_loss_note = (
                 f"Konvertierung von binärem .doc (Word 97-2003) über {method} nach .docx. "
                 f"Formatierungen, Makros oder eingebettete OLE-Objekte können vom Original abweichen."
             )
-            
+
             conn.send(("ok", {
                 "text": md_text,
                 "ocr_applied": False,
+                "ocr_policy": task_ocr_policy,
                 "derivative_path": task["derivative_rel"],
                 "derivative_sha256": derivative_sha256,
                 "conversion_method": method,
                 "potential_quality_loss": quality_loss_note
             }))
+        elif is_pdf:
+            raw_text = ""
+            raw_convert_err = None
+            try:
+                raw_text = convert_to_markdown_raw(src_abs)
+            except Exception as e:
+                raw_convert_err = str(e)
+
+            needs_ocr = (task_ocr_policy != "disabled") and (task_redo_ocr or is_image_based_pdf(src_abs, raw_text))
+
+            if not needs_ocr:
+                if raw_convert_err:
+                    conn.send(("conversion_required", {
+                        "error": raw_convert_err,
+                        "sha256": task.get("src_sha256")
+                    }))
+                    return
+                conn.send(("ok", {
+                    "text": raw_text,
+                    "ocr_applied": False,
+                    "ocr_policy": task_ocr_policy,
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "markitdown-direct",
+                    "potential_quality_loss": None
+                }))
+                return
+
+            if task_ocr_policy == "enrich_source":
+                # Check digital signature
+                signature_state = is_digitally_signed_pdf(src_abs)
+                if signature_state is not False:
+                    print(f"Warning: Digitally signed PDF detected at '{src_abs}'. In-place OCR mutation is forbidden to protect signature integrity.", file=sys.stderr)
+                    conn.send(("conversion_required", {
+                        "error": "PDF signature could not be safely ruled out for in-place OCR",
+                        "sha256": task.get("src_sha256")
+                    }))
+                    return
+
+                # Check writability
+                if not os.access(get_safe_path(src_abs), os.W_OK):
+                    conn.send(("conversion_required", {
+                        "error": "Cloud source PDF is read-only; cannot enrich in-place",
+                        "sha256": task.get("src_sha256")
+                    }))
+                    return
+
+                ok, msg = run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=task_redo_ocr, timeout=task.get("file_timeout", 60), expected_src_sha256=task.get("src_sha256"), check_signature=True)
+                if not ok:
+                    conn.send(("conversion_required", {
+                        "error": f"OCR enrichment failed: {msg}",
+                        "sha256": task.get("src_sha256")
+                    }))
+                    return
+
+                fresh_sha256 = calculate_sha256(src_abs)
+                try:
+                    final_text = convert_to_markdown_raw(src_abs)
+                except Exception:
+                    final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF extrahiert]\n"
+                conn.send(("ok", {
+                    "text": final_text,
+                    "ocr_applied": True,
+                    "ocr_policy": "enrich_source",
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "ocrmypdf-inplace",
+                    "potential_quality_loss": None,
+                    "new_src_sha256": fresh_sha256,
+                    "new_src_size": os.path.getsize(get_safe_path(src_abs)),
+                    "new_src_mtime": os.stat(get_safe_path(src_abs)).st_mtime
+                }))
+            elif task_ocr_policy == "local_derivative":
+                derivative_abs = task["derivative_abs"]
+                cloud_path_abs = task.get("cloud_path_abs")
+                if cloud_path_abs:
+                    assert_not_in_cloud_dir(derivative_abs, cloud_path_abs)
+
+                os.makedirs(os.path.dirname(derivative_abs), exist_ok=True)
+                ok, msg = run_ocr_on_pdf(src_abs, dest_abs=derivative_abs, redo_ocr=task_redo_ocr, timeout=task.get("file_timeout", 60))
+                if not ok:
+                    conn.send(("conversion_required", {
+                        "error": f"OCR derivative creation failed: {msg}",
+                        "sha256": task.get("src_sha256")
+                    }))
+                    return
+
+                deriv_sha256 = calculate_sha256(derivative_abs)
+                try:
+                    final_text = convert_to_markdown_raw(derivative_abs)
+                except Exception:
+                    final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF-Derivat extrahiert]\n"
+                quality_loss_note = (
+                    "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt. "
+                    "Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
+                )
+                conn.send(("ok", {
+                    "text": final_text,
+                    "ocr_applied": True,
+                    "ocr_policy": "local_derivative",
+                    "derivative_path": task["derivative_rel"],
+                    "derivative_sha256": deriv_sha256,
+                    "conversion_method": "ocrmypdf-derivative",
+                    "potential_quality_loss": quality_loss_note
+                }))
+            else:
+                conn.send(("ok", {
+                    "text": raw_text,
+                    "ocr_applied": False,
+                    "ocr_policy": task_ocr_policy,
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "markitdown-direct",
+                    "potential_quality_loss": None
+                }))
         else:
-            res_text, ocr_applied = convert_to_markdown(src_abs, enable_ocr=enable_ocr)
+            res_text = convert_to_markdown_raw(src_abs)
             conn.send(("ok", {
                 "text": res_text,
-                "ocr_applied": ocr_applied,
+                "ocr_applied": False,
+                "ocr_policy": task_ocr_policy,
                 "derivative_path": None,
                 "derivative_sha256": None,
                 "conversion_method": "markitdown-direct",
@@ -434,10 +705,10 @@ def _convert_worker_target(task, conn, enable_ocr=True):
         except Exception:
             pass
 
-def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, total_count=None):
+def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_derivative", redo_ocr=False, total_count=None):
     if total_count is None:
         total_count = len(tasks)
-        
+
     results = {}
     if not tasks:
         return results
@@ -454,15 +725,15 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
             src_rel = task["src_rel"]
             size_str = format_size(task["stat"].st_size)
             doc_flag = " [.doc]" if task.get("is_doc") else ""
-            
+
             print(f"[{idx}/{total_count}] Converting{doc_flag} {src_rel} ({size_str}) ...", flush=True)
-            
+
             parent_conn, child_conn = multiprocessing.Pipe()
             task["file_timeout"] = file_timeout
-            proc = multiprocessing.Process(target=_convert_worker_target, args=(task, child_conn, enable_ocr))
+            proc = multiprocessing.Process(target=_convert_worker_target, args=(task, child_conn, ocr_policy, redo_ocr))
             proc.start()
             child_conn.close()
-            
+
             active_jobs.append({
                 "task": task,
                 "proc": proc,
@@ -495,6 +766,10 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
                             "derivative_sha256": payload.get("derivative_sha256"),
                             "conversion_method": payload.get("conversion_method"),
                             "potential_quality_loss": payload.get("potential_quality_loss"),
+                            "ocr_policy": payload.get("ocr_policy"),
+                            "new_src_sha256": payload.get("new_src_sha256"),
+                            "new_src_size": payload.get("new_src_size"),
+                            "new_src_mtime": payload.get("new_src_mtime"),
                             "error": None
                         }
                         ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""
@@ -532,6 +807,10 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, enable_ocr=True, to
                                 "derivative_sha256": payload.get("derivative_sha256"),
                                 "conversion_method": payload.get("conversion_method"),
                                 "potential_quality_loss": payload.get("potential_quality_loss"),
+                                "ocr_policy": payload.get("ocr_policy"),
+                                "new_src_sha256": payload.get("new_src_sha256"),
+                                "new_src_size": payload.get("new_src_size"),
+                                "new_src_mtime": payload.get("new_src_mtime"),
                                 "error": None
                             }
                             ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""
@@ -631,7 +910,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
     project_meta = None
     is_topic = force_topic
-    
+
     if not is_topic and os.path.exists(projects_file):
         try:
             with open(projects_file, "r", encoding="utf-8") as f:
@@ -661,10 +940,10 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
     title = project_id.upper()
     if meta:
         title = meta.get("kuerzel") or meta.get("title") or title
-        
+
     cloud_sync = meta.get("cloud_sync") if meta else None
     configs = {}
-    
+
     if not cloud_sync:
         configs["default"] = {
             "title": title,
@@ -694,10 +973,10 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             output_json = sconfig.get("output_json") or sconfig.get("filemap_json")
             output_md = sconfig.get("output_md") or sconfig.get("filemap_md")
             output_dir = sconfig.get("output_dir") or sconfig.get("cloud_mirror_dir")
-            
+
             suffix = f"-{sid}" if sid != "default" else ""
             stitle = f"{title} ({sid})" if sid != "default" else title
-            
+
             configs[sid] = {
                 "title": stitle,
                 "scan_dir": scan_dir or (f"data/cloud/{project_id.upper()}" if meta and meta.get("kuerzel") else f"data/cloud/{project_id}"),
@@ -706,21 +985,21 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
                 "is_topic": is_topic
             }
-                
+
     if storage_id:
         if storage_id in configs:
             return {storage_id: configs[storage_id]}
         else:
             print(f"Warning: Storage ID '{storage_id}' not found in configuration.")
             return {}
-            
+
     return configs
 
 
 AUTOMATED_METADATA_KEYS = {
     "version", "mtime", "size", "sha256",
     "markdown_mirror", "derivative",
-    "conversion_status", "conversion_error"
+    "conversion_status", "conversion_error", "ocr_applied", "ocr_policy"
 }
 
 def is_protected_output_file(rel_workspace_path, resolved_config=None):
@@ -731,7 +1010,7 @@ def is_protected_output_file(rel_workspace_path, resolved_config=None):
     if not normalized:
         return False
     basename = PurePosixPath(normalized).name.lower()
-    
+
     # Common protected filemap, manifest and index files
     if basename in ("filemap.md", "filemap.json", "index.md", "readme.md", "manifest.json"):
         return True
@@ -739,7 +1018,7 @@ def is_protected_output_file(rel_workspace_path, resolved_config=None):
         return True
     if basename.startswith("manifest") and (basename.endswith(".json") or basename.endswith(".md")):
         return True
-        
+
     if resolved_config:
         out_json = normalize_workspace_relative_path(resolved_config.get("output_json"))
         out_md = normalize_workspace_relative_path(resolved_config.get("output_md"))
@@ -754,21 +1033,21 @@ def merge_curated_metadata(existing_entry, new_entry):
     """
     if not isinstance(existing_entry, dict):
         return new_entry
-    
+
     result = dict(new_entry)
-    
+
     # Preserve manual description if existing was not default/empty
     existing_desc = existing_entry.get("description")
     if existing_desc and existing_desc != "-":
         result["description"] = existing_desc
     elif "description" not in result:
         result["description"] = existing_desc or "-"
-        
+
     # Preserve all other non-automated keys
     for k, v in existing_entry.items():
         if k not in AUTOMATED_METADATA_KEYS and k not in result:
             result[k] = v
-            
+
     return result
 
 def parse_markdown_file(filepath):
@@ -801,7 +1080,7 @@ def write_markdown_file(filepath, metadata, body):
             val_escaped = str(v).replace('"', '\\"')
             frontmatter_lines.append(f'{k}: "{val_escaped}"')
     frontmatter_lines.append("---")
-    
+
     os.makedirs(os.path.dirname(safe_path), exist_ok=True)
     with open(safe_path, "w", encoding="utf-8", errors="replace") as f:
         f.write("\n".join(frontmatter_lines) + "\n\n" + (body or ""))
@@ -809,12 +1088,17 @@ def write_markdown_file(filepath, metadata, body):
 def main():
     args = parse_args()
     workspace_root = os.path.abspath(args.workspace_root) if args.workspace_root else find_workspace_root()
-    
+
     project_id = args.project_id or args.topic_id
     is_topic = args.topic or (args.topic_id is not None)
-    
+
+    ocr_policy = args.ocr_policy
+    if args.no_ocr:
+        ocr_policy = "disabled"
+    redo_ocr = args.redo_ocr
+
     configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id)
-    
+
     if not configs:
         print(f"Error: No cloud sync configurations resolved for ID '{project_id}'.")
         return
@@ -824,17 +1108,17 @@ def main():
         cloud_dir = args.cloud_dir or resolved["scan_dir"]
         output_dir = args.output_dir or resolved["output_dir"]
         filemap_json = args.filemap_json or resolved["output_json"]
-        
+
         cloud_path_abs = os.path.normpath(os.path.join(workspace_root, cloud_dir))
         output_path_abs = os.path.normpath(os.path.join(workspace_root, output_dir))
         filemap_json_abs = os.path.normpath(os.path.join(workspace_root, filemap_json))
-        
+
         extensions = [ext.strip().lower() for ext in args.extensions.split(",")]
-        
+
         if not os.path.exists(cloud_path_abs):
             print(f"Error: Cloud directory '{cloud_path_abs}' does not exist.")
             continue
-            
+
         filemap_data = {}
         if os.path.exists(filemap_json_abs):
             try:
@@ -842,7 +1126,7 @@ def main():
                     filemap_data = json.load(f)
             except Exception as e:
                 print(f"Warning: Could not read filemap.json: {e}")
-                
+
         if not filemap_data:
             filemap_data = {
                 "project": project_id,
@@ -850,12 +1134,12 @@ def main():
                 "files": {}
             }
         files_in_json = filemap_data.setdefault("files", {})
-        
+
         processed_mirrors = set()
         processed_derivatives = set()
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         doc_converter = get_doc_converter()
-        
+
         # Collect raw scanned cloud files
         raw_scanned_files = []
         for root, dirs, filenames in os.walk(cloud_path_abs):
@@ -865,17 +1149,17 @@ def main():
                     continue
                 if f.startswith(".") or f.startswith("~$") or f.lower() == "desktop.ini":
                     continue
-                    
+
                 src_abs = os.path.join(root, f)
                 src_rel_workspace = os.path.relpath(src_abs, workspace_root).replace("\\", "/")
                 rel_to_cloud = os.path.relpath(src_abs, cloud_path_abs)
-                
+
                 is_doc = (ext == ".doc")
                 stat = os.stat(get_safe_path(src_abs))
                 src_mtime = datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                 src_version = get_file_version(f)
                 src_sha256 = calculate_sha256(src_abs)
-                
+
                 raw_scanned_files.append({
                     "src_abs": src_abs,
                     "src_rel": src_rel_workspace,
@@ -890,7 +1174,7 @@ def main():
                 })
 
         current_scanned_paths = {item["src_rel"] for item in raw_scanned_files}
-        
+
         # Build index of unmapped existing entries by sha256 to track renames/moves
         unmapped_by_sha256 = {}
         for old_path, old_info in files_in_json.items():
@@ -899,7 +1183,7 @@ def main():
 
         new_files_in_json = {}
         candidate_tasks = []
-        
+
         for item in raw_scanned_files:
             src_abs = item["src_abs"]
             src_rel_workspace = item["src_rel"]
@@ -907,11 +1191,12 @@ def main():
             f = item["filename"]
             ext = item["ext"]
             is_doc = item["is_doc"]
+            is_pdf = (ext == ".pdf")
             stat = item["stat"]
             src_mtime = item["src_mtime"]
             src_version = item["src_version"]
             src_sha256 = item["src_sha256"]
-            
+
             # Resolve existing metadata (by path or by sha256 rename)
             if src_rel_workspace in files_in_json:
                 base_existing = files_in_json[src_rel_workspace]
@@ -920,16 +1205,19 @@ def main():
                 print(f"Uebernehme Metadaten von verschobener/umbenannter Datei {old_path} -> {src_rel_workspace}")
             else:
                 base_existing = {}
-            
+
             dest_rel_workspace = os.path.join(output_dir, os.path.splitext(rel_to_cloud)[0] + ".md").replace("\\", "/")
             dest_abs = os.path.normpath(os.path.join(workspace_root, dest_rel_workspace))
-            
+
             derivative_rel_workspace = None
             derivative_abs = None
             if is_doc:
                 derivative_rel_workspace = os.path.join(output_dir, "_derivatives", os.path.splitext(rel_to_cloud)[0] + ".docx").replace("\\", "/")
                 derivative_abs = os.path.normpath(os.path.join(workspace_root, derivative_rel_workspace))
-            
+            elif is_pdf and ocr_policy == "local_derivative":
+                derivative_rel_workspace = os.path.join(output_dir, "_derivatives", os.path.splitext(rel_to_cloud)[0] + ".pdf").replace("\\", "/")
+                derivative_abs = os.path.normpath(os.path.join(workspace_root, derivative_rel_workspace))
+
             # Check converter availability for .doc files
             if is_doc and not doc_converter:
                 print(f"[SKIP] Kein .doc-Konverter verfuegbar fuer {src_rel_workspace} -> Katalogisiert als 'conversion_required'.")
@@ -944,11 +1232,16 @@ def main():
                 }
                 new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, raw_entry)
                 continue
-            
-            needs_conversion = args.force or not os.path.exists(get_safe_path(dest_abs))
+
+            needs_conversion = args.force or redo_ocr or not os.path.exists(get_safe_path(dest_abs))
             if is_doc and derivative_abs and not os.path.exists(get_safe_path(derivative_abs)):
                 needs_conversion = True
-                
+            if is_pdf and ocr_policy == "local_derivative" and derivative_abs:
+                if os.path.exists(get_safe_path(dest_abs)):
+                    existing_meta, _ = parse_markdown_file(dest_abs)
+                    if existing_meta and existing_meta.get("ocr_applied") == "true" and not os.path.exists(get_safe_path(derivative_abs)):
+                        needs_conversion = True
+
             existing_meta = None
             if not needs_conversion and os.path.exists(get_safe_path(dest_abs)):
                 existing_meta, body = parse_markdown_file(dest_abs)
@@ -957,7 +1250,9 @@ def main():
                         needs_conversion = True
                     elif existing_meta.get("original_sha256") and existing_meta.get("original_sha256") != src_sha256:
                         needs_conversion = True
-                    elif len(body.strip()) < 10 and existing_meta.get("ocr_applied") != "true" and not is_doc:
+                    elif is_pdf and ocr_policy != "disabled" and existing_meta.get("ocr_applied") != "true" and is_image_based_pdf(src_abs, body):
+                        needs_conversion = True
+                    elif len(body.strip()) < 10 and existing_meta.get("ocr_applied") != "true" and not is_doc and not is_pdf:
                         needs_conversion = True
                     else:
                         last_verified_str = existing_meta.get("last_verified_date")
@@ -974,12 +1269,12 @@ def main():
                                 needs_conversion = True
                 else:
                     needs_conversion = True
-                    
+
             if not needs_conversion:
                 processed_mirrors.add(dest_rel_workspace)
                 if derivative_rel_workspace:
                     processed_derivatives.add(derivative_rel_workspace)
-                    
+
             candidate_tasks.append({
                 "src_abs": src_abs,
                 "src_rel": src_rel_workspace,
@@ -990,9 +1285,12 @@ def main():
                 "src_sha256": src_sha256,
                 "stat": stat,
                 "is_doc": is_doc,
+                "is_pdf": is_pdf,
                 "derivative_abs": derivative_abs,
                 "derivative_rel": derivative_rel_workspace,
                 "cloud_path_abs": cloud_path_abs,
+                "ocr_policy": ocr_policy,
+                "redo_ocr": redo_ocr,
                 "needs_conversion": needs_conversion,
                 "base_existing": base_existing
             })
@@ -1013,7 +1311,7 @@ def main():
                 src_rel_workspace = t["src_rel"]
                 dest_rel_workspace = t["dest_rel"]
                 base_existing = t.get("base_existing", {})
-                
+
                 updated_entry = {
                     "version": t["src_version"],
                     "mtime": t["src_mtime"],
@@ -1025,14 +1323,16 @@ def main():
                 }
                 if t.get("derivative_rel") and os.path.exists(get_safe_path(t["derivative_abs"])):
                     deriv_sha = base_existing.get("derivative", {}).get("sha256") or calculate_sha256(t["derivative_abs"])
+                    deriv_format = "docx" if t.get("is_doc") else "pdf"
+                    default_conv = "libreoffice-headless" if t.get("is_doc") else "ocrmypdf-derivative"
                     updated_entry["derivative"] = {
                         "path": t["derivative_rel"],
                         "sha256": deriv_sha,
-                        "format": "docx",
-                        "conversion_method": base_existing.get("derivative", {}).get("conversion_method") or doc_converter or "libreoffice-headless",
+                        "format": deriv_format,
+                        "conversion_method": base_existing.get("derivative", {}).get("conversion_method") or default_conv,
                         "converted_at": base_existing.get("derivative", {}).get("converted_at") or now_str,
                         "potential_quality_loss": base_existing.get("derivative", {}).get("potential_quality_loss") or (
-                            f"Konvertierung von binärem .doc (Word 97-2003) über {doc_converter or 'libreoffice-headless'} nach .docx."
+                            f"Konvertierung von binärem .doc (Word 97-2003) über {doc_converter or 'libreoffice-headless'} nach .docx." if t.get("is_doc") else "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt."
                         )
                     }
                 new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, updated_entry)
@@ -1042,7 +1342,8 @@ def main():
                 tasks_to_convert,
                 file_timeout=args.file_timeout,
                 max_jobs=args.jobs,
-                enable_ocr=not args.no_ocr,
+                ocr_policy=ocr_policy,
+                redo_ocr=redo_ocr,
                 total_count=total_files
             )
 
@@ -1056,11 +1357,18 @@ def main():
                 if res.get("success"):
                     count_converted += 1
                     file_mtime = t["src_mtime"]
+                    file_size = t['stat'].st_size
                     try:
                         fresh_stat = os.stat(get_safe_path(t["src_abs"]))
                         file_mtime = datetime.datetime.fromtimestamp(fresh_stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
                     except Exception:
                         pass
+
+                    if res.get("new_src_sha256"):
+                        t["src_sha256"] = res["new_src_sha256"]
+                        file_size = res.get("new_src_size", file_size)
+                        if res.get("new_src_mtime") is not None:
+                            file_mtime = datetime.datetime.fromtimestamp(res["new_src_mtime"]).strftime("%Y-%m-%d %H:%M:%S")
 
                     metadata = {
                         "original_file": src_rel_workspace,
@@ -1070,11 +1378,11 @@ def main():
                         "file_date": file_mtime,
                         "last_verified_date": now_str
                     }
-                    
+
                     file_entry = {
                         "version": t["src_version"],
-                        "mtime": t["src_mtime"],
-                        "size": format_size(t['stat'].st_size),
+                        "mtime": file_mtime,
+                        "size": format_size(file_size),
                         "sha256": t["src_sha256"],
                         "description": "-",
                         "markdown_mirror": dest_rel_workspace,
@@ -1085,21 +1393,25 @@ def main():
                         metadata["derivative_file"] = res["derivative_path"]
                         metadata["derivative_sha256"] = res["derivative_sha256"]
                         metadata["conversion_method"] = res["conversion_method"]
-                        metadata["potential_quality_loss"] = res["potential_quality_loss"]
-                        
+                        if res.get("potential_quality_loss"):
+                            metadata["potential_quality_loss"] = res["potential_quality_loss"]
+
                         file_entry["derivative"] = {
                             "path": res["derivative_path"],
                             "sha256": res["derivative_sha256"],
-                            "format": "docx",
+                            "format": "docx" if t.get("is_doc") else "pdf",
                             "conversion_method": res["conversion_method"],
                             "converted_at": now_str,
-                            "potential_quality_loss": res["potential_quality_loss"]
+                            "potential_quality_loss": res.get("potential_quality_loss")
                         }
                         processed_derivatives.add(res["derivative_path"])
 
                     if res.get("ocr_applied"):
                         metadata["ocr_applied"] = "true"
+                        metadata["ocr_policy"] = res.get("ocr_policy", ocr_policy)
                         metadata["ocr_notice"] = "Hinweis: Text wurde mittels OCR aus einem Bild-PDF erfasst. Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
+                        file_entry["ocr_applied"] = True
+                        file_entry["ocr_policy"] = res.get("ocr_policy", ocr_policy)
 
                     # Safety check before writing mirror
                     assert_not_in_cloud_dir(dest_abs, cloud_path_abs)
@@ -1137,18 +1449,18 @@ def main():
                         continue
                     mirror_abs = os.path.join(root, f)
                     mirror_rel_workspace = os.path.relpath(mirror_abs, workspace_root).replace("\\", "/")
-                    
+
                     # Never delete protected files like filemap.md, index.md, etc.
                     if is_protected_output_file(mirror_rel_workspace, resolved):
                         continue
-                        
+
                     if mirror_rel_workspace not in processed_mirrors:
                         print(f"Removing orphaned mirror: {mirror_rel_workspace}")
                         try:
                             os.remove(get_safe_path(mirror_abs))
                         except Exception as e:
                             print(f"Error removing {mirror_rel_workspace}: {e}")
-                            
+
                         for src_rel, info in list(new_files_in_json.items()):
                             if info.get("markdown_mirror") == mirror_rel_workspace:
                                 del info["markdown_mirror"]
@@ -1192,7 +1504,7 @@ def main():
                             os.rmdir(get_safe_path(dir_path))
                     except Exception as e:
                         print(f"Warning removing empty subdirectory {dir_path}: {e}")
-                                
+
         # Save filemap.json back with current active files
         filemap_data["files"] = new_files_in_json
         filemap_data["updated_at"] = now_str
@@ -1202,5 +1514,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

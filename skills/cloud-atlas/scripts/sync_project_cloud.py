@@ -16,6 +16,8 @@ def parse_args():
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
     parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
+    parser.add_argument("--ocr-policy", choices=["enrich_source", "local_derivative", "disabled"], default="local_derivative", help="OCR-Policy fuer PDFs")
+    parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge die Neuerstellung bestehender OCR-Ebenen")
     return parser.parse_args()
 
 def main():
@@ -43,6 +45,10 @@ def main():
         cmd_convert.extend(["--storage-id", args.storage_id])
     if args.no_ocr:
         cmd_convert.append("--no-ocr")
+    else:
+        cmd_convert.extend(["--ocr-policy", args.ocr_policy])
+    if args.redo_ocr:
+        cmd_convert.append("--redo-ocr")
         
     print(f"=== Schritt 1: Konvertiere Cloud-Dokumente fuer ID '{target_id}' ===")
     res_convert = subprocess.run(cmd_convert)
