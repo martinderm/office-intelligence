@@ -5,11 +5,45 @@ import re
 import json
 import argparse
 import hashlib
+import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 
 MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
+
+
+def atomic_write_text(filepath, content):
+    """Atomically replace a UTF-8 text file using a flushed sibling temporary file."""
+    target_path = Path(os.path.abspath(filepath))
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_fd, temp_name = tempfile.mkstemp(
+        prefix=f".{target_path.name}.",
+        suffix=".tmp",
+        dir=str(target_path.parent),
+    )
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8", newline="\n") as temp_file:
+            temp_fd = None
+            temp_file.write(content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_name, target_path)
+    finally:
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(temp_name)
+        except OSError:
+            pass
+
+
+def write_json_file(filepath, data):
+    """Serialize JSON and atomically replace the destination file."""
+    atomic_write_text(filepath, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def normalize_workspace_relative_path(path_value):
@@ -377,8 +411,7 @@ def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id
                                 updated = True
             
             if updated:
-                with open(json_file, "w", encoding="utf-8") as f:
-                    json.dump(items, f, indent=2, ensure_ascii=False)
+                write_json_file(json_file, items)
                 print(f"Updated 'last_synced_at' timestamp for '{storage_id}' in {json_file}")
                 break
         except Exception as e:
@@ -525,9 +558,7 @@ def main():
             "files": files_data
         }
         
-        os.makedirs(os.path.dirname(output_json_abs), exist_ok=True)
-        with open(output_json_abs, "w", encoding="utf-8") as f:
-            json.dump(json_output_data, f, indent=2, ensure_ascii=False)
+        write_json_file(output_json_abs, json_output_data)
         print(f"Updated {output_json_abs}")
 
         # Generate Markdown File
@@ -604,9 +635,7 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
 
         md_content += "\n".join(table_rows) + "\n"
         
-        os.makedirs(os.path.dirname(output_md_abs), exist_ok=True)
-        with open(output_md_abs, "w", encoding="utf-8") as f:
-            f.write(md_content)
+        atomic_write_text(output_md_abs, md_content)
         print(f"Updated {output_md_abs}")
         
         # Update last_synced_at in projects.json / topics.json

@@ -1072,8 +1072,40 @@ def parse_markdown_file(filepath):
         print(f"Warning parsing markdown {filepath}: {e}")
     return None, ""
 
+def atomic_write_text(filepath, content):
+    """Atomically replace a UTF-8 text file using a flushed sibling temporary file."""
+    target_path = Path(os.path.abspath(filepath))
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_fd, temp_name = tempfile.mkstemp(
+        prefix=f".{target_path.name}.",
+        suffix=".tmp",
+        dir=str(target_path.parent),
+    )
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8", errors="replace", newline="\n") as temp_file:
+            temp_fd = None
+            temp_file.write(content)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(get_safe_path(temp_name), get_safe_path(str(target_path)))
+    finally:
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+        try:
+            os.unlink(get_safe_path(temp_name))
+        except OSError:
+            pass
+
+
+def write_json_file(filepath, data):
+    """Serialize JSON and atomically replace the destination file."""
+    atomic_write_text(filepath, json.dumps(data, indent=2, ensure_ascii=False))
+
+
 def write_markdown_file(filepath, metadata, body):
-    safe_path = get_safe_path(filepath)
     frontmatter_lines = ["---"]
     for k, v in metadata.items():
         if v is not None:
@@ -1081,9 +1113,7 @@ def write_markdown_file(filepath, metadata, body):
             frontmatter_lines.append(f'{k}: "{val_escaped}"')
     frontmatter_lines.append("---")
 
-    os.makedirs(os.path.dirname(safe_path), exist_ok=True)
-    with open(safe_path, "w", encoding="utf-8", errors="replace") as f:
-        f.write("\n".join(frontmatter_lines) + "\n\n" + (body or ""))
+    atomic_write_text(filepath, "\n".join(frontmatter_lines) + "\n\n" + (body or ""))
 
 def main():
     args = parse_args()
@@ -1508,8 +1538,7 @@ def main():
         # Save filemap.json back with current active files
         filemap_data["files"] = new_files_in_json
         filemap_data["updated_at"] = now_str
-        with open(filemap_json_abs, "w", encoding="utf-8") as f:
-            json.dump(filemap_data, f, indent=2, ensure_ascii=False)
+        write_json_file(filemap_json_abs, filemap_data)
         print(f"Saved filemap JSON to {filemap_json_abs}")
 
 if __name__ == "__main__":

@@ -581,6 +581,76 @@ class DocConversionTests(unittest.TestCase):
         self.assertEqual(pdf_file.read_bytes(), original)
         self.assertEqual(list(self.cloud_dir.glob(".ocr-stage-*.pdf")), [])
 
+    def test_atomic_markdown_interruption_preserves_existing_mirror_and_cleans_temp(self):
+        """An interruption before promotion leaves an existing Markdown mirror intact."""
+        mirror = self.output_dir / "Atomic_Mirror.md"
+        original = b"existing mirror\r\n"
+        mirror.write_bytes(original)
+
+        with mock.patch.object(convert_cloud_docs.os, "fsync", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                convert_cloud_docs.write_markdown_file(
+                    str(mirror),
+                    {"original_file": "data/cloud/TEST_PROJ/Atomic_Mirror.pdf"},
+                    "replacement body",
+                )
+
+        self.assertEqual(mirror.read_bytes(), original)
+        self.assertEqual(list(self.output_dir.glob(".Atomic_Mirror.md.*.tmp")), [])
+
+    def test_atomic_markdown_write_failure_preserves_existing_mirror_and_cleans_temp(self):
+        """A partial sibling write failure cannot truncate the existing mirror."""
+        mirror = self.output_dir / "Write_Failure.md"
+        original = b"existing mirror\r\n"
+        mirror.write_bytes(original)
+        real_fdopen = convert_cloud_docs.os.fdopen
+
+        class FailingWriter:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self.stream.close()
+
+            def write(self, content):
+                self.stream.write(content[:8])
+                raise OSError("simulated write failure")
+
+            def flush(self):
+                self.stream.flush()
+
+            def fileno(self):
+                return self.stream.fileno()
+
+        def failing_fdopen(fd, *args, **kwargs):
+            return FailingWriter(real_fdopen(fd, *args, **kwargs))
+
+        with mock.patch.object(convert_cloud_docs.os, "fdopen", side_effect=failing_fdopen):
+            with self.assertRaisesRegex(OSError, "simulated write failure"):
+                convert_cloud_docs.write_markdown_file(str(mirror), {}, "replacement body")
+
+        self.assertEqual(mirror.read_bytes(), original)
+        self.assertEqual(list(self.output_dir.glob(".Write_Failure.md.*.tmp")), [])
+
+    def test_atomic_filemap_replace_failure_preserves_existing_status_and_cleans_temp(self):
+        """A failed filemap promotion preserves the previous valid status document."""
+        filemap = self.output_dir / "filemap.json"
+        original = b'{"files":{"existing":{"conversion_status":"converted"}}}\r\n'
+        filemap.write_bytes(original)
+
+        with mock.patch.object(convert_cloud_docs.os, "replace", side_effect=OSError("replace failed")):
+            with self.assertRaisesRegex(OSError, "replace failed"):
+                convert_cloud_docs.write_json_file(
+                    str(filemap),
+                    {"files": {"replacement": {"conversion_status": "conversion_required"}}},
+                )
+
+        self.assertEqual(filemap.read_bytes(), original)
+        self.assertEqual(list(self.output_dir.glob(".filemap.json.*.tmp")), [])
+
     def test_redo_ocr_overrides_scan_detection(self):
         """Explicit redo reaches the OCR path even when a text layer is present."""
         pdf_file = self.cloud_dir / "Already_Ocred.pdf"
