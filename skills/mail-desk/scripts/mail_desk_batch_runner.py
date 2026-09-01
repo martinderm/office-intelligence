@@ -31,14 +31,19 @@ from core import (
     append_action_log_entry,
     append_replies_needed_entry,
     auto_resolve_replies_from_sent,
+    backfill_index_signatures,
+    build_signature_index,
     check_if_replied,
     classify_email,
     draft_manifest,
+    extract_email_address,
+    flush_batch_evidence,
     get_single_email_details,
     load_catalogs,
     load_final_index,
     load_sent_index,
     normalize_message_id,
+    normalize_signature_text,
     resolve_case,
     resolve_data_dir,
     resolve_final_index_path,
@@ -46,7 +51,6 @@ from core import (
     save_final_index_atomic,
     search_mailbox,
     sync_sent_items,
-    flush_batch_evidence,
     update_evidence_file,
     utc_now_iso,
     verify_in_target_folder,
@@ -115,22 +119,91 @@ def get_unprocessed_emails(
     folder: str,
     target_count: int,
     order: str = "oldest",
+    date: str | None = None,
+    query: str | None = None,
     account: str | None = None,
     data_dir: Path | None = None,
     skip_known: bool = True,
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Fetch target_count unprocessed (or all) emails in oldest or newest order reliably."""
+    """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably."""
     dd = data_dir or resolve_data_dir()
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
+    signature_index = build_signature_index(dd)
 
-    fetch_sizes = [max(target_count * 4, 150), 300, 600, 1000] if skip_known else [target_count]
     collected: list[dict[str, Any]] = []
     known_count = 0
-
     inspected_eids: set[str] = set()
+
+    # Fast direct path if date or query filter is provided
+    if date or query:
+        search_arg = f"date {date}" if date else str(query)
+        if tracker:
+            tracker.step(f"listing_envelopes ({search_arg})")
+        out = run_himalaya(
+            ["-o", "json", "envelope", "list", "-f", folder, "-s", str(max(target_count * 2, 50)), search_arg],
+            account=account,
+            timeout=45,
+            max_retries=2,
+        )
+        if "[" in out:
+            out = out[out.find("["):]
+        candidate_envs = json.loads(out) if out.strip().startswith("[") else []
+
+        for env in candidate_envs:
+            eid = str(env.get("id"))
+            if eid in inspected_eids:
+                continue
+            inspected_eids.add(eid)
+
+            # Fast O(1) in-memory signature check before making any IMAP network calls
+            env_subj = normalize_signature_text(env.get("subject"))
+            from_info = env.get("from")
+            from_addr_str = from_info.get("addr") if isinstance(from_info, dict) else str(from_info or "")
+            env_from = extract_email_address(from_addr_str)
+            matched_entry = signature_index.get((env_subj, env_from)) or signature_index.get((env_subj, ""))
+
+            if matched_entry and skip_known:
+                known_count += 1
+                if tracker:
+                    tracker.step("skipping_known_email", envelope_id=eid, subject=env.get("subject", ""))
+                continue
+
+            if tracker:
+                tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
+            email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
+            mid = email_res.get("message_id")
+            is_known = bool((mid and mid in known_items) or matched_entry)
+
+            if is_known:
+                known_count += 1
+                email_res["is_known"] = True
+                email_res["known_location"] = (
+                    (known_items.get(mid, {}) if mid else {}).get("final_folder")
+                    or (matched_entry.get("final_folder") if matched_entry else None)
+                )
+                if skip_known:
+                    if tracker:
+                        tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
+                    continue
+            else:
+                email_res["is_known"] = False
+                email_res["known_location"] = None
+
+            collected.append(email_res)
+            if tracker:
+                tracker.advance_item(envelope_id=eid, subject=email_res.get("subject", ""), step_name="inspected")
+            time.sleep(0.02)
+
+            if len(collected) >= target_count:
+                return collected, known_count
+
+        return collected, known_count
+
+    fetch_sizes = [max(target_count * 2, 25), max(target_count * 4, 50), 100] if skip_known else [target_count]
+
     for f_size in fetch_sizes:
         if tracker:
             tracker.step(f"listing_envelopes (fetch_count={f_size})")
@@ -147,16 +220,32 @@ def get_unprocessed_emails(
                 continue
             inspected_eids.add(eid)
 
+            # Fast O(1) in-memory signature check before making any IMAP network calls
+            env_subj = normalize_signature_text(env.get("subject"))
+            from_info = env.get("from")
+            from_addr_str = from_info.get("addr") if isinstance(from_info, dict) else str(from_info or "")
+            env_from = extract_email_address(from_addr_str)
+            matched_entry = signature_index.get((env_subj, env_from)) or signature_index.get((env_subj, ""))
+
+            if matched_entry and skip_known:
+                known_count += 1
+                if tracker:
+                    tracker.step("skipping_known_email", envelope_id=eid, subject=env.get("subject", ""))
+                continue
+
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
             email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
             mid = email_res.get("message_id")
-            is_known = bool(mid and mid in known_items)
+            is_known = bool((mid and mid in known_items) or matched_entry)
 
             if is_known:
                 known_count += 1
                 email_res["is_known"] = True
-                email_res["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
+                email_res["known_location"] = (
+                    (known_items.get(mid, {}) if mid else {}).get("final_folder")
+                    or (matched_entry.get("final_folder") if matched_entry else None)
+                )
                 if skip_known:
                     if tracker:
                         tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
@@ -191,6 +280,8 @@ def run_inspect_mode(
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
     order = str(config.get("order", "oldest")).lower()
+    date = config.get("date")
+    query = config.get("query")
     threads = min(int(config.get("threads", 2)), 2)
     preview_lines = int(config.get("preview_lines", 30))
     explicit_ids = config.get("envelope_ids")
@@ -224,14 +315,16 @@ def run_inspect_mode(
                     res = fut.result()
                     results_map[res["envelope_id"]] = res
             ordered_emails = [results_map[eid] for eid in target_env_ids if eid in results_map]
-    elif skip_known:
+    elif skip_known or date or query:
         ordered_emails, known_count = get_unprocessed_emails(
             folder=folder,
             target_count=count,
             order=order,
+            date=date,
+            query=query,
             account=account,
             data_dir=dd,
-            skip_known=True,
+            skip_known=skip_known,
             preview_lines=preview_lines,
         )
     else:
@@ -314,6 +407,8 @@ def run_draft_mode(
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
     order = str(config.get("order", "oldest")).lower()
+    date = config.get("date")
+    query = config.get("query")
     preview_lines = int(config.get("preview_lines", 30))
     output_file = config.get("output_file", str(dd / "batch-manifest.json"))
     inspected_file = config.get("inspected_file") or (dd / "batch-inspected.json")
@@ -327,7 +422,7 @@ def run_draft_mode(
     emails: list[dict[str, Any]] = []
 
     # Fast path: check if batch-inspected.json exists and has valid unhandled emails
-    if not config.get("force_fetch") and Path(inspected_file).exists():
+    if not config.get("force_fetch") and not date and not query and Path(inspected_file).exists():
         try:
             with Path(inspected_file).open("r", encoding="utf-8") as f:
                 idata = json.load(f)
@@ -343,6 +438,8 @@ def run_draft_mode(
             folder=folder,
             target_count=count,
             order=order,
+            date=date,
+            query=query,
             account=account,
             data_dir=dd,
             skip_known=True,
@@ -473,6 +570,7 @@ def run_execute_mode(
             if not routing_ok:
                 try:
                     run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account, timeout=45, max_retries=2)
+                    time.sleep(0.3)
                     new_env_id = verify_in_target_folder(
                         target_folder,
                         norm_mid,
@@ -481,6 +579,16 @@ def run_execute_mode(
                         date_str=date_str,
                         account=account,
                     )
+                    if not new_env_id:
+                        time.sleep(0.5)
+                        new_env_id = verify_in_target_folder(
+                            target_folder,
+                            norm_mid,
+                            subject=subject,
+                            from_addr=from_str,
+                            date_str=date_str,
+                            account=account,
+                        )
                     if new_env_id:
                         routing_ok = True
                         try:
@@ -523,6 +631,9 @@ def run_execute_mode(
                 "envelope_id": str(new_env_id) if new_env_id else str(env_id),
                 "in_reply_to": item.get("in_reply_to", ""),
                 "references": item.get("references", []),
+                "subject": subject,
+                "from": from_str,
+                "date": date_str or utc_now_iso(),
                 "updated_at": utc_now_iso(),
             }
             index_items[norm_mid] = idx_entry

@@ -20,6 +20,9 @@ ALLOWED_FIELDS = {
     "gmail_thread_id",
     "in_reply_to",
     "references",
+    "subject",
+    "from",
+    "date",
     "updated_at",
 }
 
@@ -213,3 +216,115 @@ def lookup_final_index(index_path: Path, message_id: str) -> dict[str, Any] | No
     data = load_final_index(index_path)
     norm = normalize_message_id(message_id)
     return data.get("items", {}).get(norm)
+
+
+def normalize_signature_text(text: str | None) -> str:
+    """Normalize text for signature matching (lowercase, collapsed whitespace)."""
+    if not text:
+        return ""
+    import re
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def extract_email_address(from_str: str | None) -> str:
+    """Extract lowercase email address or fallback to normalized string."""
+    if not from_str:
+        return ""
+    import re
+    m = re.search(r"[\w\.-]+@[\w\.-]+", from_str)
+    return m.group(0).lower() if m else normalize_signature_text(from_str)
+
+
+def build_signature_index(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
+    """Build fast in-memory signature lookup map from final index and action log."""
+    index_data = load_final_index(data_dir / "final-location-index.json")
+    items = index_data.get("items", {})
+
+    signatures: dict[tuple[str, str], dict[str, Any]] = {}
+
+    # 1. From final index entries
+    for mid, val in items.items():
+        if not isinstance(val, dict):
+            continue
+        subj = normalize_signature_text(val.get("subject"))
+        from_addr = extract_email_address(val.get("from"))
+        if subj:
+            signatures[(subj, from_addr)] = val
+            if (subj, "") not in signatures:
+                signatures[(subj, "")] = val
+
+    # 2. From action-log.jsonl entries
+    action_log_path = data_dir / "action-log.jsonl"
+    if action_log_path.exists():
+        try:
+            with action_log_path.open("r", encoding="utf-8") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        rec = json.loads(line)
+                        mid = normalize_message_id(rec.get("message_id", ""))
+                        if not mid:
+                            continue
+                        subj = normalize_signature_text(rec.get("subject"))
+                        from_addr = extract_email_address(rec.get("from"))
+                        target = rec.get("action", {}).get("target_folder") or rec.get("action", {}).get("target_label")
+                        entry_info = {
+                            "message_id": mid,
+                            "final_folder": target,
+                            "final_label": target,
+                            "subject": rec.get("subject"),
+                            "from": rec.get("from"),
+                        }
+                        if subj:
+                            signatures[(subj, from_addr)] = entry_info
+                            if (subj, "") not in signatures:
+                                signatures[(subj, "")] = entry_info
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    return signatures
+
+
+def backfill_index_signatures(data_dir: Path) -> int:
+    """Backfill missing subject/from/date in final-location-index.json from action-log.jsonl."""
+    index_path = data_dir / "final-location-index.json"
+    index_data = load_final_index(index_path)
+    items = index_data.get("items", {})
+
+    action_log_path = data_dir / "action-log.jsonl"
+    if not action_log_path.exists():
+        return 0
+
+    enriched = 0
+    with action_log_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                mid = normalize_message_id(rec.get("message_id", ""))
+                if mid and mid in items:
+                    item = items[mid]
+                    updated = False
+                    if not item.get("subject") and rec.get("subject"):
+                        item["subject"] = rec.get("subject")
+                        updated = True
+                    if not item.get("from") and rec.get("from"):
+                        item["from"] = rec.get("from")
+                        updated = True
+                    if not item.get("date") and rec.get("at"):
+                        item["date"] = rec.get("at")
+                        updated = True
+                    if updated:
+                        enriched += 1
+            except Exception:
+                continue
+
+    if enriched > 0:
+        index_data["updated_at"] = utc_now_iso()
+        save_final_index_atomic(index_path, index_data)
+
+    return enriched

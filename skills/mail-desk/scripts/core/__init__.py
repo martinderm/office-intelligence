@@ -16,8 +16,12 @@ from .himalaya import (
     verify_in_target_folder,
 )
 from .index import (
+    backfill_index_signatures,
+    build_signature_index,
+    extract_email_address,
     load_final_index,
     lookup_final_index,
+    normalize_signature_text,
     query_final_index,
     save_final_index_atomic,
     upsert_final_index_entry,
