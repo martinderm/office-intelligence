@@ -25,6 +25,22 @@ Der Skill kapselt folgende Aufgaben:
 3. **Fallback & Katalogisierung (`conversion_required`)**: Fehlt ein Konverter für `.doc`-Dateien, scheitert die OCR-Verarbeitung oder ist ein PDF digital signiert bei `enrich_source`, bricht der Scan nicht ab; die Datei wird vollständig katalogisiert und als `conversion_required` markiert.
 4. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen und Derivate unter `_derivatives/` (wenn das Original in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse.
 
+### Mutations- und Lock-Vorbedingung
+
+`sync_project_cloud.py`, `convert_cloud_docs.py` und `gen_filemap.py` mutieren je nach
+Lauf lokale Mirrors, Derivate, Filemaps, Katalogzeitstempel und bei explizitem
+`enrich_source` ein Cloud-PDF. Vor jedem solchen Lauf ist der **konsumierende
+Ziel-Workspace** mittels `workspace-lock` zu sperren. Die Lease muss dem ausführenden
+Harness gehören. Ein aktiver fremder Lock (Tier 1) stoppt den Lauf. Ein eindeutig stale
+Lock darf nur über das reguläre Tier-2-Takeover von `workspace-lock` übernommen werden;
+ein Force-Unlock/-Override (Tier 3) erfordert explizite Human Approval und ist nie
+autonom zulässig. Bei fehlender oder nicht verifizierbarer Ownership wird nicht mutiert.
+
+Bis der technische Guard aus OI-03 verfügbar ist, prüft der Operator diese Bedingung
+vor dem Aufruf und hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ein lockfreier
+Lauf ist ausschließlich ein expliziter Single-Session-Legacy-Modus: keine parallelen
+Writer, sichtbare Warnung und dokumentierte Ausnahme. Er ist nie der sichere Default.
+
 ---
 
 ## 2. Konfiguration & Datenmodell (Schema)

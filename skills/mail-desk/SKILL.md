@@ -17,6 +17,29 @@ Daraus folgen zwei Regeln:
 
 Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht loggen, dann nur bei klarer Lage die backend-spezifische Routing-Aktion ausführen.
 
+## Mutations- und Lock-Vorbedingung
+
+Vor jeder schreibenden oder bewegenden Aktion im konsumierenden Workspace muss dessen
+`workspace-lock` mit einer Lease des ausführenden Harnesses erworben sein. Das gilt für
+`data/mail-desk/*`, Final-Index, Evidenz- und Referenzupdates, Archivierung sowie jede
+Mailbox-Aktion wie Copy, Move oder Delete. Ein aktiver fremder Lock (Tier 1) stoppt
+lokale Mutationen. Ein eindeutig stale Lock darf ausschließlich über das reguläre
+Tier-2-Takeover von `workspace-lock` übernommen werden. Ein Force-Unlock/-Override
+(Tier 3) erfordert explizite Human Approval und ist nie autonom zulässig. Bei fehlender
+oder nicht eindeutig verifizierbarer Ownership wird nicht mutiert.
+
+Der Workspace-Lock serialisiert ausschließlich lokale Harnesses und schützt weder die
+Mailbox noch andere externe Clients vor gleichzeitigen Änderungen. Copy-, Move- und
+Delete-Aktionen benötigen daher zusätzlich die adapterseitigen Preconditions und
+Idempotenz-/Verifikationsschritte gegen externe Zustandsänderungen; der Lock ersetzt
+diese Anforderungen nicht.
+
+Bis OI-03 den gemeinsamen Guard technisch erzwingt, ist der Lock vor der Aktion
+operativ zu prüfen und Erwerb, Lease-Status und Freigabe im Handoff zu dokumentieren.
+Ohne Lock darf nur ein ausdrücklich gewählter Single-Session-Legacy-Modus laufen:
+keine parallelen Writer, sichtbare Warnung und dokumentierter Verzicht. Er ist keine
+stille Fallback-Regel.
+
 ## Backend wählen
 
 `mail-desk` enthält die fachliche Arbeitsweise, aber keinen eigenen Mailbox-Zugriff. Wähle vor jeder Verarbeitung genau einen Backend-Adapter und lies ihn vollständig:

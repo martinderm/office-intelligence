@@ -7,6 +7,24 @@ description: Umfassende Orchestrierungs-Suite für alle täglichen Office-, Wiss
 
 Zentrale Orchestrierungs- und Workflow-Suite für alle operativen Büro-, Kommunikations- und Wissensmanagement-Aufgaben im Agenten-Workspace.
 
+## Mutations- und Lock-Vertrag
+
+Lesende Auswertungen dürfen ohne Lock erfolgen. Vor **jeder** lokalen Mutation, die ein
+verbrauchender Workspace durch dieses Bundle ausführt – einschließlich Konvertierung,
+Filemap-/Katalog-/Mirror-Write, Evidenz- oder Mail-Desk-State, JSONL-Append sowie
+Verschieben oder Löschen – muss der Ziel-Workspace mit `workspace-lock` gesperrt sein.
+Die Lease muss dem ausführenden Harness gehören. Ein aktiver fremder Lock (Tier 1) ist
+ein Stoppsignal. Ein eindeutig stale Lock darf ausschließlich über das reguläre
+Tier-2-Takeover von `workspace-lock` übernommen werden; dieses protokolliert den
+vorherigen Lock. Ein Force-Unlock/-Override (Tier 3) ist nur nach expliziter Human
+Approval zulässig und wird nie autonom ausgeführt.
+
+Der gemeinsame technische Guard liegt im Shared Skill `workspace-lock` unter
+`scripts/workspace_lock_guard.py`. Ein Lauf ohne Lock ist nur über dessen expliziten
+Single-Session-Legacy-Modus zulässig: keine weiteren Harnesses dürfen schreiben, der
+Warnhinweis wird sichtbar ausgegeben und der Verzicht im Run-Nachweis dokumentiert.
+Fehlender Lock bedeutet sonst: nicht mutieren.
+
 ---
 
 ## 🧭 Verfügbare Fach-Desks unter `skills/`
