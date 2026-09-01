@@ -12,6 +12,8 @@ import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from core.metadata import build_cloud_artifact_metadata
+
 if hasattr(sys.stdout, 'reconfigure'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -24,6 +26,33 @@ if hasattr(sys.stderr, 'reconfigure'):
         pass
 
 DEFAULT_EXTENSIONS = ".pdf,.docx,.xlsx,.pptx,.doc"
+
+# Mirrors are Cloud-zone artifacts.  New writes are deliberately constrained to
+# the data-zone schema properties so conversion/OCR implementation details stay
+# in filemap.json instead of becoming an unbounded frontmatter format.
+CANONICAL_CLOUD_FRONTMATTER_KEYS = frozenset({
+    "zone", "trust_level", "status", "source_uri", "source_version",
+    "source_sha256", "artifact_sha256", "synced_at", "converter",
+    "data_classification", "retention_class", "owner",
+    "instructions_are_data", "origin_classifications", "export_policy",
+    "promotion_policy",
+})
+REQUIRED_CLOUD_FRONTMATTER_KEYS = frozenset({
+    "zone", "trust_level", "status", "source_uri", "source_sha256",
+    "artifact_sha256", "synced_at", "converter", "data_classification",
+    "retention_class", "owner", "instructions_are_data",
+})
+
+
+def calculate_markdown_payload_sha256(markdown_body):
+    """Hash the converted Markdown payload, never the full self-referential file.
+
+    ``artifact_sha256`` represents exactly the UTF-8 bytes of the Markdown body
+    supplied to the mirror writer.  It intentionally excludes frontmatter (and
+    therefore its own field) plus the separator added by the file serializer.
+    """
+    payload = (markdown_body or "").encode("utf-8", errors="replace")
+    return hashlib.sha256(payload).hexdigest()
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Automatische Konvertierung von Cloud-Dateien zu Markdown (inkl. kontrollierter .doc-Unterstützung).")
@@ -906,6 +935,35 @@ def find_workspace_root(start_dir=None):
         current = parent
     return os.path.abspath(start_dir or os.getcwd())
 
+
+def resolve_cloud_metadata_policy(project_or_topic, storage_config, identifier, is_topic):
+    """Return deterministic metadata policy from declared configuration.
+
+    Storage values intentionally override project/topic values.  The package
+    defaults are stable and do not inspect the host, current user, or clock.
+    """
+    project_or_topic = project_or_topic if isinstance(project_or_topic, dict) else {}
+    storage_config = storage_config if isinstance(storage_config, dict) else {}
+    owner_prefix = "topic" if is_topic else "project"
+    return {
+        "data_classification": (
+            storage_config.get("data_classification")
+            or project_or_topic.get("data_classification")
+            or "internal"
+        ),
+        "retention_class": (
+            storage_config.get("retention_class")
+            or project_or_topic.get("retention_class")
+            or "project-lifecycle"
+        ),
+        "owner": (
+            storage_config.get("owner")
+            or project_or_topic.get("owner")
+            or f"{owner_prefix}:{identifier}"
+        ),
+    }
+
+
 def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None):
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
     project_meta = None
@@ -951,7 +1009,8 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_json": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.json",
             "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
             "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
-            "is_topic": is_topic
+            "is_topic": is_topic,
+            **resolve_cloud_metadata_policy(meta, {}, project_id, is_topic),
         }
         kuerzel = (meta.get("kuerzel") or project_id) if meta else project_id
         folder_candidates = [
@@ -983,7 +1042,8 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_json": output_json or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.json",
                 "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
-                "is_topic": is_topic
+                "is_topic": is_topic,
+                **resolve_cloud_metadata_policy(meta, sconfig, project_id, is_topic),
             }
 
     if storage_id:
@@ -1051,6 +1111,12 @@ def merge_curated_metadata(existing_entry, new_entry):
     return result
 
 def parse_markdown_file(filepath):
+    """Read canonical or legacy mirror frontmatter without rewriting either.
+
+    Callers needing provenance should use ``mirror_source_sha256`` below: it
+    maps the legacy ``original_sha256`` field to the canonical source semantic.
+    Raw legacy keys remain exposed for compatibility with existing consumers.
+    """
     safe_path = get_safe_path(filepath)
     if not os.path.exists(safe_path):
         return None, ""
@@ -1066,11 +1132,36 @@ def parse_markdown_file(filepath):
                 for line in frontmatter_str.strip().split("\n"):
                     if ":" in line:
                         k, v = line.split(":", 1)
-                        metadata[k.strip()] = v.strip().strip('"').strip("'")
+                        key = k.strip()
+                        value = v.strip().strip('"').strip("'")
+                        if key == "instructions_are_data" and value.lower() in {"true", "false"}:
+                            metadata[key] = value.lower() == "true"
+                        else:
+                            metadata[key] = value
+                if body.startswith("\r\n\r\n"):
+                    body = body[4:]
+                elif body.startswith("\n\n"):
+                    body = body[2:]
                 return metadata, body
     except Exception as e:
         print(f"Warning parsing markdown {filepath}: {e}")
     return None, ""
+
+
+def mirror_source_sha256(metadata):
+    """Return source hash from canonical or legacy frontmatter semantics."""
+    if not isinstance(metadata, dict):
+        return None
+    return metadata.get("source_sha256") or metadata.get("original_sha256")
+
+
+def mirror_ocr_applied(metadata, filemap_entry):
+    """Read OCR state from the legacy mirror or the authoritative filemap."""
+    if isinstance(filemap_entry, dict) and filemap_entry.get("ocr_applied") is True:
+        return True
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get("ocr_applied") in (True, "true")
 
 def atomic_write_text(filepath, content):
     """Atomically replace a UTF-8 text file using a flushed sibling temporary file."""
@@ -1106,11 +1197,24 @@ def write_json_file(filepath, data):
 
 
 def write_markdown_file(filepath, metadata, body):
+    """Atomically write one canonical Cloud-zone Markdown mirror."""
+    if not isinstance(metadata, dict):
+        raise ValueError("canonical cloud frontmatter must be a dictionary")
+    unexpected = set(metadata) - CANONICAL_CLOUD_FRONTMATTER_KEYS
+    missing = REQUIRED_CLOUD_FRONTMATTER_KEYS - set(metadata)
+    if unexpected:
+        raise ValueError(f"non-canonical cloud frontmatter keys: {sorted(unexpected)}")
+    if missing:
+        raise ValueError(f"missing canonical cloud frontmatter keys: {sorted(missing)}")
+
     frontmatter_lines = ["---"]
     for k, v in metadata.items():
         if v is not None:
-            val_escaped = str(v).replace('"', '\\"')
-            frontmatter_lines.append(f'{k}: "{val_escaped}"')
+            if isinstance(v, bool):
+                frontmatter_lines.append(f"{k}: {'true' if v else 'false'}")
+            else:
+                val_escaped = str(v).replace('"', '\\"')
+                frontmatter_lines.append(f'{k}: "{val_escaped}"')
     frontmatter_lines.append("---")
 
     atomic_write_text(filepath, "\n".join(frontmatter_lines) + "\n\n" + (body or ""))
@@ -1269,34 +1373,19 @@ def main():
             if is_pdf and ocr_policy == "local_derivative" and derivative_abs:
                 if os.path.exists(get_safe_path(dest_abs)):
                     existing_meta, _ = parse_markdown_file(dest_abs)
-                    if existing_meta and existing_meta.get("ocr_applied") == "true" and not os.path.exists(get_safe_path(derivative_abs)):
+                    if existing_meta and mirror_ocr_applied(existing_meta, base_existing) and not os.path.exists(get_safe_path(derivative_abs)):
                         needs_conversion = True
 
             existing_meta = None
             if not needs_conversion and os.path.exists(get_safe_path(dest_abs)):
                 existing_meta, body = parse_markdown_file(dest_abs)
                 if existing_meta:
-                    if existing_meta.get("file_date") != src_mtime:
+                    if mirror_source_sha256(existing_meta) != src_sha256:
                         needs_conversion = True
-                    elif existing_meta.get("original_sha256") and existing_meta.get("original_sha256") != src_sha256:
+                    elif is_pdf and ocr_policy != "disabled" and not mirror_ocr_applied(existing_meta, base_existing) and is_image_based_pdf(src_abs, body):
                         needs_conversion = True
-                    elif is_pdf and ocr_policy != "disabled" and existing_meta.get("ocr_applied") != "true" and is_image_based_pdf(src_abs, body):
+                    elif len(body.strip()) < 10 and not mirror_ocr_applied(existing_meta, base_existing) and not is_doc and not is_pdf:
                         needs_conversion = True
-                    elif len(body.strip()) < 10 and existing_meta.get("ocr_applied") != "true" and not is_doc and not is_pdf:
-                        needs_conversion = True
-                    else:
-                        last_verified_str = existing_meta.get("last_verified_date")
-                        if last_verified_str:
-                            try:
-                                last_verified = datetime.datetime.strptime(last_verified_str, "%Y-%m-%d %H:%M:%S")
-                                age_hours = (datetime.datetime.now() - last_verified).total_seconds() / 3600.0
-                                if age_hours >= 24.0:
-                                    print(f"Verifying {src_rel_workspace} (unchanged since last check)...")
-                                    existing_meta["last_verified_date"] = now_str
-                                    write_markdown_file(dest_abs, existing_meta, body)
-                            except Exception as e:
-                                print(f"Warning parsing last_verified_date: {e}")
-                                needs_conversion = True
                 else:
                     needs_conversion = True
 
@@ -1322,7 +1411,12 @@ def main():
                 "ocr_policy": ocr_policy,
                 "redo_ocr": redo_ocr,
                 "needs_conversion": needs_conversion,
-                "base_existing": base_existing
+                "base_existing": base_existing,
+                "metadata_policy": {
+                    "data_classification": resolved["data_classification"],
+                    "retention_class": resolved["retention_class"],
+                    "owner": resolved["owner"],
+                },
             })
 
         total_files = len(candidate_tasks)
@@ -1400,15 +1494,6 @@ def main():
                         if res.get("new_src_mtime") is not None:
                             file_mtime = datetime.datetime.fromtimestamp(res["new_src_mtime"]).strftime("%Y-%m-%d %H:%M:%S")
 
-                    metadata = {
-                        "original_file": src_rel_workspace,
-                        "original_sha256": t["src_sha256"],
-                        "version": t["src_version"],
-                        "conversion_date": now_str,
-                        "file_date": file_mtime,
-                        "last_verified_date": now_str
-                    }
-
                     file_entry = {
                         "version": t["src_version"],
                         "mtime": file_mtime,
@@ -1420,12 +1505,6 @@ def main():
                     }
 
                     if res.get("derivative_path"):
-                        metadata["derivative_file"] = res["derivative_path"]
-                        metadata["derivative_sha256"] = res["derivative_sha256"]
-                        metadata["conversion_method"] = res["conversion_method"]
-                        if res.get("potential_quality_loss"):
-                            metadata["potential_quality_loss"] = res["potential_quality_loss"]
-
                         file_entry["derivative"] = {
                             "path": res["derivative_path"],
                             "sha256": res["derivative_sha256"],
@@ -1437,14 +1516,24 @@ def main():
                         processed_derivatives.add(res["derivative_path"])
 
                     if res.get("ocr_applied"):
-                        metadata["ocr_applied"] = "true"
-                        metadata["ocr_policy"] = res.get("ocr_policy", ocr_policy)
-                        metadata["ocr_notice"] = "Hinweis: Text wurde mittels OCR aus einem Bild-PDF erfasst. Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
                         file_entry["ocr_applied"] = True
                         file_entry["ocr_policy"] = res.get("ocr_policy", ocr_policy)
 
                     # Safety check before writing mirror
                     assert_not_in_cloud_dir(dest_abs, cloud_path_abs)
+                    source_uri = normalize_workspace_relative_path(src_rel_workspace)
+                    if source_uri is None:
+                        raise ValueError(f"source URI must be workspace-relative: {src_rel_workspace}")
+                    metadata = build_cloud_artifact_metadata(
+                        source_uri=source_uri,
+                        source_sha256=t["src_sha256"],
+                        artifact_sha256=calculate_markdown_payload_sha256(res["markdown_body"]),
+                        converter=res.get("conversion_method") or "markitdown-direct",
+                        data_classification=t["metadata_policy"]["data_classification"],
+                        retention_class=t["metadata_policy"]["retention_class"],
+                        owner=t["metadata_policy"]["owner"],
+                        synced_at=datetime.datetime.now(datetime.timezone.utc),
+                    )
                     write_markdown_file(dest_abs, metadata, res["markdown_body"])
                     processed_mirrors.add(dest_rel_workspace)
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, file_entry)

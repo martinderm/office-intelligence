@@ -4,7 +4,9 @@ import json
 import shutil
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
+from unittest import mock
 
 # Load scripts directory
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
@@ -12,6 +14,14 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import convert_cloud_docs
 import gen_filemap
+
+
+def _data_zone_artifact_schema():
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "Shared-Memory" / "agent-architecture" / "schemas" / "data-zone-artifact.schema.json"
+        if candidate.is_file():
+            return json.loads(candidate.read_text(encoding="utf-8"))
+    raise FileNotFoundError("data-zone-artifact.schema.json not found")
 
 
 class MetadataPreservationTests(unittest.TestCase):
@@ -75,6 +85,172 @@ class MetadataPreservationTests(unittest.TestCase):
         
         sys.argv = ["gen_filemap.py", "--project-id", "test_proj", "--workspace-root", str(self.root)]
         gen_filemap.main()
+
+    def _run_mocked_conversion(self, source_file, markdown_body, **overrides):
+        source_rel = source_file.relative_to(self.root).as_posix()
+        result = {
+            "success": True,
+            "markdown_body": markdown_body,
+            "ocr_applied": False,
+            "derivative_path": None,
+            "derivative_sha256": None,
+            "conversion_method": "markitdown-direct",
+            "potential_quality_loss": None,
+            "ocr_policy": "disabled",
+            "new_src_sha256": None,
+            "new_src_size": None,
+            "new_src_mtime": None,
+            "error": None,
+        }
+        result.update(overrides)
+        with mock.patch.object(
+            convert_cloud_docs,
+            "run_conversion_tasks",
+            return_value={source_rel: result},
+        ):
+            sys.argv = [
+                "convert_cloud_docs.py", "--project-id", "test_proj",
+                "--workspace-root", str(self.root),
+            ]
+            convert_cloud_docs.main()
+
+    def test_legacy_frontmatter_is_read_and_unchanged_mirror_is_byte_exact(self):
+        """Dual-read accepts legacy provenance without using a skip run as migration."""
+        source = self.cloud_dir / "legacy.pdf"
+        source.write_bytes(b"legacy cloud source")
+        source_hash = convert_cloud_docs.calculate_sha256(str(source))
+        mirror = self.output_dir / "legacy.md"
+        original = (
+            "---\n"
+            "original_file: \"data/cloud/TEST_PROJ/legacy.pdf\"\n"
+            f"original_sha256: \"{source_hash}\"\n"
+            "file_date: \"2000-01-01 00:00:00\"\n"
+            "last_verified_date: \"2000-01-01 00:00:00\"\n"
+            "---\n\n"
+            "Legacy payload that must remain byte-exact.\n"
+        ).encode("utf-8")
+        mirror.write_bytes(original)
+
+        metadata, body = convert_cloud_docs.parse_markdown_file(str(mirror))
+        self.assertEqual(metadata["original_file"], "data/cloud/TEST_PROJ/legacy.pdf")
+        self.assertEqual(convert_cloud_docs.mirror_source_sha256(metadata), source_hash)
+        self.assertIn("byte-exact", body)
+
+        self._run_full_sync()
+
+        self.assertEqual(mirror.read_bytes(), original)
+
+    def test_new_normal_mirror_has_only_canonical_schema_frontmatter_and_payload_hash(self):
+        source = self.cloud_dir / "normal.pdf"
+        source.write_bytes(b"normal cloud source")
+        payload = "# Normal\n\nCanonical Markdown payload.\n"
+
+        self._run_mocked_conversion(source, payload)
+
+        metadata, body = convert_cloud_docs.parse_markdown_file(str(self.output_dir / "normal.md"))
+        expected_keys = {
+            "zone", "trust_level", "status", "source_uri", "source_sha256",
+            "artifact_sha256", "synced_at", "converter", "data_classification",
+            "retention_class", "owner", "instructions_are_data",
+        }
+        self.assertEqual(set(metadata), expected_keys)
+        self.assertTrue(set(metadata) <= convert_cloud_docs.CANONICAL_CLOUD_FRONTMATTER_KEYS)
+        schema = _data_zone_artifact_schema()
+        self.assertFalse(schema["additionalProperties"])
+        self.assertTrue(set(schema["required"]) <= set(metadata))
+        self.assertTrue(set(metadata) <= set(schema["properties"]))
+        self.assertEqual(metadata["zone"], "cloud")
+        self.assertEqual(metadata["trust_level"], "untrusted_external")
+        self.assertEqual(metadata["status"], "active")
+        self.assertIsNotNone(datetime.fromisoformat(metadata["synced_at"]))
+        self.assertEqual(metadata["source_uri"], "data/cloud/TEST_PROJ/normal.pdf")
+        self.assertEqual(metadata["source_sha256"], convert_cloud_docs.calculate_sha256(str(source)))
+        self.assertEqual(metadata["artifact_sha256"], convert_cloud_docs.calculate_markdown_payload_sha256(payload))
+        self.assertEqual(metadata["artifact_sha256"], convert_cloud_docs.calculate_markdown_payload_sha256(body))
+        self.assertEqual(metadata["owner"], "project:test_proj")
+        self.assertEqual(metadata["retention_class"], "project-lifecycle")
+        self.assertEqual(metadata["data_classification"], "internal")
+        self.assertTrue(metadata["instructions_are_data"])
+        self.assertNotIn("original_file", metadata)
+        self.assertNotIn("ocr_applied", metadata)
+
+    def test_ocr_derivative_mirror_keeps_details_in_filemap_not_frontmatter(self):
+        source = self.cloud_dir / "scan.pdf"
+        source.write_bytes(b"scanned cloud source")
+        derivative = self.output_dir / "_derivatives" / "scan.pdf"
+        derivative.parent.mkdir(parents=True)
+        derivative.write_bytes(b"OCR derivative")
+        payload = "# Scan\n\nOCR payload.\n"
+
+        self._run_mocked_conversion(
+            source,
+            payload,
+            ocr_applied=True,
+            ocr_policy="local_derivative",
+            derivative_path="memory/cloud/projects/test_proj/_derivatives/scan.pdf",
+            derivative_sha256=convert_cloud_docs.calculate_sha256(str(derivative)),
+            conversion_method="ocrmypdf-derivative",
+            potential_quality_loss="OCR detail belongs in the filemap.",
+        )
+
+        metadata, body = convert_cloud_docs.parse_markdown_file(str(self.output_dir / "scan.md"))
+        self.assertTrue(set(metadata) <= convert_cloud_docs.CANONICAL_CLOUD_FRONTMATTER_KEYS)
+        self.assertEqual(metadata["artifact_sha256"], convert_cloud_docs.calculate_markdown_payload_sha256(body))
+        self.assertFalse({"ocr_applied", "ocr_policy", "derivative_file", "derivative_sha256"} & set(metadata))
+        filemap = json.loads((self.output_dir / "filemap.json").read_text(encoding="utf-8"))
+        entry = filemap["files"]["data/cloud/TEST_PROJ/scan.pdf"]
+        self.assertTrue(entry["ocr_applied"])
+        self.assertEqual(entry["derivative"]["path"], "memory/cloud/projects/test_proj/_derivatives/scan.pdf")
+
+    def test_actual_refresh_upgrades_legacy_frontmatter_to_canonical(self):
+        source = self.cloud_dir / "refresh.pdf"
+        source.write_bytes(b"version one")
+        old_hash = convert_cloud_docs.calculate_sha256(str(source))
+        mirror = self.output_dir / "refresh.md"
+        mirror.write_text(
+            "---\n"
+            "original_file: \"data/cloud/TEST_PROJ/refresh.pdf\"\n"
+            f"original_sha256: \"{old_hash}\"\n"
+            "file_date: \"2000-01-01 00:00:00\"\n"
+            "---\n\nlegacy body\n",
+            encoding="utf-8",
+        )
+        source.write_bytes(b"version two requires a refresh")
+
+        self._run_mocked_conversion(source, "# Refresh\n\nNew payload.\n")
+
+        metadata, _ = convert_cloud_docs.parse_markdown_file(str(mirror))
+        self.assertTrue(set(metadata) <= convert_cloud_docs.CANONICAL_CLOUD_FRONTMATTER_KEYS)
+        self.assertEqual(metadata["source_sha256"], convert_cloud_docs.calculate_sha256(str(source)))
+        self.assertNotIn("original_sha256", metadata)
+
+    def test_metadata_policy_uses_declared_storage_values_before_stable_defaults(self):
+        policy = convert_cloud_docs.resolve_cloud_metadata_policy(
+            {
+                "owner": "project-owner",
+                "retention_class": "project-retention",
+                "data_classification": "confidential",
+            },
+            {"owner": "storage-owner", "data_classification": "restricted"},
+            "test_proj",
+            False,
+        )
+        self.assertEqual(
+            policy,
+            {
+                "owner": "storage-owner",
+                "retention_class": "project-retention",
+                "data_classification": "restricted",
+            },
+        )
+        self.assertEqual(
+            convert_cloud_docs.resolve_cloud_metadata_policy({}, {}, "test_topic", True),
+            {
+                "owner": "topic:test_topic",
+                "retention_class": "project-lifecycle",
+                "data_classification": "internal",
+            },
+        )
 
     def test_manual_description_and_custom_metadata_preservation_on_force(self):
         """Curated description and custom metadata keys are never lost during sync and --force."""

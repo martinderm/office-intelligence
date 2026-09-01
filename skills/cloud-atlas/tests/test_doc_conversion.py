@@ -74,6 +74,17 @@ class DocConversionTests(unittest.TestCase):
         if "CLOUD_ATLAS_MOCK_IS_SCAN" in os.environ:
             del os.environ["CLOUD_ATLAS_MOCK_IS_SCAN"]
 
+    def canonical_metadata(self):
+        return convert_cloud_docs.build_cloud_artifact_metadata(
+            source_uri="data/cloud/TEST_PROJ/test.pdf",
+            source_sha256="a" * 64,
+            artifact_sha256="b" * 64,
+            converter="test-converter",
+            data_classification="internal",
+            retention_class="project-lifecycle",
+            owner="project:test_proj",
+        )
+
     def test_successful_doc_conversion_pipeline(self):
         """Test full .doc conversion: derivative created, markdown mirror generated, manifest & frontmatter populated."""
         doc_file = self.cloud_dir / "Vertrag_v2.doc"
@@ -99,14 +110,12 @@ class DocConversionTests(unittest.TestCase):
 
         meta, body = convert_cloud_docs.parse_markdown_file(str(md_file))
         self.assertIsNotNone(meta)
-        self.assertEqual(meta.get("original_file"), "data/cloud/TEST_PROJ/Vertrag_v2.doc")
-        self.assertEqual(meta.get("version"), "2")
-        self.assertIsNotNone(meta.get("original_sha256"))
-        self.assertEqual(meta.get("original_sha256"), convert_cloud_docs.calculate_sha256(str(doc_file)))
-        self.assertEqual(meta.get("derivative_file"), "memory/cloud/projects/test_proj/_derivatives/Vertrag_v2.docx")
-        self.assertEqual(meta.get("derivative_sha256"), convert_cloud_docs.calculate_sha256(str(deriv_file)))
-        self.assertEqual(meta.get("conversion_method"), "mock-converter")
-        self.assertIn("Konvertierung von binärem .doc", meta.get("potential_quality_loss", ""))
+        self.assertEqual(meta.get("source_uri"), "data/cloud/TEST_PROJ/Vertrag_v2.doc")
+        self.assertEqual(meta.get("source_sha256"), convert_cloud_docs.calculate_sha256(str(doc_file)))
+        self.assertEqual(meta.get("converter"), "mock-converter")
+        self.assertEqual(meta.get("artifact_sha256"), convert_cloud_docs.calculate_markdown_payload_sha256(body))
+        self.assertNotIn("original_file", meta)
+        self.assertNotIn("derivative_file", meta)
 
         # 3. Check filemap.json
         filemap_json_path = self.output_dir / "filemap.json"
@@ -333,11 +342,11 @@ class DocConversionTests(unittest.TestCase):
         self.assertTrue(md_file.is_file())
         meta, body = convert_cloud_docs.parse_markdown_file(str(md_file))
         self.assertIsNotNone(meta)
-        self.assertEqual(meta.get("ocr_applied"), "true")
-        self.assertEqual(meta.get("ocr_policy"), "local_derivative")
-        self.assertEqual(meta.get("derivative_file"), "memory/cloud/projects/test_proj/_derivatives/Scanned_Document.pdf")
-        self.assertEqual(meta.get("derivative_sha256"), deriv_sha)
-        self.assertIn("OCR", meta.get("ocr_notice", ""))
+        self.assertEqual(meta.get("source_uri"), "data/cloud/TEST_PROJ/Scanned_Document.pdf")
+        self.assertEqual(meta.get("source_sha256"), orig_sha)
+        self.assertEqual(meta.get("artifact_sha256"), convert_cloud_docs.calculate_markdown_payload_sha256(body))
+        self.assertNotIn("ocr_applied", meta)
+        self.assertNotIn("derivative_file", meta)
 
         # Check filemap.json
         filemap_json_path = self.output_dir / "filemap.json"
@@ -394,8 +403,9 @@ class DocConversionTests(unittest.TestCase):
         md_file = self.output_dir / "Writable_Scan.md"
         self.assertTrue(md_file.is_file())
         meta, body = convert_cloud_docs.parse_markdown_file(str(md_file))
-        self.assertEqual(meta.get("ocr_applied"), "true")
-        self.assertEqual(meta.get("ocr_policy"), "enrich_source")
+        self.assertEqual(meta.get("source_uri"), "data/cloud/TEST_PROJ/Writable_Scan.pdf")
+        self.assertEqual(meta.get("source_sha256"), new_sha)
+        self.assertNotIn("ocr_applied", meta)
         self.assertNotIn("derivative_file", meta)
 
         # filemap.json
@@ -439,7 +449,7 @@ class DocConversionTests(unittest.TestCase):
         md_file = self.output_dir / "Disabled_OCR_Scan.md"
         self.assertTrue(md_file.is_file())
         meta, body = convert_cloud_docs.parse_markdown_file(str(md_file))
-        self.assertNotEqual(meta.get("ocr_applied"), "true")
+        self.assertNotIn("ocr_applied", meta)
 
     def test_short_digital_pdf_not_treated_as_scan(self):
         """Short 1-line digital PDF (<30 chars) with digital fonts is NOT treated as a scan."""
@@ -591,7 +601,7 @@ class DocConversionTests(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 convert_cloud_docs.write_markdown_file(
                     str(mirror),
-                    {"original_file": "data/cloud/TEST_PROJ/Atomic_Mirror.pdf"},
+                    self.canonical_metadata(),
                     "replacement body",
                 )
 
@@ -630,7 +640,7 @@ class DocConversionTests(unittest.TestCase):
 
         with mock.patch.object(convert_cloud_docs.os, "fdopen", side_effect=failing_fdopen):
             with self.assertRaisesRegex(OSError, "simulated write failure"):
-                convert_cloud_docs.write_markdown_file(str(mirror), {}, "replacement body")
+                convert_cloud_docs.write_markdown_file(str(mirror), self.canonical_metadata(), "replacement body")
 
         self.assertEqual(mirror.read_bytes(), original)
         self.assertEqual(list(self.output_dir.glob(".Write_Failure.md.*.tmp")), [])
