@@ -1,3 +1,4 @@
+import ast
 import os
 import sys
 import datetime
@@ -9,8 +10,25 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
+try:
+    from core.metadata import (
+        CANONICAL_CLOUD_METADATA_KEYS,
+        validate_cloud_artifact_metadata,
+    )
+except ModuleNotFoundError:
+    # Keep direct imports from a test loader portable while preserving the
+    # standalone script's bundled ``scripts/core`` import path.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from core.metadata import (
+        CANONICAL_CLOUD_METADATA_KEYS,
+        validate_cloud_artifact_metadata,
+    )
+
 
 MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
+FILEMAP_SCHEMA_VERSION = 1
+FILEMAP_SCHEMA_URI = "https://raw.githubusercontent.com/martinderm/office-intelligence/main/skills/cloud-atlas/references/filemap.schema.json"
+CANONICAL_ARTIFACT_METADATA_KEYS = CANONICAL_CLOUD_METADATA_KEYS
 
 
 def atomic_write_text(filepath, content):
@@ -59,6 +77,209 @@ def normalize_workspace_relative_path(path_value):
     return normalized.as_posix()
 
 
+def _read_mirror_artifact_metadata(workspace_root, mirror_path):
+    """Read canonical scalar frontmatter; return None for an unchanged legacy mirror."""
+    mirror_abs = Path(workspace_root) / Path(*PurePosixPath(mirror_path).parts)
+    if not mirror_abs.is_file():
+        return None
+    try:
+        content = mirror_abs.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"Could not read mirror metadata {mirror_path}: {exc}") from exc
+    if not content.startswith("---"):
+        return None
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return None
+
+    metadata = {}
+    for line in parts[1].strip().splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if value.lower() in {"true", "false"}:
+            metadata[key] = value.lower() == "true"
+        elif value.lower() == "null":
+            metadata[key] = None
+        elif value.startswith("[") and value.endswith("]"):
+            try:
+                metadata[key] = json.loads(value)
+            except json.JSONDecodeError:
+                try:
+                    metadata[key] = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    metadata[key] = value
+        else:
+            metadata[key] = value
+
+    if not (set(metadata) & CANONICAL_ARTIFACT_METADATA_KEYS):
+        return None
+    return metadata
+
+
+def _read_mirror_payload(workspace_root, mirror_path):
+    """Return the exact Markdown payload represented by artifact_sha256."""
+    mirror_abs = Path(workspace_root) / Path(*PurePosixPath(mirror_path).parts)
+    try:
+        content = mirror_abs.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise ValueError(f"Could not read mirror payload {mirror_path}: {exc}") from exc
+    parts = content.split("---", 2)
+    if len(parts) < 3:
+        return content
+    body = parts[2]
+    if body.startswith("\r\n\r\n"):
+        return body[4:]
+    if body.startswith("\n\n"):
+        return body[2:]
+    return body
+
+
+def validate_filemap(filemap, workspace_root=None):
+    """Fail closed unless a generated filemap satisfies its container contract."""
+    workspace_root = workspace_root or os.getcwd()
+    if not isinstance(filemap, dict):
+        raise ValueError("filemap must be an object")
+
+    required = {
+        "$schema", "schema_version", "kind", "scope", "storage_id", "project",
+        "project_title", "scan_dir", "output_dir", "updated_at", "files",
+    }
+    missing = sorted(required - set(filemap))
+    if missing:
+        raise ValueError(f"filemap is missing required keys: {missing}")
+    unknown = sorted(set(filemap) - required)
+    if unknown:
+        raise ValueError(f"filemap has unknown container keys: {unknown}")
+    if filemap["$schema"] != FILEMAP_SCHEMA_URI:
+        raise ValueError("filemap.$schema does not identify the bundled Filemap schema")
+    if filemap["schema_version"] != FILEMAP_SCHEMA_VERSION:
+        raise ValueError(f"filemap.schema_version must be {FILEMAP_SCHEMA_VERSION}")
+    if filemap["kind"] != "cloud-filemap":
+        raise ValueError("filemap.kind must be 'cloud-filemap'")
+    if not isinstance(filemap["scope"], str) or filemap["scope"] not in {"project", "topic"}:
+        raise ValueError("filemap.scope is invalid")
+    if not isinstance(filemap["storage_id"], str) or re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9._-]*", filemap["storage_id"]
+    ) is None:
+        raise ValueError("filemap.storage_id is invalid")
+    for field in ("project", "project_title"):
+        if not isinstance(filemap[field], str) or not filemap[field].strip():
+            raise ValueError(f"filemap.{field} must be a non-empty string")
+    for field in ("updated_at",):
+        if not isinstance(filemap[field], str) or re.fullmatch(
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", filemap[field]
+        ) is None:
+            raise ValueError(f"filemap.{field} has an invalid timestamp")
+
+    scan_dir = normalize_workspace_relative_path(filemap["scan_dir"])
+    output_dir = normalize_workspace_relative_path(filemap["output_dir"])
+    if not scan_dir or not output_dir:
+        raise ValueError("filemap scan_dir and output_dir must be workspace-relative paths")
+    files = filemap["files"]
+    if not isinstance(files, dict):
+        raise ValueError("filemap.files must be an object")
+
+    required_entry = {"version", "mtime", "size", "sha256", "description"}
+    valid_statuses = {"converted", "conversion_required"}
+    valid_ocr_policies = {"enrich_source", "local_derivative", "disabled"}
+    for source_path, entry in files.items():
+        normalized_source = normalize_workspace_relative_path(source_path)
+        if not normalized_source or not path_is_within(normalized_source, scan_dir):
+            raise ValueError(f"filemap.files contains a source outside scan_dir: {source_path!r}")
+        if not isinstance(entry, dict):
+            raise ValueError(f"filemap.files[{source_path!r}] must be an object")
+        missing_entry = sorted(required_entry - set(entry))
+        if missing_entry:
+            raise ValueError(f"filemap.files[{source_path!r}] is missing keys: {missing_entry}")
+        if not isinstance(entry["version"], str) or not isinstance(entry["description"], str):
+            raise ValueError(f"filemap.files[{source_path!r}] has invalid text fields")
+        for field in ("mtime",):
+            if not isinstance(entry[field], str) or re.fullmatch(
+                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", entry[field]
+            ) is None:
+                raise ValueError(f"filemap.files[{source_path!r}].{field} has an invalid timestamp")
+        if not isinstance(entry["size"], str) or re.fullmatch(
+            r"\d+(?:\.\d+)? (?:B|KB|MB)", entry["size"]
+        ) is None:
+            raise ValueError(f"filemap.files[{source_path!r}].size has an invalid format")
+        if not isinstance(entry["sha256"], str) or re.fullmatch(
+            r"[a-fA-F0-9]{64}", entry["sha256"]
+        ) is None:
+            raise ValueError(f"filemap.files[{source_path!r}].sha256 has an invalid format")
+
+        mirror = None
+        if "markdown_mirror" in entry:
+            mirror = entry["markdown_mirror"]
+            mirror = normalize_workspace_relative_path(mirror)
+            if not mirror or not path_is_within(mirror, output_dir):
+                raise ValueError(f"filemap.files[{source_path!r}].markdown_mirror is outside output_dir")
+        status = entry.get("conversion_status")
+        if "conversion_status" in entry and (
+            not isinstance(status, str) or status not in valid_statuses
+        ):
+            raise ValueError(f"filemap.files[{source_path!r}].conversion_status is invalid")
+        if status == "converted" and not mirror:
+            raise ValueError(f"filemap.files[{source_path!r}] is converted without a markdown_mirror")
+        if "ocr_applied" in entry and not isinstance(entry["ocr_applied"], bool):
+            raise ValueError(f"filemap.files[{source_path!r}].ocr_applied must be boolean")
+        if "ocr_policy" in entry and (
+            not isinstance(entry["ocr_policy"], str)
+            or entry["ocr_policy"] not in valid_ocr_policies
+        ):
+            raise ValueError(f"filemap.files[{source_path!r}].ocr_policy is invalid")
+        if "conversion_error" in entry and not isinstance(entry["conversion_error"], str):
+            raise ValueError(f"filemap.files[{source_path!r}].conversion_error must be a string")
+
+        derivative = entry.get("derivative")
+        if "derivative" in entry:
+            if not isinstance(derivative, dict):
+                raise ValueError(f"filemap.files[{source_path!r}].derivative must be an object")
+            for field in ("path", "sha256", "format"):
+                if field not in derivative:
+                    raise ValueError(f"filemap.files[{source_path!r}].derivative is missing {field}")
+            deriv_path = normalize_workspace_relative_path(derivative["path"])
+            if not deriv_path or not path_is_within(deriv_path, output_dir):
+                raise ValueError(f"filemap.files[{source_path!r}].derivative.path is outside output_dir")
+            if not isinstance(derivative["sha256"], str) or re.fullmatch(
+                r"[a-fA-F0-9]{64}", derivative["sha256"]
+            ) is None:
+                raise ValueError(f"filemap.files[{source_path!r}].derivative.sha256 has an invalid format")
+            if not isinstance(derivative["format"], str) or not derivative["format"].strip():
+                raise ValueError(f"filemap.files[{source_path!r}].derivative.format is invalid")
+
+        artifact_metadata = entry.get("artifact_metadata")
+        if "artifact_metadata" in entry:
+            if not mirror:
+                raise ValueError(f"filemap.files[{source_path!r}] has artifact_metadata without a mirror")
+            validate_cloud_artifact_metadata(
+                artifact_metadata,
+                expected_source_uri=normalized_source,
+            )
+            source_abs = Path(workspace_root) / Path(*PurePosixPath(normalized_source).parts)
+            actual_source_sha256 = calculate_sha256(source_abs)
+            if actual_source_sha256 is None:
+                raise ValueError(
+                    f"filemap.files[{source_path!r}].artifact_metadata source file is unavailable"
+                )
+            if artifact_metadata["source_sha256"].lower() != actual_source_sha256:
+                raise ValueError(
+                    f"filemap.files[{source_path!r}].artifact_metadata.source_sha256 "
+                    "does not match the current source file"
+                )
+            actual_artifact_sha256 = calculate_markdown_payload_sha256(
+                _read_mirror_payload(workspace_root, mirror)
+            )
+            if artifact_metadata["artifact_sha256"].lower() != actual_artifact_sha256:
+                raise ValueError(
+                    f"filemap.files[{source_path!r}].artifact_metadata.artifact_sha256 "
+                    "does not match the mirror payload"
+                )
+    return True
+
+
 def calculate_sha256(filepath):
     """Calculate SHA-256 hash of a file safely."""
     path_obj = Path(filepath)
@@ -72,6 +293,11 @@ def calculate_sha256(filepath):
         return hasher.hexdigest()
     except Exception:
         return None
+
+
+def calculate_markdown_payload_sha256(markdown_body):
+    """Hash the UTF-8 payload used by canonical Cloud mirror metadata."""
+    return hashlib.sha256((markdown_body or "").encode("utf-8", errors="replace")).hexdigest()
 
 
 def canonical_mirror_path(source_path, scan_dir, output_dir):
@@ -152,7 +378,7 @@ def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, ex
 AUTOMATED_METADATA_KEYS = {
     "version", "mtime", "size", "sha256",
     "markdown_mirror", "derivative",
-    "conversion_status", "conversion_error"
+    "conversion_status", "conversion_error", "artifact_metadata"
 }
 
 
@@ -520,6 +746,11 @@ def main():
             )
             if markdown_mirror:
                 file_entry["markdown_mirror"] = markdown_mirror
+                artifact_metadata = _read_mirror_artifact_metadata(
+                    workspace_root, markdown_mirror
+                )
+                if artifact_metadata is not None:
+                    file_entry["artifact_metadata"] = artifact_metadata
 
             derivative = select_derivative(
                 workspace_root,
@@ -550,14 +781,27 @@ def main():
 
             files_data[rel_to_workspace_forward] = merge_curated_metadata(existing_info, file_entry)
 
-        # Save to JSON
+        # Keep file ordering stable even when the filesystem returns directory
+        # entries in a different order between runs.
+        files_data = {path: files_data[path] for path in sorted(files_data)}
+
+        # Save to JSON only after validating the container and any delegated
+        # canonical artifact metadata.  This prevents a malformed map from
+        # replacing the previous valid one.
         json_output_data = {
+            "$schema": FILEMAP_SCHEMA_URI,
+            "schema_version": FILEMAP_SCHEMA_VERSION,
+            "kind": "cloud-filemap",
+            "scope": "topic" if is_topic else "project",
+            "storage_id": sid,
             "project": project_id,
             "project_title": project_title,
+            "scan_dir": scan_dir,
+            "output_dir": output_dir,
             "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "files": files_data
         }
-        
+        validate_filemap(json_output_data, workspace_root)
         write_json_file(output_json_abs, json_output_data)
         print(f"Updated {output_json_abs}")
 

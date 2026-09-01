@@ -4,6 +4,7 @@ dist/
 # Runtime/state/debug artifacts (can contain sensitive mail content)
 data/
 *.log
+.agents/session.lock
 gitleaks*.sarif
 docs/INSTALL_PATHS.local.md
 memory/references/projects/inbox/*.json

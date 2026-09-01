@@ -7,6 +7,10 @@ description: "Synchronisiert und kartografiert Projekt- und Topic-bezogene Cloud
 
 Dieser Skill verwaltet die Synchronisation, Konvertierung und Erstellung von Dateiverzeichnissen (Filemaps) für projekt- und topicbezogene Cloud-Speicher (Junctions) innerhalb des Agent-Workspaces.
 
+Das maschinenlesbare Container-Schema für `filemap.json` und die zugehörige
+Schemaentscheidung stehen in [references/filemap.schema.json](references/filemap.schema.json)
+und [references/filemap-schema.md](references/filemap-schema.md).
+
 ---
 
 ## 1. Übersicht

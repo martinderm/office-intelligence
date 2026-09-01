@@ -9,7 +9,7 @@ from pathlib import Path
 SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from core.metadata import build_cloud_artifact_metadata
+from core.metadata import build_cloud_artifact_metadata, validate_cloud_artifact_metadata
 
 
 def _schema_path() -> Path:
@@ -99,6 +99,15 @@ class CloudArtifactMetadataTests(unittest.TestCase):
         self.assertEqual("cloud", metadata["zone"])
         self.assertEqual("active", metadata["status"])
         self.assertEqual(self.synced_at.isoformat(timespec="seconds"), metadata["synced_at"])
+
+    def test_runtime_validator_is_independent_and_checks_canonical_contract(self):
+        metadata = build_cloud_artifact_metadata(**self.values)
+        self.assertTrue(validate_cloud_artifact_metadata(metadata, expected_source_uri=metadata["source_uri"]))
+
+        invalid = dict(metadata)
+        invalid["artifact_sha256"] = "not-a-sha256"
+        with self.assertRaisesRegex(ValueError, "artifact_sha256"):
+            validate_cloud_artifact_metadata(invalid)
 
     def test_clock_is_injectable_and_called_once(self):
         calls = []
