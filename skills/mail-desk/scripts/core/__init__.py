@@ -46,6 +46,7 @@ from .sent_indexer import (
     sync_sent_items,
 )
 from .progress import BatchProgressTracker
+from .envelope import build_error, build_success, emit_json
 
 __all__ = [
     "normalize_message_id",
@@ -77,4 +78,7 @@ __all__ = [
     "clean_subject",
     "auto_resolve_replies_from_sent",
     "BatchProgressTracker",
+    "build_success",
+    "build_error",
+    "emit_json",
 ]
