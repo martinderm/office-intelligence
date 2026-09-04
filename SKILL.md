@@ -1,65 +1,49 @@
 ---
 name: office-intelligence
-description: Umfassende Orchestrierungs-Suite für alle täglichen Office-, Wissens- und Verwaltungs-Workflows nach dem Dual-Evidence-Standard. Verwende diesen Root-Skill zur Orientierung und wähle für konkrete Aufgaben den passenden Fach-Desk unter skills/ (mail-desk, meeting-desk, event-documentation, task-desk, topic-catalog-entry, project-catalog-entry).
+description: Router für die sieben Office-Intelligence-Sub-Skills. Verwende diesen Bundle-Skill zur Auswahl des passenden Fach-Desks für Cloud-Atlas, Mail-, Meeting-, Event-, Aufgaben-, Projekt- oder Topic-Arbeit; die fachliche Ausführung bleibt beim jeweiligen Sub-Skill.
 ---
 
 # Office Intelligence
 
-Zentrale Orchestrierungs- und Workflow-Suite für alle operativen Büro-, Kommunikations- und Wissensmanagement-Aufgaben im Agenten-Workspace.
+`office-intelligence` ist ein **Skill-Bundle und Router**, kein Agent-Workspace. Es
+legt keine eigene Workspace-Control-Plane oder Agent-Lifecycle-Regeln fest. Für eine
+konkrete Aufgabe den passenden Sub-Skill öffnen; dessen Anweisungen sind maßgeblich.
 
-## Mutations- und Lock-Vertrag
+## Gemeinsame Mutations- und Lock-Regel
 
-Lesende Auswertungen dürfen ohne Lock erfolgen. Vor **jeder** lokalen Mutation, die ein
-verbrauchender Workspace durch dieses Bundle ausführt – einschließlich Konvertierung,
-Filemap-/Katalog-/Mirror-Write, Evidenz- oder Mail-Desk-State, JSONL-Append sowie
-Verschieben oder Löschen – muss der Ziel-Workspace mit `workspace-lock` gesperrt sein.
-Die Lease muss dem ausführenden Harness gehören. Ein aktiver fremder Lock (Tier 1) ist
-ein Stoppsignal. Ein eindeutig stale Lock darf ausschließlich über das reguläre
-Tier-2-Takeover von `workspace-lock` übernommen werden; dieses protokolliert den
-vorherigen Lock. Ein Force-Unlock/-Override (Tier 3) ist nur nach expliziter Human
-Approval zulässig und wird nie autonom ausgeführt.
+Lesende Auswertungen benötigen keinen Lock. Vor jeder lokalen oder externen Mutation,
+die ein Sub-Skill in einem konsumierenden Workspace ausführt, muss dessen
+`workspace-lock` mit einer Lease des ausführenden Harnesses erworben sein. Ein aktiver
+fremder Lock stoppt die Mutation; ein eindeutig stale Lock darf nur über das reguläre
+Tier-2-Takeover übernommen werden. Force-Unlock/-Override erfordert explizite Human
+Approval. Fehlt eindeutig verifizierbare Lock-Ownership, wird nicht mutiert.
 
-Der gemeinsame technische Guard liegt im Shared Skill `workspace-lock` unter
-`scripts/workspace_lock_guard.py`. Ein Lauf ohne Lock ist nur über dessen expliziten
-Single-Session-Legacy-Modus zulässig: keine weiteren Harnesses dürfen schreiben, der
-Warnhinweis wird sichtbar ausgegeben und der Verzicht im Run-Nachweis dokumentiert.
-Fehlender Lock bedeutet sonst: nicht mutieren.
+Ein lockfreier Lauf ist ausschließlich ein expliziter Single-Session-Legacy-Modus:
+keine parallelen Writer, sichtbare Warnung und dokumentierte Ausnahme. Details zu
+Mutationen, Nachweisen und ggf. externen Preconditions stehen im zuständigen Sub-Skill.
 
----
+## Routing
 
-## 🧭 Verfügbare Fach-Desks unter `skills/`
+| Wenn die Aufgabe … | Verwende |
+| --- | --- |
+| projekt- oder topicbezogene Cloud-Verzeichnisse kartiert, konvertiert oder als Filemaps und lokale Mirrors synchronisiert | [cloud-atlas](skills/cloud-atlas/SKILL.md) |
+| eine einzelne Mail fachlich beurteilt, routet, auf Antwortbedarf und Todos prüft oder leicht protokolliert | [mail-desk](skills/mail-desk/SKILL.md) |
+| Meetings, Konferenzschaltungen oder Vorträge aus einem Adapter oder Upload in Workspace-Evidenz überführt | [meeting-desk](skills/meeting-desk/SKILL.md) |
+| eine größere Konferenz, Tagung oder ein Seminar als Event mit Programm, Aufzeichnungen und Folgeaufgaben dokumentiert | [event-documentation](skills/event-documentation/SKILL.md) |
+| konkrete Action Items aus Mail, Meeting, Event oder Chat priorisiert, dedupliziert und zur Aufgaben-Synchronisation vorbereitet | [task-desk](skills/task-desk/SKILL.md) |
+| einen Eintrag in `memory/references/projects/projects.json` oder die zugehörige Projektstruktur anlegt oder pflegt | [project-catalog-entry](skills/project-catalog-entry/SKILL.md) |
+| einen Eintrag in `memory/references/topics/topics.json` oder die zugehörige Topic-/Subtopic-Struktur anlegt oder pflegt | [topic-catalog-entry](skills/topic-catalog-entry/SKILL.md) |
 
-Wähle für konkrete Arbeitsabläufe direkt den spezialisierten Sub-Skill:
+Abgrenzung: `mail-desk` bearbeitet Mailfälle, `task-desk` entscheidet über
+nachverfolgbare Aufgaben, und die Katalog-Desks pflegen strukturierte Projekt- bzw.
+Topic-Daten. `meeting-desk` behandelt einzelne Meetings; `event-documentation` die
+umfassende Dokumentation größerer Veranstaltungen. `cloud-atlas` ist für
+Cloud-Speicher und deren lokale Spiegel zuständig, nicht für die Katalogpflege selbst.
 
-1. **`skills/mail-desk` — E-Mail-Management & Posteingang**
-   - Sichten, Priorisieren, Klassifizieren und Beantworten von E-Mails.
-   - Sichern von Mail-Signalen als Belege in Monats-Logs (`memory/evidence/topics/<slug>/YYYY-MM.md`).
+## Externe Nachbar-Skills
 
-2. **`skills/meeting-desk` — Besprechungen & Aufzeichnungen**
-   - Lifecycle-Management für Meetings aus SaaS-Adaptern (`fireflies-api`, `zoom-api`) oder manuellen Uploads.
-   - Transkript-Synthese, Qualitätskontrolle von Zusammenfassungen und Ablage in `memory/evidence/meetings/`.
-   - Thematische Zuordnung und Übergabe von Action-Items an den `task-desk`.
-
-3. **`skills/event-documentation` — Konferenzen & Veranstaltungen**
-   - 2-Säulen-Dokumentation für größere Events.
-   - Trennung von offiziellen Programmen (`references/.../events/index.md`) und Aufzeichnungen/Notizen (`evidence/.../events/`).
-
-4. **`skills/task-desk` — Aufgaben-Triage & Todoist-Synchronisation**
-   - Zentrale Bündelung aller Folgeaufgaben aus Mails, Meetings, Events und Chat.
-   - Anwenden von Routing-Regeln (`references/todos/routing-rules.md`) und Deduplizierung (`evidence/todos/created-tasks.json`).
-   - Synchronisation mit Todoist unter lückenloser **Factored Attribution** (`description: "Quelle: [EVID-...]"`).
-
-5. **`skills/topic-catalog-entry` — Themen-Taxonomie**
-   - Strukturierte Neuanlage und Pflege von Fachthemen (`memory/references/topics/<slug>/`).
-
-6. **`skills/project-catalog-entry` — Projekt-Katalog**
-   - Strukturierte Neuanlage und Pflege von Projekten (`memory/references/projects/<slug>/`).
-
----
-
-## 🛠️ Zusammenspiel mit SaaS-Adaptern
-
-`office-intelligence` steuert die fachlichen Arbeitsabläufe und delegiert technische API-Calls an die zustandslosen Adapter:
-- **Audio & Transkripte:** `fireflies-api`, `zoom-api`
-- **Aufgaben-Sync:** `todoist-api`
-- **Mailbox-Transport:** `himalaya`, `gmail`
+Technische Integrationen bleiben getrennte, nicht zum Bundle gehörende Skills:
+beispielsweise `fireflies-api` oder `zoom-api` für Meeting-Intake, `todoist-api` für
+Aufgaben-Synchronisation sowie passende Mailbox-Adapter für Transport und
+Mailbox-Aktionen. Der jeweilige Fach-Desk definiert, wann diese Adapter einzubeziehen
+sind.

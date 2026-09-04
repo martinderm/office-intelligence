@@ -1,188 +1,53 @@
 # office-intelligence
 
-Leichtgewichtiger, produktiver Kern fuer agentische Mailarbeit und Wissenspflege.
-
-Der aktive Betriebsmodus in diesem Repository ist:
-
-- mail-desk fuer operative Einzelmail-Triage
-- project-catalog-entry fuer Projektkatalog und Projekt-Wissensstruktur
-- topic-catalog-entry fuer Topickatalog und thematische Wissensstruktur
-
-## Aktueller Fokus (main)
-
-Der Branch main ist bewusst auf den funktionierenden Kern reduziert:
-
-- Mailbearbeitung ueber mail-desk
-- Routing anhand von Projekt- und Topic-Katalog
-- schlanke, nachvollziehbare Datenablage unter data/mail-desk
-- gezielte Wissenspflege unter memory/references
-
-Nicht aktiv im Hauptpfad:
-
-- schwere, hybride/deterministische Batch-Mailpipeline
-- experimentelle End-to-End-Automatisierung mit Teilfunktionalitaet
-
-## Hinweis auf den Hybrid-Branch
-
-Die hybride, teilweise funktionsfaehige Mailverarbeitung (inklusive OpenClaw-Plugin-Integration) ist bewusst ausgelagert nach:
-
-- feature/automation-mail-processor-openclaw
-
-Dieser Branch dient als Entwicklungs- und Experimentierpfad. Der produktive Standard bleibt main.
-
-## Repository-Struktur
-
-Relevante Kernbereiche:
-
-- skills/mail-desk
-- skills/project-catalog-entry
-- skills/topic-catalog-entry
-- skills/event-documentation
-- memory/references/projects/projects.json
-- memory/references/topics/topics.json
-- data/mail-desk
-
-## Kern-Workflow
-
-1. Mail lesen und einordnen (mail-desk)
-2. Projekt-/Topic-Kontext laden
-3. Routing-Entscheidung treffen
-4. in data/mail-desk protokollieren
-5. bei belastbaren neuen Fakten memory/references aktualisieren
-
-## Skills im Detail
-
-### mail-desk
-
-Pfad:
-
-- skills/mail-desk/SKILL.md
-
-Zweck:
-
-- eine Mail nach der anderen bearbeiten
-- klare, nachvollziehbare Entscheidungen
-- kein versteckter Massenlauf
-- Message-ID als stabile Referenz
-
-Wichtige Datenpfade:
-
-- data/mail-desk/action-log.jsonl
-- data/mail-desk/pending-review.jsonl
-- data/mail-desk/replies-needed.jsonl
-- data/mail-desk/final-location-index.json
-- data/mail-desk/archive/
-
-### project-catalog-entry
-
-Pfad:
-
-- skills/project-catalog-entry/SKILL.md
-
-Zweck:
-
-- Projekte sauber anlegen und pflegen
-- routingrelevante Metadaten in projects.json halten
-- Projektwissen in Projektordnern strukturieren
-
-Source of truth:
-
-- memory/references/projects/projects.json
-
-### topic-catalog-entry
-
-Pfad:
-
-- skills/topic-catalog-entry/SKILL.md
-
-Zweck:
-
-- Topics/Subtopics sauber pflegen
-- thematische Routing-Signale stabil halten
-- Topicwissen strukturiert dokumentieren
-
-Source of truth:
-
-- memory/references/topics/topics.json
-
-### event-documentation
-
-Pfad:
-
-- skills/event-documentation/SKILL.md
-
-Zweck:
-
-- Dokumentation und Ordnerstrukturpflege für größere Konferenzen und Events
-- Programm-Extraktion, Transcript-Verarbeitung, Action-Items Triage und Todoist-Fristensynchronisation
-
-### cloud-atlas
-
-Pfad:
-
-- [skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md)
-
-Zweck:
-
-- Kartografierung von Cloud-Speicher Junctions und vollautomatische Synchronisation lokaler Markdown-Spiegelungen (Mirrors) mit autoritativem `output_dir`, Multi-Core-Verarbeitung (`--jobs 2`), Hänge-Schutz (`--file-timeout 60`) und automatischem OCR-Fallback via `ocrmypdf` für gescannte PDFs.
-- Ausführliche CLI- und Prozessdokumentation siehe interne `SKILL.md`.
-
-## Installation in Agent-Workspaces
-
-Standard-Rollout:
-
-- skills/mail-desk
-- skills/project-catalog-entry
-- skills/topic-catalog-entry
-- skills/event-documentation
-- skills/cloud-atlas
-
-Minimaler Rollout:
-
-1. die fünf Skill-Ordner in den Ziel-Agent-Workspace kopieren
-2. sicherstellen, dass `memory/references/projects/projects.json` und `memory/references/topics/topics.json` vorhanden sind
-3. **Erweiterung der `AGENTS.md`**: Bei Installation von `cloud-atlas` müssen die Regeln zum Hybrid-Modell für Cloud-Filemaps in die `AGENTS.md` des Ziel-Workspaces übernommen werden (Vorlagen-Text siehe [skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md)).
-4. pro Mail den Workflow aus `skills/mail-desk/SKILL.md` verwenden
-
-## Katalog- und Referenzmodell
-
-Gemeinsame Katalog-Doku:
-
-- memory/references/README.md
-
-Projektkatalog:
-
-- memory/references/projects/projects.json
-
-Topickatalog:
-
-- memory/references/topics/topics.json
-
-Leitprinzip:
-
-- Katalogdateien enthalten strukturierte Routing-Metadaten
-- Fachwissen liegt in den jeweiligen Projekt-/Topic-Unterordnern
-
-## Lokaler Start
-
-Falls nur Skills/Katalogpflege und Dokumentation genutzt werden, ist kein Build oder Pipeline-Run noetig.
-
-## Betriebsgrenzen auf main
-
-- Kein automatisches Batch-Routing als Standard
-- Keine implizite Vollautomation ueber alle Mails
-- Fokus auf kontrollierte, agentische Einzelbearbeitung
-
-## Erweiterungen
-
-Ergaenzende API-Skills fuer angrenzende Workflows koennen weiterhin separat genutzt werden, zum Beispiel:
-
-- fireflies-api fuer Meeting- und Transcript-Arbeit: [martinderm/fireflies-api](https://github.com/martinderm/fireflies-api)
-- todoist-api fuer Task-Routing: [martinderm/todoist-api](https://github.com/martinderm/todoist-api)
-
-## Migrationshinweis
-
-Wenn du von aelteren Stands kommst, in denen mail-processor als primaerer Laufweg dokumentiert war:
-
-- nutze auf main den mail-desk-zentrierten Kern
-- verwende den Hybrid-Branch nur fuer gezielte Entwicklungsarbeiten
+`office-intelligence` ist ein Skill-Bundle für nachvollziehbare Office-, Wissens- und
+Verwaltungsarbeit nach dem Dual-Evidence-Ansatz. Der Root-[`SKILL.md`](SKILL.md) ist
+ein Router: Er wählt einen Fach-Desk aus, ersetzt ihn aber nicht. Das Bundle ist kein
+Agent-Workspace und bringt keine eigene Workspace-Control-Plane oder
+Agent-Lifecycle-Verwaltung mit.
+
+## Enthaltene Sub-Skills
+
+| Sub-Skill | Einsatzbereich | Nicht zuständig für |
+| --- | --- | --- |
+| [cloud-atlas](skills/cloud-atlas/SKILL.md) | Projekt- und Topic-Cloudspeicher, Konvertierung, Filemaps und lokale Markdown-Mirrors | Projekt-/Topic-Katalogeinträge |
+| [mail-desk](skills/mail-desk/SKILL.md) | Fachliche Bearbeitung einzelner Mails, Routing, Reply-/Todo-Entscheidungen und leichte Mail-Logs | Mailbox-Transport und vollständige Aufgaben-Triage |
+| [meeting-desk](skills/meeting-desk/SKILL.md) | Intake, Klassifikation, Evidenz und Nachbereitung einzelner Meetings, Konferenzschaltungen und Vorträge | Dokumentation eines gesamten größeren Events |
+| [event-documentation](skills/event-documentation/SKILL.md) | Konferenzen, Tagungen und Seminare mit Programm, Aufzeichnungen und Action-Item-Triage | allgemeiner Meeting-Intake außerhalb eines Events |
+| [task-desk](skills/task-desk/SKILL.md) | Action-Item-Extraktion, Priorisierung, Deduplizierung und Vorbereitung der Aufgaben-Synchronisation | Mailbox-Routing oder Pflege von Katalogstrukturen |
+| [project-catalog-entry](skills/project-catalog-entry/SKILL.md) | `projects.json` und zugehörige Projektarbeits- und Wissensstruktur | Topic-/Subtopic-Katalogpflege |
+| [topic-catalog-entry](skills/topic-catalog-entry/SKILL.md) | `topics.json` und zugehörige Topic-/Subtopic-Arbeits- und Wissensstruktur | Projektkatalogpflege |
+
+`mail-desk` ist grundsätzlich ein kontrollierter Fall-für-Fall-Workflow. Kleine,
+ausdrücklich beauftragte Datums- oder Ordner-Batches sind möglich, wenn jede Mail
+denselben vollständigen Compliance-Flow durchläuft; die Desk-Regeln bestimmen die
+Grenzen.
+
+## Installation und Nutzung
+
+Installiere oder verlinke den vollständigen Ordner `office-intelligence/` einschließlich
+aller sieben Ordner unter `skills/`. Öffne zunächst den Root-[`SKILL.md`](SKILL.md) und
+danach nur den für die konkrete Aufgabe passenden Sub-Skill. Konsumierende Workspaces
+stellen ihre eigenen Kataloge, Evidenz- und Datenpfade bereit; die dort geltenden
+Workspace-Regeln bleiben maßgeblich.
+
+Vor einer Mutation im konsumierenden Workspace ist dessen `workspace-lock` mit einer
+Lease des ausführenden Harnesses erforderlich. Lesende Auswertungen sind lockfrei. Ein
+lockfreier Schreiblauf ist nur als ausdrücklich gewählter, dokumentierter
+Single-Session-Legacy-Modus zulässig; die Details stehen in den jeweiligen Sub-Skills.
+
+## Adapter und Nachbar-Skills
+
+Die sieben oben aufgeführten Ordner sind die Mitglieder dieses Bundles. Technische
+Adapter gehören nicht dazu und werden bei Bedarf separat eingebunden, etwa
+`fireflies-api` oder `zoom-api` für Meeting-Intake, `todoist-api` für Aufgaben-Sync
+sowie passende Gmail-, Himalaya- oder IMAP-Adapter für Mailbox-Zugriff. Die fachliche
+Entscheidung bleibt jeweils beim zuständigen Office-Intelligence-Desk.
+
+## Referenzmodell
+
+Die Katalog-Desks arbeiten mit `memory/references/projects/projects.json` und
+`memory/references/topics/topics.json`. Fachliche Struktur liegt in den zugehörigen
+Projekt- und Topic-Unterordnern; operative Nachweise bleiben von diesen Referenzen
+getrennt. Konkrete Pfade, Formate und Schreibregeln sind absichtlich nur in den
+zuständigen Sub-Skills beschrieben.
