@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import json
 from pathlib import Path
 import sys
@@ -55,6 +56,7 @@ from core import (
     utc_now_iso,
     verify_in_target_folder,
 )
+from core.envelope import build_error, build_success, emit_json
 
 
 # ==============================================================================
@@ -1080,10 +1082,173 @@ def run_resolve_mode(
 # Main Entry Point
 # ==============================================================================
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Unified batch runner for mail-desk (inspect, draft, execute, verify, pipeline, search, resolve)."
+CANONICAL_ACTION = "batch_runner"
+MODE_ALIASES = {
+    "inspect": "inspect",
+    "fetch": "inspect",
+    "draft": "draft",
+    "propose": "draft",
+    "sync_sent": "sync_sent",
+    "sync-sent": "sync_sent",
+    "sent": "sync_sent",
+    "pipeline": "pipeline",
+    "auto": "pipeline",
+    "execute": "execute",
+    "process": "execute",
+    "verify": "verify",
+    "validate": "verify",
+    "check": "verify",
+    "search": "search",
+    "locate": "search",
+    "find": "search",
+    "resolve": "resolve",
+    "archive": "resolve",
+}
+
+
+class ArgumentParseError(ValueError):
+    """An argparse failure that can be reported through the JSON contract."""
+
+
+class EnvelopeArgumentParser(argparse.ArgumentParser):
+    """Keep argparse diagnostics off stdout so it remains machine-readable."""
+
+    def error(self, message: str) -> None:
+        self.print_usage(sys.stderr)
+        sys.stderr.write(f"{self.prog}: error: {message}\n")
+        raise ArgumentParseError(message)
+
+
+def _legacy_result_data(result: dict[str, Any], operation: str) -> dict[str, Any]:
+    """Move legacy runner result fields below the canonical envelope boundary."""
+    data = {key: value for key, value in result.items() if key not in {"ok", "mode", "message"}}
+    data["operation"] = operation
+    return data
+
+
+def _is_partial_failure(result: dict[str, Any]) -> bool:
+    """Recognize mixed item outcomes, including verify and pipeline summaries."""
+    execute_summary = result.get("execute_summary")
+    verify_summary = result.get("verify_summary")
+    # A fully completed execute stage may already have routed and persisted
+    # mutations.  If its follow-up verification stage then fails wholesale,
+    # the pipeline is still only partially complete even without mixed lists.
+    if (
+        isinstance(execute_summary, dict)
+        and execute_summary.get("ok") is True
+        and isinstance(verify_summary, dict)
+        and verify_summary.get("ok") is False
+    ):
+        return True
+
+    results = result.get("results")
+    if isinstance(results, list):
+        outcomes = [
+            entry[key]
+            for entry in results
+            if isinstance(entry, dict)
+            for key in ("success", "resolved", "consistent")
+            if isinstance(entry.get(key), bool)
+        ]
+        if any(outcome is True for outcome in outcomes) and any(outcome is False for outcome in outcomes):
+            return True
+
+    return any(
+        isinstance(summary, dict) and _is_partial_failure(summary)
+        for summary in (execute_summary, verify_summary)
     )
+
+
+def _result_envelope(result: dict[str, Any], operation: str) -> dict[str, Any]:
+    """Translate a legacy in-process result into the OI-10 CLI envelope."""
+    data = _legacy_result_data(result, operation)
+    if bool(result.get("ok")):
+        return build_success(
+            CANONICAL_ACTION,
+            result.get("message") or f"Batch runner {operation} completed.",
+            data,
+        )
+
+    partial = _is_partial_failure(result)
+    state = "PartialFailure" if partial else "Failed"
+    message = result.get("message") or (
+        f"Batch runner {operation} completed with partial failures."
+        if partial
+        else f"Batch runner {operation} failed."
+    )
+    return build_error(
+        CANONICAL_ACTION,
+        message,
+        data,
+        error_type="PartialFailure" if partial else "OperationFailed",
+        state=state,
+    )
+
+
+def _emit(envelope: dict[str, Any]) -> bool:
+    """Emit exactly one canonical envelope, including serialization failures."""
+    try:
+        emit_json(envelope)
+        return True
+    except Exception as exc:  # noqa: BLE001 - final CLI boundary must stay JSON-only
+        try:
+            emit_json(
+                build_error(
+                    CANONICAL_ACTION,
+                    "Unable to serialize batch runner result.",
+                    error_type="SerializationError",
+                    error_details={"exception_type": type(exc).__name__},
+                )
+            )
+        except Exception:  # noqa: BLE001 - stdout may be unavailable, but never emit a non-envelope
+            pass
+        return False
+
+
+def _serialization_error_envelope(exc: Exception, operation: str) -> dict[str, Any]:
+    """Build the recoverable error used before any success-only cleanup."""
+    return build_error(
+        CANONICAL_ACTION,
+        "Unable to serialize batch runner result.",
+        {"operation": operation},
+        error_type="SerializationError",
+        error_details={"exception_type": type(exc).__name__},
+    )
+
+
+def _is_json_serializable(envelope: dict[str, Any]) -> tuple[bool, Exception | None]:
+    """Preflight stdout serialization before deleting a successful manifest."""
+    try:
+        json.dumps(envelope, ensure_ascii=False)
+    except (TypeError, ValueError) as exc:
+        return False, exc
+    return True, None
+
+
+def _failure_envelope(
+    message: object,
+    *,
+    error_type: str,
+    operation: str = "argument_parse",
+    state: str = "Failed",
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return build_error(
+        CANONICAL_ACTION,
+        message,
+        {"operation": operation},
+        error_type=error_type,
+        error_details=details,
+        state=state,
+    )
+
+
+def _build_parser() -> EnvelopeArgumentParser:
+    parser = EnvelopeArgumentParser(
+        add_help=False,
+        description="Unified batch runner for mail-desk (inspect, draft, execute, verify, pipeline, search, resolve).",
+    )
+    parser.add_argument("-h", "--help", action="store_true", help="Show JSON-compatible CLI help metadata")
     parser.add_argument("--input", "-i", help="Path to input JSON file in data/")
     parser.add_argument("--stdin", action="store_true", help="Read JSON configuration from stdin")
     parser.add_argument("--account", "-a", help="Himalaya account override")
@@ -1102,15 +1267,12 @@ def main() -> int:
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
     parser.add_argument("--no-skip-known", dest="skip_known", action="store_false", help="Do not skip known emails")
     parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Minimum confidence threshold for pipeline auto-execution")
+    return parser
 
-    args = parser.parse_args()
 
-    data_dir = resolve_data_dir(args.data_dir)
-    input_path: Path | None = None
-    config: dict[str, Any] = {}
-
+def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     if args.pipeline is not None:
-        config = {
+        return {
             "mode": "pipeline",
             "count": args.pipeline,
             "order": args.order,
@@ -1119,27 +1281,20 @@ def main() -> int:
             "min_confidence": args.min_confidence,
             "verify": True,
         }
-    elif args.sync_sent is not None:
-        config = {
-            "mode": "sync_sent",
-            "count": args.sync_sent,
-            "folder": "Sent Items",
-        }
-    elif args.resolve:
-        config = {
-            "mode": "resolve",
-            "auto_from_sent": True,
-        }
-    elif args.draft is not None:
-        config = {
+    if args.sync_sent is not None:
+        return {"mode": "sync_sent", "count": args.sync_sent, "folder": "Sent Items"}
+    if args.resolve:
+        return {"mode": "resolve", "auto_from_sent": True}
+    if args.draft is not None:
+        return {
             "mode": "draft",
             "count": args.draft,
             "order": args.order,
             "folder": args.folder,
             "output_file": str(data_dir / "batch-manifest.json"),
         }
-    elif args.inspect is not None:
-        config = {
+    if args.inspect is not None:
+        return {
             "mode": "inspect",
             "count": args.inspect,
             "order": args.order,
@@ -1147,89 +1302,176 @@ def main() -> int:
             "skip_known": args.skip_known,
             "output_file": str(data_dir / "batch-inspected.json"),
         }
-    elif args.stdin:
+    return None
+
+
+def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[str, Any], Path | None]:
+    """Load direct, stdin, explicit, or auto-discovered input without printing."""
+    direct = _direct_mode_config(args, data_dir)
+    if direct is not None:
+        return direct, None
+
+    if args.stdin:
         raw = sys.stdin.read().strip()
         if not raw:
-            print(json.dumps({"ok": False, "error": "stdin payload is empty"}, ensure_ascii=False, indent=2))
-            return 1
-        config = json.loads(raw)
-    elif args.input:
+            raise ArgumentParseError("stdin payload is empty")
+        try:
+            config = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ArgumentParseError(f"stdin payload is not valid JSON: {exc.msg}") from exc
+        return config, None
+
+    if args.input:
         input_path = Path(args.input).expanduser().resolve()
         if not input_path.exists():
-            print(json.dumps({"ok": False, "error": f"Input file not found: {input_path}"}, ensure_ascii=False, indent=2))
-            return 1
-        with input_path.open("r", encoding="utf-8") as f:
-            config = json.load(f)
-    else:
-        # Default auto-discovery in data/mail-desk/
-        candidates = [
-            data_dir / "batch-manifest.json",
-            data_dir / "batch-pipeline.json",
-            data_dir / "batch-draft.json",
-            data_dir / "batch-inspect.json",
-            data_dir / "batch-verify.json",
-            data_dir / "batch-search.json",
-            data_dir / "batch-resolve.json",
-            data_dir / "batch-sync-sent.json",
-        ]
-        found_input = False
-        for cand in candidates:
-            if cand.exists():
-                input_path = cand
-                with input_path.open("r", encoding="utf-8") as f:
-                    config = json.load(f)
-                found_input = True
-                break
-        if not found_input:
-            candidate_names = ", ".join(c.name for c in candidates)
-            err_msg = (
-                "Neither --input nor --stdin was provided, and no default input file "
-                f"({candidate_names}) was found in {data_dir}."
-            )
-            print(json.dumps({"ok": False, "error": err_msg}, ensure_ascii=False, indent=2))
-            return 1
-
-    mode = config.get("mode", "execute").lower()
-    index_path = resolve_final_index_path(args.index, data_dir=data_dir)
-    account = args.account or config.get("account")
-
-    if mode in ("inspect", "fetch"):
-        out = run_inspect_mode(config, account=account, data_dir=data_dir)
-    elif mode in ("draft", "propose"):
-        out = run_draft_mode(config, account=account, data_dir=data_dir)
-    elif mode in ("sync_sent", "sync-sent", "sent"):
-        out = run_sync_sent_mode(config, account=account, data_dir=data_dir)
-    elif mode in ("pipeline", "auto"):
-        out = run_pipeline_mode(config, account=account, data_dir=data_dir, index_path=index_path)
-    elif mode in ("execute", "process"):
-        out = run_execute_mode(config, account=account, data_dir=data_dir, index_path=index_path)
-    elif mode in ("verify", "validate", "check"):
-        out = run_verify_mode(config, account=account, data_dir=data_dir, index_path=index_path)
-    elif mode in ("search", "locate", "find"):
-        out = run_search_mode(config, account=account, data_dir=data_dir)
-    elif mode in ("resolve", "archive"):
-        out = run_resolve_mode(config, data_dir=data_dir)
-    else:
-        print(json.dumps({"ok": False, "error": f"Unsupported mode: {mode}"}, ensure_ascii=False, indent=2))
-        return 1
-
-    # Delete input file on confirmed success if requested
-    delete_input = config.get("delete_input_on_success", True) and not args.keep_input
-    if input_path and input_path.exists() and delete_input and out.get("ok"):
+            raise FileNotFoundError(f"Input file not found: {input_path}")
         try:
-            input_path.unlink()
-            out["input_file_deleted"] = True
-        except Exception as e:
-            out["input_file_deleted"] = False
-            out["input_file_delete_error"] = str(e)
+            with input_path.open("r", encoding="utf-8") as handle:
+                return json.load(handle), input_path
+        except json.JSONDecodeError as exc:
+            raise ArgumentParseError(f"Input file is not valid JSON: {exc.msg}") from exc
 
-    print(json.dumps(out, ensure_ascii=False, indent=2))
-    return 0 if out.get("ok") else 1
+    candidates = [
+        data_dir / "batch-manifest.json",
+        data_dir / "batch-pipeline.json",
+        data_dir / "batch-draft.json",
+        data_dir / "batch-inspect.json",
+        data_dir / "batch-verify.json",
+        data_dir / "batch-search.json",
+        data_dir / "batch-resolve.json",
+        data_dir / "batch-sync-sent.json",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    return json.load(handle), candidate
+            except json.JSONDecodeError as exc:
+                raise ArgumentParseError(f"Auto-discovered input is not valid JSON: {exc.msg}") from exc
+
+    candidate_names = ", ".join(candidate.name for candidate in candidates)
+    raise FileNotFoundError(
+        "Neither --input nor --stdin was provided, and no default input file "
+        f"({candidate_names}) was found in {data_dir}."
+    )
+
+
+def _dispatch(
+    config: dict[str, Any],
+    *,
+    account: str | None,
+    data_dir: Path,
+    index_path: Path,
+) -> tuple[dict[str, Any], str]:
+    raw_mode = config.get("mode", "execute")
+    if not isinstance(raw_mode, str):
+        raise ArgumentParseError("mode must be a string")
+    mode = raw_mode.lower()
+    operation = MODE_ALIASES.get(mode)
+    if operation is None:
+        raise ArgumentParseError(f"Unsupported mode: {mode}")
+
+    # The runner has always produced a JSON result.  Redirect legacy progress
+    # messages while it runs so stdout contains exactly that one result envelope.
+    with contextlib.redirect_stdout(sys.stderr):
+        if operation == "inspect":
+            return run_inspect_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "draft":
+            return run_draft_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "sync_sent":
+            return run_sync_sent_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "pipeline":
+            return run_pipeline_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
+        if operation == "execute":
+            return run_execute_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
+        if operation == "verify":
+            return run_verify_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
+        if operation == "search":
+            return run_search_mode(config, account=account, data_dir=data_dir), operation
+        return run_resolve_mode(config, data_dir=data_dir), operation
+
+
+def main() -> int:
+    try:
+        parser = _build_parser()
+        args = parser.parse_args()
+        if args.help:
+            sys.stderr.write(parser.format_help())
+            _emit(build_success(CANONICAL_ACTION, "Batch runner CLI help.", {"operation": "help"}))
+            return 0
+
+        data_dir = resolve_data_dir(args.data_dir)
+        config, input_path = _load_configuration(args, data_dir)
+        if not isinstance(config, dict):
+            raise ArgumentParseError("configuration must be a JSON object")
+
+        index_path = resolve_final_index_path(args.index, data_dir=data_dir)
+        account = args.account or config.get("account")
+        result, operation = _dispatch(
+            config,
+            account=account,
+            data_dir=data_dir,
+            index_path=index_path,
+        )
+        if not isinstance(result, dict):
+            raise TypeError("mode handler returned a non-object result")
+
+        # A handler result must be serializable before it can count as a
+        # successful run.  In particular, do this before deleting its manifest:
+        # a caller needs that input to recover from a serialization failure.
+        envelope = _result_envelope(result, operation)
+        serializable, serialization_error = _is_json_serializable(envelope)
+        if not serializable:
+            envelope = _serialization_error_envelope(serialization_error, operation)
+
+        # Preserve manifests unless the complete mode result succeeded.  A
+        # cleanup failure is a partial failure because the requested lifecycle
+        # was not fully completed, but the input remains available for recovery.
+        delete_input = config.get("delete_input_on_success", True) and not args.keep_input
+        cleanup_failure: Exception | None = None
+        input_deleted = False
+        if input_path is not None and input_path.exists() and delete_input and envelope["success"]:
+            try:
+                input_path.unlink()
+                input_deleted = True
+            except Exception as exc:  # noqa: BLE001 - report cleanup under the envelope
+                cleanup_failure = exc
+
+        if input_path is not None:
+            result["input_file_deleted"] = input_deleted
+            if envelope["success"]:
+                envelope["data"]["input_file_deleted"] = input_deleted
+        if cleanup_failure is not None:
+            result["ok"] = False
+            result["message"] = "Batch completed, but input manifest cleanup failed."
+            result["cleanup_error"] = str(cleanup_failure)
+            envelope = build_error(
+                CANONICAL_ACTION,
+                result["message"],
+                _legacy_result_data(result, operation),
+                error_type="CleanupFailure",
+                error_details={"exception_type": type(cleanup_failure).__name__},
+                state="PartialFailure",
+            )
+        emitted = _emit(envelope)
+        return 0 if emitted and envelope["success"] else 1
+    except ArgumentParseError as exc:
+        _emit(_failure_envelope(str(exc), error_type="ArgumentError"))
+        return 2
+    except FileNotFoundError as exc:
+        _emit(_failure_envelope(str(exc), error_type="InputNotFound", operation="input_load", state="NotFound"))
+        return 1
+    except Exception as exc:  # noqa: BLE001 - every CLI failure must retain the envelope contract
+        _emit(
+            _failure_envelope(
+                str(exc) or type(exc).__name__,
+                error_type=type(exc).__name__,
+                operation="runtime",
+                details={"exception_type": type(exc).__name__},
+            )
+        )
+        return 1
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
-        raise SystemExit(1)
+    raise SystemExit(main())
