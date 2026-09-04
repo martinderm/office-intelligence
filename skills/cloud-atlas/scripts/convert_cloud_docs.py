@@ -1,5 +1,6 @@
 import os
 import sys
+import contextlib
 import datetime
 import re
 import json
@@ -26,6 +27,8 @@ if hasattr(sys.stderr, 'reconfigure'):
         pass
 
 DEFAULT_EXTENSIONS = ".pdf,.docx,.xlsx,.pptx,.doc"
+ACTION = "convert_cloud_docs"
+MAX_ENVELOPE_MESSAGE_LENGTH = 1000
 
 # Mirrors are Cloud-zone artifacts.  New writes are deliberately constrained to
 # the data-zone schema properties so conversion/OCR implementation details stay
@@ -54,7 +57,33 @@ def calculate_markdown_payload_sha256(markdown_body):
     payload = (markdown_body or "").encode("utf-8", errors="replace")
     return hashlib.sha256(payload).hexdigest()
 
-def parse_args():
+class ConversionRunError(RuntimeError):
+    """A conversion failure with enough context for a CLI envelope."""
+
+    def __init__(self, phase, message, storage_id=None):
+        super().__init__(message)
+        self.phase = phase
+        self.storage_id = storage_id
+
+
+def bounded_text(value, limit=MAX_ENVELOPE_MESSAGE_LENGTH):
+    text = str(value or "")
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def make_envelope(success, state, message, data, error=None):
+    """Return the shared-skills canonical CLI response shape."""
+    return {
+        "action": ACTION,
+        "success": success,
+        "state": state,
+        "message": bounded_text(message),
+        "data": data,
+        "error": error,
+    }
+
+
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Automatische Konvertierung von Cloud-Dateien zu Markdown (inkl. kontrollierter .doc-Unterstützung).")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
@@ -72,7 +101,8 @@ def parse_args():
     parser.add_argument("--ocr-policy", choices=["enrich_source", "local_derivative", "disabled"], default="local_derivative", help="OCR-Policy fuer PDFs: 'local_derivative' (Standard: OCR-Ergebnis als PDF unter _derivatives/), 'enrich_source' (In-place Anreicherung) oder 'disabled'.")
     parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback (entspricht --ocr-policy disabled)")
     parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge Neuerstellung bestehender OCR-Ebenen (--redo-ocr)")
-    return parser.parse_args()
+    parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen JSON-Envelope auf stdout aus")
+    return parser.parse_args(argv)
 
 # Setup markitdown conversion
 try:
@@ -1219,12 +1249,18 @@ def write_markdown_file(filepath, metadata, body):
 
     atomic_write_text(filepath, "\n".join(frontmatter_lines) + "\n\n" + (body or ""))
 
-def main():
-    args = parse_args()
+def run_conversion(args, run_state):
+    """Run the legacy conversion workflow and retain compact per-storage results.
+
+    The workflow deliberately remains responsible for all conversion decisions and
+    writes.  ``run_state`` only records a bounded, machine-readable summary so a
+    caller can expose a canonical envelope without changing the work performed.
+    """
     workspace_root = os.path.abspath(args.workspace_root) if args.workspace_root else find_workspace_root()
 
     project_id = args.project_id or args.topic_id
     is_topic = args.topic or (args.topic_id is not None)
+    run_state["target"] = {"kind": "topic" if is_topic else "project", "id": project_id}
 
     ocr_policy = args.ocr_policy
     if args.no_ocr:
@@ -1234,8 +1270,7 @@ def main():
     configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id)
 
     if not configs:
-        print(f"Error: No cloud sync configurations resolved for ID '{project_id}'.")
-        return
+        raise ConversionRunError("config", f"No cloud sync configurations resolved for ID '{project_id}'.")
 
     for sid, resolved in configs.items():
         print(f"\n--- Konvertiere Dokumente fuer Storage: {sid} ---")
@@ -1246,11 +1281,38 @@ def main():
         cloud_path_abs = os.path.normpath(os.path.join(workspace_root, cloud_dir))
         output_path_abs = os.path.normpath(os.path.join(workspace_root, output_dir))
         filemap_json_abs = os.path.normpath(os.path.join(workspace_root, filemap_json))
+        storage_summary = {
+            "storage_id": bounded_text(sid),
+            "scan_dir": bounded_text(cloud_dir.replace("\\", "/")),
+            "output_dir": bounded_text(output_dir.replace("\\", "/")),
+            "output_json": bounded_text(filemap_json.replace("\\", "/")),
+        }
+        run_state["partial_storage"] = storage_summary
 
         extensions = [ext.strip().lower() for ext in args.extensions.split(",")]
 
         if not os.path.exists(cloud_path_abs):
-            print(f"Error: Cloud directory '{cloud_path_abs}' does not exist.")
+            message = f"Cloud directory '{cloud_path_abs}' does not exist."
+            print(f"Error: {message}")
+            storage_summary["success"] = False
+            storage_summary["counts"] = {
+                "scanned": 0,
+                "converted": 0,
+                "skipped": 0,
+                "conversion_required": 0,
+                "failed": 0,
+            }
+            storage_summary["error"] = {
+                "phase": "scan",
+                "type": "FileNotFoundError",
+                "message": bounded_text(message),
+            }
+            run_state["storages"].append(storage_summary)
+            run_state.setdefault("storage_errors", []).append({
+                "storage_id": storage_summary["storage_id"],
+                **storage_summary["error"],
+            })
+            run_state.pop("partial_storage", None)
             continue
 
         filemap_data = {}
@@ -1556,6 +1618,13 @@ def main():
                     count_failed += 1
 
         print(f"\nZusammenfassung fuer {sid}: {count_converted} erfolgreich konvertiert, {count_skipped} aktuell (uebersprungen), {count_conversion_required} als 'conversion_required' markiert, {count_failed} fehlgeschlagen.")
+        storage_summary["counts"] = {
+            "scanned": len(raw_scanned_files),
+            "converted": count_converted,
+            "skipped": count_skipped,
+            "conversion_required": count_conversion_required,
+            "failed": count_failed,
+        }
 
         # Clean up orphaned markdown mirrors (where original file is deleted)
         if os.path.exists(output_path_abs):
@@ -1629,6 +1698,100 @@ def main():
         filemap_data["updated_at"] = now_str
         write_json_file(filemap_json_abs, filemap_data)
         print(f"Saved filemap JSON to {filemap_json_abs}")
+        storage_summary["success"] = count_failed == 0
+        storage_summary["file_count"] = len(new_files_in_json)
+        if count_failed:
+            error = {
+                "phase": "conversion",
+                "type": "ConversionFailures",
+                "message": f"{count_failed} file conversion(s) failed.",
+            }
+            storage_summary["error"] = error
+            run_state.setdefault("storage_errors", []).append({
+                "storage_id": storage_summary["storage_id"],
+                **error,
+            })
+        run_state["storages"].append(storage_summary)
+        run_state.pop("partial_storage", None)
+
+    return run_state
+
+
+def main(argv=None):
+    """CLI entrypoint with a pure-stdout canonical ``--json`` mode."""
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    json_requested = "--json" in arguments
+    try:
+        args = parse_args(arguments)
+    except SystemExit as exc:
+        exit_code = int(exc.code) if isinstance(exc.code, int) else 2
+        if json_requested:
+            print(json.dumps(make_envelope(
+                False,
+                "Failed",
+                "Invalid command-line arguments.",
+                {"target": None, "storages": []},
+                {"phase": "arguments", "type": "ArgumentError", "message": "Invalid command-line arguments."},
+            ), ensure_ascii=False))
+            return exit_code
+        return exit_code
+
+    run_state = {"target": None, "storages": []}
+    try:
+        if args.json:
+            # The converter has a long-standing, useful human progress stream.
+            # In JSON mode it is intentionally redirected, not suppressed.
+            with contextlib.redirect_stdout(sys.stderr):
+                run_conversion(args, run_state)
+        else:
+            run_conversion(args, run_state)
+    except ConversionRunError as exc:
+        if args.json:
+            error = {
+                "phase": exc.phase,
+                "storage_id": bounded_text(exc.storage_id) if exc.storage_id is not None else None,
+                "type": type(exc).__name__,
+                "message": bounded_text(exc),
+            }
+            print(json.dumps(make_envelope(False, "Failed", str(exc), run_state, error), ensure_ascii=False))
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        error = {
+            "phase": "runtime",
+            "storage_id": run_state.get("partial_storage", {}).get("storage_id"),
+            "type": type(exc).__name__,
+            "message": bounded_text(exc),
+        }
+        if args.json:
+            print(json.dumps(make_envelope(False, "Failed", str(exc), run_state, error), ensure_ascii=False))
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    if run_state.get("storage_errors"):
+        first_error = run_state["storage_errors"][0]
+        message = f"Conversion completed with {len(run_state['storage_errors'])} failed storage(s)."
+        error = {
+            "phase": "storage",
+            "storage_id": first_error["storage_id"],
+            "type": "StorageFailures",
+            "message": bounded_text(message),
+        }
+        if args.json:
+            print(json.dumps(make_envelope(False, "Failed", message, run_state, error), ensure_ascii=False))
+        return 1
+
+    if args.json:
+        converted = sum(item.get("counts", {}).get("converted", 0) for item in run_state["storages"])
+        print(json.dumps(make_envelope(
+            True,
+            "Completed",
+            f"Converted cloud documents for {len(run_state['storages'])} storage(s); {converted} file(s) converted.",
+            run_state,
+        ), ensure_ascii=False))
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
