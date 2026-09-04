@@ -1,81 +1,184 @@
 #!/usr/bin/env python3
-import sys
+"""Run the cloud converter and filemap generator as one ordered sync."""
+
 import argparse
+import json
 import subprocess
-import os
+import sys
+from pathlib import Path
+
+
+ACTION = "sync_project_cloud"
+COMPLETED = "Completed"
+FAILED = "Failed"
+
+
+class CliArgumentError(ValueError):
+    """An argument error that can be represented by the JSON contract."""
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CliArgumentError(message)
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Synchronisiert den Cloud-Speicher eines Projekts oder Themas (Konvertierung + Filemap).")
+    parser = ArgumentParser(
+        description="Synchronisiert den Cloud-Speicher eines Projekts oder Themas (Konvertierung + Filemap)."
+    )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
     group.add_argument("--topic-id", help="Topic-ID (z. B. lifelong-learning)")
     parser.add_argument("--force", action="store_true", help="Alle Konvertierungen erzwingen")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic")
-    parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
-    parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
+    parser.add_argument("--storage-id", help="Optionale Storage-ID bei mehreren Cloud-Speichern")
+    parser.add_argument("--workspace-root", help="Expliziter Pfad zum Workspace-Root")
     parser.add_argument("--file-timeout", type=int, default=60, help="Maximales Timeout pro Dateikonvertierung in Sekunden (Standard: 60)")
     parser.add_argument("--jobs", "-j", type=int, default=2, help="Anzahl paralleler Konvertierungs-Jobs (Standard: 2)")
     parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback fuer rein bildbasierte PDFs")
     parser.add_argument("--ocr-policy", choices=["enrich_source", "local_derivative", "disabled"], default="local_derivative", help="OCR-Policy fuer PDFs")
     parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge die Neuerstellung bestehender OCR-Ebenen")
+    parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen Structured-CLI-Envelope aus")
     return parser.parse_args()
 
+
+def envelope(success, state, message, data, error=None):
+    """Return the canonical, single-source-of-truth CLI result."""
+    return {
+        "action": ACTION,
+        "success": success,
+        "state": state,
+        "message": message,
+        "data": data,
+        "error": error,
+    }
+
+
+def emit_json(result):
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+def command_data(target_kind, target_id, completed_steps):
+    return {
+        "target": {"kind": target_kind, "id": target_id},
+        "completed_steps": completed_steps,
+    }
+
+
+def run_step(step, command, json_mode):
+    """Run one child command and avoid any child output on JSON stdout."""
+    try:
+        if json_mode:
+            result = subprocess.run(command, capture_output=True, text=True)
+        else:
+            result = subprocess.run(command)
+    except OSError as exc:
+        return None, {
+            "step": step,
+            "exit_code": None,
+            "type": type(exc).__name__,
+            "message": str(exc),
+        }
+
+    if result.returncode != 0:
+        return None, {
+            "step": step,
+            "exit_code": result.returncode,
+            "type": "ChildProcessError",
+            "message": f"Der Schritt '{step}' wurde mit Exitcode {result.returncode} beendet.",
+        }
+    return result, None
+
+
 def main():
-    args = parse_args()
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    
+    try:
+        args = parse_args()
+    except CliArgumentError as exc:
+        if "--json" in sys.argv[1:]:
+            emit_json(
+                envelope(
+                    False,
+                    FAILED,
+                    "Cloud-Synchronisation konnte nicht gestartet werden.",
+                    {"target": None, "completed_steps": []},
+                    {
+                        "step": "arguments",
+                        "exit_code": 2,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
+            )
+        else:
+            print(f"Fehlerhafte Argumente: {exc}", file=sys.stderr)
+        return 2
+    scripts_dir = Path(__file__).resolve().parent
     target_flag = "--project-id" if args.project_id else "--topic-id"
+    target_kind = "project" if args.project_id else "topic"
     target_id = args.project_id or args.topic_id
-    
-    # 1. Run convert_cloud_docs.py
-    cmd_convert = [
+    completed_steps = []
+
+    convert_command = [
         sys.executable,
-        os.path.join(scripts_dir, "convert_cloud_docs.py"),
-        target_flag, target_id,
-        "--file-timeout", str(args.file_timeout),
-        "--jobs", str(args.jobs)
+        str(scripts_dir / "convert_cloud_docs.py"),
+        target_flag,
+        target_id,
+        "--file-timeout",
+        str(args.file_timeout),
+        "--jobs",
+        str(args.jobs),
     ]
     if args.workspace_root:
-        cmd_convert.extend(["--workspace-root", args.workspace_root])
+        convert_command.extend(["--workspace-root", args.workspace_root])
     if args.force:
-        cmd_convert.append("--force")
+        convert_command.append("--force")
     if args.topic:
-        cmd_convert.append("--topic")
+        convert_command.append("--topic")
     if args.storage_id:
-        cmd_convert.extend(["--storage-id", args.storage_id])
+        convert_command.extend(["--storage-id", args.storage_id])
     if args.no_ocr:
-        cmd_convert.append("--no-ocr")
+        convert_command.append("--no-ocr")
     else:
-        cmd_convert.extend(["--ocr-policy", args.ocr_policy])
+        convert_command.extend(["--ocr-policy", args.ocr_policy])
     if args.redo_ocr:
-        cmd_convert.append("--redo-ocr")
-        
-    print(f"=== Schritt 1: Konvertiere Cloud-Dokumente fuer ID '{target_id}' ===")
-    res_convert = subprocess.run(cmd_convert)
-    if res_convert.returncode != 0:
-        print("Fehler beim Konvertieren der Cloud-Dokumente. Abbruch.")
-        sys.exit(res_convert.returncode)
-        
-    # 2. Run gen_filemap.py
-    cmd_map = [
-        sys.executable,
-        os.path.join(scripts_dir, "gen_filemap.py"),
-        target_flag, target_id
-    ]
+        convert_command.append("--redo-ocr")
+
+    if not args.json:
+        print(f"=== Schritt 1: Konvertiere Cloud-Dokumente fuer ID '{target_id}' ===")
+    _, error = run_step("convert", convert_command, args.json)
+    if error:
+        if args.json:
+            emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+        else:
+            print("Fehler beim Konvertieren der Cloud-Dokumente. Abbruch.")
+        return error["exit_code"] if error["exit_code"] is not None else 1
+    completed_steps.append("convert")
+
+    filemap_command = [sys.executable, str(scripts_dir / "gen_filemap.py"), target_flag, target_id]
     if args.workspace_root:
-        cmd_map.extend(["--workspace-root", args.workspace_root])
+        filemap_command.extend(["--workspace-root", args.workspace_root])
     if args.topic:
-        cmd_map.append("--topic")
+        filemap_command.append("--topic")
     if args.storage_id:
-        cmd_map.extend(["--storage-id", args.storage_id])
-        
-    print(f"\n=== Schritt 2: Generiere Filemap fuer ID '{target_id}' ===")
-    res_map = subprocess.run(cmd_map)
-    if res_map.returncode != 0:
-        print("Fehler beim Generieren der Filemap.")
-        sys.exit(res_map.returncode)
-        
-    print("\n=== Cloud-Synchronisation erfolgreich abgeschlossen! ===")
+        filemap_command.extend(["--storage-id", args.storage_id])
+
+    if not args.json:
+        print(f"\n=== Schritt 2: Generiere Filemap fuer ID '{target_id}' ===")
+    _, error = run_step("filemap", filemap_command, args.json)
+    if error:
+        if args.json:
+            emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+        else:
+            print("Fehler beim Generieren der Filemap.")
+        return error["exit_code"] if error["exit_code"] is not None else 1
+    completed_steps.append("filemap")
+
+    if args.json:
+        emit_json(envelope(True, COMPLETED, "Cloud-Synchronisation erfolgreich abgeschlossen.", command_data(target_kind, target_id, completed_steps)))
+    else:
+        print("\n=== Cloud-Synchronisation erfolgreich abgeschlossen! ===")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

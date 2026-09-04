@@ -260,7 +260,7 @@ Jedes Paket ist so geschnitten, dass ein kleiner Coding Agent nur wenige Dateien
 | `OI-06` | ✅ abgeschlossen | Kanonischen Metadaten-Builder ergänzen | kleiner Helper in `cloud-atlas`, Tests | erzeugte Cloud-Metadaten validieren gegen kanonisches Schema | `OI-01` | Luna/Flash |
 | `OI-07` | ✅ abgeschlossen | Dual-Read/Canonical-Write migrieren | `convert_cloud_docs.py`, Tests | alte Mirrors werden erkannt; neue Ausgabe enthält keine Legacy-Felder | `OI-06` | Terra-high implementiert; stärkeres Parent-Review |
 | `OI-08` | ✅ abgeschlossen | Filemap-Schema entscheiden und implementieren | neues Schema/Referenz, `gen_filemap.py`, Tests | Container und Artefaktmetadaten deterministisch validiert | `OI-06` | Luna-xhigh implementiert; stärkeres Parent-Review mit zwei Korrekturrunden (Portabilität sowie Schema-URI/Index-Hygiene) |
-| `OI-09a` | ⬜ offen | Envelope für Cloud-Sync-Wrapper | `sync_project_cloud.py`, Contract-Test | Success- und Error-Pfad sind kanonisch | `OI-04a`, `OI-04b` | Luna/Flash |
+| `OI-09a` | ✅ abgeschlossen | Envelope für Cloud-Sync-Wrapper | `sync_project_cloud.py`, Contract-Test | Success- und Error-Pfad sind kanonisch | `OI-04a`, `OI-04b` | Terra-medium implementiert; stärkeres Parent-Review ohne Korrekturrunde |
 | `OI-09b` | ⬜ offen | Envelope für Filemap-Generator | `gen_filemap.py`, Contract-Test | Human- und JSON-Modus sauber getrennt | `OI-04b` | Luna/Flash |
 | `OI-09c` | ⬜ offen | Envelope für Cloud-Konverter | `convert_cloud_docs.py`, Contract-Test | Fortschritt bleibt außerhalb des JSON-Envelopes | `OI-04a` | Luna/Flash |
 | `OI-10` | ⬜ offen | Mail-Desk Envelope-Helper | neuer Helper unter `mail-desk/scripts/core/`, Tests | Success- und Error-Envelope zentral getestet | keine | Luna/Flash |
