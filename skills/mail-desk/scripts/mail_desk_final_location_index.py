@@ -14,6 +14,9 @@ if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 from core import (
+    build_error,
+    build_success,
+    emit_json,
     load_final_index,
     lookup_final_index,
     normalize_message_id,
@@ -25,6 +28,33 @@ from core import (
     upsert_final_index_many,
     utc_now_iso,
 )
+
+
+ACTION = "final_location_index"
+
+
+def _emit_success(operation: str, message: str, data: dict[str, Any]) -> None:
+    emit_json(build_success(ACTION, message, {"operation": operation, **data}))
+
+
+def _emit_error(
+    operation: str,
+    message: str,
+    exc: Exception | None = None,
+    *,
+    state: str = "Failed",
+    data: dict[str, Any] | None = None,
+) -> None:
+    emit_json(
+        build_error(
+            ACTION,
+            message,
+            {"operation": operation, **(data or {})},
+            state=state,
+            error_type=type(exc).__name__ if exc else "OperationError",
+            error_details={"reason": str(exc)[:1000]} if exc else None,
+        )
+    )
 
 
 def get_index_stats(index_path: Path) -> dict[str, Any]:
@@ -45,8 +75,6 @@ def get_index_stats(index_path: Path) -> dict[str, Any]:
     file_size_bytes = index_path.stat().st_size if index_path.exists() else 0
 
     return {
-        "ok": True,
-        "action": "stats",
         "index_file": str(index_path),
         "file_size_bytes": file_size_bytes,
         "file_size_kb": round(file_size_bytes / 1024, 1),
@@ -79,7 +107,11 @@ def execute_index_manifest(manifest: dict[str, Any], data_dir: Path | None = Non
 
         try:
             if action in ("stats", "summary", "count"):
-                res = get_index_stats(index_path)
+                res = {
+                    "ok": True,
+                    "action": "stats",
+                    "result": get_index_stats(index_path),
+                }
             elif action in ("lookup", "get", "find"):
                 mid = op.get("message_id") or op.get("mid")
                 if not mid:
@@ -156,6 +188,30 @@ def execute_index_manifest(manifest: dict[str, Any], data_dir: Path | None = Non
     return out
 
 
+def _manifest_output_data(result: dict[str, Any]) -> dict[str, Any]:
+    """Translate legacy internal operation results into canonical payload data."""
+    raw_results = result.get("results")
+    raw_list = raw_results if isinstance(raw_results, list) else [raw_results]
+    translated = []
+    for raw in raw_list:
+        if not isinstance(raw, dict):
+            translated.append({"operation": "unknown", "success": False, "data": {}, "error": {"type": "InvalidResult", "message": str(raw)}})
+            continue
+        error = raw.get("error")
+        translated.append(
+            {
+                "operation": raw.get("action", "unknown"),
+                "success": bool(raw.get("ok")),
+                "data": {key: value for key, value in raw.items() if key not in {"ok", "action", "error"}},
+                "error": None if error is None else {"type": "OperationError", "message": str(error)[:1000]},
+            }
+        )
+    return {
+        "total_operations": result.get("total_operations", len(translated)),
+        "results": translated if isinstance(raw_results, list) else translated[0],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Unified CLI and JSON manifest client for final-location-index.json")
     parser.add_argument("--input", "-i", help="Path to JSON operation manifest")
@@ -178,7 +234,13 @@ def main() -> int:
     p_query.add_argument("--query", "-q", help="Search keyword")
     p_query.add_argument("--limit", "-l", type=int, default=50, help="Max results to return")
 
-    args = parser.parse_args()
+    try:
+        args = parser.parse_args()
+    except SystemExit as exc:
+        if exc.code not in (None, 0):
+            _emit_error("argument_parse", "Invalid command-line arguments.", ValueError("argparse rejected the arguments"))
+            return int(exc.code)
+        raise
 
     data_dir = resolve_data_dir()
     index_path = resolve_final_index_path(args.index, data_dir=data_dir)
@@ -187,47 +249,55 @@ def main() -> int:
     if args.input:
         in_p = Path(args.input).expanduser().resolve()
         if not in_p.exists():
-            print(json.dumps({"ok": False, "error": f"Input file not found: {in_p}"}, ensure_ascii=False, indent=2))
+            _emit_error("manifest", "Input manifest was not found.", FileNotFoundError(str(in_p)))
             return 1
         try:
             with in_p.open("r", encoding="utf-8") as f:
                 manifest = json.load(f)
         except Exception as e:
-            print(json.dumps({"ok": False, "error": f"Invalid JSON manifest: {e}"}, ensure_ascii=False, indent=2))
+            _emit_error("manifest", "Input manifest is not valid JSON.", e)
             return 1
 
         out = execute_index_manifest(manifest, data_dir=data_dir)
+        output_data = _manifest_output_data(out)
 
         delete_input = manifest.get("delete_input_on_success", True) and not args.keep_input
         if in_p.exists() and delete_input and out.get("ok"):
             try:
                 in_p.unlink()
                 out["input_file_deleted"] = True
+                output_data["input_file_deleted"] = True
             except Exception as e:
                 out["input_file_deleted"] = False
                 out["input_file_delete_error"] = str(e)
+                output_data["input_file_deleted"] = False
+                output_data["input_file_delete_error"] = str(e)[:1000]
 
-        print(json.dumps(out, ensure_ascii=False, indent=2))
-        return 0 if out.get("ok") else 1
+        if out.get("ok"):
+            _emit_success("manifest", "Final-location index operations completed.", output_data)
+            return 0
+        _emit_error("manifest", "One or more final-location index operations failed.", data=output_data)
+        return 1
 
     # 2. Subcommand mode
     if args.subcommand == "stats" or not args.subcommand:
         out = get_index_stats(index_path)
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        _emit_success("stats", "Final-location index statistics completed.", {"result": out})
         return 0
 
     if args.subcommand == "lookup":
         norm_mid = normalize_message_id(args.message_id)
         item = lookup_final_index(index_path, norm_mid)
-        out = {
-            "ok": True,
-            "action": "lookup",
-            "found": item is not None,
-            "message_id": norm_mid,
-            "item": item,
-        }
-        print(json.dumps(out, ensure_ascii=False, indent=2))
-        return 0 if item is not None else 2
+        if item is None:
+            _emit_error(
+                "lookup",
+                "Message ID is not indexed.",
+                state="NotFound",
+                data={"message_id": norm_mid, "item": None},
+            )
+            return 2
+        _emit_success("lookup", "Final-location index lookup completed.", {"message_id": norm_mid, "item": item})
+        return 0
 
     if args.subcommand == "query":
         q_res = query_final_index(index_path, folder=args.folder, query=args.query)
@@ -238,15 +308,13 @@ def main() -> int:
         else:
             sliced_items = items[: args.limit]
         out = {
-            "ok": True,
-            "action": "query",
             "folder_filter": args.folder,
             "query_filter": args.query,
             "total_matches": total_matches,
             "returned_count": min(total_matches, args.limit),
             "items": sliced_items,
         }
-        print(json.dumps(out, ensure_ascii=False, indent=2))
+        _emit_success("query", "Final-location index query completed.", {"result": out})
         return 0
 
     return 0
@@ -256,5 +324,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False, indent=2))
+        _emit_error("unknown", "Final-location index operation failed.", exc)
         raise SystemExit(1)

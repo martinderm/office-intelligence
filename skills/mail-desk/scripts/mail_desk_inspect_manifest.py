@@ -23,7 +23,11 @@ from typing import Any
 
 from core.classifier import classify_email, load_catalogs
 from core.common import normalize_message_id, resolve_data_dir, resolve_final_index_path
+from core.envelope import build_error, build_success, emit_json
 from core.index import load_final_index
+
+
+ACTION = "inspect_manifest"
 
 
 def parse_args() -> argparse.Namespace:
@@ -189,8 +193,25 @@ def render_human_readable(result: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    args = parse_args()
+    json_requested = "--json" in sys.argv[1:]
+    try:
+        args = parse_args()
+    except SystemExit as exc:
+        # argparse has already written its actionable diagnostic to stderr.
+        # In machine mode it must still produce exactly one canonical object.
+        if json_requested and exc.code not in (None, 0):
+            emit_json(
+                build_error(
+                    ACTION,
+                    "Invalid command-line arguments.",
+                    {"operation": "inspect"},
+                    error_type="ArgumentError",
+                )
+            )
+            return int(exc.code)
+        raise
     manifest_path = Path(args.input)
+    output_json = args.json
 
     try:
         input_data = load_manifest(manifest_path)
@@ -244,24 +265,28 @@ def main() -> int:
                 pass
 
         if output_json:
-            envelope = {
-                "status": "success",
-                "data": result,
-                "error": None,
-            }
-            print(json.dumps(envelope, ensure_ascii=False, indent=2))
+            emit_json(
+                build_success(
+                    ACTION,
+                    "Manifest inspection completed.",
+                    {"operation": "inspect", "result": result},
+                )
+            )
         else:
             print(render_human_readable(result))
         return 0
 
     except Exception as e:
-        if args.json:
-            envelope = {
-                "status": "error",
-                "data": None,
-                "error": str(e),
-            }
-            print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        if output_json or json_requested:
+            emit_json(
+                build_error(
+                    ACTION,
+                    "Manifest inspection failed.",
+                    {"operation": "inspect"},
+                    error_type=type(e).__name__,
+                    error_details={"reason": str(e)[:1000]},
+                )
+            )
         else:
             print(f"Error inspecting manifest: {e}", file=sys.stderr)
         return 1
