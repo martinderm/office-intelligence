@@ -271,12 +271,14 @@ class FilemapSchemaTests(unittest.TestCase):
     def tearDown(self):
         self.temporary_directory.cleanup()
 
-    def _run_generator(self):
+    def _run_generator(self, direct=False):
         with mock.patch.object(
             MODULE.sys,
             "argv",
             ["gen_filemap.py", "--project-id", "test", "--workspace-root", str(self.root)],
         ):
+            if direct:
+                return MODULE.run_generation(MODULE.parse_args())
             MODULE.main()
 
     def test_schema_delegates_artifact_metadata_to_normative_data_zone_schema(self):
@@ -348,8 +350,8 @@ class FilemapSchemaTests(unittest.TestCase):
         original = b'{"previous":"valid"}\n'
         filemap_path.write_bytes(original)
 
-        with self.assertRaisesRegex(ValueError, r"artifact_sha256"):
-            self._run_generator()
+        with self.assertRaisesRegex(MODULE.GenerationError, r"artifact_sha256"):
+            self._run_generator(direct=True)
 
         self.assertEqual(original, filemap_path.read_bytes())
 

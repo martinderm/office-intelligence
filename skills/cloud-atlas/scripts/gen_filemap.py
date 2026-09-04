@@ -7,6 +7,8 @@ import json
 import argparse
 import hashlib
 import tempfile
+import contextlib
+import io
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
@@ -29,6 +31,55 @@ MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
 FILEMAP_SCHEMA_VERSION = 1
 FILEMAP_SCHEMA_URI = "https://raw.githubusercontent.com/martinderm/office-intelligence/main/skills/cloud-atlas/references/filemap.schema.json"
 CANONICAL_ARTIFACT_METADATA_KEYS = CANONICAL_CLOUD_METADATA_KEYS
+ACTION = "gen_filemap"
+COMPLETED = "Completed"
+FAILED = "Failed"
+MAX_ENVELOPE_MESSAGE_LENGTH = 1000
+
+
+class CliArgumentError(ValueError):
+    """An argument error that can be represented by the JSON contract."""
+
+
+class GenerationError(Exception):
+    """A generation failure with a stable processing phase and storage context."""
+
+    def __init__(self, phase, storage_id, cause, storage_results=None, partial_storage=None):
+        super().__init__(str(cause))
+        self.phase = phase
+        self.storage_id = storage_id
+        self.cause = cause
+        self.storage_results = storage_results or []
+        self.partial_storage = partial_storage
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        raise CliArgumentError(message)
+
+
+def envelope(success, state, message, data, error=None):
+    """Return the canonical, single-source-of-truth CLI result."""
+    return {
+        "action": ACTION,
+        "success": success,
+        "state": state,
+        "message": message,
+        "data": data,
+        "error": error,
+    }
+
+
+def emit_json(result):
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+
+
+def bounded_message(message):
+    """Keep envelope diagnostics useful without embedding unbounded output."""
+    text = str(message)
+    if len(text) <= MAX_ENVELOPE_MESSAGE_LENGTH:
+        return text
+    return text[:MAX_ENVELOPE_MESSAGE_LENGTH - 3] + "..."
 
 
 def atomic_write_text(filepath, content):
@@ -441,7 +492,7 @@ if hasattr(sys.stderr, 'reconfigure'):
         pass
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generischer Filemap-Generator fuer Cloud-Speicher Junctions.")
+    parser = ArgumentParser(description="Generischer Filemap-Generator fuer Cloud-Speicher Junctions.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
     group.add_argument("--topic-id", help="Topic-ID (z. B. lifelong-learning)")
@@ -452,6 +503,7 @@ def parse_args():
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic (Standard: Auto-Erkennung)")
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
     parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
+    parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen Structured-CLI-Envelope aus")
     return parser.parse_args()
 
 # Regex patterns for version extraction
@@ -641,10 +693,12 @@ def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id
                 print(f"Updated 'last_synced_at' timestamp for '{storage_id}' in {json_file}")
                 break
         except Exception as e:
-            print(f"Warning: Could not update last_synced_at in {json_file}: {e}")
+            warning = bounded_message(f"Could not update last_synced_at in {json_file}: {e}")
+            print(f"Warning: {warning}")
+            return warning
+    return None
 
-def main():
-    args = parse_args()
+def run_generation(args):
     workspace_root = os.path.abspath(args.workspace_root) if args.workspace_root else find_workspace_root()
     
     project_id = args.project_id or args.topic_id
@@ -653,9 +707,10 @@ def main():
     configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id)
     
     if not configs:
-        print(f"Error: No cloud sync configurations resolved for ID '{project_id}'.")
-        return
+        raise RuntimeError(f"No cloud sync configurations resolved for ID '{project_id}'.")
 
+    storage_results = []
+    warnings = []
     for sid, resolved in configs.items():
         print(f"\n--- Generiere Filemap fuer Storage: {sid} ---")
         project_title = args.project_title or resolved["title"]
@@ -670,8 +725,7 @@ def main():
         output_md_abs = os.path.normpath(os.path.join(workspace_root, output_md))
         
         if not os.path.exists(scan_path_abs):
-            print(f"Error: Scan directory '{scan_path_abs}' does not exist.")
-            continue
+            raise GenerationError("scan", sid, FileNotFoundError(f"Scan directory '{scan_path_abs}' does not exist."), storage_results)
 
         # Load existing files data from JSON if it exists to preserve descriptions and custom keys
         existing_files_data = {}
@@ -801,8 +855,14 @@ def main():
             "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "files": files_data
         }
-        validate_filemap(json_output_data, workspace_root)
-        write_json_file(output_json_abs, json_output_data)
+        try:
+            validate_filemap(json_output_data, workspace_root)
+        except ValueError as exc:
+            raise GenerationError("validation", sid, exc, storage_results) from exc
+        try:
+            write_json_file(output_json_abs, json_output_data)
+        except OSError as exc:
+            raise GenerationError("write", sid, exc, storage_results) from exc
         print(f"Updated {output_json_abs}")
 
         # Generate Markdown File
@@ -879,11 +939,85 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
 
         md_content += "\n".join(table_rows) + "\n"
         
-        atomic_write_text(output_md_abs, md_content)
+        current_result = {
+            "storage_id": sid,
+            "output_json": output_json.replace("\\", "/"),
+            "output_md": output_md.replace("\\", "/"),
+            "file_count": len(files_data),
+        }
+        try:
+            atomic_write_text(output_md_abs, md_content)
+        except OSError as exc:
+            partial_result = dict(current_result)
+            partial_result["completed_outputs"] = ["json"]
+            raise GenerationError("write", sid, exc, storage_results, partial_result) from exc
         print(f"Updated {output_md_abs}")
         
         # Update last_synced_at in projects.json / topics.json
-        update_config_last_synced_at(workspace_root, project_id, is_topic, sid)
+        storage_results.append(current_result)
+        warning = update_config_last_synced_at(workspace_root, project_id, is_topic, sid)
+        if warning:
+            warnings.append({"storage_id": sid, "message": bounded_message(warning)})
+    return {
+        "target": {"kind": "topic" if is_topic else "project", "id": project_id},
+        "storages": storage_results,
+        "warnings": warnings,
+    }
+
+
+def _error_details(phase, exc, storage_id=None):
+    error = {"phase": phase, "type": type(exc).__name__, "message": bounded_message(exc)}
+    if storage_id is not None:
+        error["storage_id"] = storage_id
+    return error
+
+
+def main():
+    try:
+        args = parse_args()
+    except CliArgumentError as exc:
+        if "--json" in sys.argv[1:]:
+            emit_json(envelope(False, FAILED, "Filemap-Generierung konnte nicht gestartet werden.", {"target": None, "storages": [], "warnings": []}, _error_details("arguments", exc)))
+        else:
+            print(f"Fehlerhafte Argumente: {exc}", file=sys.stderr)
+        return 2
+
+    if not args.json:
+        try:
+            run_generation(args)
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
+    captured_output = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(captured_output):
+            data = run_generation(args)
+    except Exception as exc:
+        phase = "generation"
+        storage_id = args.storage_id
+        completed_storages = []
+        partial_storage = None
+        if isinstance(exc, GenerationError):
+            phase = exc.phase
+            storage_id = exc.storage_id
+            completed_storages = exc.storage_results
+            partial_storage = exc.partial_storage
+            exc = exc.cause
+        elif isinstance(exc, FileNotFoundError):
+            phase = "scan"
+        elif isinstance(exc, RuntimeError) and str(exc).startswith("No cloud sync configurations"):
+            phase = "config"
+        elif isinstance(exc, ValueError):
+            phase = "validation"
+        elif isinstance(exc, OSError):
+            phase = "write"
+        emit_json(envelope(False, FAILED, "Filemap-Generierung fehlgeschlagen.", {"target": {"kind": "topic" if (args.topic or args.topic_id) else "project", "id": args.project_id or args.topic_id}, "storages": completed_storages, "partial_storage": partial_storage, "warnings": []}, _error_details(phase, exc, storage_id)))
+        return 1
+
+    emit_json(envelope(True, COMPLETED, "Filemap-Generierung erfolgreich abgeschlossen.", data))
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
