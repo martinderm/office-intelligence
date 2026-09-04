@@ -337,6 +337,12 @@ Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/
 
 Die standardisierte Werkzeugleiste des Skills `mail-desk`:
 
+Kanonische CLI-Envelopes (`action`, `success`, `state`, `message`, `data`,
+`error`) sind der Standard für alle neuen Aufrufer. Den befristeten
+[`Legacy-CLI-Adapter`](references/legacy-cli-adapter.md) nur laden und verwenden,
+wenn ein ausdrücklich identifizierter historischer `ok`-/`status`-Konsument
+weiterbetrieben werden muss; nie für neue Aufrufer.
+
 1. **Batch-Runner (`mail_desk_batch_runner.py`):**
    Zentraler Batch-Prozessor für Entwurf (`draft`), Routing, Verifikation, Indexierung, Evidenzfortschreibung und Echtzeit-Fortschrittstelemetrie. Aufruf standardisiert über `--input data/mail-desk/batch-manifest.json`.
 
