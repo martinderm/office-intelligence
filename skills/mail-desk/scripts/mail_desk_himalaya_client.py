@@ -26,6 +26,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
+from core.envelope import build_error, build_success, emit_json
 from core.common import normalize_message_id
 from core.himalaya import (
     get_single_email_details,
@@ -35,7 +36,47 @@ from core.himalaya import (
 )
 
 
-def parse_args() -> argparse.Namespace:
+ACTION = "himalaya_client"
+
+
+def _bounded_reason(exc: Exception) -> str:
+    return str(exc)[:1000]
+
+
+def _emit_error(
+    operation: str,
+    message: str,
+    exc: Exception | None = None,
+    *,
+    state: str = "Failed",
+    data: dict[str, Any] | None = None,
+    error_type: str | None = None,
+) -> None:
+    emit_json(
+        build_error(
+            ACTION,
+            message,
+            {"operation": operation, **(data or {})},
+            state=state,
+            error_type=error_type or (type(exc).__name__ if exc else "HimalayaClientError"),
+            error_details={"reason": _bounded_reason(exc)} if exc else None,
+        )
+    )
+
+
+def _machine_arguments(argv: list[str]) -> bool:
+    """Whether parser errors must use the JSON machine contract."""
+    return any(
+        argument == "--json"
+        or argument == "--input"
+        or argument.startswith("--input=")
+        or argument == "-i"
+        or (argument.startswith("-i") and len(argument) > 2)
+        for argument in argv
+    )
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     common_parent = argparse.ArgumentParser(add_help=False)
     common_parent.add_argument(
         "--account",
@@ -102,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     p_search.add_argument("-m", "--message-id", type=str, default=None, help="Specific Message-ID.")
     p_search.add_argument("-f", "--folders", nargs="*", default=None, help="Folders to search in.")
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 # ==============================================================================
@@ -251,17 +292,31 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
     with manifest_path.open("r", encoding="utf-8") as f:
         mdata = json.load(f)
 
-    ops = mdata.get("operations") or mdata.get("items") or []
     if isinstance(mdata, list):
         ops = mdata
+        manifest_account = None
+        delete_on_success = True
+    elif isinstance(mdata, dict):
+        ops = mdata.get("operations") or mdata.get("items") or []
+        manifest_account = mdata.get("account")
+        delete_on_success = bool(mdata.get("delete_input_on_success", True))
+    else:
+        raise ValueError("Manifest must be a JSON object or a list of operations.")
+    if not isinstance(ops, list):
+        raise ValueError("Manifest operations must be a list.")
 
     results = []
     all_succeeded = True
-    acc = account or mdata.get("account")
+    acc = account or manifest_account
 
     for i, op in enumerate(ops):
-        action = op.get("action", "").lower().replace("-", "_")
+        action = "unknown"
         try:
+            if not isinstance(op, dict):
+                raise ValueError("Manifest operation must be an object.")
+            action = str(op.get("action", "")).lower().replace("-", "_")
+            if not action:
+                raise ValueError("Manifest operation requires an action.")
             if action in ["list_folders", "folders"]:
                 res = op_list_folders(account=acc)
             elif action in ["list_envelopes", "envelopes", "list"]:
@@ -309,12 +364,11 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                 raise ValueError(f"Unknown operation action: {action}")
 
             results.append({"op_index": i, "action": action, "success": True, "result": res})
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             all_succeeded = False
-            results.append({"op_index": i, "action": action, "success": False, "error": str(e)})
+            results.append({"op_index": i, "action": action, "success": False, "error": _bounded_reason(e)})
 
     # Handle deletion on success
-    delete_on_success = bool(mdata.get("delete_input_on_success", True)) if isinstance(mdata, dict) else True
     input_deleted = False
     if all_succeeded and delete_on_success:
         try:
@@ -331,24 +385,78 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
     }
 
 
+def _manifest_data(result: dict[str, Any]) -> dict[str, Any]:
+    """Translate internal manifest results into one non-competing data model."""
+    translated: list[dict[str, Any]] = []
+    for raw in result.get("results", []):
+        succeeded = bool(raw.get("success"))
+        error = raw.get("error")
+        translated.append(
+            {
+                "operation": raw.get("action", "unknown"),
+                "success": succeeded,
+                "data": raw.get("result") if succeeded else {},
+                "error": None if succeeded else {
+                    "type": "OperationError",
+                    "message": str(error or "Operation failed.")[:1000],
+                },
+            }
+        )
+    return {
+        "total_operations": result.get("total_operations", len(translated)),
+        "results": translated,
+        "input_file_deleted": bool(result.get("input_file_deleted")),
+    }
+
+
 # ==============================================================================
 # Main CLI Entrypoint
 # ==============================================================================
 
 def main() -> int:
-    args = parse_args()
+    raw_argv = sys.argv[1:]
+    machine_requested = _machine_arguments(raw_argv)
+    try:
+        args = parse_args()
+    except SystemExit as exc:
+        if exc.code not in (None, 0) and machine_requested:
+            _emit_error(
+                "argument_parse",
+                "Invalid command-line arguments.",
+                ValueError("argparse rejected the arguments"),
+                error_type="ArgumentError",
+            )
+            return int(exc.code)
+        raise
+
+    machine_mode = bool(args.input or args.json)
 
     try:
         if args.input:
             manifest_path = Path(args.input)
             data = execute_manifest(manifest_path, account=args.account)
-            status = "success" if data.get("all_succeeded") else "partial"
-            envelope = {"status": status, "data": data, "error": None}
-            print(json.dumps(envelope, ensure_ascii=False, indent=2))
-            return 0 if data.get("all_succeeded") else 1
+            output_data = {"operation": "manifest", **_manifest_data(data)}
+            if data.get("all_succeeded"):
+                emit_json(build_success(ACTION, "Himalaya manifest operations completed.", output_data))
+                return 0
+            _emit_error(
+                "manifest",
+                "One or more Himalaya manifest operations failed.",
+                state="PartialFailure",
+                data=output_data,
+                error_type="ManifestOperationError",
+            )
+            return 1
 
         if not args.subcommand:
-            print("Error: No command or --input manifest specified. Run with --help.", file=sys.stderr)
+            if machine_mode:
+                _emit_error(
+                    "argument_parse",
+                    "A subcommand or input manifest is required.",
+                    error_type="ArgumentError",
+                )
+            else:
+                print("Error: No command or --input manifest specified. Run with --help.", file=sys.stderr)
             return 1
 
         sub = args.subcommand.replace("-", "_")
@@ -398,9 +506,8 @@ def main() -> int:
                 account=args.account,
             )
 
-        envelope = {"status": "success", "data": result, "error": None}
-        if args.json:
-            print(json.dumps(envelope, ensure_ascii=False, indent=2))
+        if machine_mode:
+            emit_json(build_success(ACTION, "Himalaya operation completed.", {"operation": sub, "result": result}))
         else:
             if isinstance(result, list):
                 print(f"Total results: {len(result)}")
@@ -410,9 +517,12 @@ def main() -> int:
                 print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
 
-    except Exception as e:
-        envelope = {"status": "error", "data": None, "error": str(e)}
-        print(json.dumps(envelope, ensure_ascii=False, indent=2), file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        operation = "manifest" if args.input else (args.subcommand.replace("-", "_") if args.subcommand else "unknown")
+        if machine_mode:
+            _emit_error(operation, "Himalaya operation failed.", exc)
+        else:
+            print(f"Error: {str(exc)[:1000]}", file=sys.stderr)
         return 1
 
 
