@@ -44,15 +44,15 @@ stille Fallback-Regel.
 
 `mail-desk` enthält die fachliche Arbeitsweise, aber keinen eigenen Mailbox-Zugriff. Wähle vor jeder Verarbeitung genau einen Backend-Adapter und lies ihn vollständig:
 
-- Gmail-Integration → `references/backends/gmail.md`
-- Himalaya oder IMAP → `references/backends/himalaya.md`
+- Gmail-Integration → [`references/backends/gmail.md`](references/backends/gmail.md)
+- Himalaya oder IMAP → [`references/backends/himalaya.md`](references/backends/himalaya.md)
 
 Der Adapter bestimmt Suche, Thread-/Nachrichten-Lesen, Routing, Zielverifikation und backend-spezifische Locator-Felder. Die fachliche Identität bleibt immer die normalisierte `message_id` ohne `< >`; ein Backend-Locator ersetzt sie nie.
 
 ## Verbindlicher Arbeitsfluss
 
 1. Scope/Trigger klären (einzeln, kein Batch ohne Auftrag; kleine, explizit beauftragte Datums-/Folder-Batches sind zulässig, solange pro Mail derselbe komplette Compliance-Flow eingehalten wird).
-2. Über den gewählten Backend-Adapter die gewünschte Mail listen und zunächst im Minimalzugriff lesen (Header + kurzer Preview); danach den `Lesegrad` festlegen (`structural`, `selective`, `full`).
+2. Über den gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) die gewünschte Mail listen und zunächst im Minimalzugriff lesen (Header + kurzer Preview); danach den `Lesegrad` festlegen (`structural`, `selective`, `full`).
 3. Nur im gewählten Lesegrad weiterlesen; bei Bedarf auf `selective` oder `full` eskalieren.
 4. Stabile Identität erfassen: `message_id`, Betreff, Absender, Datum; `message_id` operativ immer in **normalisierter kanonischer Form ohne `< >`** weiterfuehren. Falls keine `message_id` vorhanden ist, einen stabilen Fallback-Key bilden und als `key_type="fallback_hash"` markieren.
 5. Prüfen, ob `message_id` bzw. Fallback-Key in aktiven **und archivierten** `data/mail-desk`-Dateien bereits vorkommt.
@@ -75,7 +75,7 @@ Der Adapter bestimmt Suche, Thread-/Nachrichten-Lesen, Routing, Zielverifikation
    - `topic`
    - `inbox-review`
    - `ignore/archive`
-13. Routing und Zielverifikation nach dem gewählten Backend-Adapter durchführen (oder Review statt Aktion).
+13. Routing und Zielverifikation nach dem gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) durchführen (oder Review statt Aktion).
 14. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
 15. Leichte `data/`-Pflege durchführen:
    - `data/mail-desk/action-log.jsonl` aktualisieren
@@ -94,8 +94,7 @@ Schritt 10 ist konditional, aber die Prüfung ist verpflichtend.
 
 Nicht doppeln:
 
-- Gmail-Suche, Thread-Lesen, Entwürfe und Gmail-Aktionen bleiben im Skill `gmail` bzw. `gmail-inbox-triage`.
-- Himalaya-Syntax, Account-Details und GroupWise-Besonderheiten bleiben in `references/backends/himalaya.md` und gegebenenfalls der lokalen `HIMALAYA.md`.
+- Backend-Zugriff, Routing, Zielverifikation und Locator-Grenzen stehen konditional im gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapter](references/backends/himalaya.md).
 - Projekt-/Topic-Katalogpflege bleibt in `project-catalog-entry` und `topic-catalog-entry`.
 
 ## Grundregeln
@@ -106,7 +105,7 @@ Nicht doppeln:
 - Dauerhafte Identität ist immer `Message-ID`/normalisierte Message-ID **ohne `< >`**, niemals ein Backend-Locator.
 - Backend-Locators dienen nur der Wiederauffindbarkeit; sie sind niemals Primär-, Close-, Idempotenz- oder Referenzschlüssel.
 - Keine Antwort senden sowie keine Mailbox-Schreibaktion ausführen ohne explizite Freigabe.
-- Mailbox-Schreibaktionen nur nach klarer Entscheidung und nach den Sicherheitsregeln des gewählten Adapters ausführen.
+- Mailbox-Schreibaktionen nur nach klarer Entscheidung und nach den Sicherheitsregeln des gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapters](references/backends/himalaya.md) ausführen.
 - Wenn mehrere Mails in einem kleinen Batch bearbeitet werden, duerfen Lesen und Preview-Pruefungen parallelisiert werden, **Schreibschritte** aber nicht:
   - keine parallelen Appends an dieselbe `.jsonl`
   - keine parallelen Aufrufe von `final_index_upsert.py`
@@ -250,6 +249,8 @@ Mindestablauf:
 3. Bei Treffer auf offene Reply-Fälle (`message_id`/`in_reply_to`/`references`/Kontext) Einträge in `replies-needed.jsonl` schließen/archivieren.
 4. Bei belastbaren neuen Informationen `memory/references/projects/*` bzw. `memory/references/topics/*` aktualisieren (mit Quellenbezug über `message_id`).
 
+Für Sent-spezifisches Listen, Lesen und Locator-Verifikation den gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) anwenden.
+
 Wichtig:
 
 - `Sent Items` sind gleichwertige operative Quelle für Wissenspflege und Reply-Status.
@@ -350,7 +351,7 @@ weiterbetrieben werden muss; nie für neue Aufrufer.
    Prüft, filtert und reklassifiziert erstellte Batch-Manifeste offline gegen `projects.json` und `topics.json` vor der eigentlichen IMAP-Ausführung (`--reclassify`, `--unindexed`, `--unclassified`).
 
 3. **Himalaya & IMAP JSON-Client (`mail_desk_himalaya_client.py`):**
-   Standardisierter Client für alle IMAP-Operationen (Listen, Lesen, Kopieren, Verschieben, Löschen, Suchen, Ordnerprüfung) via `--input data/mail-desk/himalaya-op.json`.
+   Nur beim Himalaya-/IMAP-Backend den vollständigen [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) anwenden.
 
 4. **Final Location Index Client (`mail_desk_final_location_index.py`):**
    Kapselt alle Lese-, Schreib-, Lookup-, Statistik- und Filteroperationen auf `final-location-index.json`.
@@ -388,29 +389,23 @@ weiterbetrieben werden muss; nie für neue Aufrufer.
         - Wiederholen bis zum Abschluss.
      3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
 
-6. **Deterministischer Himalaya-Client & JSON-Wrapper (`mail_desk_himalaya_client.py`):**
-   - Kapselt alle direkten IMAP-Operationen (Listing, Read, Copy, Move, Delete, Search) mit automatischer Socket-/TLS-10054-Fehlerbehandlung und strukturierten JSON-Envelopes.
-   - **STRIKTE REGEL: Aufruf IMMER per JSON-Input (`--input <file.json>`):**
-     Sowohl Einzeloperationen, Inspektionen als auch Multi-Operationen MÜSSEN immer über eine standardisierte JSON-Eingabedatei übergeben werden. Dadurch bleibt der CLI-Befehl für den Nutzer stets identisch, deterministisch und vorab per JSON-Review freigabefähig.
-     ```bash
-     python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
-     ```
-     Manifest-Format (`himalaya-op.json` wird bei gesetztem `delete_input_on_success: true` nach erfolgreicher Ausführung automatisch gelöscht):
-     ```json
-     {
-       "operations": [
-         { "action": "list_folders" },
-         { "action": "list_envelopes", "folder": "INBOX", "page_size": 20 },
-         { "action": "read", "folder": "INBOX", "envelope_id": "7195" },
-         { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
-         { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
-         { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
-         { "action": "search", "query": "USAGE-NG" }
-       ],
-       "delete_input_on_success": true
-     }
-     ```
-   - Direkte ad-hoc CLI-Subkommandos mit wechselnden Parametern sind im operativen Agenten-Workflow untersagt; stattdessen wird immer das temporäre JSON-Manifest erstellt und via `--input` ausgeführt.
+6. **Himalaya-Operationsmanifest (`himalaya-op.json`; OI-14c-Bestand):**
+   Der folgende bestehende Manifest-Shape bleibt bis zur gezielten OI-14c-Auslagerung hier. Clientzweck und seine Aufrufregel stehen ausschließlich im [Himalaya-/IMAP-Adapter](references/backends/himalaya.md).
+
+   ```json
+   {
+     "operations": [
+       { "action": "list_folders" },
+       { "action": "list_envelopes", "folder": "INBOX", "page_size": 20 },
+       { "action": "read", "folder": "INBOX", "envelope_id": "7195" },
+       { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
+       { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
+       { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
+       { "action": "search", "query": "USAGE-NG" }
+     ],
+     "delete_input_on_success": true
+   }
+   ```
 
 ### Final-Index- und Batch-Regeln
 
