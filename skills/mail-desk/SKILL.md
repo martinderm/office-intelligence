@@ -13,7 +13,7 @@ Daraus folgen zwei Regeln:
 
 - Kleine oder schwache Modelle sollen **nicht** so tun, als waere dieser Skill ein Leichtgewichts-Workflow. Wenn die noetige Sorgfalt, Konsistenz oder Kontextverarbeitung voraussichtlich nicht gehalten werden kann, ist eine **Warnung** auszugeben und der Fall an ein leistungsfaehigeres Modell oder an den User zur bewussten Fortsetzung zu eskalieren.
 - Edits an diesem Skill selbst immer mit Vorsicht vornehmen: kleine, gezielte Aenderungen; keine stillen Verhaltensverschiebungen; bestehende harte Compliance-, Quellen- oder Final-Index-Regeln nicht nebenbei aufweichen; Dopplungen lieber bewusst abbauen als neue Parallelregeln einzufuehren.
-- Script- und Hilfsdateipfade in diesem Skill nach Moeglichkeit relativ zur `SKILL.md` bzw. zu ihrem Verzeichnis lesen und verwenden; keine konkurrierenden Pfadvarianten parallel pflegen.
+- Pfadkonventionen fuer Skripte und Hilfsdateien: [`references/cli-operations.md`](references/cli-operations.md).
 
 Arbeite Mails einzeln und bewusst ab: lesen, Kontext laden, entscheiden, leicht loggen, dann nur bei klarer Lage die backend-spezifische Routing-Aktion ausführen.
 
@@ -77,13 +77,7 @@ Der Adapter bestimmt Suche, Thread-/Nachrichten-Lesen, Routing, Zielverifikation
    - `ignore/archive`
 13. Routing und Zielverifikation nach dem gewählten [Gmail-](references/backends/gmail.md) oder [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) durchführen (oder Review statt Aktion).
 14. `memory/references/` aktualisieren, wenn neue belastbare Informationen vorliegen (über die zuständigen Skills `project-catalog-entry` und/oder `topic-catalog-entry`).
-15. Leichte `data/`-Pflege durchführen:
-   - `data/mail-desk/action-log.jsonl` aktualisieren
-   - offene Review-Fälle in `data/mail-desk/pending-review.jsonl` führen
-   - offene Antwortfälle in `data/mail-desk/replies-needed.jsonl` führen
-   - bei Erledigung (Status `closed|resolved|dismissed|superseded`) Eintrag aus aktiver Datei entfernen und nach `data/mail-desk/archive/YYYY-Www/` verschieben
-   - `data/mail-desk/final-location-index.json` nicht manuell editieren, sondern über die vorgesehenen Skripte pflegen (`final_index_lookup.py`, `final_index_upsert.py --mode upsert-final|patch`)
-   - Schreibzugriffe auf gemeinsame `data/mail-desk/`-Dateien immer **seriell**, nie parallel ausführen; das gilt besonders für `.jsonl`-Logs und `final-location-index.json`
+15. Leichte `data/`-Pflege seriell durchführen (`action-log.jsonl`, `pending-review.jsonl`, `replies-needed.jsonl`, wochenbasierte Fallarchivierung sowie script-basierte Final-Index-Aktualisierung; Datenpfade und Schemata: [`references/log-schema.md`](references/log-schema.md); Skriptzugriffe: [`references/cli-operations.md`](references/cli-operations.md)).
 16. Kurzbericht mit Routing + Wissenspflege liefern.
 
 Schritt 10 ist konditional, aber die Prüfung ist verpflichtend.
@@ -307,204 +301,13 @@ Die Verifikation soll dabei immer mit dem **kleinstmoeglichen belastbaren Nachwe
 - keine grossen Mailbox-Zustaende in den Arbeitskontext ziehen, wenn ein kleiner verifizierender Ausschnitt reicht
 - fuer stark strukturierte oder triviale Mailklassen darf die Nachweisfuehrung schlank sein, sofern Zielordner, `message_id`-Bezug und Final-Index korrekt verifiziert bleiben
 
-### Harte Regel: kein manueller Final-Index-Write
+### Operative Werkzeuge & Nachweise
 
-`data/mail-desk/final-location-index.json` darf **niemals manuell** editiert oder direkt im Rohtext gelesen werden.
-Ausschließlich zulässig ist das standardisierte Werkzeug `mail_desk_final_location_index.py` bzw. der Batch-Runner:
-
-- `python3 scripts/mail_desk_final_location_index.py stats`
-- `python3 scripts/mail_desk_final_location_index.py lookup --mid 'msg-2026-001@example.org'`
-- `python3 scripts/mail_desk_final_location_index.py query --folder 'Projekte/EVOLVE' --limit 20`
-- `python3 scripts/mail_desk_final_location_index.py --input data/mail-desk/index-op.json`
-
-Zusätzlich erlaubt für die Index-Location:
-
-- Standardpfad: `data/mail-desk/final-location-index.json` (empfohlen)
-- optionaler Env-Override via `.env`/Umgebung:
-  - `MAIL_DESK_DATA_DIR=/abs/path/to/data/mail-desk`
-  - oder `MAIL_DESK_FINAL_INDEX_PATH=/abs/path/to/final-location-index.json`
-
-Hinweis: Message-IDs für Skript-Lookups immer in normalisierter Form **ohne `< >`** übergeben; Message-IDs mit `$` dabei in **Single Quotes** setzen, damit die Shell nichts expandiert.
-Hinweis: Für die Skriptaufrufe sind `python3` **und** `python` erlaubt; verwende die Variante, die lokal verfügbar ist.
-
-### Automatisierte Hilfsskripte & Modulare Architektur
-
-Die Tool-Landschaft unter `scripts/` basiert auf einem modularen Kern (`scripts/core/`):
-- `core/himalaya.py`: Robuste CLI-Ausführung, Header-/Preview-Extraktion, Encoding-Schutz und Parallelsuche.
-- `core/index.py`: Atomares Lesen, Schreiben, Filtern und Lookup für `final-location-index.json`.
-- `core/action_log.py`: Protokollierung in `action-log.jsonl`, `replies-needed.jsonl` und Case-Archivierung.
-- `core/evidence.py`: Aktualisierung von Markdown-Evidenzen (`evidence/YYYY-MM.md`) mit Dublettenerkennung.
-- `core/classifier.py`: Offline-Regel- und Katalog-Klassifikation mit Projekt-/Topic-Pattern-Matching.
-
-Die standardisierte Werkzeugleiste des Skills `mail-desk`:
-
-Kanonische CLI-Envelopes (`action`, `success`, `state`, `message`, `data`,
-`error`) sind der Standard für alle neuen Aufrufer. Den befristeten
-[`Legacy-CLI-Adapter`](references/legacy-cli-adapter.md) nur laden und verwenden,
-wenn ein ausdrücklich identifizierter historischer `ok`-/`status`-Konsument
-weiterbetrieben werden muss; nie für neue Aufrufer.
-
-1. **Batch-Runner (`mail_desk_batch_runner.py`):**
-   Zentraler Batch-Prozessor für Entwurf (`draft`), Routing, Verifikation, Indexierung, Evidenzfortschreibung und Echtzeit-Fortschrittstelemetrie. Aufruf standardisiert über `--input data/mail-desk/batch-manifest.json`.
-
-2. **Offline-Inspektion & Katalog-Reevaluierung (`mail_desk_inspect_manifest.py`):**
-   Prüft, filtert und reklassifiziert erstellte Batch-Manifeste offline gegen `projects.json` und `topics.json` vor der eigentlichen IMAP-Ausführung (`--reclassify`, `--unindexed`, `--unclassified`).
-
-3. **Himalaya & IMAP JSON-Client (`mail_desk_himalaya_client.py`):**
-   Nur beim Himalaya-/IMAP-Backend den vollständigen [Himalaya-/IMAP-Adapter](references/backends/himalaya.md) anwenden.
-
-4. **Final Location Index Client (`mail_desk_final_location_index.py`):**
-   Kapselt alle Lese-, Schreib-, Lookup-, Statistik- und Filteroperationen auf `final-location-index.json`.
-
-5. **Erledigung und Fall-Archivierung (`mail_desk_resolve_case.py`):**
-   Archiviert offene Einträge aus `replies-needed.jsonl` oder `pending-review.jsonl` direkt unter dem wochenbasierten Pfad `archive/YYYY-Www/` und aktualisiert den Status.
-
-6. **Mailbox-Preflight-Check (`mailbox_preflight.py`):**
-   Validiert die Erreichbarkeit und Authentifizierung des konfigurierten Mailkontos vor komplexen Operationen.
-   - Ausführliche Dokumentation und JSON-Schemas: [`references/batch-runner.md`](references/batch-runner.md)
-   - Standard-Dateinamen: `batch-inspect.json`, `batch-manifest.json`, `batch-verify.json`, `batch-search.json`, `batch-resolve.json`
-   - **Inspektion:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json`
-   - **Ausführung:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json` (oder ohne Argumente bei Standard-Manifest)
-   - **Verifikation:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-verify.json`
-   - **Globale Suche:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-search.json`
-   - **Batch-Lösung / Archivierung:** `python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-resolve.json`
-
-4. **Deterministischer Manifest-Inspektor (`mail_desk_inspect_manifest.py`):**
-   - Prüft, filtert und fasst erstellte Entwurfs-Manifeste (`batch-manifest.json`) vor der Ausführung zusammen:
-   - **Übersicht:** `python3 scripts/mail_desk_inspect_manifest.py`
-   - **Unklare Fälle filtern:** `python3 scripts/mail_desk_inspect_manifest.py --filter-kind unknown`
-   - **Antwortbedarf filtern:** `python3 scripts/mail_desk_inspect_manifest.py --needs-reply`
-   - **Nicht-indexierte Mails filtern:** `python3 scripts/mail_desk_inspect_manifest.py --unindexed`
-   - **Manifest mit aktuellen Katalogen neu klassifizieren:** `python3 scripts/mail_desk_inspect_manifest.py --reclassify`
-   - **Strukturiertes JSON:** `python3 scripts/mail_desk_inspect_manifest.py --json`
-
-5. **Live-Fortschritts-Monitoring & Deterministische Zeitschätzung (`core/progress.py`):**
-   - Bei allen Batch-Läufen (`--draft`, `--execute`, `--pipeline`, `--inspect`) führt der Runner eine atomare Statusdatei [`data/mail-desk/runner-progress.json`](data/mail-desk/runner-progress.json) mit Zählern, Prozentwert, aktuellen Arbeitsschritten und deterministischer Restzeitschätzung (ETA).
-   - Ungepuffertes Live-Streaming in stdout/`task.log`: Jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
-   - **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
-     1. Batch im Hintergrund starten mit initialem Timer von **60 Sekunden** (Warmup-Phase für realistische $\bar{T}_{\text{item}}$-Messung über mehrere IMAP-Operationen hinweg).
-     2. Beim Aufwachen `runner-progress.json` lesen:
-        - Wenn `status == "completed"` $\rightarrow$ Batch abgeschlossen, Vollzugsmeldung.
-        - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen.
-        - Wiederholen bis zum Abschluss.
-     3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
-
-6. **Himalaya-Operationsmanifest (`himalaya-op.json`; OI-14c-Bestand):**
-   Der folgende bestehende Manifest-Shape bleibt bis zur gezielten OI-14c-Auslagerung hier. Clientzweck und seine Aufrufregel stehen ausschließlich im [Himalaya-/IMAP-Adapter](references/backends/himalaya.md).
-
-   ```json
-   {
-     "operations": [
-       { "action": "list_folders" },
-       { "action": "list_envelopes", "folder": "INBOX", "page_size": 20 },
-       { "action": "read", "folder": "INBOX", "envelope_id": "7195" },
-       { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
-       { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
-       { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
-       { "action": "search", "query": "USAGE-NG" }
-     ],
-     "delete_input_on_success": true
-   }
-   ```
-
-### Final-Index- und Batch-Regeln
-
-- Die Backend-Location ist immer die nach Routing verifizierte finale Location; niemals eine Quell- oder Zwischenlocation speichern.
-- Ohne verifizierte finale Backend-Location kein `upsert-final`; spätere Korrekturen nur über `patch`.
-- JSONL-Batches sind temporäre Input-Artefakte und nie die Source of Truth. Jede Zeile enthält genau einen bereits verifizierten finalen Eintrag.
-- Nach erfolgreichem Import verwendete `final-index-batch-*.jsonl` löschen.
-- Backend-spezifische Verifikation und Felder stehen im jeweiligen Adapter.
-
-### Pflicht-Output pro verarbeiteter Mail
-
-Am Ende der Bearbeitung einer Mail immer einen kompakten Compliance-Block ausgeben:
-
-- `routing: ok|fail`
-- `metadata: ok|fail`
-- `final-index-script: ok|fail`
-- `reference-source-id: ok|fail|n/a`
-
-`reference-source-id` ist `n/a`, wenn keine Wissenspflege in `memory/references/*` nötig war.
-
-Ohne diesen Block gilt die Bearbeitung als unvollständig.
-
-## Leichte Daten unter `data/mail-desk/`
-
-Standardpfade:
-
-```text
-data/mail-desk/
-  action-log.jsonl          # nur laufende/heutige Arbeitsnotizen, nicht als Dauerablage missbrauchen
-  pending-review.jsonl      # nur offene Review-Fälle
-  replies-needed.jsonl      # nur offene Antwortfälle
-  sent-index.jsonl          # leichter Index gesendeter Antworten (Header-/Routingmetadaten)
-  archive/
-    YYYY-Www/
-      action-log.jsonl
-      pending-review.jsonl
-      replies-needed.jsonl
-```
-
-Keine großen Mailarchive standardmäßig anlegen. Bei Bedarf kurze Auszüge oder Pfade auf Anhänge notieren, aber nicht die komplette Mail duplizieren.
-
-Kontextsparend arbeiten:
-
-- fuer Schema-, Dedupe- oder Formatpruefungen nur kleine, gezielte Ausschnitte lesen
-- Regeldateien innerhalb derselben Session nicht pro Mail erneut voll laden, wenn sich der Falltyp nicht wesentlich geaendert hat
-- nach erster belastbarer Auswertung bevorzugt mit `message_id` plus Arbeitsverdichtung weiterarbeiten statt mit mehrfach wiederholtem Rohmaterial
-
-Zusätzlich einen schlanken Lookup-Index pflegen (verbindlich, script-basiert):
-
-- `data/mail-desk/final-location-index.json`
-- **STRIKTE REGEL: Zugriff ausschließlich über Python / CLI-Tool (`mail_desk_final_location_index.py` oder `core/index.py`):**
-  - Die Datei darf NIEMALS direkt mit Texteditoren, `view_file` oder `grep` geöffnet, gelesen oder manuell bearbeitet werden (Gefahr von Context-Window-Overflows, unvollständigem Lesen und Syntax-Korruption).
-  - Alle Lookups, Abfragen, Statistiken und Modifikationen MÜSSEN über Python-Tools laufen:
-    ```bash
-    # Statistiken & Zusammenfassung
-    python3 scripts/mail_desk_final_location_index.py stats
-    # Gezielter Einzel-Lookup per Message-ID
-    python3 scripts/mail_desk_final_location_index.py lookup --mid '<message_id>'
-    # Filtern nach Ordner/Suchbegriff
-    python3 scripts/mail_desk_final_location_index.py query -f 'Projekte/EVOLVE' -l 20
-    # Standardisierter JSON-Manifest-Aufruf (mit Bestätigung/Auto-Cleanup)
-    python3 scripts/mail_desk_final_location_index.py --input data/mail-desk/index-op.json
-    ```
-- Zweck: Schnelle, atomare $O(1)$-Auflösung von `Message-ID` → finale Backend-Location + zuletzt gesehener Backend-Locator
-- Keine Mailinhalte speichern
-- Für Thread-Bezug optional nur Header-IDs mitführen: `in_reply_to`, `references`
-- JSON-Struktur und Feldregeln sind verbindlich in `references/log-schema.md` definiert (Abschnitt `final-location-index.json`).
-
-Optional zusätzlich für schnelle Reply-Nachweise bei alten Fällen:
-
-- `data/mail-desk/sent-index.jsonl`
-- JSON-Struktur und Feldregeln sind in `references/log-schema.md` definiert (Abschnitt `sent-index.jsonl`).
-
-## Erledigungsregel und Archivierung
-
-Wenn ein offener Eintrag erledigt wird, immer den **ursprünglichen Eintrag aktualisieren** statt einen widersprüchlichen zweiten Eintrag daneben zu schreiben.
-
-Vorgehen:
-
-1. Aktive Datei lesen (`pending-review.jsonl` oder `replies-needed.jsonl`).
-2. Passenden ursprünglichen Eintrag per `message_id` suchen; falls keine Message-ID vorhanden ist, per stabilem `message_key` mit `key_type="fallback_hash"`. Nie per Backend-Locator schließen.
-3. Diesen Eintrag mit Status/Resolution ergänzen, z. B.:
-   - `status: "closed" | "resolved" | "dismissed" | "superseded"`
-   - `closed_at` oder `resolved_at`
-   - `resolution`
-   - optional `resolved_by_message_id` / `resolved_by_key`
-4. Aktualisierten erledigten Eintrag aus der aktiven Datei entfernen.
-5. Erledigten Eintrag in `data/mail-desk/archive/YYYY-Www/<dateiname>.jsonl` anhängen.
-6. Aktive Datei ohne den erledigten Eintrag zurückschreiben.
-
-*Hinweis:* Dieser gesamte Ablauf (Schritte 1–6) wird vollständig automatisiert durch Aufruf von `python3 scripts/mail_desk_resolve_case.py --message-id '...' --status 'resolved' --resolution '...'`.
-
-Aktive Dateien enthalten nur offene bzw. noch relevante Einträge. Alles Erledigte wandert ins Wochenarchiv nach ISO-Kalenderwoche.
-
-Beim Schliessen oder Archivieren nur den fuer den konkreten Fall noetigen Eintrag und den noetigen Kontext lesen; keine breiten aktiven Dateistaende mitschleppen, wenn ein gezielter Lookup reicht.
-
-Keine Doppelstruktur wie `open` + später separate `closed`-Zeile für dieselbe Mail. Das war eine Falle. Eine kleine, aber sie beißt.
-
-Schemas siehe `references/log-schema.md`.
+- **Final-Location-Index:** Darf **niemals manuell** editiert oder direkt im Rohtext gelesen werden; Zugriff ausschließlich script-basiert über `mail_desk_final_location_index.py` oder Batch-Runner. Vollständige Regeln, Befehle und Env-Overrides: [`references/cli-operations.md`](references/cli-operations.md).
+- **CLI-Envelopes & Hilfsskripte:** Kanonische Envelopes (`action`, `success`, `state`, `message`, `data`, `error`), Skriptübersicht und Alt-Adapter: [`references/cli-operations.md`](references/cli-operations.md); befristeter [`Legacy-CLI-Adapter`](references/legacy-cli-adapter.md).
+- **Batch-Verarbeitung & Manifeste:** Modi (`inspect`, `execute`, `verify`, `search`, `resolve`), JSON-Schemas, Runner-Fortschritt (`runner-progress.json`) und ETA-Timer-Regeln: [`references/batch-runner.md`](references/batch-runner.md).
+- **Datenpfade, Schemata & Archivierung:** Struktur von `data/mail-desk/` (`action-log.jsonl`, `pending-review.jsonl`, `replies-needed.jsonl`, `sent-index.jsonl`), Idempotenz und das 6-Schritte-Verfahren zur Fallerledigung: [`references/log-schema.md`](references/log-schema.md).
+- **Pflicht-Output:** Am Ende jeder Mailbearbeitung ist der standardisierte Compliance-Block (`routing`, `metadata`, `final-index-script`, `reference-source-id`) Pflicht. Definition und Felder: [`references/cli-operations.md`](references/cli-operations.md).
 
 ## Zusätzliche Erkennungsregeln (verbindlich)
 
@@ -614,20 +417,15 @@ Review gehört in `data/mail-desk/pending-review.jsonl`.
 
 `pending-decisions` ist kein Mail-Log von `mail-desk`, sondern ein separater Entscheidungs-Backlog (z. B. aus `mail-processor`) für echte strukturelle User-Entscheidungen. Nur solche Fälle dorthin eskalieren.
 
-## Abschluss-Checkliste (operativ, verpflichtend)
+## Abschluss-Checkliste (fachlich, verpflichtend)
 
 Vor Abschluss eines Mail-Schritts:
 
 1. Routing-Aktion mit dem kleinstmoeglichen belastbaren Nachweis nach dem gewählten Backend-Adapter verifiziert.
-2. `action-log.jsonl` aktualisiert.
-3. Falls Antwortbedarf: `replies-needed.jsonl` aktualisiert.
-4. Falls Review-Fall: `pending-review.jsonl` aktualisiert.
-5. Final-Index über `mail_desk_final_location_index.py` oder den Batch-Runner aktualisiert.
-6. Final-Index über `mail_desk_final_location_index.py lookup` oder gezielten Batch-Check gegengeprüft.
-7. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
-8. Wenn Wissenspflege aus Mailinhalt erfolgte: passendes `evidence/YYYY-MM.md` aktualisiert und dort dieselbe Aussage mit `message_id`/`message_ids` auffindbar.
-9. Für die Abschlussprüfung keine unnötigen Wiederholungen derselben Rohmail, Regeldateien oder breiten Folder-/Log-Listen erzeugen.
-10. Compliance-Block (`routing|metadata|final-index-script|reference-source-id`) ausgegeben; bei keiner Wissenspflege `reference-source-id: n/a`.
+2. Alle aktualisierten `memory/references/*`-Einträge enthalten `message_id`/`message_ids` oder dokumentierten Fallback-Grund.
+3. Wenn Wissenspflege aus Mailinhalt erfolgte: passendes `evidence/YYYY-MM.md` aktualisiert und dort dieselbe Aussage mit `message_id`/`message_ids` auffindbar.
+4. Für die Abschlussprüfung keine unnötigen Wiederholungen derselben Rohmail, Regeldateien oder breiten Folder-/Log-Listen erzeugen.
+5. Operative Tool-, Log-, Final-Index- und Compliance-Block-Schritte gemäß Checkliste in [`references/cli-operations.md`](references/cli-operations.md) vollständig ausgeführt.
 
 ## Ausgabe an den User
 

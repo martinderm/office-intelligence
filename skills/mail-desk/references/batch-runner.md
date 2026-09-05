@@ -149,33 +149,39 @@ Liest Metadaten, Header (`Message-Id`, `In-Reply-To`, `References`, `From`, `To`
 ### Beispiel Output
 ```json
 {
-  "ok": true,
-  "mode": "inspect",
-  "folder": "INBOX",
-  "total_fetched": 1,
-  "items": [
-    {
-      "envelope_id": "101",
-      "folder": "INBOX",
-      "message_id": "msg-2026-001@partner.example.org",
-      "raw_message_id": "MSG-2026-001@partner.example.org",
-      "subject": "Statusbericht Arbeitspaket 4",
-      "from": "Dr. Alex Beispiel <alex@partner.example.org>",
-      "to": "Empfänger <user@example.org>",
-      "date": "Tue, 6 Jan 2026 14:15:20 +0000",
-      "in_reply_to": "",
-      "references": "",
-      "preview": "Hallo zusammen,\n\nanbei der aktuelle Berichtsentwurf...",
-      "error": null,
-      "known_status": {
-        "in_index": false,
-        "in_action_log": false,
-        "final_folder": null,
-        "is_new": true
+  "action": "inspect",
+  "success": true,
+  "state": "Completed",
+  "message": "Inspected 1 message(s) from INBOX.",
+  "data": {
+    "mode": "inspect",
+    "folder": "INBOX",
+    "total_fetched": 1,
+    "items": [
+      {
+        "envelope_id": "101",
+        "folder": "INBOX",
+        "message_id": "msg-2026-001@partner.example.org",
+        "raw_message_id": "MSG-2026-001@partner.example.org",
+        "subject": "Statusbericht Arbeitspaket 4",
+        "from": "Dr. Alex Beispiel <alex@partner.example.org>",
+        "to": "Empfänger <user@example.org>",
+        "date": "Tue, 6 Jan 2026 14:15:20 +0000",
+        "in_reply_to": "",
+        "references": "",
+        "preview": "Hallo zusammen,\n\nanbei der aktuelle Berichtsentwurf...",
+        "error": null,
+        "known_status": {
+          "in_index": false,
+          "in_action_log": false,
+          "final_folder": null,
+          "is_new": true
+        }
       }
-    }
-  ],
-  "input_file_deleted": true
+    ],
+    "input_file_deleted": true
+  },
+  "error": null
 }
 ```
 
@@ -366,25 +372,31 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
 ### Beispiel Output
 ```json
 {
-  "ok": true,
-  "mode": "execute",
-  "total_processed": 1,
-  "all_succeeded": true,
-  "results": [
-    {
-      "envelope_id": "101",
-      "message_id": "msg-2026-001@partner.example.org",
-      "subject": "Statusbericht Arbeitspaket 4",
-      "final_folder": "Projekte/Project-Alpha",
-      "new_envelope_id": "205",
-      "routing": "ok",
-      "metadata": "ok",
-      "final-index-script": "ok",
-      "reference-source-id": "ok",
-      "success": true
-    }
-  ],
-  "input_file_deleted": true
+  "action": "execute",
+  "success": true,
+  "state": "Completed",
+  "message": "Processed 1 message(s), all succeeded.",
+  "data": {
+    "mode": "execute",
+    "total_processed": 1,
+    "all_succeeded": true,
+    "results": [
+      {
+        "envelope_id": "101",
+        "message_id": "msg-2026-001@partner.example.org",
+        "subject": "Statusbericht Arbeitspaket 4",
+        "final_folder": "Projekte/Project-Alpha",
+        "new_envelope_id": "205",
+        "routing": "ok",
+        "metadata": "ok",
+        "final-index-script": "ok",
+        "reference-source-id": "ok",
+        "success": true
+      }
+    ],
+    "input_file_deleted": true
+  },
+  "error": null
 }
 ```
 
@@ -434,25 +446,31 @@ Prüft für eine gegebene Liste von Message-IDs (oder ein zuvor ausgeführtes Ma
 ### Beispiel Output
 ```json
 {
-  "ok": true,
-  "mode": "verify",
-  "total_checked": 1,
-  "all_consistent": true,
-  "results": [
-    {
-      "message_id": "msg-2026-001@partner.example.org",
-      "subject": "Statusbericht Arbeitspaket 4",
-      "in_index": true,
-      "indexed_folder": "Projekte/Project-Alpha",
-      "indexed_envelope_id": "205",
-      "in_action_log": true,
-      "logged_folder": "Projekte/Project-Alpha",
-      "in_evidence": true,
-      "folder_verified": null,
-      "current_envelope_id": null,
-      "consistent": true
-    }
-  ]
+  "action": "verify",
+  "success": true,
+  "state": "Completed",
+  "message": "Verified 1 message(s), all consistent.",
+  "data": {
+    "mode": "verify",
+    "total_checked": 1,
+    "all_consistent": true,
+    "results": [
+      {
+        "message_id": "msg-2026-001@partner.example.org",
+        "subject": "Statusbericht Arbeitspaket 4",
+        "in_index": true,
+        "indexed_folder": "Projekte/Project-Alpha",
+        "indexed_envelope_id": "205",
+        "in_action_log": true,
+        "logged_folder": "Projekte/Project-Alpha",
+        "in_evidence": true,
+        "folder_verified": null,
+        "current_envelope_id": null,
+        "consistent": true
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
@@ -501,19 +519,25 @@ Durchsucht parallel mehrere (oder alle) Mailbox-Ordner nach bestimmten Suchbegri
 ### Beispiel Output
 ```json
 {
-  "ok": true,
-  "mode": "search",
-  "total_found": 1,
-  "matches": [
-    {
-      "folder": "Projekte/Project-Alpha",
-      "envelope_id": "205",
-      "message_id": "msg-2026-001@partner.example.org",
-      "subject": "Statusbericht Arbeitspaket 4",
-      "from": "Dr. Alex Beispiel alex@partner.example.org",
-      "date": "2026-01-06 14:20+01:00"
-    }
-  ]
+  "action": "search",
+  "success": true,
+  "state": "Completed",
+  "message": "Found 1 match(es).",
+  "data": {
+    "mode": "search",
+    "total_found": 1,
+    "matches": [
+      {
+        "folder": "Projekte/Project-Alpha",
+        "envelope_id": "205",
+        "message_id": "msg-2026-001@partner.example.org",
+        "subject": "Statusbericht Arbeitspaket 4",
+        "from": "Dr. Alex Beispiel alex@partner.example.org",
+        "date": "2026-01-06 14:20+01:00"
+      }
+    ]
+  },
+  "error": null
 }
 ```
 
@@ -569,37 +593,66 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 ### Beispiel Output
 ```json
 {
-  "ok": true,
-  "mode": "resolve",
-  "total_processed": 1,
-  "all_resolved": true,
-  "results": [
-    {
-      "ok": true,
-      "resolved": true,
-      "message_id": "msg-2026-001@partner.example.org",
-      "source_file": "replies-needed.jsonl",
-      "archived_to": "data/mail-desk/archive/2026-W03/replies-needed.jsonl",
-      "item": {
-        "timestamp": "2026-01-12T10:00:00Z",
-        "envelope_id": "205",
+  "action": "resolve",
+  "success": true,
+  "state": "Completed",
+  "message": "Resolved 1 case(s), all succeeded.",
+  "data": {
+    "mode": "resolve",
+    "total_processed": 1,
+    "all_resolved": true,
+    "results": [
+      {
+        "resolved": true,
         "message_id": "msg-2026-001@partner.example.org",
-        "subject": "Statusbericht Arbeitspaket 4",
-        "status": "resolved",
-        "resolution": "Abstimmung telefonisch am 14.01. erfolgt, keine weitere Aktion nötig.",
-        "closed_at": "2026-01-14T15:30:00Z"
+        "source_file": "replies-needed.jsonl",
+        "archived_to": "data/mail-desk/archive/2026-W03/replies-needed.jsonl",
+        "item": {
+          "timestamp": "2026-01-12T10:00:00Z",
+          "envelope_id": "205",
+          "message_id": "msg-2026-001@partner.example.org",
+          "subject": "Statusbericht Arbeitspaket 4",
+          "status": "resolved",
+          "resolution": "Abstimmung telefonisch am 14.01. erfolgt, keine weitere Aktion nötig.",
+          "closed_at": "2026-01-14T15:30:00Z"
+        }
       }
-    }
-  ],
-  "input_file_deleted": true
+    ],
+    "input_file_deleted": true
+  },
+  "error": null
 }
 ```
 
 ---
 
+## Live-Fortschritts-Monitoring & Zeitschätzung (`core/progress.py`)
+
+- Bei allen Batch-Läufen (`--draft`, `--execute`, `--pipeline`, `--inspect`) führt der Runner eine atomare Statusdatei `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) mit Zählern, Prozentwert, aktuellen Arbeitsschritten und deterministischer Restzeitschätzung (ETA).
+- Ungepuffertes Live-Streaming in stdout/`task.log`: Jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
+- **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
+  1. Batch im Hintergrund starten mit initialem Timer von **60 Sekunden** (Warmup-Phase für realistische $\bar{T}_{\text{item}}$-Messung über mehrere IMAP-Operationen hinweg).
+  2. Beim Aufwachen `runner-progress.json` lesen:
+     - Wenn `status == "completed"` $\rightarrow$ Batch abgeschlossen, Vollzugsmeldung.
+     - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen.
+     - Wiederholen bis zum Abschluss.
+  3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
+
+---
+
+## Final-Index- und Batch-Importregeln
+
+- Die Backend-Location ist immer die nach Routing verifizierte finale Location; niemals eine Quell- oder Zwischenlocation speichern.
+- Ohne verifizierte finale Backend-Location kein `upsert-final`; spätere Korrekturen nur über `patch`.
+- JSONL-Batches sind temporäre Input-Artefakte und nie die Source of Truth. Jede Zeile enthält genau einen bereits verifizierten finalen Eintrag.
+- Nach erfolgreichem Import verwendete `final-index-batch-*.jsonl` löschen.
+- Backend-spezifische Verifikation und Felder stehen im jeweiligen Adapter ([`backends/gmail.md`](backends/gmail.md) bzw. [`backends/himalaya.md`](backends/himalaya.md)); Scriptzugriffsregeln in [`cli-operations.md`](cli-operations.md).
+
+---
+
 ## Fehlerbehandlung & Sicherheit
 
-1. **Kein Datenverlust:** Schlägt auch nur ein Einzelschritt (z. B. Routing oder Index-Write) fehl, gibt das Skript `ok: false` zurück und das Eingabemanifest **bleibt zur Fehleranalyse erhalten** (wird nicht gelöscht).
+1. **Kein Datenverlust:** Schlägt auch nur ein Einzelschritt (z. B. Routing oder Index-Write) fehl, gibt das Skript `success: false` (mit kanonischem Fehler-Envelope) zurück und das Eingabemanifest **bleibt zur Fehleranalyse erhalten** (wird nicht gelöscht).
 2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine temporäre Zwischendatei (`.tmp`) geschrieben und anschließend atomar ersetzt, um Korruption bei Prozessabbrüchen zu verhindern.
 3. **Plattformunabhängiges UTF-8:** Standard-Streams (`stdout`/`stderr`) und Dateilese-/schreiboperationen sind strikt auf UTF-8 konfiguriert (verhindert Windows `charmap`-Codierungsfehler bei Umlauten oder Sonderzeichen).
 4. **Fehlertolerante Subprozess-Ausführung:** `subprocess.run(..., errors="replace")` und Timeouts auf Einzelebene stellen sicher, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze nicht den gesamten Batch-Lauf blockieren.

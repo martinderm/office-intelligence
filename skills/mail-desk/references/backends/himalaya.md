@@ -26,7 +26,7 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
 
-- The existing `himalaya-op.json` manifest shape remains in [`SKILL.md`](../../SKILL.md) as an explicitly retained OI-14c handoff; its batch lifecycle is documented in [`references/batch-runner.md`](../batch-runner.md).
+- The existing `himalaya-op.json` manifest shape is documented in [`references/cli-operations.md`](../cli-operations.md); its batch lifecycle is documented in [`references/batch-runner.md`](../batch-runner.md).
 
 ## Envelope IDs
 

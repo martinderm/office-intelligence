@@ -1,6 +1,33 @@
 # mail-desk Log Schema
 
-All files are JSONL under `data/mail-desk/`. Keep entries small. Active files contain only open/current items; completed items move to `data/mail-desk/archive/YYYY-Www/`.
+All files are JSONL under `data/mail-desk/` (except `final-location-index.json`). Keep entries small. Active files contain only open/current items; completed items move to `data/mail-desk/archive/YYYY-Www/`.
+
+### Standardpfade
+
+```text
+data/mail-desk/
+  action-log.jsonl          # nur laufende/heutige Arbeitsnotizen, nicht als Dauerablage missbrauchen
+  pending-review.jsonl      # nur offene Review-Fälle
+  replies-needed.jsonl      # nur offene Antwortfälle
+  sent-index.jsonl          # leichter Index gesendeter Antworten (Header-/Routingmetadaten)
+  final-location-index.json # schneller O(1)-Lookup für finale Backend-Location (nur script-basiert)
+  runner-progress.json      # atomare Fortschrittsdatei bei Batch-Läufen
+  archive/
+    YYYY-Www/
+      action-log.jsonl
+      pending-review.jsonl
+      replies-needed.jsonl
+```
+
+Keine großen Mailarchive standardmäßig anlegen. Bei Bedarf kurze Auszüge oder Pfade auf Anhänge notieren, aber nicht die komplette Mail duplizieren.
+
+### Schreibregeln & Kontextsparen
+
+- Schreibzugriffe auf gemeinsame `data/mail-desk/`-Dateien immer **seriell**, nie parallel ausführen; das gilt besonders für `.jsonl`-Logs und `final-location-index.json`.
+- Für Schema-, Dedupe- oder Formatprüfungen nur kleine, gezielte Ausschnitte lesen.
+- Regeldateien innerhalb derselben Session nicht pro Mail erneut voll laden, wenn sich der Falltyp nicht wesentlich geändert hat.
+- Nach erster belastbarer Auswertung bevorzugt mit `message_id` plus Arbeitsverdichtung weiterarbeiten statt mit mehrfach wiederholtem Rohmaterial.
+- Script-Zugriffe auf `final-location-index.json` sind in [`cli-operations.md`](cli-operations.md) geregelt; die Datei darf niemals manuell editiert werden.
 
 ## Durable mail identity
 
@@ -146,6 +173,21 @@ Regeln:
 ## Closing an item
 
 Do not add a separate closed row next to an open row for the same mail. Update the original item and then archive it.
+
+### Vorgehen beim Schließen / Archivieren
+
+1. Aktive Datei lesen (`pending-review.jsonl` oder `replies-needed.jsonl`).
+2. Passenden ursprünglichen Eintrag per `message_id` suchen; falls keine Message-ID vorhanden ist, per stabilem `message_key` mit `key_type="fallback_hash"`. Nie per Backend-Locator schließen.
+3. Diesen Eintrag mit Status/Resolution ergänzen (siehe Pflichtfelder unten).
+4. Aktualisierten erledigten Eintrag aus der aktiven Datei entfernen.
+5. Erledigten Eintrag in `data/mail-desk/archive/YYYY-Www/<dateiname>.jsonl` anhängen.
+6. Aktive Datei ohne den erledigten Eintrag zurückschreiben.
+
+*Hinweis:* Dieser Ablauf wird automatisiert durch Aufruf von `python3 scripts/mail_desk_resolve_case.py` ausgeführt (Details siehe [`cli-operations.md`](cli-operations.md)).
+
+Aktive Dateien enthalten nur offene bzw. noch relevante Einträge. Alles Erledigte wandert ins Wochenarchiv nach ISO-Kalenderwoche. Keine Doppelstruktur wie `open` + später separate `closed`-Zeile für dieselbe Mail.
+
+Beim Schließen oder Archivieren nur den für den konkreten Fall nötigen Eintrag und Kontext lesen; keine breiten aktiven Dateistände mitschleppen, wenn ein gezielter Lookup reicht.
 
 Required close fields:
 
