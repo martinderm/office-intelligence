@@ -149,12 +149,12 @@ Liest Metadaten, Header (`Message-Id`, `In-Reply-To`, `References`, `From`, `To`
 ### Beispiel Output
 ```json
 {
-  "action": "inspect",
+  "action": "batch_runner",
   "success": true,
   "state": "Completed",
   "message": "Inspected 1 message(s) from INBOX.",
   "data": {
-    "mode": "inspect",
+    "operation": "inspect",
     "folder": "INBOX",
     "total_fetched": 1,
     "items": [
@@ -372,12 +372,12 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
 ### Beispiel Output
 ```json
 {
-  "action": "execute",
+  "action": "batch_runner",
   "success": true,
   "state": "Completed",
   "message": "Processed 1 message(s), all succeeded.",
   "data": {
-    "mode": "execute",
+    "operation": "execute",
     "total_processed": 1,
     "all_succeeded": true,
     "results": [
@@ -446,12 +446,12 @@ Prüft für eine gegebene Liste von Message-IDs (oder ein zuvor ausgeführtes Ma
 ### Beispiel Output
 ```json
 {
-  "action": "verify",
+  "action": "batch_runner",
   "success": true,
   "state": "Completed",
   "message": "Verified 1 message(s), all consistent.",
   "data": {
-    "mode": "verify",
+    "operation": "verify",
     "total_checked": 1,
     "all_consistent": true,
     "results": [
@@ -519,12 +519,12 @@ Durchsucht parallel mehrere (oder alle) Mailbox-Ordner nach bestimmten Suchbegri
 ### Beispiel Output
 ```json
 {
-  "action": "search",
+  "action": "batch_runner",
   "success": true,
   "state": "Completed",
   "message": "Found 1 match(es).",
   "data": {
-    "mode": "search",
+    "operation": "search",
     "total_found": 1,
     "matches": [
       {
@@ -593,12 +593,12 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 ### Beispiel Output
 ```json
 {
-  "action": "resolve",
+  "action": "batch_runner",
   "success": true,
   "state": "Completed",
   "message": "Resolved 1 case(s), all succeeded.",
   "data": {
-    "mode": "resolve",
+    "operation": "resolve",
     "total_processed": 1,
     "all_resolved": true,
     "results": [

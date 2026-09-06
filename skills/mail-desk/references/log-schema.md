@@ -1,6 +1,6 @@
 # mail-desk Log Schema
 
-All files are JSONL under `data/mail-desk/` (except `final-location-index.json`). Keep entries small. Active files contain only open/current items; completed items move to `data/mail-desk/archive/YYYY-Www/`.
+The log files under `data/mail-desk/` are JSONL; `final-location-index.json` and `runner-progress.json` are JSON files. Keep entries small. Active files contain only open/current items; completed items move to `data/mail-desk/archive/YYYY-Www/`.
 
 ### Standardpfade
 
