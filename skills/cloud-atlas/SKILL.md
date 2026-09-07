@@ -68,10 +68,13 @@ Lock darf nur über das reguläre Tier-2-Takeover von `workspace-lock` übernomm
 ein Force-Unlock/-Override (Tier 3) erfordert explizite Human Approval und ist nie
 autonom zulässig. Bei fehlender oder nicht verifizierbarer Ownership wird nicht mutiert.
 
-Bis der technische Guard aus OI-03 verfügbar ist, prüft der Operator diese Bedingung
-vor dem Aufruf und hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ein lockfreier
-Lauf ist ausschließlich ein expliziter Single-Session-Legacy-Modus: keine parallelen
-Writer, sichtbare Warnung und dokumentierte Ausnahme. Er ist nie der sichere Default.
+Vor dem Aufruf prüft der ausführende Harness die Ownership mit
+`workspace-lock/scripts/workspace_lock_guard.py` und `require_workspace_lock()` unter
+Angabe seiner Lease- oder Conversation-ID. Der Guard bleibt als gemeinsame
+Sicherheitskomponente im `workspace-lock`-Skill; Cloud Atlas dupliziert ihn nicht. Der
+Operator hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ein lockfreier Lauf ist
+ausschließlich ein expliziter Single-Session-Legacy-Modus: keine parallelen Writer,
+sichtbare Warnung und dokumentierte Ausnahme. Er ist nie der sichere Default.
 
 ---
 

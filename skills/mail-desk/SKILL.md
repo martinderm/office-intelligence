@@ -34,6 +34,11 @@ Der Lock schützt lokale gemeinsame Writer, nicht andere Mailbox-Clients; er ers
 die adapterseitigen Preconditions und Zielverifikation gegen externe
 Zustandsänderungen nicht. Beides bleibt nötig.
 
+Vor dem Fach-Skript prüft der ausführende Harness seine Ownership über
+`workspace-lock/scripts/workspace_lock_guard.py` mit `require_workspace_lock()` und
+der eigenen Lease- oder Conversation-ID. Der gemeinsame Guard wird nicht in den
+Mail-Desk kopiert.
+
 Wähle **genau einen** Adapter und lies nur diesen vollständig:
 
 - Gmail: [`references/backends/gmail.md`](references/backends/gmail.md)

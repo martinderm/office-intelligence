@@ -1,6 +1,6 @@
 ---
 name: project-catalog-entry
-description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige Projektreferenz unter `memory/references/projects/<slug>/` als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. `mail-processor` nutzt diese Strukturen für Projekt-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
+description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige slug-spezifische Projektreferenz als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. `mail-processor` nutzt diese Strukturen für Projekt-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
 ---
 
 # project-catalog-entry
@@ -164,4 +164,3 @@ Vor Ausgabe prüfen:
 ## Geplante Schema-Erweiterungen & Backlog (unter Vorbehalt)
 
 - Geplante Schema-Erweiterungen (Workpackages mit Tasks, Deliverables, Milestones) und Migrationspläne sind im zentralen Backlog dokumentiert: [`TODO.md`](TODO.md).
-

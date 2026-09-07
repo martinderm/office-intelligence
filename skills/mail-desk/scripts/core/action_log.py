@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .common import get_iso_week_folder, normalize_message_id, utc_now_iso
+from .common import atomic_write_text, get_iso_week_folder, normalize_message_id, utc_now_iso
 
 
 def append_action_log_entry(data_dir: Path, entry: dict[str, Any]) -> None:
@@ -79,9 +79,7 @@ def resolve_case(
             with archive_file.open("a", encoding="utf-8") as af:
                 af.write(json.dumps(found, ensure_ascii=False) + "\n")
 
-            with active_file.open("w", encoding="utf-8", newline="\n") as f:
-                for l in lines:
-                    f.write(l + "\n")
+            atomic_write_text(active_file, "".join(line + "\n" for line in lines))
 
             resolved_item = found
             source_file = active_file.name

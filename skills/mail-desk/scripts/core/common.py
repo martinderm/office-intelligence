@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import json
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Iterable
 
 # Ensure standard streams handle UTF-8 cleanly on Windows
 try:
@@ -20,6 +23,46 @@ except Exception:
 def utc_now_iso() -> str:
     """Return current UTC timestamp in ISO-8601 format with Z suffix."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def atomic_write_text(target: Path, content: str) -> None:
+    """Durably write UTF-8 text to a sibling temporary file, then replace target."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    file_descriptor = -1
+    temporary_path: Path | None = None
+    try:
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+        )
+        temporary_path = Path(temporary_name)
+        with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            file_descriptor = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if file_descriptor >= 0:
+            os.close(file_descriptor)
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def atomic_write_json(target: Path, payload: Any) -> None:
+    """Atomically replace a JSON document with stable UTF-8 formatting."""
+    atomic_write_text(target, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+
+
+def atomic_rewrite_jsonl(target: Path, entries: Iterable[dict[str, Any]]) -> None:
+    """Atomically replace a JSONL document; append-only writers remain lock-bound."""
+    content = "".join(json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries)
+    atomic_write_text(target, content)
 
 
 def get_iso_week_folder() -> str:
@@ -80,4 +123,3 @@ def resolve_evidence_dir(kind: str, item_id: str, workspace_root: Path | None = 
         return legacy_path
 
     return new_path
-

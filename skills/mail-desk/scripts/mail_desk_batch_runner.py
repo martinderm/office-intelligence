@@ -28,6 +28,7 @@ if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 from core import (
+    atomic_write_json,
     BatchProgressTracker,
     append_action_log_entry,
     append_replies_needed_entry,
@@ -379,17 +380,13 @@ def run_inspect_mode(
         if manifest_file:
             mf_path = Path(manifest_file).expanduser().resolve()
             mf_path.parent.mkdir(parents=True, exist_ok=True)
-            with mf_path.open("w", encoding="utf-8") as f:
-                json.dump(draft, f, ensure_ascii=False, indent=2)
-                f.write("\n")
+            atomic_write_json(mf_path, draft)
             output_data["manifest_file_created"] = str(mf_path)
 
     if output_file:
         out_path = Path(output_file).expanduser().resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        atomic_write_json(out_path, output_data)
 
     return output_data
 
@@ -455,9 +452,7 @@ def run_draft_mode(
 
     out_path = Path(output_file).expanduser().resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(draft, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    atomic_write_json(out_path, draft)
 
     tracker.complete(f"Drafted {len(draft.get('items', []))} items to {out_path.name}")
 
@@ -868,9 +863,7 @@ def run_verify_mode(
     if output_file:
         out_path = Path(output_file).expanduser().resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        atomic_write_json(out_path, out)
 
     return out
 
@@ -1020,9 +1013,7 @@ def run_search_mode(
     if output_file:
         out_path = Path(output_file).expanduser().resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
-            f.write("\n")
+        atomic_write_json(out_path, out)
 
     return out
 

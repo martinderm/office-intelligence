@@ -364,10 +364,9 @@ def ensure_tesseract_path():
     import platform
     if platform.system() == "Windows":
         candidates = [
-            r"C:\Users\dagobert-ai\AppData\Local\Programs\Tesseract-OCR",
+            str(Path.home() / "AppData" / "Local" / "Programs" / "Tesseract-OCR"),
             r"C:\Program Files\Tesseract-OCR",
             r"C:\Program Files (x86)\Tesseract-OCR",
-            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR")
         ]
         path_dirs = os.environ.get("PATH", "").split(os.pathsep)
         for cand in candidates:

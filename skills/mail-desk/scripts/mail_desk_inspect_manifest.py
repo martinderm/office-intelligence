@@ -22,7 +22,7 @@ from typing import Any
 
 
 from core.classifier import classify_email, load_catalogs
-from core.common import normalize_message_id, resolve_data_dir, resolve_final_index_path
+from core.common import atomic_write_json, normalize_message_id, resolve_data_dir, resolve_final_index_path
 from core.envelope import build_error, build_success, emit_json
 from core.index import load_final_index
 
@@ -247,9 +247,7 @@ def main() -> int:
                 )
                 reclassified_items.append(new_item)
             data["items"] = reclassified_items
-            with target_manifest_path.open("w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-                f.write("\n")
+            atomic_write_json(target_manifest_path, data)
 
         result = inspect_manifest(
             data,

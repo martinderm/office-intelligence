@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id, utc_now_iso, resolve_data_dir
+from .common import atomic_rewrite_jsonl, normalize_message_id, utc_now_iso, resolve_data_dir
 from .himalaya import run_himalaya, get_single_email_details
 
 
@@ -473,9 +473,7 @@ def auto_resolve_replies_from_sent(data_dir: Path | None = None) -> dict[str, An
             })
 
     if needs_rewrite:
-        with rn_path.open("w", encoding="utf-8", newline="\n") as f:
-            for e in updated_entries:
-                f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        atomic_rewrite_jsonl(rn_path, updated_entries)
 
     return {
         "ok": True,

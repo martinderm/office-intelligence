@@ -1,4 +1,5 @@
 import os
+import inspect
 import sys
 import json
 import shutil
@@ -679,6 +680,12 @@ class DocConversionTests(unittest.TestCase):
         self.assertEqual(status, "ok")
         self.assertTrue(payload["ocr_applied"])
         self.assertNotEqual(pdf_file.read_bytes(), original)
+
+    def test_tesseract_discovery_has_no_user_specific_home_path(self):
+        source = inspect.getsource(convert_cloud_docs.ensure_tesseract_path)
+
+        self.assertIn("Path.home()", source)
+        self.assertNotRegex(source, r"[A-Za-z]:\\Users\\[^\\]+")
 
 
 if __name__ == "__main__":

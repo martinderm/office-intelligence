@@ -18,6 +18,11 @@ fremder Lock stoppt die Mutation; ein eindeutig stale Lock darf nur über das re
 Tier-2-Takeover übernommen werden. Force-Unlock/-Override erfordert explizite Human
 Approval. Fehlt eindeutig verifizierbare Lock-Ownership, wird nicht mutiert.
 
+Die technische Ownership-Prüfung erfolgt vor dem Fach-Skript mit
+`workspace-lock/scripts/workspace_lock_guard.py`; der ausführende Harness verwendet
+`require_workspace_lock()` mit seiner Lease- oder Conversation-ID. Der Guard bleibt
+im gemeinsamen `workspace-lock`-Skill und wird nicht in dieses Bundle kopiert.
+
 Ein lockfreier Lauf ist ausschließlich ein expliziter Single-Session-Legacy-Modus:
 keine parallelen Writer, sichtbare Warnung und dokumentierte Ausnahme. Details zu
 Mutationen, Nachweisen und ggf. externen Preconditions stehen im zuständigen Sub-Skill.

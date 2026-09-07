@@ -1,6 +1,9 @@
 """Core package for mail-desk intelligence operations."""
 
 from .common import (
+    atomic_rewrite_jsonl,
+    atomic_write_json,
+    atomic_write_text,
     get_iso_week_folder,
     normalize_message_id,
     resolve_data_dir,
@@ -49,6 +52,9 @@ from .progress import BatchProgressTracker
 from .envelope import build_error, build_success, emit_json
 
 __all__ = [
+    "atomic_rewrite_jsonl",
+    "atomic_write_json",
+    "atomic_write_text",
     "normalize_message_id",
     "utc_now_iso",
     "get_iso_week_folder",
