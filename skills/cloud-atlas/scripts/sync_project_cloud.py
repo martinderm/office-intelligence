@@ -81,12 +81,28 @@ def run_step(step, command, json_mode):
         }
 
     if result.returncode != 0:
-        return None, {
+        error = {
             "step": step,
             "exit_code": result.returncode,
             "type": "ChildProcessError",
             "message": f"Der Schritt '{step}' wurde mit Exitcode {result.returncode} beendet.",
         }
+        if json_mode:
+            try:
+                child = json.loads(result.stdout or "")
+            except (TypeError, ValueError):
+                child = None
+            if isinstance(child, dict) and child.get("state") == "ConversionRequired":
+                error["type"] = "ConversionRequired"
+                error["message"] = child.get("message") or error["message"]
+                child_error = child.get("error")
+                error["details"] = child_error
+                error["requirements"] = (
+                    child_error.get("requirements", [])
+                    if isinstance(child_error, dict)
+                    else []
+                )
+        return None, error
     return result, None
 
 
@@ -117,6 +133,7 @@ def main():
     target_kind = "project" if args.project_id else "topic"
     target_id = args.project_id or args.topic_id
     completed_steps = []
+    conversion_required_error = None
 
     convert_command = [
         sys.executable,
@@ -142,16 +159,23 @@ def main():
         convert_command.extend(["--ocr-policy", args.ocr_policy])
     if args.redo_ocr:
         convert_command.append("--redo-ocr")
+    if args.json:
+        convert_command.append("--json")
 
     if not args.json:
         print(f"=== Schritt 1: Konvertiere Cloud-Dokumente fuer ID '{target_id}' ===")
     _, error = run_step("convert", convert_command, args.json)
     if error:
-        if args.json:
-            emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+        if error["type"] == "ConversionRequired":
+            # The converter has written the catalog state.  Generate the filemap
+            # before exposing the deferred, non-successful overall outcome.
+            conversion_required_error = error
         else:
-            print("Fehler beim Konvertieren der Cloud-Dokumente. Abbruch.")
-        return error["exit_code"] if error["exit_code"] is not None else 1
+            if args.json:
+                emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+            else:
+                print("Fehler beim Konvertieren der Cloud-Dokumente. Abbruch.")
+            return error["exit_code"] if error["exit_code"] is not None else 1
     completed_steps.append("convert")
 
     filemap_command = [sys.executable, str(scripts_dir / "gen_filemap.py"), target_flag, target_id]
@@ -161,6 +185,8 @@ def main():
         filemap_command.append("--topic")
     if args.storage_id:
         filemap_command.extend(["--storage-id", args.storage_id])
+    if args.json:
+        filemap_command.append("--json")
 
     if not args.json:
         print(f"\n=== Schritt 2: Generiere Filemap fuer ID '{target_id}' ===")
@@ -172,6 +198,19 @@ def main():
             print("Fehler beim Generieren der Filemap.")
         return error["exit_code"] if error["exit_code"] is not None else 1
     completed_steps.append("filemap")
+
+    if conversion_required_error:
+        if args.json:
+            emit_json(envelope(
+                False,
+                "ConversionRequired",
+                conversion_required_error["message"],
+                command_data(target_kind, target_id, completed_steps),
+                conversion_required_error,
+            ))
+        else:
+            print("Cloud-Synchronisation abgeschlossen; mindestens eine Datei benötigt eine optionale Konvertierungsfähigkeit.")
+        return conversion_required_error["exit_code"] if conversion_required_error["exit_code"] is not None else 1
 
     if args.json:
         emit_json(envelope(True, COMPLETED, "Cloud-Synchronisation erfolgreich abgeschlossen.", command_data(target_kind, target_id, completed_steps)))

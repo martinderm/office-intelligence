@@ -1,0 +1,4 @@
+# Optional dependencies for Cloud Atlas document conversion and OCR only.
+# They are intentionally not requirements of the Office Intelligence bundle.
+markitdown>=0.1.0
+ocrmypdf>=17.0.0

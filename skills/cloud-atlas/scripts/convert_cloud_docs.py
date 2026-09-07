@@ -66,6 +66,44 @@ class ConversionRunError(RuntimeError):
         self.storage_id = storage_id
 
 
+class ConversionRequiredError(RuntimeError):
+    """An optional converter is unavailable for an otherwise valid source file."""
+
+    def __init__(self, capability, message):
+        super().__init__(message)
+        self.capability = capability
+
+
+def conversion_required_payload(error, sha256=None, capability=None):
+    """Serialize a recoverable conversion prerequisite for a worker result."""
+    if isinstance(error, ConversionRequiredError):
+        capability = error.capability
+    return {
+        "error": str(error),
+        "sha256": sha256,
+        "capability": capability or "converter",
+    }
+
+
+def conversion_capability(error, default="converter"):
+    """Classify a missing optional capability without parsing CLI prose upstream."""
+    if isinstance(error, ConversionRequiredError):
+        return error.capability
+    text = str(error).lower()
+    for capability in ("markitdown", "ocrmypdf", "tesseract", "ghostscript", "doc_converter"):
+        if capability in text:
+            return capability
+    return default
+
+
+def send_conversion_required(conn, error, sha256=None, capability=None):
+    conn.send(("conversion_required", conversion_required_payload(
+        error,
+        sha256,
+        capability or conversion_capability(error),
+    )))
+
+
 def bounded_text(value, limit=MAX_ENVELOPE_MESSAGE_LENGTH):
     text = str(value or "")
     return text if len(text) <= limit else text[: limit - 3] + "..."
@@ -499,6 +537,10 @@ def run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=False, timeout=120, expected
                 os.unlink(target_output)
 
     ensure_tesseract_path()
+    if not shutil.which("ocrmypdf"):
+        return False, "OCRmyPDF CLI is unavailable (capability: ocrmypdf)."
+    if not shutil.which("tesseract"):
+        return False, "Tesseract CLI is unavailable (capability: tesseract)."
 
     cmd = ["ocrmypdf", "-l", "deu", "--output-type", "pdf", "--optimize", "0"]
     if redo_ocr:
@@ -542,7 +584,10 @@ def convert_to_markdown_raw(src_abs):
             else:
                 raise RuntimeError(stderr_str or f"CLI returned exit code {res.returncode}")
         except FileNotFoundError:
-            raise RuntimeError("Neither 'markitdown' Python package nor CLI tool was found. Please run 'pip install markitdown'.")
+            raise ConversionRequiredError(
+                "markitdown",
+                "MarkItDown is unavailable (neither the Python library nor CLI was found).",
+            )
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
 
@@ -586,26 +631,17 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
 
             # Check mock failure hook for testing corrupted/failed files
             if os.environ.get("CLOUD_ATLAS_MOCK_CORRUPT") == "1":
-                conn.send(("conversion_required", {
-                    "error": "Corrupted .doc file structure: could not parse binary format",
-                    "sha256": task.get("src_sha256")
-                }))
+                send_conversion_required(conn, "Corrupted .doc file structure: could not parse binary format", task.get("src_sha256"))
                 return
 
             ok, res, method = convert_doc_file(src_abs, derivative_dir, timeout=task.get("file_timeout", 60))
             if not ok:
-                conn.send(("conversion_required", {
-                    "error": res,
-                    "sha256": task.get("src_sha256")
-                }))
+                send_conversion_required(conn, res, task.get("src_sha256"), "doc_converter")
                 return
 
             actual_derivative_path = res
             if not os.path.isfile(actual_derivative_path) or os.path.getsize(actual_derivative_path) == 0:
-                conn.send(("conversion_required", {
-                    "error": f"Derivative output file missing or empty at {actual_derivative_path}",
-                    "sha256": task.get("src_sha256")
-                }))
+                send_conversion_required(conn, f"Derivative output file missing or empty at {actual_derivative_path}", task.get("src_sha256"), "doc_converter")
                 return
 
             derivative_sha256 = calculate_sha256(actual_derivative_path)
@@ -613,6 +649,9 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
             # Convert derivative (.docx) to Markdown
             try:
                 md_text = convert_to_markdown_raw(actual_derivative_path)
+            except ConversionRequiredError as exc:
+                send_conversion_required(conn, exc, task.get("src_sha256"))
+                return
             except Exception:
                 md_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus .docx-Derivat extrahiert]\n"
 
@@ -642,10 +681,7 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
 
             if not needs_ocr:
                 if raw_convert_err:
-                    conn.send(("conversion_required", {
-                        "error": raw_convert_err,
-                        "sha256": task.get("src_sha256")
-                    }))
+                    send_conversion_required(conn, raw_convert_err, task.get("src_sha256"))
                     return
                 conn.send(("ok", {
                     "text": raw_text,
@@ -663,31 +699,29 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 signature_state = is_digitally_signed_pdf(src_abs)
                 if signature_state is not False:
                     print(f"Warning: Digitally signed PDF detected at '{src_abs}'. In-place OCR mutation is forbidden to protect signature integrity.", file=sys.stderr)
-                    conn.send(("conversion_required", {
-                        "error": "PDF signature could not be safely ruled out for in-place OCR",
-                        "sha256": task.get("src_sha256")
-                    }))
+                    if signature_state is True:
+                        message = "Digitally signed PDF cannot be mutated in-place"
+                    else:
+                        message = "PDF signature cannot be safely ruled out; PDF cannot be mutated in-place"
+                    send_conversion_required(conn, message, task.get("src_sha256"), "ocr_policy")
                     return
 
                 # Check writability
                 if not os.access(get_safe_path(src_abs), os.W_OK):
-                    conn.send(("conversion_required", {
-                        "error": "Cloud source PDF is read-only; cannot enrich in-place",
-                        "sha256": task.get("src_sha256")
-                    }))
+                    send_conversion_required(conn, "Cloud source PDF is read-only; cannot enrich in-place", task.get("src_sha256"), "ocr_policy")
                     return
 
                 ok, msg = run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=task_redo_ocr, timeout=task.get("file_timeout", 60), expected_src_sha256=task.get("src_sha256"), check_signature=True)
                 if not ok:
-                    conn.send(("conversion_required", {
-                        "error": f"OCR enrichment failed: {msg}",
-                        "sha256": task.get("src_sha256")
-                    }))
+                    send_conversion_required(conn, f"OCR enrichment failed: {msg}", task.get("src_sha256"))
                     return
 
                 fresh_sha256 = calculate_sha256(src_abs)
                 try:
                     final_text = convert_to_markdown_raw(src_abs)
+                except ConversionRequiredError as exc:
+                    send_conversion_required(conn, exc, task.get("src_sha256"))
+                    return
                 except Exception:
                     final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF extrahiert]\n"
                 conn.send(("ok", {
@@ -711,15 +745,15 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 os.makedirs(os.path.dirname(derivative_abs), exist_ok=True)
                 ok, msg = run_ocr_on_pdf(src_abs, dest_abs=derivative_abs, redo_ocr=task_redo_ocr, timeout=task.get("file_timeout", 60))
                 if not ok:
-                    conn.send(("conversion_required", {
-                        "error": f"OCR derivative creation failed: {msg}",
-                        "sha256": task.get("src_sha256")
-                    }))
+                    send_conversion_required(conn, f"OCR derivative creation failed: {msg}", task.get("src_sha256"))
                     return
 
                 deriv_sha256 = calculate_sha256(derivative_abs)
                 try:
                     final_text = convert_to_markdown_raw(derivative_abs)
+                except ConversionRequiredError as exc:
+                    send_conversion_required(conn, exc, task.get("src_sha256"))
+                    return
                 except Exception:
                     final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF-Derivat extrahiert]\n"
                 quality_loss_note = (
@@ -756,6 +790,8 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 "conversion_method": "markitdown-direct",
                 "potential_quality_loss": None
             }))
+    except ConversionRequiredError as exc:
+        send_conversion_required(conn, exc, task.get("src_sha256"))
     except Exception as e:
         conn.send(("error", str(e)))
     finally:
@@ -841,6 +877,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                             "markdown_body": None,
                             "ocr_applied": False,
                             "error": payload.get("error") if isinstance(payload, dict) else payload,
+                            "capability": payload.get("capability") if isinstance(payload, dict) else "converter",
                             "sha256": payload.get("sha256") if isinstance(payload, dict) else task.get("src_sha256")
                         }
                         print(f"[{idx}/{total_count}] [conversion_required] {src_rel}: {results[src_rel]['error']}", flush=True)
@@ -882,6 +919,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                                 "markdown_body": None,
                                 "ocr_applied": False,
                                 "error": payload.get("error") if isinstance(payload, dict) else payload,
+                                "capability": payload.get("capability") if isinstance(payload, dict) else "converter",
                                 "sha256": payload.get("sha256") if isinstance(payload, dict) else task.get("src_sha256")
                             }
                             print(f"[{idx}/{total_count}] [conversion_required] {src_rel}: {results[src_rel]['error']}", flush=True)
@@ -1379,6 +1417,7 @@ def run_conversion(args, run_state):
 
         new_files_in_json = {}
         candidate_tasks = []
+        preflight_conversion_requirements = []
 
         for item in raw_scanned_files:
             src_abs = item["src_abs"]
@@ -1416,6 +1455,7 @@ def run_conversion(args, run_state):
 
             # Check converter availability for .doc files
             if is_doc and not doc_converter:
+                message = "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)"
                 print(f"[SKIP] Kein .doc-Konverter verfuegbar fuer {src_rel_workspace} -> Katalogisiert als 'conversion_required'.")
                 raw_entry = {
                     "version": src_version,
@@ -1424,9 +1464,14 @@ def run_conversion(args, run_state):
                     "sha256": src_sha256,
                     "description": "-",
                     "conversion_status": "conversion_required",
-                    "conversion_error": "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)"
+                    "conversion_error": message
                 }
                 new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, raw_entry)
+                preflight_conversion_requirements.append({
+                    "source": bounded_text(src_rel_workspace),
+                    "capability": "doc_converter",
+                    "message": bounded_text(message),
+                })
                 continue
 
             needs_conversion = args.force or redo_ocr or not os.path.exists(get_safe_path(dest_abs))
@@ -1486,7 +1531,8 @@ def run_conversion(args, run_state):
         count_skipped = 0
         count_converted = 0
         count_failed = 0
-        count_conversion_required = 0
+        count_conversion_required = len(preflight_conversion_requirements)
+        conversion_requirements = list(preflight_conversion_requirements)
 
         for task_idx, t in enumerate(candidate_tasks, 1):
             t["task_num"] = task_idx
@@ -1613,6 +1659,11 @@ def run_conversion(args, run_state):
                         "conversion_error": str(err_msg)
                     }
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, file_entry)
+                    conversion_requirements.append({
+                        "source": bounded_text(src_rel_workspace),
+                        "capability": bounded_text(res.get("capability") or conversion_capability(err_msg)),
+                        "message": bounded_text(err_msg),
+                    })
                     print(f"Datei '{src_rel_workspace}' katalogisiert mit Status 'conversion_required': {err_msg}")
                 else:
                     count_failed += 1
@@ -1698,8 +1749,14 @@ def run_conversion(args, run_state):
         filemap_data["updated_at"] = now_str
         write_json_file(filemap_json_abs, filemap_data)
         print(f"Saved filemap JSON to {filemap_json_abs}")
-        storage_summary["success"] = count_failed == 0
+        storage_summary["success"] = count_failed == 0 and count_conversion_required == 0
         storage_summary["file_count"] = len(new_files_in_json)
+        if conversion_requirements:
+            storage_summary["conversion_requirements"] = conversion_requirements
+            run_state.setdefault("conversion_requirements", []).extend([
+                {"storage_id": storage_summary["storage_id"], **requirement}
+                for requirement in conversion_requirements
+            ])
         if count_failed:
             error = {
                 "phase": "conversion",
@@ -1781,6 +1838,21 @@ def main(argv=None):
         }
         if args.json:
             print(json.dumps(make_envelope(False, "Failed", message, run_state, error), ensure_ascii=False))
+        return 1
+
+    if run_state.get("conversion_requirements"):
+        requirements = run_state["conversion_requirements"]
+        message = f"Conversion requires attention for {len(requirements)} file(s)."
+        error = {
+            "phase": "conversion",
+            "type": "ConversionRequired",
+            "message": bounded_text(message),
+            "requirements": requirements,
+        }
+        if args.json:
+            print(json.dumps(make_envelope(False, "ConversionRequired", message, run_state, error), ensure_ascii=False))
+        else:
+            print(message, file=sys.stderr)
         return 1
 
     if args.json:

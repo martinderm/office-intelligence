@@ -57,6 +57,49 @@ class SyncProjectCloudContractTests(unittest.TestCase):
         self.assertEqual([], result["data"]["completed_steps"])
         self.assertEqual(1, run_mock.call_count)
 
+    def test_conversion_required_child_is_preserved_as_typed_envelope(self):
+        child = {
+            "action": "convert_cloud_docs",
+            "success": False,
+            "state": "ConversionRequired",
+            "message": "Conversion requires attention for 1 file(s).",
+            "data": {"storages": []},
+            "error": {"type": "ConversionRequired", "requirements": [{"capability": "markitdown"}]},
+        }
+        conversion = subprocess.CompletedProcess([], 1, stdout=json.dumps(child))
+        filemap = subprocess.CompletedProcess([], 0, stdout=json.dumps({"success": True}))
+
+        exit_code, stdout, run_mock = self.run_main("--project-id", "example", "--json", side_effect=[conversion, filemap])
+
+        result = self.json_result(stdout)
+        self.assertEqual(1, exit_code)
+        self.assertFalse(result["success"])
+        self.assertEqual("ConversionRequired", result["state"])
+        self.assertEqual("ConversionRequired", result["error"]["type"])
+        self.assertEqual(child["error"], result["error"]["details"])
+        self.assertEqual(child["error"]["requirements"], result["error"]["requirements"])
+        self.assertEqual(["convert", "filemap"], result["data"]["completed_steps"])
+        self.assertEqual(2, run_mock.call_count)
+        self.assertTrue(all("--json" in call.args[0] for call in run_mock.call_args_list))
+
+    def test_filemap_failure_is_not_masked_by_conversion_required(self):
+        child = {
+            "state": "ConversionRequired",
+            "message": "Conversion requires attention for 1 file(s).",
+            "error": {"type": "ConversionRequired"},
+        }
+        conversion = subprocess.CompletedProcess([], 1, stdout=json.dumps(child))
+        filemap = subprocess.CompletedProcess([], 9, stdout=json.dumps({"success": False}))
+
+        exit_code, stdout, run_mock = self.run_main("--project-id", "example", "--json", side_effect=[conversion, filemap])
+
+        result = self.json_result(stdout)
+        self.assertEqual(9, exit_code)
+        self.assertEqual("Failed", result["state"])
+        self.assertEqual("filemap", result["error"]["step"])
+        self.assertEqual(["convert"], result["data"]["completed_steps"])
+        self.assertEqual(2, run_mock.call_count)
+
     def test_filemap_error_returns_nonzero(self):
         exit_code, stdout, run_mock = self.run_main(
             "--topic-id", "example", "--json", side_effect=[subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 9)]

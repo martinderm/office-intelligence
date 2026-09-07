@@ -194,6 +194,110 @@ class ConvertCloudDocsContractTests(unittest.TestCase):
         self.assertIn("Zusammenfassung", stderr)
         self.assertNotIn("Zusammenfassung", stdout)
 
+    def test_optional_doc_converter_is_conversion_required_not_completed(self):
+        self.configure(document_extension=".doc")
+        os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"] = "none"
+
+        exit_code, stdout, _ = self.run_main(
+            "--project-id", "example", "--workspace-root", str(self.root), "--json"
+        )
+
+        result = self.json_result(stdout)
+        storage = result["data"]["storages"][0]
+        self.assertEqual(1, exit_code)
+        self.assertFalse(result["success"])
+        self.assertEqual("ConversionRequired", result["state"])
+        self.assertEqual("ConversionRequired", result["error"]["type"])
+        self.assertIn("requires attention", result["message"])
+        self.assertNotIn("optional capabilities", result["message"])
+        self.assertEqual(1, storage["counts"]["conversion_required"])
+        self.assertFalse(storage["success"])
+        requirement = result["error"]["requirements"][0]
+        self.assertEqual("doc_converter", requirement["capability"])
+        self.assertEqual("default", requirement["storage_id"])
+
+    def test_conversion_required_storage_does_not_stop_later_storage(self):
+        self.configure(("needs_converter", "valid"), document_extension=".doc")
+        os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"] = "none"
+        (self.root / "data" / "cloud" / "VALID" / "valid.doc").unlink()
+        (self.root / "data" / "cloud" / "VALID" / "valid.docx").write_bytes(b"valid")
+
+        def converted(tasks, **_kwargs):
+            return {
+                task["src_rel"]: {
+                    "success": True,
+                    "markdown_body": "Converted valid storage document.",
+                    "ocr_applied": False,
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "markitdown-direct",
+                    "potential_quality_loss": None,
+                    "ocr_policy": "disabled",
+                    "new_src_sha256": None,
+                    "new_src_size": None,
+                    "new_src_mtime": None,
+                }
+                for task in tasks
+            }
+
+        with mock.patch.object(MODULE, "run_conversion_tasks", side_effect=converted):
+            exit_code, stdout, _ = self.run_main(
+                "--project-id", "example", "--workspace-root", str(self.root), "--json"
+            )
+
+        result = self.json_result(stdout)
+        self.assertEqual(1, exit_code)
+        self.assertEqual("ConversionRequired", result["state"])
+        self.assertEqual(2, len(result["data"]["storages"]))
+        self.assertEqual(1, result["data"]["storages"][0]["counts"]["conversion_required"])
+        self.assertTrue(result["data"]["storages"][1]["success"])
+        self.assertEqual(1, result["data"]["storages"][1]["counts"]["converted"])
+
+    def test_missing_markitdown_is_a_typed_conversion_requirement(self):
+        source = self.root / "source.docx"
+        source.write_bytes(b"placeholder")
+        task = {
+            "src_abs": str(source),
+            "src_sha256": "a" * 64,
+            "is_doc": False,
+            "is_pdf": False,
+        }
+        parent, child = MODULE.multiprocessing.Pipe()
+        with mock.patch.object(
+            MODULE,
+            "convert_to_markdown_raw",
+            side_effect=MODULE.ConversionRequiredError("markitdown", "MarkItDown is unavailable."),
+        ):
+            MODULE._convert_worker_target(task, child)
+        status, payload = parent.recv()
+        parent.close()
+
+        self.assertEqual("conversion_required", status)
+        self.assertEqual("markitdown", payload["capability"])
+        self.assertEqual("MarkItDown is unavailable.", payload["error"])
+        self.assertNotIn("pip install", payload["error"])
+
+    def test_missing_ocr_cli_prerequisites_are_deterministic(self):
+        source = self.root / "scan.pdf"
+        source.write_bytes(b"%PDF-1.4\nplaceholder\n%%EOF")
+        output = self.root / "derivative.pdf"
+
+        with mock.patch.object(MODULE.shutil, "which", return_value=None):
+            success, message = MODULE.run_ocr_on_pdf(str(source), str(output))
+        self.assertFalse(success)
+        self.assertEqual("OCRmyPDF CLI is unavailable (capability: ocrmypdf).", message)
+
+        with mock.patch.object(MODULE.shutil, "which", side_effect=["/tools/ocrmypdf", None]):
+            success, message = MODULE.run_ocr_on_pdf(str(source), str(output))
+        self.assertFalse(success)
+        self.assertEqual("Tesseract CLI is unavailable (capability: tesseract).", message)
+
+    def test_ghostscript_prerequisite_is_typed_deterministically(self):
+        self.assertEqual(
+            "ghostscript",
+            MODULE.conversion_capability("Ghostscript is unavailable for OCR processing."),
+        )
+
     def test_json_argument_error_is_canonical(self):
         exit_code, stdout, _ = self.run_main("--json")
 

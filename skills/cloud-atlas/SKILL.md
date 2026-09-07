@@ -17,7 +17,7 @@ und [references/filemap-schema.md](references/filemap-schema.md).
 
 Der Skill kapselt folgende Aufgaben:
 1. **Dokumenten-Konvertierung & Hänge-Schutz**:
-   - Scannt einen Cloud-Speicher nach Standard-Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und konvertiert sie direkt mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory.
+   - Scannt einen Cloud-Speicher nach Standard-Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und kann sie mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory konvertieren.
    - **Kontrollierte `.doc`-Unterstützung (Word 97–2003)**: Binäre Legacy-`.doc`-Dateien werden in einem kontrollierten 2-Stufen-Verfahren über LibreOffice (`soffice`) oder Word COM in ein separates `.docx`-Derivat unter `_derivatives/` konvertiert und daraus der Markdown-Spiegel erzeugt.
    - **Kontrollierte PDF-OCR & Policy-Steuerung (`--ocr-policy`)**:
      - *`local_derivative` (Standard & sichere Voreinstellung)*: Bei bildbasierten PDFs wird das OCR-Ergebnis als durchsuchbares PDF unter `_derivatives/` abgelegt; das Original im Cloud-Speicher bleibt 100% unberührt.
@@ -28,6 +28,34 @@ Der Skill kapselt folgende Aufgaben:
 2. **Filemap- & Manifest-Generierung**: Erstellt eine strukturierte JSON-Datenbank (`filemap.json`) und eine lesbare Markdown-Tabelle (`filemap.md`) mit Metadaten (SHA-256, Größe, Version, Änderungsdatum, Beschreibung, Mirror-Link, Derivat-Link und Konvertierungsstatus).
 3. **Fallback & Katalogisierung (`conversion_required`)**: Fehlt ein Konverter für `.doc`-Dateien, scheitert die OCR-Verarbeitung oder ist ein PDF digital signiert bei `enrich_source`, bricht der Scan nicht ab; die Datei wird vollständig katalogisiert und als `conversion_required` markiert.
 4. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen und Derivate unter `_derivatives/` (wenn das Original in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse.
+
+### Optionale Konvertierungs- und OCR-Voraussetzungen
+
+Der Office-Intelligence-Router und alle Nicht-Cloud-Desks benötigen **keine**
+Konvertierungspakete. Dokumentkonvertierung ist eine optionale Cloud-Atlas-Funktion;
+sie wird bewusst nur bei Bedarf installiert:
+
+```bash
+python -m pip install -r .agents/skills/cloud-atlas/requirements-conversion.txt
+```
+
+`requirements-conversion.txt` enthält `markitdown` (Python-Bibliothek; alternativ
+kann ein kompatibles `markitdown`-CLI im `PATH` bereitstehen) und `ocrmypdf` (stellt
+das `ocrmypdf`-CLI bereit). Für OCR müssen zusätzlich hostseitig **Ghostscript** sowie
+**Tesseract** mit den benötigten Sprachdaten verfügbar sein; der aktuelle Aufruf nutzt
+`-l deu` und benötigt deshalb insbesondere das deutsche Tesseract-Sprachpaket. Diese
+Systemvoraussetzungen werden weder vom Bundle noch von der Python-Requirements-Datei
+installiert. Für Legacy-`.doc` ist außerdem LibreOffice (`soffice`, bevorzugt) oder
+unter Windows Microsoft Word mit PowerShell-COM erforderlich.
+
+Fehlt eine dieser optionalen Fähigkeiten, bleibt der Scan deterministisch: Das
+Original wird katalogisiert mit `conversion_status: "conversion_required"`, andere
+Dateien und weitere Storages laufen weiter, und es wird kein freier
+Installationsbefehl ausgegeben. Im `--json`-Envelope ist dies ein nicht-erfolgreicher
+Zustand `state: "ConversionRequired"` mit `error.type: "ConversionRequired"` und
+maschinell lesbaren `error.requirements` (jeweils `storage_id`, `source`,
+`capability`, `message`). Der Aufrufer entscheidet anschließend ausdrücklich, ob er
+die optionale Funktion bereitstellt oder die Datei unverändert katalogisiert lässt.
 
 ### Mutations- und Lock-Vorbedingung
 
@@ -188,9 +216,11 @@ python .agents/skills/cloud-atlas/scripts/convert_cloud_docs.py --project-id mes
 #### 7. Konverter-Voraussetzungen für `.doc`
 Für die Konvertierung alter Word 97–2003 `.doc`-Dateien:
 * **LibreOffice (empfohlen, cross-platform):** `soffice.com` / `soffice` (wird automatisch in PATH und Standard-Installationspfaden erkannt).
-  * *Windows:* `winget install TheDocumentFoundation.LibreOffice`
-  * *Linux / Ubuntu:* `sudo apt install libreoffice-writer`
 * **Microsoft Word (Windows-Fallback):** MS Word COM-Automation über PowerShell.
+
+Diese hostseitigen Konverter gehören nicht zu den optionalen Python-Paketen. Fehlt
+beides, liefert der Lauf `ConversionRequired`/`conversion_required`; er fordert keine
+ungeprüfte Systeminstallation an.
 
 ---
 
