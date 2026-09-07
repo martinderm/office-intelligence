@@ -202,7 +202,7 @@ Das Root-`requirements.txt` enthält `markitdown` und `ocrmypdf`, obwohl nur `cl
 
 `event-documentation` verwendet `/Agent-Share/...` als festen BokuDrive-Pfad.
 
-**Soll:** Ein neutraler `storage_id` beziehungsweise konfigurierbarer Mount-Pfad ist der Standard. `/Agent-Share/` bleibt als dokumentiertes Legacy-/Deployment-Mapping erhalten, wenn es in bestehenden BOKU-Workspaces gebraucht wird. Eine blinde globale Ersetzung ist nicht zulässig.
+**Soll:** Neue Event-Ablagen verwenden ausschließlich einen bestehenden, im Projekt- oder Topic-Katalog konfigurierten Cloud-Atlas-Speicher (`cloud_sync.<storage_id>`). Mount, Mirrors und Filemaps werden aus dessen workspace-relativen Pfaden aufgelöst; institutionsspezifische Speicherpfade sind kein zulässiger Default. Bestehende `/Agent-Share/`-Links gelten nur als Migrationsaltbestand, werden weder neu erzeugt noch blind global ersetzt und dürfen erst nach eindeutiger Zuordnung zu einer konkreten Cloud-Atlas-Storage-ID kontrolliert migriert werden.
 
 ### P2-05 — Paketkonventionen sind nicht vollständig konsistent
 
@@ -275,7 +275,7 @@ Jedes Paket ist so geschnitten, dass ein kleiner Coding Agent nur wenige Dateien
 | `OI-14c` | ✅ abgeschlossen | Manifest- und Compliance-Details auslagern | `mail-desk/SKILL.md`, neue Referenzen | Formate und Sicherheitsregeln ohne Verlust verlinkt | `OI-14b` | Terra-high korrigierte nach Parent-Finding die fünf kanonischen Batch-Runner-Beispiele und die JSON/JSONL-Abgrenzung; Parent-Review, 52 Mail-Desk-Tests, Linkprüfung und `quick_validate` grün |
 | `OI-14d` | ✅ abgeschlossen | Mail-Desk-Router final kürzen | `mail-desk/SKILL.md`, Linkprüfung | Zielgröße erreicht; progressive Disclosure vollständig | `OI-14c` | Terra-high implementiert; Parent-Review mit gezielter Korrekturrunde zu Lock-Richtung, Todo-/Reply-Prüfpflicht und Spam-Fast-Path; Router auf 141 Zeilen verdichtet, 52 Mail-Desk-Tests, Linkprüfung und `quick_validate` grün |
 | `OI-15` | ✅ abgeschlossen | Cloud-Abhängigkeiten isolieren | `requirements.txt`, Cloud-Atlas-Doku, Fehlerpfade | Nicht-Cloud-Desks ohne Pakete nutzbar; fehlende Konverter strukturiert | `OI-09a/b/c` | Terra-high implementiert; Parent-Review mit zwei gezielten Korrekturrunden zu Signaturschutz, Filemap-Fortsetzung, Capability-Klassifikation und einheitlichem `ConversionRequired`-Vertrag; 93 Cloud-Atlas-Tests, 52 Mail-Desk-Regressionstests, Bundle-/Skill-Validierung und `git diff --check` grün |
-| `OI-16` | ⬜ offen | Event-Speicher abstrahieren | Event-Skill und Template | neutraler Default plus getestete/dokumentierte Legacy-Abbildung | keine | Luna/Flash |
+| `OI-16` | ✅ abgeschlossen | Event-Speicher über Cloud Atlas abstrahieren | Event-Skill, Template und Contract-Test | neue Events ausschließlich über konfiguriertes `cloud_sync.<storage_id>`; `/Agent-Share/` nur kontrollierter Migrationsinput | keine | Terra-high implementiert; Nutzer-Override auf Cloud-Atlas-only übernommen; Parent-Review mit einer Korrekturrunde zu Katalogzuständigkeit und rechnerisch korrekten Topic-/Projekt-Relativlinks; 5 Event-Contract-Tests, Bundle-/Skill-Validierung, Katalogvalidator und `git diff --check` grün |
 | `OI-17` | ⬜ offen | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | stärkeres Modell oder unabhängiger Reviewer |
 
 ### Paketvorlage für kleine Coding Agents

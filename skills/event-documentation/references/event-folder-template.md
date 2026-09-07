@@ -44,6 +44,8 @@ title: "<Event-Titel>"
 date: "YYYY-MM-DD"
 location: "<Ort, Land>"
 website: "<Link zur Event-Website>"
+cloud_storage_id: "<storage_id>"
+cloud_filemap: "<workspace-relativer Pfad aus cloud_sync.<storage_id>.output_json>"
 ---
 
 # <Event-Titel>
@@ -72,7 +74,8 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 ### Tag 1 — YYYY-MM-DD
 * **HH:MM Uhr:** <Programmpunkt-Name> (z. B. Eröffnung)
 * **HH:MM Uhr:** **Keynote 1:** <Vortragstitel> (Speaker: <Name>)  
-  ➡️ **Aufzeichnung:** [Meeting-Zusammenfassung](../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/YYYY-MM-DD-<slug>.summary.md) (ID: `<meeting-id>`)
+  ➡️ **Aufzeichnung (Topic/Subtopic):** [Meeting-Zusammenfassung](../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/YYYY-MM-DD-<slug>.summary.md) (ID: `<meeting-id>`)
+  ➡️ **Aufzeichnung (Projekt):** [Meeting-Zusammenfassung](../../../../../evidence/projects/<project>/events/<event-slug>/recordings/YYYY-MM-DD-<slug>.summary.md) (ID: `<meeting-id>`)
 
 ---
 
@@ -86,7 +89,8 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 
 ## 🔗 Wichtige Quellen & Kontakte
 * **Offizielle Event-Seite:** [<Name>](<Link>)
-* **Programm-Download (PDF):** [<Name>](<Link-Online>) | [Lokales PDF](/Agent-Share/<Pfad-zu-PDF>) | [Lokales Markdown](/Agent-Share/<Pfad-zu-MD>)
+* **Cloud-Atlas-Speicher:** `cloud_sync.<storage_id>` — Filemap: `<cloud_filemap>`
+* **Programm-Download (PDF):** [<Name>](<Link-Online>) | [Cloud-Atlas-Original](<relativer-Link-aus-scan_dir>) | [Cloud-Atlas-Markdown-Mirror](<relativer-Link-aus-output_dir>)
 * **Kontakte:** [Name <email>](mailto:email)
 ```
 
@@ -116,6 +120,7 @@ Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage we
 ---
 
 ## Pfad- und Linkregeln
-1. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden (z. B. von Säule 1 `index.md` nach Säule 2 `recordings/...`).
-2. **Agent-Share-Links:** Links zu Originaldokumenten auf BokuDrive (`Agent-Share/`) beginnen mit dem systemneutralen Präfix `/Agent-Share/` (z. B. `/Agent-Share/LLL-Networks/...`).
-3. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.
+1. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden. Vom Topic-/Subtopic-Event-`index.md` führt ein Link zu `memory/evidence/topics/<topic>/events/<event-slug>/recordings/...` über `../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/...`; vom Projekt-Event-`index.md` über `../../../../../evidence/projects/<project>/events/<event-slug>/recordings/...`. Bei anderen Quell- oder Zielpfaden den relativen Link aus den tatsächlichen Workspace-Pfaden ableiten, nicht eines dieser Beispiele übernehmen.
+2. **Cloud-Atlas-Routing:** Vor dem Ausfüllen einen bestehenden `cloud_sync.<storage_id>` im zuständigen Projekt- oder Topic-Katalog wählen. Fehlt die Konfiguration, sie ausschließlich mit `project-catalog-entry` (Projekt) beziehungsweise `topic-catalog-entry` (Topic oder Subtopic) pflegen; erst danach Cloud Atlas für Synchronisation, Konvertierung und Filemap nutzen. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Speicher verwenden.
+3. **Cloud-Atlas-Links:** Originale werden aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. `cloud_storage_id` und `cloud_filemap` müssen zur gewählten Konfiguration passen.
+4. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.
