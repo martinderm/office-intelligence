@@ -11,6 +11,10 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 4. **Automatische Aufräumlogik:** Das als Eingabe dienende temporäre JSON-Manifest unter `data/mail-desk/` wird nach bestätigter, fehlerfreier Ausführung automatisch gelöscht (`delete_input_on_success: true`).
 5. **Autonome Pipeline & Drafts:** Ermöglicht das automatisierte Nachladen unverarbeiteter E-Mails (`skip_known: true`), regelbasiertes Erstellen von Manifest-Entwürfen (`draft`) sowie autonome End-to-End-Verarbeitungsdurchläufe (`pipeline`).
 
+### Implementierungsstruktur
+
+Der Runner bleibt während der modularen Migration Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Bereits ausgelagerte Handler liegen unter `scripts/core/modes/`: `search.py` enthält `run_search_mode`, `resolve.py` enthält `run_resolve_mode`. Beide Namen werden im Runner weiter importiert und re-exportiert, sodass bestehende Imports, Patches und Modus-Aliase stabil bleiben. Die weiteren Modi werden schrittweise nach demselben Muster ausgelagert.
+
 ---
 
 ## Einheitliche Standard-Dateinamen

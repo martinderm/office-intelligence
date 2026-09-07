@@ -10,7 +10,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-02` | ⬜ offen | Nein | Es gibt weiterhin nur Projekt-Root-Matching und ein auf 30 Zeilen begrenztes Preview; keine hierarchische Artefaktauflösung und keine Full-Body-Eskalation. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
-| `FR-05` | 🟡 Vorarbeiten umgesetzt | Ja, aber nicht die Zielstruktur | Envelope-/Common-Helper, atomare Writes und die Progressive-Disclosure-Dokumentation wurden verbessert; die Modusfunktionen liegen weiterhin im inzwischen über 1.500-zeiligen Runner. |
+| `FR-05` | 🟡 in Umsetzung: erster Modulschnitt | Ja: `search` und `resolve` ausgelagert | Die ersten beiden Modusfunktionen liegen in `scripts/core/modes/`; sechs Handler verbleiben im aktuell 1.485-zeiligen Runner. |
 | `FR-06` | 🟡 teilweise: manueller Workflow-Pilot | Teilweise: U-1 bis U-5 gehärtet, quellengebundene manuelle Synthese beschrieben | Ein 10-Mail-Pilot samt manueller Synthese ist als Praxisnachweis dokumentiert. `synthesis_targets` im Manifest und maschinenlesbare Runner-`telemetry` fehlen weiterhin. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
@@ -268,10 +268,10 @@ Die Reihenfolge ist derzeit widersprüchlich: Die Problemstellung verlangt eine 
 
 ## FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)
 
-**Status:** 🟡 Vorarbeiten in dieser Session umgesetzt, Ziel noch offen. OI-10 bis OI-14 brachten den zentralen Envelope-Helper, CLI-Vertragsprüfungen und die Refactor-/Progressive-Disclosure-Dokumentation; OI-17 ergänzte gemeinsame atomare Schreibfunktionen. Die acht `run_*_mode`-Funktionen verbleiben jedoch in `mail_desk_batch_runner.py`; die Datei umfasst aktuell 1.468 physische Zeilen und `scripts/core/modes/` existiert nicht.
+**Status:** 🟡 In Umsetzung. Nach den Vorarbeiten aus OI-10 bis OI-14 und OI-17 ist nun der erste Modulschnitt erfolgt: `run_search_mode` und `run_resolve_mode` liegen in `scripts/core/modes/`. Sechs Modusfunktionen verbleiben in `mail_desk_batch_runner.py`; die Datei umfasst aktuell 1.485 physische Zeilen.
 
 ### Problemstellung
-[`mail_desk_batch_runner.py`](skills/mail-desk/scripts/mail_desk_batch_runner.py) liegt inzwischen über der 1.500-Zeilen-Schwelle. Zwar sind Basis-Hilfsfunktionen bereits in `scripts/core/` ausgelagert, die einzelnen Modus-Routinen (`run_inspect_mode`, `run_draft_mode`, `run_execute_mode`, `run_verify_mode` etc.) liegen jedoch noch linear im Hauptskript.
+Vor dem ersten Modulschnitt lag [`mail_desk_batch_runner.py`](skills/mail-desk/scripts/mail_desk_batch_runner.py) bereits über der 1.500-Zeilen-Schwelle. Basis-Hilfsfunktionen sowie `search` und `resolve` sind inzwischen in `scripts/core/` ausgelagert; die übrigen Modus-Routinen (`run_inspect_mode`, `run_draft_mode`, `run_execute_mode`, `run_verify_mode` etc.) liegen noch linear im Hauptskript.
 
 ### Ziel-Spezifikation
 Sobald weitere Modi hinzukommen (z. B. der Dossier-Modus oder erweiterte AI-Pipelines) oder die Dateigröße 1.500 Zeilen überschreitet, wird die Modi-Logik in ein Untermodul ausgelagert:
@@ -294,15 +294,21 @@ skills/mail-desk/scripts/
         ├── verify.py               # run_verify_mode
         ├── pipeline.py             # run_pipeline_mode
         ├── dossier.py              # run_dossier_mode (FR-04)
-        ├── search.py               # run_search_mode
-        └── resolve.py              # run_resolve_mode
+        ├── search.py               # run_search_mode ✅
+        └── resolve.py              # run_resolve_mode ✅
 ```
 
 ### Kommentar und Schärfung
 
-FR-05 sollte vor FR-04 erfolgen: Mit dem Dossier-Modus würde der Runner die im Request genannte 1.500-Zeilen-Schwelle unmittelbar überschreiten. Die Zielgröße von ungefähr 150 Zeilen für den Dispatcher ist plausibel, sollte aber kein hartes Abnahmekriterium sein; wichtiger sind stabile Imports, genau ein kanonischer Envelope am CLI-Rand und unveränderte Modussemantik.
+FR-05 sollte vor FR-04 abgeschlossen werden: Die im Request genannte 1.500-Zeilen-Schwelle war bereits überschritten und wurde durch den ersten Schnitt knapp unterschritten. Die Zielgröße von ungefähr 150 Zeilen für den Dispatcher ist plausibel, sollte aber kein hartes Abnahmekriterium sein; wichtiger sind stabile Imports, genau ein kanonischer Envelope am CLI-Rand und unveränderte Modussemantik.
 
-Die Auslagerung sollte inkrementell erfolgen. Zuerst eignen sich die relativ abgeschlossenen Modi `search` und `resolve`, danach `inspect`/`draft`, zuletzt die eng gekoppelten Mutationspfade `execute`/`verify`/`pipeline`. Nach jedem Schritt müssen die bestehenden Envelope-, Partial-Failure-, Cleanup- und Manifest-Sicherheitstests grün bleiben. Erst danach sollte `dossier.py` aus FR-04 hinzukommen.
+Die Auslagerung erfolgt inkrementell. `search` und `resolve` sind abgeschlossen; als Nächstes folgen `inspect`/`draft`, zuletzt die eng gekoppelten Mutationspfade `execute`/`verify`/`pipeline`. Nach jedem Schritt müssen die bestehenden Envelope-, Partial-Failure-, Cleanup- und Manifest-Sicherheitstests grün bleiben. Erst danach sollte `dossier.py` aus FR-04 hinzukommen.
+
+### Umsetzungsnachweis: erster Modulschnitt
+
+- `scripts/core/modes/search.py` und `scripts/core/modes/resolve.py` kapseln die beiden abgeschlossenen Handler und sind direkt testbar.
+- Der Runner importiert und re-exportiert beide Namen weiterhin. Damit bleiben Dispatch, bestehende Imports und Patch-Schnittstellen während der Migration stabil.
+- Regressionstests decken Ergebnisform, atomare Ausgabe, explizite und automatische Fallauflösung sowie den Alias-Dispatch ab.
 
 ---
 

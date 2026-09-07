@@ -48,18 +48,17 @@ from core import (
     load_sent_index,
     normalize_message_id,
     normalize_signature_text,
-    resolve_case,
     resolve_data_dir,
     resolve_final_index_path,
     run_himalaya,
     save_final_index_atomic,
-    search_mailbox,
     sync_sent_items,
     update_evidence_file,
     utc_now_iso,
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.modes import run_resolve_mode, run_search_mode
 
 
 # ==============================================================================
@@ -1061,97 +1060,6 @@ def run_pipeline_mode(
         "all_succeeded": pipeline_ok,
         "execute_summary": exec_result,
         "verify_summary": verify_result,
-    }
-
-
-# ==============================================================================
-# Search Mode
-# ==============================================================================
-
-def run_search_mode(
-    config: dict[str, Any],
-    account: str | None = None,
-    data_dir: Path | None = None,
-) -> dict[str, Any]:
-    query = config.get("query", "").strip()
-    raw_mids = config.get("message_ids", [])
-    folders = config.get("folders")
-    page_size = int(config.get("page_size", 50))
-    threads = int(config.get("threads", 4))
-    output_file = config.get("output_file")
-
-    matches = search_mailbox(
-        query=query,
-        message_ids=raw_mids,
-        folders=folders,
-        page_size=page_size,
-        threads=threads,
-        account=account,
-    )
-
-    out = {
-        "ok": True,
-        "mode": "search",
-        "total_found": len(matches),
-        "matches": matches,
-    }
-
-    if output_file:
-        out_path = Path(output_file).expanduser().resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(out_path, out)
-
-    return out
-
-
-# ==============================================================================
-# Resolve Mode
-# ==============================================================================
-
-def run_resolve_mode(
-    config: dict[str, Any],
-    data_dir: Path | None = None,
-) -> dict[str, Any]:
-    dd = data_dir or resolve_data_dir()
-    items = config.get("items", [])
-    if "message_id" in config:
-        items.append({
-            "message_id": config["message_id"],
-            "status": config.get("status", "resolved"),
-            "resolution": config.get("resolution", ""),
-            "resolved_by": config.get("resolved_by_message_id") or config.get("resolved_by"),
-        })
-
-    # If specific items are specified, resolve those explicitly
-    if items:
-        resolved_results: list[dict[str, Any]] = []
-        all_resolved = True
-
-        for item in items:
-            mid = item.get("message_id", "")
-            status = item.get("status", "resolved")
-            resolution = item.get("resolution", "")
-            resolved_by = item.get("resolved_by_message_id") or item.get("resolved_by")
-            res = resolve_case(dd, mid, status=status, resolution=resolution, resolved_by=resolved_by)
-            resolved_results.append(res)
-            if not res.get("resolved"):
-                all_resolved = False
-
-        return {
-            "ok": all_resolved,
-            "mode": "resolve",
-            "total_processed": len(resolved_results),
-            "all_resolved": all_resolved,
-            "results": resolved_results,
-        }
-
-    # Otherwise run automated audit against sent items
-    auto_res = auto_resolve_replies_from_sent(data_dir=dd)
-    return {
-        "ok": True,
-        "mode": "resolve",
-        "auto_audit": True,
-        **auto_res,
     }
 
 
