@@ -1,28 +1,32 @@
 # Konformitäts- und Umsetzungsbericht: `office-intelligence` → `agent-architecture`
 
-> **Dokument-ID:** `OI-ARCH-COMPLIANCE-2026-09`  
+> **Dokument-ID:** `OI-ARCH-COMPLIANCE-2026-09`
 > **Zielobjekt:** `skills/office-intelligence` als **Shared Skill Bundle**, nicht als Agent-Workspace
 >
 > **Referenz-Architektur:** `Shared-Memory/agent-architecture` und `skills/authoring-guide.md`
 >
-> **Prüfdatum:** 2026-09-01  
+> **Prüfdatum:** 2026-09-01; Abschlussaudit: 2026-09-07
 > **Geprüfter Git-Ausgangspunkt:** `fb9ba3e5f7a6cc239c51ac298453159e8ddb0cfc`
 >
-> **Worktree bei Prüfung:** nicht clean; Bericht sowie Änderungen unter `skills/project-catalog-entry/` waren gestaged
+> **Geprüfter Implementierungsstand:** `4b4d620687b495ad0972c6e33808f094c7dc4435`
 >
-> **Status:** Review abgeschlossen; Umsetzung ausständig
+> **Worktree beim Abschlussaudit:** Implementierungsstand clean; `.agents/session.lock` ignoriert und nicht versioniert; anschließend nur dieser Abschlussbericht geändert
+>
+> **Status:** `conformant` im dokumentierten Scope; keine offenen P0-/P1-Findings
 
 ---
 
 ## 1. Urteil
 
-`office-intelligence` ist fachlich stark und setzt Dual Evidence, Message-ID-Bindung, Katalog-Routing und nachvollziehbare Evidenzanker bereits überzeugend um. Der bisherige Bericht hat die richtige Modernisierungsrichtung erkannt, aber drei Punkte falsch eingeordnet:
+`office-intelligence` ist nach Umsetzung von `OI-01` bis `OI-16` und dem Abschlussaudit `OI-17` als Shared Skill Bundle im dokumentierten Scope **konform**. Dual Evidence, Message-ID-Bindung, Katalog-Routing und nachvollziehbare Evidenzanker blieben erhalten; Sicherheits-, Metadaten-, CLI- und Portabilitätsverträge sind nun getestet und dokumentiert.
 
-1. Das Repository ist ein **Skill Bundle und kein Agent-Workspace**. Es benötigt daher weder eine eigene `.agents/workspace-architecture.json` noch eine vollständige Dummy-Struktur mit allen vier Data Zones.
-2. Concurrency und sichere Schreiboperationen sind keine optionale P2-Verbesserung. Für mutierende Skill-Werkzeuge sind Lock-Vertrag und atomare Writes sicherheitsrelevant.
-3. Die In-place-OCR in `cloud-atlas` ist als fachlich sinnvolle Anreicherung bildbasierter Cloud-PDFs zulässig, aber noch nicht als ausdrückliche Mutations-, Provenienz- und Fallback-Policy beschrieben.
+Die drei tragenden Architekturentscheidungen sind:
 
-Das Bundle ist deshalb **bedingt konform**. Die fachliche Architektur kann beibehalten werden; vor einer vollständigen Konformität sind die P0- und P1-Pakete dieses Berichts umzusetzen und unabhängig zu validieren.
+1. Das Repository bleibt ein **Skill Bundle und kein Agent-Workspace**; es erhält keine konkurrierende Control Plane oder Dummy-Data-Zones.
+2. Mutationen werden am ausführenden Harness über den gemeinsamen ownership-gebundenen `workspace-lock`-Guard autorisiert; ersetzende Writes sind atomar, Append-only bleibt lockgebunden.
+3. PDF-OCR verwendet `local_derivative` als sicheren Default. `enrich_source` bleibt die bewusst erlaubte Sonderlösung für beschreibbare, sicher unsignierte und versionierte Cloud-PDFs mit vollständiger Provenienz; signierte oder nicht sicher beurteilbare PDFs werden nicht in-place verändert.
+
+Das Abschlussaudit fand vier eng begrenzte Restabweichungen (Mail-Desk-Ersatzwrites, veralteter Guard-Hinweis, benutzerspezifischer Tesseract-Suchpfad und Paket-/Frontmatter-Konventionen). Sie wurden im geprüften Implementierungsstand `4b4d620` geschlossen und vollständig regressionsgetestet.
 
 ---
 
@@ -64,6 +68,10 @@ Diese Stärken dürfen bei der Modernisierung nicht durch großflächige Neuarch
 ---
 
 ## 4. Findings nach Priorität
+
+Die folgenden Abschnitte dokumentieren die historischen Ausgangsbefunde. Ihr
+Abschlussstatus und die aktuelle Evidenz stehen in Abschnitt 10; keiner der P0-/P1-
+Befunde ist am geprüften Implementierungsstand offen.
 
 ### P1-00 — In-place-OCR benötigt einen ausdrücklichen Anreicherungsvertrag
 
@@ -206,7 +214,7 @@ Das Root-`requirements.txt` enthält `markitdown` und `ocrmypdf`, obwohl nur `cl
 
 ### P2-05 — Paketkonventionen sind nicht vollständig konsistent
 
-Der Authoring Guide fordert `LICENSE.txt`; im Bundle liegt `LICENSE`. Dieser Unterschied ist funktional gering, sollte aber entweder vereinheitlicht oder im Guide als erlaubte Variante dokumentiert werden.
+Der Authoring Guide fordert `LICENSE.txt`; im Ausgangsstand lag die Datei als `LICENSE` vor. `OI-17` hat sie ohne Inhaltsänderung in `LICENSE.txt` umbenannt. Zusätzlich wurden die zuvor vom Skill-Validator abgelehnten Winkelklammern aus den Frontmatter-Beschreibungen der Projekt- und Topic-Katalog-Skills entfernt.
 
 ### Verbesserung, aber kein Compliance-Blocker
 
@@ -276,7 +284,7 @@ Jedes Paket ist so geschnitten, dass ein kleiner Coding Agent nur wenige Dateien
 | `OI-14d` | ✅ abgeschlossen | Mail-Desk-Router final kürzen | `mail-desk/SKILL.md`, Linkprüfung | Zielgröße erreicht; progressive Disclosure vollständig | `OI-14c` | Terra-high implementiert; Parent-Review mit gezielter Korrekturrunde zu Lock-Richtung, Todo-/Reply-Prüfpflicht und Spam-Fast-Path; Router auf 141 Zeilen verdichtet, 52 Mail-Desk-Tests, Linkprüfung und `quick_validate` grün |
 | `OI-15` | ✅ abgeschlossen | Cloud-Abhängigkeiten isolieren | `requirements.txt`, Cloud-Atlas-Doku, Fehlerpfade | Nicht-Cloud-Desks ohne Pakete nutzbar; fehlende Konverter strukturiert | `OI-09a/b/c` | Terra-high implementiert; Parent-Review mit zwei gezielten Korrekturrunden zu Signaturschutz, Filemap-Fortsetzung, Capability-Klassifikation und einheitlichem `ConversionRequired`-Vertrag; 93 Cloud-Atlas-Tests, 52 Mail-Desk-Regressionstests, Bundle-/Skill-Validierung und `git diff --check` grün |
 | `OI-16` | ✅ abgeschlossen | Event-Speicher über Cloud Atlas abstrahieren | Event-Skill, Template und Contract-Test | neue Events ausschließlich über konfiguriertes `cloud_sync.<storage_id>`; `/Agent-Share/` nur kontrollierter Migrationsinput | keine | Terra-high implementiert; Nutzer-Override auf Cloud-Atlas-only übernommen; Parent-Review mit einer Korrekturrunde zu Katalogzuständigkeit und rechnerisch korrekten Topic-/Projekt-Relativlinks; 5 Event-Contract-Tests, Bundle-/Skill-Validierung, Katalogvalidator und `git diff --check` grün |
-| `OI-17` | ⬜ offen | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | stärkeres Modell oder unabhängiger Reviewer |
+| `OI-17` | ✅ abgeschlossen | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff und gezielte Restkorrekturen | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | Parent-Audit auf neu eingelesener Governance-/Reportbasis; Restbefunde in `4b4d620` geschlossen; 153 Bundle-Tests und 12 Guard-Tests grün, acht Skill-Entrypoints valide |
 
 ### Paketvorlage für kleine Coding Agents
 
@@ -309,7 +317,7 @@ Empfohlen wird daher:
 4. Nach jedem Paket Tests, Diff und Handoff festhalten.
 5. Erst nach bestandenem Paket mit dem abhängigen Paket fortfahren.
 
-Parallelität ist nur in isolierten Git-Worktrees und bei vollständig disjunkten Dateien sinnvoll. Für Luna-/Flash-Agenten ist serielle Ausführung meist robuster und günstiger als parallele Koordination. Besonders `OI-01`, `OI-03`, `OI-08` und `OI-17` erhalten ein unabhängiges Review durch ein stärkeres Modell oder einen Menschen.
+Parallelität ist nur in isolierten Git-Worktrees und bei vollständig disjunkten Dateien sinnvoll. Für Luna-/Flash-Agenten ist serielle Ausführung meist robuster und günstiger als parallele Koordination. Besonders `OI-01`, `OI-03` und `OI-08` erhalten ein unabhängiges Review durch ein stärkeres Modell oder einen Menschen. `OI-17` wird durch einen kontexttragenden starken Parent nach vollständigem Neueinlesen der Governance- und Reportbasis ausgeführt; bei zweifelhaften Befunden ist ein unabhängiger Reviewer hinzuzuziehen.
 
 ### Empfohlene Reihenfolge
 
@@ -329,22 +337,71 @@ Die Stränge sind logisch teilweise unabhängig, sollen im selben physischen Wor
 
 | Bereich | Status jetzt | Abnahmebedingung |
 | :--- | :--- | :--- |
-| Cloud-PDF-Anreicherung | teilweise konform | In-place-OCR ist policy-gesteuert, versioniert, provenance-gebunden und gegen digitale/signierte PDFs abgesichert |
-| Locking | nicht konform | ownership-gebundener, getesteter Mutationsvertrag |
-| Atomare Writes | teilweise konform | alle ersetzenden Writes atomar; Append-Vertrag geschützt |
-| Data-Zone-Pfade | weitgehend konform | veralteter Hilfetext entfernt; Legacy-Pfade explizit behandelt |
-| Cloud-Metadaten | nicht konform | Canonical-Write und Schema-Tests |
-| CLI-Envelopes | nicht konform | kanonische Contract-Tests für alle CLI-Einstiegspunkte |
-| Dual Evidence | konform mit Verbesserungen | bestehende Beleganker und Trennung bleiben regressionsfrei |
-| Router/Katalog | teilweise konform | sieben Sub-Skills konsistent dokumentiert |
-| Token-Footprint | teilweise konform | Mail-Desk modularisiert, Details progressiv geladen |
-| Abhängigkeiten | teilweise konform | Cloud-Extras isoliert und Fehlerzustände strukturiert |
-| Auditierbarkeit | teilweise konform | Commit, Dirty State, Befehle und Evidence-Matrix dokumentiert |
+| Cloud-PDF-Anreicherung | konform | Policy, Signaturschutz, atomare Mutation und Provenienz sind getestet |
+| Locking | konform | gemeinsamer ownership-gebundener Guard am Harness-Gate; kein autonomes Force; Legacy nur explizit |
+| Atomare Writes | konform | ersetzende Cloud- und Mail-Desk-Writes verwenden sibling-temp + replace; Append-only ist lockgebunden |
+| Data-Zone-Pfade | konform | kanonische Cloud-Pfade; Legacy-Pfade nur kontrolliert gelesen/migriert; Events Cloud-Atlas-only |
+| Cloud-Metadaten | konform | Canonical-Write, Dual-Read und Schema-Tests vorhanden |
+| CLI-Envelopes | konform | kanonische Contract-Tests für Cloud- und Mail-Desk-Einstiegspunkte; Legacy nur über Opt-in-Adapter |
+| Dual Evidence | konform | Beleganker und normative/empirische Trennung regressionsfrei |
+| Router/Katalog | konform | sieben Sub-Skills in Root, README und zentralem Katalog konsistent |
+| Token-Footprint | konform | Mail-Desk-Router aktuell 146 Zeilen einschließlich Guard-Vertrag; Details progressiv in Referenzen |
+| Abhängigkeiten | konform | Cloud-Extras isoliert; fehlende Konverter liefern `ConversionRequired` |
+| Paketkonventionen | konform | `LICENSE.txt`, valide Frontmatter und portable Pfade |
+| Auditierbarkeit | konform | Ausgangs- und Implementierungscommit, Dirty State, Befehle und Evidence-Matrix dokumentiert |
 
 ---
 
 ## 9. Abschlussurteil
 
-`office-intelligence` benötigt keine neue Agent-Workspace-Architektur. Es benötigt eine gezielte Härtung als Shared Skill Bundle.
+`office-intelligence` benötigt und besitzt keine eigene Agent-Workspace-Architektur. Die gezielte Härtung als Shared Skill Bundle ist abgeschlossen.
 
-Die Umsetzung soll nicht als große Migration erfolgen, sondern als Folge kleiner, testbarer Pakete. Luna- oder Flash-Klassen sind für den Großteil der mechanisch klaren Pakete geeignet. Sicherheits-, Schema- und Abschlussentscheidungen bleiben reviewpflichtig. Nach `OI-17` kann der Status auf `conformant` gesetzt werden, wenn alle P0-/P1-Abnahmekriterien belegt sind.
+Die lineare Umsetzung in kleinen, separat geprüften Paketen hat sich bewährt. Kleinere Modelle waren für eng mechanische Pakete teilweise geeignet; sicherheits-, schema- und kontextreiche Pakete benötigten Terra beziehungsweise stärkeres Parent-Review. Am geprüften Stand sind alle P0-/P1-Abnahmekriterien belegt. Der Status lautet daher `conformant`.
+
+---
+
+## 10. Abschlussaudit-Evidenz (`OI-17`)
+
+### 10.1 Reproduzierbarer Prüfstand
+
+- Ausgangscommit des ursprünglichen Audits: `fb9ba3e5f7a6cc239c51ac298453159e8ddb0cfc`
+- Letzter Paketstand vor Abschlusskorrekturen: `977aa4ade77da344ef5cafe596ed04cab336d897`
+- Geprüfter Implementierungsstand nach Abschlusskorrekturen: `4b4d620687b495ad0972c6e33808f094c7dc4435`
+- Externer `workspace-lock`-Stand: `484b28fb58be17164274b0169dcfdc15cf5ac11d`
+- Git-Hygiene: Implementierungsstand clean; `.agents/session.lock` durch `.gitignore` erfasst, weder getrackt noch gestaged; kein Push im Abschlussaudit
+
+### 10.2 Prüfungen
+
+| Prüfung | Ergebnis |
+| :--- | :--- |
+| `python -m unittest discover -s skills/cloud-atlas/tests -p "test_*.py"` | 94/94 grün |
+| `python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"` | 54/54 grün |
+| `python -m unittest discover -s skills/event-documentation/tests -p "test_*.py"` | 5/5 grün |
+| `python -m unittest discover -s tests -p "test_*.py" -v` im `workspace-lock`-Repo | 12/12 grün |
+| `python -m compileall -q skills` | grün |
+| `quick_validate.py` mit UTF-8-Modus für Root und alle sieben Sub-Skills | 8/8 grün |
+| `python scripts/validate-skills-catalog.py` im zentralen Skills-Repo | grün |
+| Lokale Markdown-Linkauflösung | alle nicht externen, nicht templatisierten Links auflösbar |
+| Portabilitäts- und Write-Scan | keine benutzerspezifischen Windows-Home-Pfade; keine direkten ersetzenden Textwrites außerhalb atomarer Helper |
+| `git diff --check` | grün |
+
+Der UTF-8-Modus beim Skill-Validator ist auf Windows erforderlich, weil dessen
+`read_text()` sonst die lokale Codepage verwendet. Dies ist ein Validator-
+Ausführungsdetail, kein Encoding-Fehler der UTF-8-Skilldateien.
+
+### 10.3 Finding-zu-Evidenz-Matrix
+
+| Finding | Status | Primäre Evidenz |
+| :--- | :--- | :--- |
+| `P1-00` OCR-Anreicherungsvertrag | geschlossen | `cloud-atlas/SKILL.md`, OCR-/Signatur-/Failure-Mode-Tests in `test_doc_conversion.py` |
+| `P0-02` Lock-Vertrag | geschlossen | Root-, Cloud- und Mail-Skill; shared `workspace_lock_guard.py`; 12 Guard-Tests |
+| `P1-01` atomare Writes | geschlossen | atomare Cloud-Writer; Mail-Desk `core/common.py`, `core/evidence.py`, `core/index.py`; Failure-Mode-Tests |
+| `P1-02` Cloud-Metadaten | geschlossen | `core/metadata.py`, Canonical-Write-/Dual-Read-Tests |
+| `P1-03` Filemap-Schemascope | geschlossen | `references/filemap.schema.json`, `references/filemap-schema.md`, Generator-/Schema-Tests |
+| `P1-04` CLI-Envelopes | geschlossen | Cloud- und Mail-Desk-Contract-Tests sowie expliziter Legacy-Adapter |
+| `P1-05` reproduzierbares Audit | geschlossen | Commit-/Dirty-State-Angaben und diese Prüfmatrix |
+| `P2-01` Router/Katalog | geschlossen | sieben konsistente Routen in `SKILL.md`, `README.md` und `skills-catalog.yaml` |
+| `P2-02` Mail-Desk-Größe | geschlossen | aktuell 146-zeiliger Router plus gezielt geladene Referenzen |
+| `P2-03` optionale Cloud-Abhängigkeiten | geschlossen | `cloud-atlas/requirements-conversion.txt`, `ConversionRequired`-Tests |
+| `P2-04` Event-Speicher | geschlossen | Cloud-Atlas-only-Vertrag und fünf Event-Storage-Tests |
+| `P2-05` Paketkonventionen | geschlossen | `LICENSE.txt`; acht erfolgreiche Skill-Validierungen |
