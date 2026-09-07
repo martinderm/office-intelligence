@@ -100,7 +100,17 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     Erkenntnissen zuständige Projekt-/Topic-Referenzen und die geforderte Evidence
     quellengebunden aktualisieren; Logs ersetzen das nicht. Jede Erkenntnis trägt
     `message_id`/dokumentierten Fallback, Datum, Absender, Betreff und knappen
-    Kontext. Bestehende Evidence-Pfad- und Legacy-Leseregeln nicht nebenbei ändern.
+    Kontext. Bei Batch-Läufen folgt nach dem physischen Transfer (`execute`) eine
+    **Post-Batch Projekt-Synthese (FR-06)** durch das LLM: Alle berührten Projekte
+    und Topics werden auf inhaltliche Fortschritte geprüft. Die zuständigen
+    Steuerungsdateien (`statusampel-*.md`, `signals.md`, `contacts.md`,
+    `workpackages/*.md`, `events/*.md`) werden nur bei belastbaren, mit der Mail
+    verknüpften neuen Erkenntnissen geändert. Ergibt die Prüfung keinen solchen
+    Erkenntnisgewinn, ist ein No-op zulässig und im Abschlussbericht zu nennen;
+    Dateien werden nie nur wegen eines Batchlaufs verändert. `synthesis_targets`
+    und Runner-Telemetrie sind noch nicht implementiert, daher erfolgt die Auswahl
+    der zu prüfenden Dateien derzeit manuell und quellengebunden. Lock- und
+    Approval-Grenzen bleiben auch für diese Synthese unverändert wirksam.
 13. Gemeinsame `data/mail-desk/`-Writes strikt seriell durchführen: keine parallelen
     JSONL-Appends oder Final-Index-Writes. Fälle korrekt aktualisieren, aus aktiven
     Dateien entfernen und wochenbasiert archivieren; Formate, Pfade und Fallerledigung stehen in

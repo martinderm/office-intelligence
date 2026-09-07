@@ -51,6 +51,9 @@ python3 scripts/mail_desk_batch_runner.py --draft 50 --order oldest
 
 # Standard 6: Direkte Inspektion per CLI
 python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
+
+# Standard 7: Einen gefilterten Pipeline-Lauf starten
+python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@example.org'
 ```
 
 ### Argumente
@@ -64,12 +67,38 @@ python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
 | `--order <oldest\|newest>` | | Verarbeitungsreihenfolge nach Alter (Standard: `oldest`). |
 | `--folder <ORDNER>` | `-f` | Quellordner im Postfach (Standard: `INBOX`). |
 | `--skip-known` / `--no-skip-known` | | Überspringt bereits verarbeitete E-Mails aus `final-location-index.json` (Standard: `True`). |
+| `--query <AUSDRUCK>` | `-q` | Himalaya-Suchausdruck für `inspect`, `draft` und `pipeline`; wird bis zum Envelope-Abruf weitergereicht. Nicht zusammen mit `--date` verwenden. |
+| `--date <YYYY-MM-DD>` | | Exakter Himalaya-Datumsfilter für `inspect`, `draft` und `pipeline`; wird bis zum Envelope-Abruf weitergereicht. Nicht zusammen mit `--query` verwenden. |
 | `--min-confidence <high\|medium\|low>` | | Minimale Konfidenz für automatische Ausführung im Pipeline-Modus (Standard: `high`). |
 | `--stdin` | | Liest das JSON-Manifest direkt aus der Standardeingabe. |
 | `--account <NAME>` | `-a` | Optionaler Backend-/Himalaya-Account-Override. |
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabe-Files bei Erfolg. |
+
+---
+
+### Filter, Reihenfolge und bekannte Nachrichten
+
+`--query` und `--date` gelten für alle drei lesenden Direktmodi (`inspect`,
+`draft`, `pipeline`) und für die entsprechenden Manifestfelder `query` bzw.
+`date`. Die Filter sind gegenseitig exklusiv; der Runner bricht bei einer
+Kombination ab, statt einen Filter still zu ignorieren. Gefilterte Himalaya-
+Ergebnisse werden anhand geparster RFC-5322-Daten chronologisch geordnet;
+nicht parsebare Daten folgen am Ende. Bei `skip_known: true` erweitert der
+Runner seine Abruffenster eindeutig und aufsteigend bis 2.500 Envelopes,
+beginnend beim Doppelten des angeforderten Targets (mindestens 25, dabei bei
+2.500 gedeckelt). Targets über 2.500 erhalten einen abschließenden Abruf in Zielgröße,
+statt still begrenzt zu werden. Viele bereits indizierte Mails verdecken so
+den ersten neuen Fall nicht. `--query`/`--date` ohne einen dieser drei
+Direktmodi sind ein Argumentfehler; für Manifestläufe stehen die gleichnamigen
+Manifestfelder bereit. Himalaya-Prozessfehler oder ungültiges Envelope-JSON
+sind Fehlerzustände, nie ein leeres Ergebnis.
+
+Temporäre Manifest-Lese- und Löschoperationen behandeln transiente Windows-
+Dateisperren mit maximal drei Versuchen und kurzem exponentiellem Backoff
+(0,1 s, 0,2 s). Danach bleibt das Manifest erhalten und der Lauf meldet den
+Fehler.
 
 ---
 
@@ -106,6 +135,14 @@ Liest Metadaten, Header (`Message-Id`, `In-Reply-To`, `References`, `From`, `To`
       "enum": ["newest", "oldest"],
       "default": "newest",
       "description": "Sortierreihenfolge nach E-Mail-Alter."
+    },
+    "query": {
+      "type": "string",
+      "description": "Optionaler Himalaya-Suchausdruck; gegenseitig exklusiv mit date."
+    },
+    "date": {
+      "type": "string",
+      "description": "Optionaler exakter Datumsfilter (YYYY-MM-DD); gegenseitig exklusiv mit query."
     },
     "envelope_ids": {
       "type": "array",

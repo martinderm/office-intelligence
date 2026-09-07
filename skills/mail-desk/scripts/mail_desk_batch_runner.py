@@ -16,11 +16,13 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 from pathlib import Path
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 
 # Add parent directory to sys.path if invoked directly
 _script_dir = Path(__file__).resolve().parent
@@ -118,6 +120,71 @@ def get_oldest_envelope_ids(folder: str, count: int, account: str | None = None)
     return [str(e["id"]) for e in envs]
 
 
+def _envelope_date_key(envelope: dict[str, Any]) -> tuple[float, int]:
+    """Return a timezone-normalized timestamp and deterministic ID tie-breaker.
+
+    Himalaya emits RFC 5322 dates, which cannot be ordered lexicographically
+    (weekday and timezone prefixes vary).  ISO-like dates are accepted as a
+    defensive fallback for adapters that serialize dates differently.
+    """
+    raw_date = str(envelope.get("date") or "").strip()
+    try:
+        parsed = parsedate_to_datetime(raw_date)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        try:
+            parsed = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+
+    if parsed is None:
+        timestamp = float("inf")
+    else:
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        timestamp = parsed.timestamp()
+
+    try:
+        envelope_id = int(str(envelope.get("id", "")))
+    except (TypeError, ValueError):
+        envelope_id = 0
+    return timestamp, envelope_id
+
+
+def _sort_envelopes_by_date(envelopes: list[dict[str, Any]], order: str) -> list[dict[str, Any]]:
+    """Sort valid dates chronologically and keep undated messages last."""
+    dated = [envelope for envelope in envelopes if _envelope_date_key(envelope)[0] != float("inf")]
+    undated = [envelope for envelope in envelopes if _envelope_date_key(envelope)[0] == float("inf")]
+    dated.sort(key=_envelope_date_key, reverse=order == "newest")
+    undated.sort(key=_envelope_date_key)
+    return dated + undated
+
+
+def _retry_permission_error(operation: Callable[[], Any], *, attempts: int = 3, initial_delay: float = 0.1) -> Any:
+    """Retry transient Windows file locks with bounded exponential backoff."""
+    for attempt in range(attempts):
+        try:
+            return operation()
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(initial_delay * (2**attempt))
+
+
+def _known_mail_fetch_sizes(target_count: int) -> list[int]:
+    """Return unique, increasing envelope-list sizes for known-mail skipping.
+
+    Normal batches expand through the documented 2,500-envelope ceiling.  A
+    caller requesting more than 2,500 receives one final fetch sized to its
+    requested target, rather than a silently truncated batch.
+    """
+    target = max(target_count, 1)
+    ceiling = max(2_500, target)
+    first_size = min(max(target * 2, 25), ceiling)
+    tiers = (25, 50, 150, 300, 600, 1_200, 2_500)
+    inner_tiers = [size for size in tiers if first_size < size < ceiling]
+    return sorted({first_size, *inner_tiers, ceiling})
+
+
 def get_unprocessed_emails(
     folder: str,
     target_count: int,
@@ -142,7 +209,13 @@ def get_unprocessed_emails(
 
     # Fast direct path if date or query filter is provided
     if date or query:
+        if date and query:
+            raise ValueError("date and query filters are mutually exclusive")
         search_arg = f"date {date}" if date else str(query)
+        if order == "oldest" and "order by" not in search_arg.lower():
+            search_arg = f"{search_arg} order by date asc"
+        elif order == "newest" and "order by" not in search_arg.lower():
+            search_arg = f"{search_arg} order by date desc"
         if tracker:
             tracker.step(f"listing_envelopes ({search_arg})")
         out = run_himalaya(
@@ -153,7 +226,16 @@ def get_unprocessed_emails(
         )
         if "[" in out:
             out = out[out.find("["):]
-        candidate_envs = json.loads(out) if out.strip().startswith("[") else []
+        if not out.strip().startswith("["):
+            raise RuntimeError(f"Himalaya did not return a valid envelope list for '{search_arg}': {out.strip()[:300]}")
+        try:
+            candidate_envs = json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Himalaya returned invalid envelope JSON for '{search_arg}': {exc.msg}") from exc
+        if not isinstance(candidate_envs, list):
+            raise RuntimeError(f"Himalaya did not return an envelope list for '{search_arg}'")
+
+        candidate_envs = _sort_envelopes_by_date(candidate_envs, order)
 
         for env in candidate_envs:
             eid = str(env.get("id"))
@@ -205,7 +287,7 @@ def get_unprocessed_emails(
 
         return collected, known_count
 
-    fetch_sizes = [max(target_count * 2, 25), max(target_count * 4, 50), 100] if skip_known else [target_count]
+    fetch_sizes = _known_mail_fetch_sizes(target_count) if skip_known else [target_count]
 
     for f_size in fetch_sizes:
         if tracker:
@@ -884,6 +966,8 @@ def run_pipeline_mode(
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
     order = str(config.get("order", "oldest")).lower()
+    date = config.get("date")
+    query = config.get("query")
     min_confidence = str(config.get("min_confidence", "high")).lower()
     do_verify = bool(config.get("verify", True))
     check_folders = bool(config.get("check_folders", False))
@@ -894,6 +978,8 @@ def run_pipeline_mode(
         folder=folder,
         target_count=count,
         order=order,
+        date=date,
+        query=query,
         account=account,
         data_dir=dd,
         skip_known=True,
@@ -1257,13 +1343,16 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
     parser.add_argument("--no-skip-known", dest="skip_known", action="store_false", help="Do not skip known emails")
+    filters = parser.add_mutually_exclusive_group()
+    filters.add_argument("--query", "-q", help="Search query filter for envelopes (e.g. 'after 2026-05-01')")
+    filters.add_argument("--date", help="Exact date filter for envelopes (YYYY-MM-DD)")
     parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Minimum confidence threshold for pipeline auto-execution")
     return parser
 
 
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     if args.pipeline is not None:
-        return {
+        cfg = {
             "mode": "pipeline",
             "count": args.pipeline,
             "order": args.order,
@@ -1272,20 +1361,30 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             "min_confidence": args.min_confidence,
             "verify": True,
         }
+        if args.query:
+            cfg["query"] = args.query
+        if args.date:
+            cfg["date"] = args.date
+        return cfg
     if args.sync_sent is not None:
         return {"mode": "sync_sent", "count": args.sync_sent, "folder": "Sent Items"}
     if args.resolve:
         return {"mode": "resolve", "auto_from_sent": True}
     if args.draft is not None:
-        return {
+        cfg = {
             "mode": "draft",
             "count": args.draft,
             "order": args.order,
             "folder": args.folder,
             "output_file": str(data_dir / "batch-manifest.json"),
         }
+        if args.query:
+            cfg["query"] = args.query
+        if args.date:
+            cfg["date"] = args.date
+        return cfg
     if args.inspect is not None:
-        return {
+        cfg = {
             "mode": "inspect",
             "count": args.inspect,
             "order": args.order,
@@ -1293,6 +1392,11 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             "skip_known": args.skip_known,
             "output_file": str(data_dir / "batch-inspected.json"),
         }
+        if args.query:
+            cfg["query"] = args.query
+        if args.date:
+            cfg["date"] = args.date
+        return cfg
     return None
 
 
@@ -1301,6 +1405,9 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
     direct = _direct_mode_config(args, data_dir)
     if direct is not None:
         return direct, None
+
+    if args.query or args.date:
+        raise ArgumentParseError("--query/--date require --inspect, --draft, or --pipeline; put filters in a manifest instead")
 
     if args.stdin:
         raw = sys.stdin.read().strip()
@@ -1317,8 +1424,9 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
         if not input_path.exists():
             raise FileNotFoundError(f"Input file not found: {input_path}")
         try:
-            with input_path.open("r", encoding="utf-8") as handle:
-                return json.load(handle), input_path
+            return _retry_permission_error(
+                lambda: json.loads(input_path.read_text(encoding="utf-8")),
+            ), input_path
         except json.JSONDecodeError as exc:
             raise ArgumentParseError(f"Input file is not valid JSON: {exc.msg}") from exc
 
@@ -1335,8 +1443,9 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
     for candidate in candidates:
         if candidate.exists():
             try:
-                with candidate.open("r", encoding="utf-8") as handle:
-                    return json.load(handle), candidate
+                return _retry_permission_error(
+                    lambda: json.loads(candidate.read_text(encoding="utf-8")),
+                ), candidate
             except json.JSONDecodeError as exc:
                 raise ArgumentParseError(f"Auto-discovered input is not valid JSON: {exc.msg}") from exc
 
@@ -1423,7 +1532,7 @@ def main() -> int:
         input_deleted = False
         if input_path is not None and input_path.exists() and delete_input and envelope["success"]:
             try:
-                input_path.unlink()
+                _retry_permission_error(input_path.unlink)
                 input_deleted = True
             except Exception as exc:  # noqa: BLE001 - report cleanup under the envelope
                 cleanup_failure = exc

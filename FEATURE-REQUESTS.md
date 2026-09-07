@@ -9,10 +9,11 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-01` | 🟠 geplant, nicht implementiert | Nur Backlog und Skill-Verweis (`73e86e6`) | Schema, Templates, Validator und Migration fehlen weiterhin. |
 | `FR-02` | ⬜ offen | Nein | Es gibt weiterhin nur Projekt-Root-Matching und ein auf 30 Zeilen begrenztes Preview; keine hierarchische Artefaktauflösung und keine Full-Body-Eskalation. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
-| `FR-04` | ⬜ offen | Nein | Kein `dossier`-Modus, kein `batch-dossier.json` und keine kataloggestützte Dossier-Suche vorhanden. |
-| `FR-05` | 🟡 Vorarbeiten umgesetzt | Ja, aber nicht die Zielstruktur | Envelope-/Common-Helper, atomare Writes und die Progressive-Disclosure-Dokumentation wurden verbessert; die Modusfunktionen liegen weiterhin im 1.468-zeiligen Runner. |
+| `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
+| `FR-05` | 🟡 Vorarbeiten umgesetzt | Ja, aber nicht die Zielstruktur | Envelope-/Common-Helper, atomare Writes und die Progressive-Disclosure-Dokumentation wurden verbessert; die Modusfunktionen liegen weiterhin im inzwischen über 1.500-zeiligen Runner. |
+| `FR-06` | 🟡 teilweise: manueller Workflow-Pilot | Teilweise: U-1 bis U-5 gehärtet, quellengebundene manuelle Synthese beschrieben | Ein 10-Mail-Pilot samt manueller Synthese ist als Praxisnachweis dokumentiert. `synthesis_targets` im Manifest und maschinenlesbare Runner-`telemetry` fehlen weiterhin. |
 
-`🟠` bezeichnet dokumentierte Planung ohne Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage und `⬜` ein noch nicht begonnenes Ziel im beschriebenen Scope.
+`🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
 ---
 
@@ -21,8 +22,9 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 1. [FR-01: Schema-Erweiterung für `projects.json` & `project-catalog-entry`](#fr-01-schema-erweiterung-für-projectsjson--project-catalog-entry)
 2. [FR-02: Hierarchische WP-/Deliverable-Erkennung & Full-Body-Eskalation in `mail-desk`](#fr-02-hierarchische-wp-deliverable-erkennung--full-body-eskalation-in-mail-desk)
 3. [FR-03: Subtopic-Strukturierung & Signalisierung in `topics.json`](#fr-03-subtopic-strukturierung--signalisierung-in-topicsjson)
-4. [FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`)](#fr-04-thematischer-dossier-modus--projekt-fokus-workflow-batch-dossierjson)
+4. [FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`) — ZURÜCKGESTELLT](#fr-04-thematischer-dossier-modus--projekt-fokus-workflow-batch-dossierjson)
 5. [FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)](#fr-05-modulare-reorganisation-des-batch-runners-scriptscoremodes)
+6. [FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation](#fr-06-post-batch-llm-projekt-synthese--knowledge-layer-synchronisation)
 
 ---
 
@@ -142,6 +144,27 @@ FR-02 sollte erst nach dem stabilen Schema aus FR-01 umgesetzt werden. Das Match
 
 Die Full-Body-Logik sollte als klarer Zwei-Pass-Flow gebaut werden: Preview klassifizieren, definierte Signale oder unzureichende Evidenz feststellen, dann genau diese Nachricht vollständig lesen und erneut klassifizieren. `needs_reply` allein ist als Trigger zu zirkulär, weil es zunächst selbst aus dem gekürzten Inhalt abgeleitet wird. Contract-Tests sollten außerdem sicherstellen, dass Volltext nur bei den dokumentierten Triggern geladen wird und ein Read-Fehler keine unvollständige Aussage als gesichert protokolliert.
 
+### Erkenntnisse aus dem 10-Mail-Pilotlauf (07.09.2026)
+
+- **Fehlende WP/Task-Ebene im Manifest:**
+  Bei Envelope 9060 (*„MESHE WP2 BOKU Focus Group“*) und Envelopes 9055/9056 (*„Li4LaM: Finding a date to discuss the Handbook for Course Design, Tools and the Process of RPL“*) erkannte der Classifier nur das Root-Projekt (`meshe`, `li4lam`). Weder `workpackage: "wp2"`, `task: "t2.2"` noch der RPL-Handbook-Kontext wurden im JSON abgebildet.
+- **Notwendigkeit signalgestützter Full-Body-Eskalation:**
+  Im 30-Zeilen-Preview von Env 9060 erschien nur eine kurze Höflichkeitsfloskel. Erst der gezielte Volltextabruf (`himalaya message read 60`) deckte den kritischen Sachverhalt auf: Die BOKU-Fokusgruppe konnte am 18.05. mangels Teilnehmern nicht stattfinden, Martin informierte WP2-Lead Lyndsey El Amoud (UCC) und diese mahnte höchste Dringlichkeit an. Ohne Full-Body-Eskalation wäre dieses kritische Projektsignal im Batch verloren gegangen.
+- **Zielstruktur im Manifest:**
+  Das `decision`-Objekt im Manifest sollte künftig strukturiert `workpackage`, `task` und `read_escalation` tragen:
+  ```json
+  "decision": {
+    "kind": "project",
+    "id": "meshe",
+    "workpackage": "wp2",
+    "task": "t2.2",
+    "read_escalation": {
+      "level": "full_body",
+      "triggers": ["focus group", "wp2"]
+    }
+  }
+  ```
+
 ---
 
 ## FR-03: Subtopic-Strukturierung & Signalisierung in `topics.json`
@@ -163,6 +186,32 @@ Strukturierte Anreicherung der Subtopics mit eigenen Signal-Attributen:
 Die Idee ist fachlich stimmig, sollte aber das bereits etablierte Feld `typical_subject_patterns` verwenden und nicht mit `typical_patterns` ein zweites Vokabular einführen. Der Classifier sollte einen Subtopic-Treffer als strukturierten Kontext (`topic_id`, `subtopic_id`, Match-Gründe) zurückgeben; bloßes Zusammenführen aller Signale auf Parent-Ebene verliert genau die gewünschte Präzision.
 
 Für `contacts` ist zu definieren, ob sie Root-Kontakte ergänzen oder auf das Subtopic einschränken. `operations/` sollte erst nach einer kurzen fachlichen Definition eingeführt werden: Dauerprozess, Ablageobjekt und Evidenzpfad müssen klar von einem Subtopic und einem Event unterscheidbar sein. FR-03 ist klein genug für ein eigenes Paket aus Schema/Template, Classifier und gezielten Tests.
+
+### Erkenntnisse aus dem 10-Mail-Pilotlauf (07.09.2026)
+
+- **Vermeidung von `"evidence": null` bei Topic-Mails:**
+  Im Pilotlauf wurden vier Mails zum Thema EUCEN-Konferenz / Dienstreise Cagliari (Env 9057, 9058, 9059, 9062) verarbeitet. Da der Classifier bisher nur auf Topic-Ebene matcht, wurden die Mails generisch als `Themen/Netzwerke` klassifiziert und erhielten `"evidence": null`.
+- **Existierende Ziel-Dossiers werden verfehlt:**
+  Im Workspace existiert bereits das präzise Subtopic-Dossier `memory/references/topics/dienstreisen/subtopics/2026-06-cagliari-eucen-conference.md`, in welches die Konferenzrechnungen (`spol@unica.it`) und Social-Event-Details (`alice.sgualdini@unica.it`) gehören.
+- **Manifest-Anreicherung:**
+  Mit FR-03 erzeugt der Classifier strukturierte Subtopic- und Event-Referenzen direkt im Manifest:
+  ```json
+  "decision": {
+    "kind": "topic",
+    "id": "dienstreisen",
+    "subtopic": "2026-06-cagliari-eucen-conference"
+  },
+  "evidence": {
+    "file": "memory/evidence/topics/dienstreisen/2026-06.md",
+    "entry": "… kanonischer Mail-Nachweis mit Message-ID …"
+  },
+  "synthesis_targets": [
+    {
+      "file": "memory/references/topics/dienstreisen/subtopics/2026-06-cagliari-eucen-conference.md",
+      "section": "Rechnungen & Logistik"
+    }
+  ]
+  ```
 
 ---
 
@@ -222,7 +271,7 @@ Die Reihenfolge ist derzeit widersprüchlich: Die Problemstellung verlangt eine 
 **Status:** 🟡 Vorarbeiten in dieser Session umgesetzt, Ziel noch offen. OI-10 bis OI-14 brachten den zentralen Envelope-Helper, CLI-Vertragsprüfungen und die Refactor-/Progressive-Disclosure-Dokumentation; OI-17 ergänzte gemeinsame atomare Schreibfunktionen. Die acht `run_*_mode`-Funktionen verbleiben jedoch in `mail_desk_batch_runner.py`; die Datei umfasst aktuell 1.468 physische Zeilen und `scripts/core/modes/` existiert nicht.
 
 ### Problemstellung
-[`mail_desk_batch_runner.py`](skills/mail-desk/scripts/mail_desk_batch_runner.py) ist auf 1.468 physische Zeilen angewachsen. Zwar sind Basis-Hilfsfunktionen bereits in `scripts/core/` ausgelagert, die einzelnen Modus-Routinen (`run_inspect_mode`, `run_draft_mode`, `run_execute_mode`, `run_verify_mode` etc.) liegen jedoch noch linear im Hauptskript.
+[`mail_desk_batch_runner.py`](skills/mail-desk/scripts/mail_desk_batch_runner.py) liegt inzwischen über der 1.500-Zeilen-Schwelle. Zwar sind Basis-Hilfsfunktionen bereits in `scripts/core/` ausgelagert, die einzelnen Modus-Routinen (`run_inspect_mode`, `run_draft_mode`, `run_execute_mode`, `run_verify_mode` etc.) liegen jedoch noch linear im Hauptskript.
 
 ### Ziel-Spezifikation
 Sobald weitere Modi hinzukommen (z. B. der Dossier-Modus oder erweiterte AI-Pipelines) oder die Dateigröße 1.500 Zeilen überschreitet, wird die Modi-Logik in ein Untermodul ausgelagert:
@@ -254,3 +303,84 @@ skills/mail-desk/scripts/
 FR-05 sollte vor FR-04 erfolgen: Mit dem Dossier-Modus würde der Runner die im Request genannte 1.500-Zeilen-Schwelle unmittelbar überschreiten. Die Zielgröße von ungefähr 150 Zeilen für den Dispatcher ist plausibel, sollte aber kein hartes Abnahmekriterium sein; wichtiger sind stabile Imports, genau ein kanonischer Envelope am CLI-Rand und unveränderte Modussemantik.
 
 Die Auslagerung sollte inkrementell erfolgen. Zuerst eignen sich die relativ abgeschlossenen Modi `search` und `resolve`, danach `inspect`/`draft`, zuletzt die eng gekoppelten Mutationspfade `execute`/`verify`/`pipeline`. Nach jedem Schritt müssen die bestehenden Envelope-, Partial-Failure-, Cleanup- und Manifest-Sicherheitstests grün bleiben. Erst danach sollte `dossier.py` aus FR-04 hinzukommen.
+
+---
+
+## FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation
+
+**Status:** 🟡 Teilweise umgesetzt (07.09.2026). Die Pilot-Härtung U-1 bis U-5 ist im Runner und durch Regressionstests abgedeckt. Ein realer 10-Mail-Lauf mit anschließender manueller, quellengebundener Synthese ist als Praxisnachweis dokumentiert. Das ist jedoch kein voll implementierter FR-06-Workflow: `synthesis_targets` im Manifest und die Runner-`telemetry` fehlen; die Auswahl und Prüfung der Steuerungsdateien erfolgen weiterhin im Session-Workflow.
+
+### Problemstellung
+Bisher endete der Batch-Workflow operativ mit dem Abschluss des Python-Runners. Dadurch wuchsen zwar die monatlichen Evidenzlogs (`evidence/YYYY-MM.md`), aber die tatsächlichen Arbeits- und Steuerungsdateien der Projekte veralteten:
+- **Statusampeln (`statusampel-*.md`)** bildeten neue Meilensteine oder gelöste Blocker nicht ab.
+- **Signale (`signals.md`)** verpassten neu vereinbarte Beschlüsse und Fristen.
+- **Kontakte (`contacts.md`)** erfassten neu aufgetretene Konsortialpartner nicht.
+- **Events (`events/*.md`)** erhielten keine Rückmeldungen über Teilnehmerbestätigungen oder Absagen/Verschiebungen.
+
+Da diese inhaltliche Übertragung semantisches Textverständnis und strategische Einordnung erfordert, kann und soll sie nicht durch starre Regex-Skripte im Python-Runner erfolgen, sondern als **verbindlicher zweiter Schritt (LLM-Synthese)** direkt nach dem Batch-Lauf ausgeführt werden.
+
+### Ziel-Spezifikation (Das 2-Stufen-Protokoll)
+
+```mermaid
+flowchart TD
+    A["1. Batch Runner (Execute)"] -->|Verschiebt Mails & schreibt| B["evidence/YYYY-MM.md (Basis-Evidenz)"]
+    B --> C["2. Post-Batch LLM-Synthese (Session)"]
+    C -->|Fristen, Deliverables & Blocker| D["statusampel-*.md (Ampelstatus)"]
+    C -->|Beschlüsse & Termine| E["signals.md (Entscheidungs-Log)"]
+    C -->|Neue Konsortialpartner| F["contacts.md (Netzwerk-Rollen)"]
+    C -->|Arbeitspaket-Fortschritt| G["workpackages/wp*.md & events/*.md"]
+```
+
+1. **Manifest-Erweiterung (`synthesis_targets` & Telemetrie):**
+   - Jedes Item im Draft-Manifest kann konkrete Zieldateien für die Synthese benennen:
+     ```json
+     "synthesis_targets": [
+       {
+         "file": "memory/references/projects/meshe/events/2026-05-18-fokusgruppe-boku-weiterbildung.md",
+         "type": "event_dossier",
+         "recommended_action": "update_status"
+       },
+       {
+         "file": "memory/references/projects/meshe/statusampel-boku-p6.md",
+         "type": "statusampel",
+         "task_anchor": "WP2 — T2.2 FDGs"
+       }
+     ]
+     ```
+   - Beim Abschluss eines `execute`-Laufs emittiert der Runner in den Telemetriedaten des Envelopes eine Liste aller im Batch berührten Projekt- und Topic-Slugs:
+     ```json
+     "telemetry": {
+       "affected_projects": ["meshe", "li4lam"],
+       "affected_topics": ["netzwerke", "boku-organisation"],
+       "synthesis_required": true
+     }
+     ```
+2. **Verbindliche LLM-Checkliste je berührtem Projekt:**
+   - **`statusampel-*.md`:** Gibt es neue Meilensteine, Deliverable-Fortschritte oder veränderte Ampelfarben?
+   - **`signals.md`:** Wurden verbindliche Termine, Fristen oder Risiken vereinbart?
+   - **`contacts.md`:** Sind neue Schlüsselpersonen aufgetaucht?
+   - **`workpackages/wp*.md`:** Gibt es neue Deliverable-Entwürfe oder Teilaufgabenabschlüsse?
+   - **`events/*.md`:** Wurden Konferenzrechnungen, Anmeldungen oder Tagungsdetails übermittelt?
+3. **Abschlussbericht:**
+   - Der Agent fasst nach dem Batch-Lauf nicht nur die Verschiebezahlen zusammen, sondern gibt einen kompakten **Projekt-Wissensbericht** aus:
+     - *„MESHE: Statusampel für WP2 und Eventdossier aktualisiert (Fokusgruppe BOKU auf verschoben gesetzt).“*
+     - *„Li4LaM: Schlüsselkontakt Belachew Yirsaw Alemu ergänzt.“*
+     - *„Dienstreisen: EUCEN-Konferenzrechnung in Cagliari-Event verknüpft.“*
+
+### Bereits umgesetzte Arbeiten und offene technische Lücke (Stand 07.09.2026)
+
+1. **Pilot-Härtung U-1 bis U-5 (`mail_desk_batch_runner.py`):**
+   - **U-1:** Filterergebnisse werden anhand geparster RFC-Daten, nicht lexikografisch, sortiert.
+   - **U-2:** Abruffenster wachsen bis 2.500 Envelopes, damit bekannte IDs neue Mails nicht verdecken.
+   - **U-3:** `--query` (`-q`) und `--date` werden für `inspect`, `draft` und `pipeline` bis zum Envelope-Abruf weitergereicht.
+   - **U-4:** Himalaya-Query- und Parsefehler werden explizit gemeldet.
+   - **U-5:** Lesen und Löschen temporärer Manifeste verwenden einen begrenzten exponentiellen PermissionError-Backoff.
+2. **Manuelle Synthese-Leitplanke (`mail-desk/SKILL.md`):**
+   - Berührte Steuerungsdateien werden geprüft, aber nur bei belastbaren, mailgebundenen neuen Erkenntnissen geändert. Ein quellengebundener No-op ist zulässig und wird berichtet.
+3. **Praxis-Pilot (10 Mails, 18.–20. Mai 2026):**
+   - 10/10 Mails fehlerfrei transferiert, verifiziert, indiziert und Basis-Evidenz geschrieben.
+   - Die Post-Batch Synthese wurde im Boku-User-Workflow manuell durchgeführt: Ein MESHE-Fokusgruppen-Eventdossier wurde auf Basis des Volltextes von Envelope 60 von `geplant` auf `verschoben / nachzuholen` korrigiert.
+4. **Noch offen für FR-06:**
+   - Der Draft-Manifest-Contract kennt noch keine `synthesis_targets`.
+   - Der Execute-/Pipeline-Envelope emittiert noch keine `telemetry.affected_projects`, `affected_topics` oder `synthesis_required`.
+   - Deshalb kann der Runner weder die Synthese technisch auslösen noch ihren Abschluss maschinenlesbar nachweisen; diese verbleibt bis zur gezielten FR-06-Implementierung im menschlich/LLM-geführten Session-Workflow.
