@@ -208,6 +208,23 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
         self.assertEqual(result["results"], envelope["data"]["results"])
         self.assertTrue(manifest.exists())
 
+    def test_execute_telemetry_is_nested_under_envelope_data(self) -> None:
+        manifest = self.write_manifest("telemetry.json", "execute")
+        telemetry = {
+            "affected_projects": ["meshe"],
+            "affected_topics": ["dienstreisen"],
+            "synthesis_required": True,
+        }
+        exit_code, envelope, _ = self.invoke(
+            ["--input", str(manifest)],
+            handler_result={"ok": True, "mode": "execute", "results": [], "telemetry": telemetry},
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assert_envelope(envelope, operation="execute")
+        self.assertEqual(telemetry, envelope["data"]["telemetry"])
+        self.assertNotIn("telemetry", envelope)
+
     def test_verify_and_pipeline_mixed_outcomes_are_partial_failures(self) -> None:
         verify = self.write_manifest("verify-partial.json", "verify")
         verify_result = {

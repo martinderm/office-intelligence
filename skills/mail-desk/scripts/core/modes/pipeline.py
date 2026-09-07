@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 from ..classifier import draft_manifest
 from ..common import resolve_data_dir
 from ..sent_indexer import load_sent_index, sync_sent_items
+from ..telemetry import canonicalize_telemetry, empty_telemetry
 from .execute import run_execute_mode
 from .verify import run_verify_mode
 
@@ -79,6 +80,7 @@ def run_pipeline_mode(
             "total_inspected": 0,
             "executed_count": 0,
             "review_needed_count": 0,
+            "telemetry": empty_telemetry(),
         }
 
     if config.get("sync_sent", True):
@@ -123,6 +125,8 @@ def run_pipeline_mode(
             index_path=index_path,
         )
 
+    telemetry = canonicalize_telemetry(exec_result.get("telemetry"))
+
     verify_result: dict[str, Any] | None = None
     if do_verify and executable_items:
         verify_result = verify(
@@ -149,4 +153,5 @@ def run_pipeline_mode(
         "all_succeeded": pipeline_ok,
         "execute_summary": exec_result,
         "verify_summary": verify_result,
+        "telemetry": telemetry,
     }

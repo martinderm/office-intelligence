@@ -435,11 +435,40 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
         "success": true
       }
     ],
+    "telemetry": {
+      "affected_projects": ["project-alpha"],
+      "affected_topics": [],
+      "synthesis_required": true
+    },
     "input_file_deleted": true
   },
   "error": null
 }
 ```
+
+### FR-06a-Telemetrie
+
+Jeder `execute`- und `pipeline`-Envelope enthält unter `data.telemetry` exakt
+`affected_projects`, `affected_topics` und `synthesis_required`. Gezählt werden
+nur Resultate mit `success: true`, deren `decision.kind` exakt `project` oder
+`topic` und deren `decision.id` ein nichtleerer String ist. IDs werden nur an den
+Rändern getrimmt; die erste Vorkommensreihenfolge des Input-Batches bleibt erhalten
+und Duplikate entfallen. Fehlgeschlagene Items sowie Pipeline-`review_needed_items`
+zählen nicht. `synthesis_required` entspricht exakt dem Wahrheitswert mindestens
+einer betroffenen Projekt- oder Topic-ID.
+
+`pipeline` übernimmt die Telemetrie seines Execute-Schritts. Bei keinem
+Execute-Schritt oder einem Legacy-Execute-Handler ohne Telemetrie ist sie immer:
+
+```json
+{
+  "affected_projects": [],
+  "affected_topics": [],
+  "synthesis_required": false
+}
+```
+
+Die Telemetrie startet keine Synthese und verändert keine Wissensdateien.
 
 ---
 

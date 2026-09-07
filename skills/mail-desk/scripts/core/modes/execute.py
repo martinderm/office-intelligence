@@ -13,6 +13,7 @@ from ..himalaya import run_himalaya, verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
 from ..progress import BatchProgressTracker
 from ..sent_indexer import auto_resolve_replies_from_sent
+from ..telemetry import collect_telemetry
 
 
 def _dependency(
@@ -299,4 +300,5 @@ def run_execute_mode(
         "total_processed": len(results),
         "all_succeeded": all_succeeded,
         "results": results,
+        "telemetry": collect_telemetry(items, results),
     }

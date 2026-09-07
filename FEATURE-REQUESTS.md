@@ -11,7 +11,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst 952 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
-| `FR-06` | 🟡 teilweise: manueller Workflow-Pilot | Teilweise: U-1 bis U-5 gehärtet, quellengebundene manuelle Synthese beschrieben | Ein 10-Mail-Pilot samt manueller Synthese ist als Praxisnachweis dokumentiert. `synthesis_targets` im Manifest und maschinenlesbare Runner-`telemetry` fehlen weiterhin. |
+| `FR-06` | 🟡 teilweise: FR-06a abgeschlossen | Ja: U-1 bis U-5, manueller Pilot und FR-06a-Telemetrie | Execute und Pipeline emittieren maschinenlesbare Telemetrie; `synthesis_targets` (FR-06b) und der Session-Handoff (FR-06c) bleiben offen. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -315,7 +315,7 @@ Die Auslagerung erfolgte inkrementell. `search`, `resolve`, `inspect`, `draft`, 
 
 ## FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation
 
-**Status:** 🟡 Teilweise umgesetzt (07.09.2026). Die Pilot-Härtung U-1 bis U-5 ist im Runner und durch Regressionstests abgedeckt. Ein realer 10-Mail-Lauf mit anschließender manueller, quellengebundener Synthese ist als Praxisnachweis dokumentiert. Das ist jedoch kein voll implementierter FR-06-Workflow: `synthesis_targets` im Manifest und die Runner-`telemetry` fehlen; die Auswahl und Prüfung der Steuerungsdateien erfolgen weiterhin im Session-Workflow.
+**Status:** 🟡 Teilweise umgesetzt (07.09.2026). Die Pilot-Härtung U-1 bis U-5, ein realer 10-Mail-Pilot mit manueller, quellengebundener Synthese und FR-06a sind implementiert und durch Regressionstests abgedeckt. Execute und Pipeline geben nun die maschinenlesbare Telemetrie aus. Offen bleiben die Manifest-`synthesis_targets` (FR-06b) und ein kompakter Session-Handoff für die nachgelagerte LLM-Synthese (FR-06c); die Auswahl und Prüfung der Steuerungsdateien erfolgen weiterhin im Session-Workflow.
 
 ### Problemstellung
 Bisher endete der Batch-Workflow operativ mit dem Abschluss des Python-Runners. Dadurch wuchsen zwar die monatlichen Evidenzlogs (`evidence/YYYY-MM.md`), aber die tatsächlichen Arbeits- und Steuerungsdateien der Projekte veralteten:
@@ -338,8 +338,8 @@ flowchart TD
     C -->|Arbeitspaket-Fortschritt| G["workpackages/wp*.md & events/*.md"]
 ```
 
-1. **Manifest-Erweiterung (`synthesis_targets` & Telemetrie):**
-   - Jedes Item im Draft-Manifest kann konkrete Zieldateien für die Synthese benennen:
+1. **FR-06b — Manifest-Erweiterung (`synthesis_targets`):**
+   - Offen: Jedes Item im Draft-Manifest kann konkrete Zieldateien für die Synthese benennen:
      ```json
      "synthesis_targets": [
        {
@@ -354,7 +354,8 @@ flowchart TD
        }
      ]
      ```
-   - Beim Abschluss eines `execute`-Laufs emittiert der Runner in den Telemetriedaten des Envelopes eine Liste aller im Batch berührten Projekt- und Topic-Slugs:
+2. **FR-06a — Execute-/Pipeline-Telemetrie (abgeschlossen):**
+   - Beim Abschluss eines `execute`- oder `pipeline`-Laufs emittiert der Runner in `data.telemetry` eine Liste der erfolgreich berührten Projekt- und Topic-Slugs:
      ```json
      "telemetry": {
        "affected_projects": ["meshe", "li4lam"],
@@ -362,13 +363,13 @@ flowchart TD
        "synthesis_required": true
      }
      ```
-2. **Verbindliche LLM-Checkliste je berührtem Projekt:**
+3. **Verbindliche LLM-Checkliste je berührtem Projekt:**
    - **`statusampel-*.md`:** Gibt es neue Meilensteine, Deliverable-Fortschritte oder veränderte Ampelfarben?
    - **`signals.md`:** Wurden verbindliche Termine, Fristen oder Risiken vereinbart?
    - **`contacts.md`:** Sind neue Schlüsselpersonen aufgetaucht?
    - **`workpackages/wp*.md`:** Gibt es neue Deliverable-Entwürfe oder Teilaufgabenabschlüsse?
    - **`events/*.md`:** Wurden Konferenzrechnungen, Anmeldungen oder Tagungsdetails übermittelt?
-3. **Abschlussbericht:**
+4. **FR-06c — Abschlussbericht / Session-Handoff (offen):**
    - Der Agent fasst nach dem Batch-Lauf nicht nur die Verschiebezahlen zusammen, sondern gibt einen kompakten **Projekt-Wissensbericht** aus:
      - *„MESHE: Statusampel für WP2 und Eventdossier aktualisiert (Fokusgruppe BOKU auf verschoben gesetzt).“*
      - *„Li4LaM: Schlüsselkontakt Belachew Yirsaw Alemu ergänzt.“*
@@ -387,7 +388,10 @@ flowchart TD
 3. **Praxis-Pilot (10 Mails, 18.–20. Mai 2026):**
    - 10/10 Mails fehlerfrei transferiert, verifiziert, indiziert und Basis-Evidenz geschrieben.
    - Die Post-Batch Synthese wurde im Boku-User-Workflow manuell durchgeführt: Ein MESHE-Fokusgruppen-Eventdossier wurde auf Basis des Volltextes von Envelope 60 von `geplant` auf `verschoben / nachzuholen` korrigiert.
-4. **Noch offen für FR-06:**
-   - Der Draft-Manifest-Contract kennt noch keine `synthesis_targets`.
-   - Der Execute-/Pipeline-Envelope emittiert noch keine `telemetry.affected_projects`, `affected_topics` oder `synthesis_required`.
-   - Deshalb kann der Runner weder die Synthese technisch auslösen noch ihren Abschluss maschinenlesbar nachweisen; diese verbleibt bis zur gezielten FR-06-Implementierung im menschlich/LLM-geführten Session-Workflow.
+4. **FR-06a — umgesetzt:**
+   - Der Execute- und Pipeline-Envelope enthält unter `data.telemetry` exakt `affected_projects`, `affected_topics` und `synthesis_required`. Nur erfolgreiche Projekt-/Topic-Items mit nichtleerer String-ID werden in stabiler Batch-Reihenfolge gezählt; Duplikate sowie Review- und Fehlerschritte bleiben außen vor.
+   - Die Telemetrie löst keine Synthese aus und verändert keine Wissensdateien.
+5. **Noch offen für FR-06:**
+   - **FR-06b:** Der Draft-Manifest-Contract kennt noch keine `synthesis_targets`.
+   - **FR-06c:** Ein kompakter, maschinenlesbarer Session-Handoff für die nachgelagerte LLM-Synthese fehlt.
+   - Deshalb verbleibt die inhaltliche Synthese bis zu diesen gezielten Erweiterungen im menschlich/LLM-geführten Session-Workflow.

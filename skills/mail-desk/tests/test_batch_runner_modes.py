@@ -391,6 +391,40 @@ class ExecuteModeTests(unittest.TestCase):
         self.assertEqual("fail", result["results"][1]["routing"])
         save.assert_called_once()
 
+    def test_execute_collects_telemetry_from_successful_project_and_topic_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            result = execute_mode.run_execute_mode(
+                {"items": [
+                    {"envelope_id": "project-1", "message_id": "project-1@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "project", "id": " meshe "}},
+                    {"envelope_id": "topic-1", "message_id": "topic-1@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "topic", "id": "dienstreisen"}},
+                    {"envelope_id": "project-duplicate", "message_id": "project-duplicate@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "project", "id": "meshe"}},
+                    {"envelope_id": "invalid-id", "message_id": "invalid-id@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "topic", "id": "   "}},
+                    {"envelope_id": "invalid-kind", "message_id": "invalid-kind@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "archive", "id": "archive"}},
+                    {"envelope_id": "failed", "message_id": "failed@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Failed"}, "decision": {"kind": "project", "id": "must-not-count"}},
+                ]},
+                data_dir=data_dir,
+                dependencies={
+                    "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
+                    "auto_resolve_replies_from_sent": Mock(),
+                    "load_final_index": Mock(return_value={"items": {}}),
+                    "run_himalaya": Mock(side_effect=RuntimeError("copy failed")),
+                    "save_final_index_atomic": Mock(), "sleep": Mock(),
+                    "verify_in_target_folder": Mock(),
+                },
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            {
+                "affected_projects": ["meshe"],
+                "affected_topics": ["dienstreisen"],
+                "synthesis_required": True,
+            },
+            result["telemetry"],
+        )
+
 
 class PipelineModeTests(unittest.TestCase):
     def test_pipeline_orchestrates_sync_classification_execute_and_verify(self) -> None:
@@ -419,6 +453,56 @@ class PipelineModeTests(unittest.TestCase):
         self.assertEqual("subject pilot", fetch.call_args.kwargs["query"])
         execute.assert_called_once()
         self.assertTrue(verify.call_args.args[0]["check_folders"])
+
+    def test_pipeline_propagates_execute_telemetry_without_review_items(self) -> None:
+        executable = {"envelope_id": "1", "decision": {"confidence": "high"}, "action": {"target_folder": "Projects/Pilot"}}
+        review = {"envelope_id": "2", "decision": {"confidence": "low", "kind": "topic", "id": "review-only"}, "action": {"target_folder": "Projects/Pilot"}}
+        telemetry = {"affected_projects": ["meshe"], "affected_topics": ["dienstreisen"], "synthesis_required": True}
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            result = pipeline_mode.run_pipeline_mode(
+                {"verify": False, "sync_sent": False},
+                data_dir=data_dir,
+                dependencies={
+                    "get_unprocessed_emails": Mock(return_value=([{"envelope_id": "1"}], 0)),
+                    "load_sent_index": Mock(return_value={}),
+                    "draft_manifest": Mock(return_value={"items": [executable, review]}),
+                    "run_execute_mode": Mock(return_value={"ok": True, "results": [], "telemetry": telemetry}),
+                },
+            )
+
+        self.assertEqual(telemetry, result["telemetry"])
+        self.assertEqual(1, result["review_needed_count"])
+
+    def test_pipeline_uses_empty_telemetry_without_execute_or_from_legacy_execute(self) -> None:
+        empty = {"affected_projects": [], "affected_topics": [], "synthesis_required": False}
+        review_item = {"envelope_id": "review", "decision": {"confidence": "low"}, "action": {"target_folder": "Projects/Pilot"}}
+        executable = {"envelope_id": "execute", "decision": {"confidence": "high"}, "action": {"target_folder": "Projects/Pilot"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            no_execute = pipeline_mode.run_pipeline_mode(
+                {"verify": False, "sync_sent": False}, data_dir=data_dir,
+                dependencies={
+                    "get_unprocessed_emails": Mock(return_value=([{"envelope_id": "review"}], 0)),
+                    "load_sent_index": Mock(return_value={}),
+                    "draft_manifest": Mock(return_value={"items": [review_item]}),
+                    "run_execute_mode": Mock(),
+                },
+            )
+            legacy_execute = pipeline_mode.run_pipeline_mode(
+                {"verify": False, "sync_sent": False}, data_dir=data_dir,
+                dependencies={
+                    "get_unprocessed_emails": Mock(return_value=([{"envelope_id": "execute"}], 0)),
+                    "load_sent_index": Mock(return_value={}),
+                    "draft_manifest": Mock(return_value={"items": [executable]}),
+                    "run_execute_mode": Mock(return_value={"ok": True, "results": [{"success": True}]}),
+                },
+            )
+
+        self.assertEqual(empty, no_execute["telemetry"])
+        self.assertEqual(empty, legacy_execute["telemetry"])
 
 
 class VerifyModeTests(unittest.TestCase):

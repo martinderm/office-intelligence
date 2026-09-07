@@ -107,10 +107,13 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     `workpackages/*.md`, `events/*.md`) werden nur bei belastbaren, mit der Mail
     verknüpften neuen Erkenntnissen geändert. Ergibt die Prüfung keinen solchen
     Erkenntnisgewinn, ist ein No-op zulässig und im Abschlussbericht zu nennen;
-    Dateien werden nie nur wegen eines Batchlaufs verändert. `synthesis_targets`
-    und Runner-Telemetrie sind noch nicht implementiert, daher erfolgt die Auswahl
-    der zu prüfenden Dateien derzeit manuell und quellengebunden. Lock- und
-    Approval-Grenzen bleiben auch für diese Synthese unverändert wirksam.
+    Dateien werden nie nur wegen eines Batchlaufs verändert. Der Runner emittiert
+    nach `execute` und `pipeline` die deterministische FR-06a-`telemetry` mit
+    `affected_projects`, `affected_topics` und `synthesis_required`; sie ist eine
+    Aufforderung zur LLM-Synthese, löst diese aber weder aus noch verändert sie
+    Wissensdateien. `synthesis_targets` (FR-06b) fehlen weiterhin, daher erfolgt
+    die Auswahl der zu prüfenden Dateien derzeit manuell und quellengebunden. Lock-
+    und Approval-Grenzen bleiben auch für diese Synthese unverändert wirksam.
 13. Gemeinsame `data/mail-desk/`-Writes strikt seriell durchführen: keine parallelen
     JSONL-Appends oder Final-Index-Writes. Fälle korrekt aktualisieren, aus aktiven
     Dateien entfernen und wochenbasiert archivieren; Formate, Pfade und Fallerledigung stehen in
