@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Unified batch runner for mail-desk operations.
 
-Supports 7 modes:
+Supports 8 modes:
 1. inspect: Parallel/sequential header & preview fetching with deduplication check
 2. draft:    Inspect unprocessed emails and draft a ready-to-review batch-manifest.json
-3. execute:  Coupled routing, target verification, index upsert, logging, evidence
-4. verify:   Consistency check across final index, action log, evidence, and folders
-5. pipeline: End-to-end autonomous cycle (inspect -> classify -> execute -> verify)
-6. search:   Global mailbox search by query or message_ids
-7. resolve:  Batch resolution and archival of replies-needed and review cases
+3. sync_sent: Index recent Sent Items for reply-status reconciliation
+4. execute:  Coupled routing, target verification, index upsert, logging, evidence
+5. verify:   Consistency check across final index, action log, evidence, and folders
+6. pipeline: End-to-end autonomous cycle (inspect -> classify -> execute -> verify)
+7. search:   Global mailbox search by query or message_ids
+8. resolve:  Batch resolution and archival of replies-needed and review cases
 """
 
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import contextlib
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -58,7 +58,12 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
-from core.modes import run_resolve_mode, run_search_mode
+from core.modes import (
+    run_draft_mode as _run_draft_mode,
+    run_inspect_mode as _run_inspect_mode,
+    run_resolve_mode,
+    run_search_mode,
+)
 
 
 # ==============================================================================
@@ -361,115 +366,28 @@ def run_inspect_mode(
     account: str | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
-    folder = config.get("folder", "INBOX")
-    count = int(config.get("count", 20))
-    order = str(config.get("order", "oldest")).lower()
-    date = config.get("date")
-    query = config.get("query")
-    threads = min(int(config.get("threads", 2)), 2)
-    preview_lines = int(config.get("preview_lines", 30))
-    explicit_ids = config.get("envelope_ids")
-    output_file = config.get("output_file")
-    check_known = bool(config.get("check_known", True))
-    skip_known = bool(config.get("skip_known", False))
-    propose_manifest = bool(config.get("propose_manifest", False) or config.get("propose", False))
-    manifest_file = config.get("manifest_file")
+    """Compatibility facade for the extracted inspect-mode handler.
 
-    dd = data_dir or resolve_data_dir()
-    workspace_root = dd.parent.parent
-
-    ordered_emails: list[dict[str, Any]] = []
-    known_count = 0
-
-    if explicit_ids and isinstance(explicit_ids, list):
-        target_env_ids = [str(x) for x in explicit_ids]
-        if len(target_env_ids) > 20:
-            for eid in target_env_ids:
-                res = get_single_email_details(eid, folder, account, preview_lines)
-                ordered_emails.append(res)
-                time.sleep(0.05)
-        else:
-            results_map: dict[str, dict[str, Any]] = {}
-            with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-                futures = {
-                    executor.submit(get_single_email_details, eid, folder, account, preview_lines): eid
-                    for eid in target_env_ids
-                }
-                for fut in concurrent.futures.as_completed(futures):
-                    res = fut.result()
-                    results_map[res["envelope_id"]] = res
-            ordered_emails = [results_map[eid] for eid in target_env_ids if eid in results_map]
-    elif skip_known or date or query:
-        ordered_emails, known_count = get_unprocessed_emails(
-            folder=folder,
-            target_count=count,
-            order=order,
-            date=date,
-            query=query,
-            account=account,
-            data_dir=dd,
-            skip_known=skip_known,
-            preview_lines=preview_lines,
-        )
-    else:
-        oldest_envs = get_oldest_envelopes(folder, count, account=account) if order == "oldest" else []
-        if not oldest_envs:
-            try:
-                out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", str(count)], account=account, timeout=30)
-                if "[" in out:
-                    out = out[out.find("["):]
-                oldest_envs = json.loads(out)
-            except Exception:
-                oldest_envs = []
-
-        envelope_map = {str(e.get("id")): e for e in oldest_envs}
-        target_env_ids = [str(e.get("id")) for e in oldest_envs]
-
-        for eid in target_env_ids:
-            fb = envelope_map.get(eid)
-            res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=fb)
-            ordered_emails.append(res)
-            time.sleep(0.02)
-
-    # Check known if needed
-    if check_known and known_count == 0:
-        index_data = load_final_index(resolve_final_index_path(data_dir=dd))
-        known_items = index_data.get("items", {})
-        for email in ordered_emails:
-            mid = email.get("message_id")
-            if mid and mid in known_items:
-                email["is_known"] = True
-                email["known_location"] = known_items[mid].get("final_folder") or known_items[mid].get("final_label")
-                known_count += 1
-            else:
-                email["is_known"] = False
-                email["known_location"] = None
-
-    output_data: dict[str, Any] = {
-        "ok": True,
-        "mode": "inspect",
-        "folder": folder,
-        "order": order,
-        "total_inspected": len(ordered_emails),
-        "known_count": known_count,
-        "emails": ordered_emails,
-    }
-
-    if propose_manifest:
-        draft = draft_manifest(ordered_emails, workspace_root=workspace_root)
-        output_data["manifest_proposal"] = draft
-        if manifest_file:
-            mf_path = Path(manifest_file).expanduser().resolve()
-            mf_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(mf_path, draft)
-            output_data["manifest_file_created"] = str(mf_path)
-
-    if output_file:
-        out_path = Path(output_file).expanduser().resolve()
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(out_path, output_data)
-
-    return output_data
+    Dependencies are resolved at call time so existing runner-level patches stay
+    effective during the incremental modularization.
+    """
+    return _run_inspect_mode(
+        config,
+        account=account,
+        data_dir=data_dir,
+        dependencies={
+            "atomic_write_json": atomic_write_json,
+            "draft_manifest": draft_manifest,
+            "get_oldest_envelopes": get_oldest_envelopes,
+            "get_single_email_details": get_single_email_details,
+            "get_unprocessed_emails": get_unprocessed_emails,
+            "load_final_index": load_final_index,
+            "resolve_data_dir": resolve_data_dir,
+            "resolve_final_index_path": resolve_final_index_path,
+            "run_himalaya": run_himalaya,
+            "sleep": time.sleep,
+        },
+    )
 
 
 # ==============================================================================
@@ -481,71 +399,20 @@ def run_draft_mode(
     account: str | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Inspect unprocessed emails (or read from batch-inspected.json) and draft batch-manifest.json."""
-    dd = data_dir or resolve_data_dir()
-    workspace_root = dd.parent.parent
-    folder = config.get("folder", "INBOX")
-    count = int(config.get("count", 20))
-    order = str(config.get("order", "oldest")).lower()
-    date = config.get("date")
-    query = config.get("query")
-    preview_lines = int(config.get("preview_lines", 30))
-    output_file = config.get("output_file", str(dd / "batch-manifest.json"))
-    inspected_file = config.get("inspected_file") or (dd / "batch-inspected.json")
-
-    tracker = BatchProgressTracker(
-        mode="draft",
-        total_items=count,
-        data_dir=dd,
+    """Compatibility facade for the extracted draft-mode handler."""
+    return _run_draft_mode(
+        config,
+        account=account,
+        data_dir=data_dir,
+        dependencies={
+            "BatchProgressTracker": BatchProgressTracker,
+            "atomic_write_json": atomic_write_json,
+            "draft_manifest": draft_manifest,
+            "get_unprocessed_emails": get_unprocessed_emails,
+            "load_sent_index": load_sent_index,
+            "resolve_data_dir": resolve_data_dir,
+        },
     )
-
-    emails: list[dict[str, Any]] = []
-
-    # Fast path: check if batch-inspected.json exists and has valid unhandled emails
-    if not config.get("force_fetch") and not date and not query and Path(inspected_file).exists():
-        try:
-            with Path(inspected_file).open("r", encoding="utf-8") as f:
-                idata = json.load(f)
-            raw_emails = idata.get("emails", [])
-            unprocessed = [e for e in raw_emails if not e.get("is_known")]
-            if unprocessed:
-                emails = unprocessed[:count]
-        except Exception:
-            emails = []
-
-    if not emails:
-        emails, _ = get_unprocessed_emails(
-            folder=folder,
-            target_count=count,
-            order=order,
-            date=date,
-            query=query,
-            account=account,
-            data_dir=dd,
-            skip_known=True,
-            preview_lines=preview_lines,
-            tracker=tracker,
-        )
-
-    tracker.step("classifying_and_checking_sent")
-    sent_lookup = load_sent_index(dd)
-    draft = draft_manifest(emails, workspace_root=workspace_root, sent_lookup=sent_lookup)
-
-    out_path = Path(output_file).expanduser().resolve()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(out_path, draft)
-
-    tracker.complete(f"Drafted {len(draft.get('items', []))} items to {out_path.name}")
-
-    return {
-        "ok": True,
-        "mode": "draft",
-        "folder": folder,
-        "order": order,
-        "total_drafted": len(draft.get("items", [])),
-        "manifest_file": str(out_path),
-        "draft": draft,
-    }
 
 
 # ==============================================================================

@@ -13,7 +13,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ### Implementierungsstruktur
 
-Der Runner bleibt während der modularen Migration Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Bereits ausgelagerte Handler liegen unter `scripts/core/modes/`: `search.py` enthält `run_search_mode`, `resolve.py` enthält `run_resolve_mode`. Beide Namen werden im Runner weiter importiert und re-exportiert, sodass bestehende Imports, Patches und Modus-Aliase stabil bleiben. Die weiteren Modi werden schrittweise nach demselben Muster ausgelagert.
+Der Runner bleibt während der modularen Migration Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Vier Handler liegen unter `scripts/core/modes/`: `search.py` enthält `run_search_mode`, `resolve.py` enthält `run_resolve_mode`, `inspect.py` enthält `run_inspect_mode` und `draft.py` enthält `run_draft_mode`. `search` und `resolve` werden direkt importiert und re-exportiert. Für `inspect` und `draft` behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Fetch-/Manifest-Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest- und Progress-Semantik stabil, ohne einen Importzyklus zu erzeugen. Noch im Runner verbleiben `sync_sent`, `execute`, `verify` und `pipeline`.
 
 ---
 
