@@ -111,9 +111,18 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     nach `execute` und `pipeline` die deterministische FR-06a-`telemetry` mit
     `affected_projects`, `affected_topics` und `synthesis_required`; sie ist eine
     Aufforderung zur LLM-Synthese, löst diese aber weder aus noch verändert sie
-    Wissensdateien. `synthesis_targets` (FR-06b) fehlen weiterhin, daher erfolgt
-    die Auswahl der zu prüfenden Dateien derzeit manuell und quellengebunden. Lock-
-    und Approval-Grenzen bleiben auch für diese Synthese unverändert wirksam.
+    Wissensdateien. `synthesis_targets` (FR-06b) können einen reviewbaren,
+    konkreten Prüfauftrag je erfolgreichem Item übergeben. Die autonome Pipeline
+    leitet diese Ziele nicht aus untrusted Mailfeldern ab und liefert in ihren
+    Drafts daher kanonisch `synthesis_targets: []`; ein Mensch oder LLM reichert
+    den Draft zwischen `draft` und `execute` quellengebunden an. Jedes Target
+    benennt nur eine sichere Markdown-Datei unter dem zum Project-/Topic-Slug
+    passenden `memory/references/`-Root und ein stabiles `type`-Label. Der
+    Execute-Preflight prüft alle Targets vor jeder Mutation. Nur erfolgreiche
+    Execute-Resultate führen validierte Targets; sie starten keine Synthese und
+    verändern keine Wissensdateien. Details und JSON-Schema stehen in
+    [`references/batch-runner.md`](references/batch-runner.md). Lock- und
+    Approval-Grenzen bleiben auch für diese Synthese unverändert wirksam.
 13. Gemeinsame `data/mail-desk/`-Writes strikt seriell durchführen: keine parallelen
     JSONL-Appends oder Final-Index-Writes. Fälle korrekt aktualisieren, aus aktiven
     Dateien entfernen und wochenbasiert archivieren; Formate, Pfade und Fallerledigung stehen in

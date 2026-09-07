@@ -482,6 +482,7 @@ def classify_email(
         "decision": decision,
         "notes": notes or f"Klassifikation: {subject}",
         "evidence": evidence_spec,
+        "synthesis_targets": [],
     }
 
 

@@ -13,6 +13,7 @@ from ..himalaya import run_himalaya, verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
 from ..progress import BatchProgressTracker
 from ..sent_indexer import auto_resolve_replies_from_sent
+from ..synthesis_targets import validate_execute_synthesis_targets
 from ..telemetry import collect_telemetry
 
 
@@ -82,9 +83,13 @@ def run_execute_mode(
     )
     sleep = _dependency(dependencies, "sleep", time.sleep)
 
+    items: list[dict[str, Any]] = config.get("items", [])
+    if not isinstance(items, list):
+        raise ValueError("Execute items must be a list")
+    validated_synthesis_targets = validate_execute_synthesis_targets(items)
+
     dd = data_dir or resolve_data()
     idx_p = index_path or resolve_index_path(data_dir=dd)
-    items: list[dict[str, Any]] = config.get("items", [])
     workspace_root = dd.parent.parent
     tracker = progress_tracker(
         mode="execute",
@@ -97,7 +102,8 @@ def run_execute_mode(
     pending_evidence: list[dict[str, Any]] = []
     all_succeeded = True
 
-    for item in items:
+    for item_index, item in enumerate(items):
+        item_synthesis_targets = validated_synthesis_targets[item_index]
         env_id = str(item["envelope_id"])
         source_folder = item.get("source_folder", "INBOX")
         raw_mid = item.get("message_id") or item.get("raw_message_id", "")
@@ -262,6 +268,7 @@ def run_execute_mode(
                 "final-index-script": "ok" if index_ok else "fail",
                 "reference-source-id": ref_source_status,
                 "success": item_success,
+                "synthesis_targets": item_synthesis_targets if item_success else [],
             }
         )
         tracker.advance_item(

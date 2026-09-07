@@ -367,6 +367,31 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
                 }
               }
             ]
+          },
+          "synthesis_targets": {
+            "type": "array",
+            "description": "Optionale, vor Execute menschlich/LLM-reviewbar angereicherte Synthese-Ziele. Autonome Drafts liefern immer [].",
+            "items": {
+              "type": "object",
+              "required": ["file", "type"],
+              "additionalProperties": false,
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Sicherer relativer POSIX-Pfad auf .md unter memory/references/projects/<decision.id>/... bzw. memory/references/topics/<decision.id>/... ."
+                },
+                "type": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$",
+                  "description": "Stabiles maschinenlesbares Label im sicheren Label-Raum; bewusst kein enger Enum."
+                },
+                "recommended_action": { "type": "string", "minLength": 1 },
+                "task_anchor": { "type": "string", "minLength": 1 },
+                "section": { "type": "string", "minLength": 1 }
+              }
+            }
           }
         }
       }
@@ -404,7 +429,15 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
       "evidence": {
         "file": "memory/references/projects/project-alpha/evidence/2026-01.md",
         "entry": "- 2026-01-06 — Übermittlung des Entwurfs zum WP4-Bericht durch Partner.\n  - Message-ID: `msg-2026-001@partner.example.org` (Dr. Alex Beispiel)\n  - Aussagekern: Übermittlung des Entwurfs zur Vorabstimmung..."
-      }
+      },
+      "synthesis_targets": [
+        {
+          "file": "memory/references/projects/project-alpha/statusampel.md",
+          "type": "statusampel",
+          "recommended_action": "review_update",
+          "task_anchor": "WP4"
+        }
+      ]
     }
   ]
 }
@@ -432,7 +465,15 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
         "metadata": "ok",
         "final-index-script": "ok",
         "reference-source-id": "ok",
-        "success": true
+        "success": true,
+        "synthesis_targets": [
+          {
+            "file": "memory/references/projects/project-alpha/statusampel.md",
+            "type": "statusampel",
+            "recommended_action": "review_update",
+            "task_anchor": "WP4"
+          }
+        ]
       }
     ],
     "telemetry": {
@@ -469,6 +510,33 @@ Execute-Schritt oder einem Legacy-Execute-Handler ohne Telemetrie ist sie immer:
 ```
 
 Die Telemetrie startet keine Synthese und verändert keine Wissensdateien.
+
+### FR-06b-Syntheseziele
+
+`synthesis_targets` ist ein optionales Feld jedes Execute-Manifest-Items. Ein
+Target ist ausschließlich ein Objekt mit den nichtleeren String-Feldern `file`
+und `type` sowie optional `recommended_action`, `task_anchor` und `section`
+(jeweils ebenfalls nichtleere Strings); weitere Keys sind nicht zulässig. `type`
+ist bewusst kein enger Enum, muss aber den stabilen Label-Raum
+`[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*` erfüllen. `file` muss ein sicherer relativer POSIX-Pfad auf
+eine `.md`-Datei sein, ohne Backslashes, absolute/Drive-/URL-Pfade oder `.`/`..`
+Segmente. Jeder Pfadabschnitt darf keine Windows-reservierten Zeichen
+`< > : " | ? *`, ASCII-Control-Zeichen oder abschließende Punkte/Leerzeichen
+enthalten. Für `decision.kind: project` liegt er unter
+`memory/references/projects/<decision.id>/...`, für `topic` entsprechend unter
+`memory/references/topics/<decision.id>/...`; die zugehörige `decision.id` ist
+ein nichtleerer, einzelner sicherer Slug. Andere Decision-Kinds dürfen nur
+fehlende oder leere Targets haben.
+
+Die autonome Klassifikation leitet keine Ziele aus Mailinhalten ab und erzeugt
+kanonisch `synthesis_targets: []`. Ein Mensch oder LLM kann den Draft zwischen
+`draft` und `execute` reviewbar anreichern. Execute prüft alle Items vor der
+ersten Mailbox-, Log-, Evidence-, Index- oder Progress-Mutation. Erfolgreiche
+Resultate enthalten die validierten Targets in Eingabereihenfolge; fehlgeschlagene
+Items enthalten immer `[]`. Die Targets starten keine Synthese und verändern
+keine Wissensdateien. `pipeline` übernimmt sie ausschließlich innerhalb seines
+bestehenden `execute_summary`; FR-06b fügt keine neue Pipeline-Top-Level-Struktur
+hinzu.
 
 ---
 
