@@ -1,6 +1,6 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 07.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` und den geprüften Abschlussstand `96ef354f` abgeglichen.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 07.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-06 fortgeschrieben.
 
 ## Statusabgleich zur Session
 
@@ -11,7 +11,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst 952 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
-| `FR-06` | 🟡 teilweise: FR-06a/FR-06b abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie und reviewbare Targets | Execute und Pipeline emittieren maschinenlesbare Telemetrie; FR-06b liefert nur reviewbar angereicherte Targets, FR-06c (Session-Handoff) bleibt offen. |
+| `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -316,7 +316,7 @@ Die Auslagerung erfolgte inkrementell. `search`, `resolve`, `inspect`, `draft`, 
 
 ## FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation
 
-**Status:** 🟡 Teilweise umgesetzt (07.09.2026). Die Pilot-Härtung U-1 bis U-5, ein realer 10-Mail-Pilot mit manueller, quellengebundener Synthese sowie FR-06a und FR-06b sind implementiert und durch Regressionstests abgedeckt. Execute und Pipeline geben die maschinenlesbare Telemetrie aus; Execute-Items können reviewbar angereicherte `synthesis_targets` transportieren. FR-06c, ein kompakter Session-Handoff für die nachgelagerte LLM-Synthese, bleibt offen.
+**Status:** ✅ Abgeschlossen (07.09.2026). Die technische Zwei-Stufen-Architektur umfasst die Pilot-Härtung U-1 bis U-5, den manuellen Pilot, FR-06a-Telemetrie, FR-06b-Targets sowie den FR-06c-Session-Handoff und ist regressionstestbar implementiert. Die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht: Der Python-Runner erstellt oder ändert keine Wissensdateien und behauptet keinen inhaltlichen Abschluss.
 
 ### Problemstellung
 Bisher endete der Batch-Workflow operativ mit dem Abschluss des Python-Runners. Dadurch wuchsen zwar die monatlichen Evidenzlogs (`evidence/YYYY-MM.md`), aber die tatsächlichen Arbeits- und Steuerungsdateien der Projekte veralteten:
@@ -370,8 +370,14 @@ flowchart TD
    - **`contacts.md`:** Sind neue Schlüsselpersonen aufgetaucht?
    - **`workpackages/wp*.md`:** Gibt es neue Deliverable-Entwürfe oder Teilaufgabenabschlüsse?
    - **`events/*.md`:** Wurden Konferenzrechnungen, Anmeldungen oder Tagungsdetails übermittelt?
-4. **FR-06c — Abschlussbericht / Session-Handoff (offen):**
-   - Der Agent fasst nach dem Batch-Lauf nicht nur die Verschiebezahlen zusammen, sondern gibt einen kompakten **Projekt-Wissensbericht** aus:
+4. **FR-06c — Abschlussbericht / Session-Handoff (abgeschlossen):**
+   - `execute` und `pipeline` geben einen strikt versionierten, fail-closed
+     `synthesis_handoff` aus. Er enthält nur erfolgreiche, gepaarte Project-/Topic-
+     Items in stabiler Reihenfolge und bewahrt jede Mail als eigene Evidenzquelle.
+     Fehlende Targets setzen `target_selection_required: true`; die Pipeline behält
+     einen validen pending Handoff auch bei einem nachfolgenden Verify-Fehler.
+   - Bei pending Handoff führt das LLM die quellengebundene Synthese aus und gibt
+     danach den kompakten **Projekt-Wissensbericht** aus:
      - *„MESHE: Statusampel für WP2 und Eventdossier aktualisiert (Fokusgruppe BOKU auf verschoben gesetzt).“*
      - *„Li4LaM: Schlüsselkontakt Belachew Yirsaw Alemu ergänzt.“*
      - *„Dienstreisen: EUCEN-Konferenzrechnung in Cagliari-Event verknüpft.“*
@@ -392,6 +398,9 @@ flowchart TD
 4. **FR-06a — umgesetzt:**
    - Der Execute- und Pipeline-Envelope enthält unter `data.telemetry` exakt `affected_projects`, `affected_topics` und `synthesis_required`. Nur erfolgreiche Projekt-/Topic-Items mit nichtleerer String-ID werden in stabiler Batch-Reihenfolge gezählt; Duplikate sowie Review- und Fehlerschritte bleiben außen vor.
    - Die Telemetrie löst keine Synthese aus und verändert keine Wissensdateien.
-5. **Noch offen für FR-06:**
-   - **FR-06c:** Ein kompakter, maschinenlesbarer Session-Handoff für die nachgelagerte LLM-Synthese fehlt.
-   - Die inhaltliche Synthese bleibt deshalb menschlich/LLM-geführt; FR-06b übergibt nur validierte, reviewbar angereicherte Ziele und löst selbst keine Wissensdatei-Änderung aus.
+5. **Abschlussgrenze für FR-06:**
+   - Die technische Zwei-Stufen-Architektur ist abgeschlossen. Der Session-Handoff
+     löst die nachgelagerte, quellengebundene LLM-Synthese verbindlich aus, aber der
+     Python-Runner automatisiert keine Wissensdatei-Änderung und behauptet keinen
+     Abschluss. Diese konkrete Inhaltsarbeit bleibt absichtlich eine Laufzeitpflicht
+     des LLM unter fortgeltenden Lock- und Approval-Grenzen.

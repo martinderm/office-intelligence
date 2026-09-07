@@ -13,6 +13,7 @@ from ..himalaya import run_himalaya, verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
 from ..progress import BatchProgressTracker
 from ..sent_indexer import auto_resolve_replies_from_sent
+from ..synthesis_handoff import collect_synthesis_handoff
 from ..synthesis_targets import validate_execute_synthesis_targets
 from ..telemetry import collect_telemetry
 
@@ -308,4 +309,5 @@ def run_execute_mode(
         "all_succeeded": all_succeeded,
         "results": results,
         "telemetry": collect_telemetry(items, results),
+        "synthesis_handoff": collect_synthesis_handoff(items, results),
     }

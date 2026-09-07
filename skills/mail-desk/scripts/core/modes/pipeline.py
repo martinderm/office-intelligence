@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 from ..classifier import draft_manifest
 from ..common import resolve_data_dir
 from ..sent_indexer import load_sent_index, sync_sent_items
+from ..synthesis_handoff import canonicalize_synthesis_handoff, empty_synthesis_handoff
 from ..telemetry import canonicalize_telemetry, empty_telemetry
 from .execute import run_execute_mode
 from .verify import run_verify_mode
@@ -81,6 +82,7 @@ def run_pipeline_mode(
             "executed_count": 0,
             "review_needed_count": 0,
             "telemetry": empty_telemetry(),
+            "synthesis_handoff": empty_synthesis_handoff(),
         }
 
     if config.get("sync_sent", True):
@@ -126,6 +128,9 @@ def run_pipeline_mode(
         )
 
     telemetry = canonicalize_telemetry(exec_result.get("telemetry"))
+    synthesis_handoff = canonicalize_synthesis_handoff(
+        exec_result.get("synthesis_handoff")
+    )
 
     verify_result: dict[str, Any] | None = None
     if do_verify and executable_items:
@@ -154,4 +159,5 @@ def run_pipeline_mode(
         "execute_summary": exec_result,
         "verify_summary": verify_result,
         "telemetry": telemetry,
+        "synthesis_handoff": synthesis_handoff,
     }
