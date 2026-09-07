@@ -60,7 +60,9 @@ from core import (
 from core.envelope import build_error, build_success, emit_json
 from core.modes import (
     run_draft_mode as _run_draft_mode,
+    run_execute_mode as _run_execute_mode,
     run_inspect_mode as _run_inspect_mode,
+    run_pipeline_mode as _run_pipeline_mode,
     run_resolve_mode,
     run_search_mode,
     run_sync_sent_mode as _run_sync_sent_mode,
@@ -448,217 +450,29 @@ def run_execute_mode(
     data_dir: Path | None = None,
     index_path: Path | None = None,
 ) -> dict[str, Any]:
-    dd = data_dir or resolve_data_dir()
-    idx_p = index_path or resolve_final_index_path(data_dir=dd)
-    items: list[dict[str, Any]] = config.get("items", [])
-    workspace_root = dd.parent.parent
-
-    tracker = BatchProgressTracker(
-        mode="execute",
-        total_items=len(items),
-        data_dir=dd,
+    """Compatibility facade for the extracted coupled execute-mode handler."""
+    return _run_execute_mode(
+        config,
+        account=account,
+        data_dir=data_dir,
+        index_path=index_path,
+        dependencies={
+            "BatchProgressTracker": BatchProgressTracker,
+            "append_action_log_entry": append_action_log_entry,
+            "append_replies_needed_entry": append_replies_needed_entry,
+            "auto_resolve_replies_from_sent": auto_resolve_replies_from_sent,
+            "flush_batch_evidence": flush_batch_evidence,
+            "load_final_index": load_final_index,
+            "normalize_message_id": normalize_message_id,
+            "resolve_data_dir": resolve_data_dir,
+            "resolve_final_index_path": resolve_final_index_path,
+            "run_himalaya": run_himalaya,
+            "save_final_index_atomic": save_final_index_atomic,
+            "sleep": time.sleep,
+            "utc_now_iso": utc_now_iso,
+            "verify_in_target_folder": verify_in_target_folder,
+        },
     )
-
-    index_data = load_final_index(idx_p)
-    index_items = index_data.setdefault("items", {})
-
-    results: list[dict[str, Any]] = []
-    pending_evidence: list[dict[str, Any]] = []
-    all_succeeded = True
-
-    results: list[dict[str, Any]] = []
-    pending_evidence: list[dict[str, Any]] = []
-    all_succeeded = True
-
-    for item in items:
-        env_id = str(item["envelope_id"])
-        source_folder = item.get("source_folder", "INBOX")
-        raw_mid = item.get("message_id") or item.get("raw_message_id", "")
-        norm_mid = normalize_message_id(raw_mid)
-        subject = item.get("subject", "")
-        from_str = item.get("from", "")
-        date_str = item.get("date", "")
-        action_spec = item.get("action", {})
-        action_type = action_spec.get("type", "copy_as_move")
-        target_folder = action_spec.get("target_folder")
-        decision = item.get("decision", {})
-        notes = item.get("notes", "")
-        evidence_spec = item.get("evidence")
-
-        routing_ok = False
-        meta_ok = False
-        index_ok = False
-        ref_source_status = "not-applicable"
-        new_env_id = None
-        final_folder = target_folder or source_folder
-        tracker.step(f"routing to {final_folder}", envelope_id=env_id, subject=subject)
-
-        # 1. Routing
-        if action_type == "copy_as_move" and target_folder and target_folder != source_folder:
-            # O(1) RAM-Check: Check if message is already indexed at target location
-            if norm_mid and norm_mid in index_items:
-                known_entry = index_items[norm_mid]
-                if known_entry.get("final_folder") == target_folder:
-                    new_env_id = known_entry.get("envelope_id") or env_id
-                    routing_ok = True
-
-            if not routing_ok:
-                try:
-                    run_himalaya(["message", "copy", target_folder, env_id, "-f", source_folder], account=account, timeout=45, max_retries=2)
-                    time.sleep(0.3)
-                    new_env_id = verify_in_target_folder(
-                        target_folder,
-                        norm_mid,
-                        subject=subject,
-                        from_addr=from_str,
-                        date_str=date_str,
-                        account=account,
-                    )
-                    if not new_env_id:
-                        time.sleep(0.5)
-                        new_env_id = verify_in_target_folder(
-                            target_folder,
-                            norm_mid,
-                            subject=subject,
-                            from_addr=from_str,
-                            date_str=date_str,
-                            account=account,
-                        )
-                    if new_env_id:
-                        routing_ok = True
-                        try:
-                            run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account, timeout=20, max_retries=2)
-                        except Exception:
-                            pass
-                    else:
-                        routing_ok = False
-                except Exception:
-                    routing_ok = False
-
-            # Gentle socket pause for GroupWise IMAP agent stability
-            time.sleep(0.15)
-
-        elif action_type == "keep_in_folder" or not target_folder or target_folder == source_folder:
-            new_env_id = env_id
-            routing_ok = True
-        elif action_type == "delete":
-            try:
-                run_himalaya(["message", "delete", env_id, "-f", source_folder], account=account, timeout=20, max_retries=2)
-                routing_ok = True
-                final_folder = "Trash"
-                new_env_id = env_id
-            except Exception:
-                routing_ok = True
-                final_folder = "Trash"
-                new_env_id = env_id
-
-        # 2. Queue evidence update for atomic batch flush
-        if evidence_spec and norm_mid and routing_ok:
-            pending_evidence.append({"message_id": norm_mid, "evidence": evidence_spec})
-            ref_source_status = "ok"
-
-        # 3. Final location index entry
-        if routing_ok and norm_mid:
-            idx_entry = {
-                "message_id": norm_mid,
-                "backend": "himalaya",
-                "final_folder": final_folder,
-                "envelope_id": str(new_env_id) if new_env_id else str(env_id),
-                "in_reply_to": item.get("in_reply_to", ""),
-                "references": item.get("references", []),
-                "subject": subject,
-                "from": from_str,
-                "date": date_str or utc_now_iso(),
-                "updated_at": utc_now_iso(),
-            }
-            index_items[norm_mid] = idx_entry
-            index_ok = True
-
-        # 4. Action logging
-        if routing_ok:
-            log_entry = {
-                "timestamp": utc_now_iso(),
-                "envelope_id": env_id,
-                "message_id": norm_mid,
-                "subject": subject,
-                "from": from_str,
-                "action": {
-                    "type": action_type,
-                    "source_folder": source_folder,
-                    "target_folder": final_folder,
-                    "new_envelope_id": str(new_env_id) if new_env_id else str(env_id),
-                },
-                "decision": decision,
-                "notes": notes,
-            }
-            append_action_log_entry(dd, log_entry)
-            meta_ok = True
-
-            if decision.get("needs_reply"):
-                rep_entry = {
-                    "timestamp": utc_now_iso(),
-                    "envelope_id": str(new_env_id) if new_env_id else str(env_id),
-                    "message_id": norm_mid,
-                    "subject": subject,
-                    "from": from_str,
-                    "folder": final_folder,
-                    "reply_status": "needed",
-                    "reply_note": notes,
-                }
-                if decision.get("reply_candidate"):
-                    rep_entry["reply_candidate"] = decision["reply_candidate"]
-                append_replies_needed_entry(dd, rep_entry)
-
-        item_success = routing_ok and index_ok and meta_ok
-        if not item_success:
-            all_succeeded = False
-
-        results.append({
-            "envelope_id": env_id,
-            "message_id": norm_mid,
-            "subject": subject,
-            "final_folder": final_folder,
-            "new_envelope_id": str(new_env_id),
-            "routing": "ok" if routing_ok else "fail",
-            "metadata": "ok" if meta_ok else "fail",
-            "final-index-script": "ok" if index_ok else "fail",
-            "reference-source-id": ref_source_status,
-            "success": item_success,
-        })
-        tracker.advance_item(
-            envelope_id=env_id,
-            subject=subject,
-            step_name=f"routed to {final_folder}" if item_success else f"failed routing {env_id}",
-        )
-
-    # Atomically flush all queued evidence markdown updates
-    if pending_evidence:
-        flush_batch_evidence(pending_evidence, workspace_root=workspace_root)
-
-    # Save index atomically once for the whole batch
-    if index_items:
-        index_data["updated_at"] = utc_now_iso()
-        save_final_index_atomic(idx_p, index_data)
-
-    # Automatically audit and resolve any matching replies from Sent Items
-    try:
-        auto_resolve_replies_from_sent(data_dir=dd, workspace_root=workspace_root)
-    except Exception:
-        pass
-
-    if all_succeeded:
-        tracker.complete(f"Executed batch of {len(results)} items successfully.")
-    else:
-        succ_cnt = sum(1 for r in results if r["success"])
-        tracker.complete(f"Executed batch: {succ_cnt}/{len(results)} succeeded.")
-
-    return {
-        "ok": all_succeeded,
-        "mode": "execute",
-        "total_processed": len(results),
-        "all_succeeded": all_succeeded,
-        "results": results,
-    }
 
 
 # ==============================================================================
@@ -698,108 +512,22 @@ def run_pipeline_mode(
     data_dir: Path | None = None,
     index_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Execute end-to-end autonomous cycle: inspect -> classify -> execute -> verify."""
-    dd = data_dir or resolve_data_dir()
-    workspace_root = dd.parent.parent
-    folder = config.get("folder", "INBOX")
-    count = int(config.get("count", 20))
-    order = str(config.get("order", "oldest")).lower()
-    date = config.get("date")
-    query = config.get("query")
-    min_confidence = str(config.get("min_confidence", "high")).lower()
-    do_verify = bool(config.get("verify", True))
-    check_folders = bool(config.get("check_folders", False))
-    preview_lines = int(config.get("preview_lines", 30))
-
-    # 1. Inspect target count of fresh emails
-    emails, known_count = get_unprocessed_emails(
-        folder=folder,
-        target_count=count,
-        order=order,
-        date=date,
-        query=query,
+    """Compatibility facade for the extracted autonomous pipeline handler."""
+    return _run_pipeline_mode(
+        config,
         account=account,
-        data_dir=dd,
-        skip_known=True,
-        preview_lines=preview_lines,
+        data_dir=data_dir,
+        index_path=index_path,
+        dependencies={
+            "draft_manifest": draft_manifest,
+            "get_unprocessed_emails": get_unprocessed_emails,
+            "load_sent_index": load_sent_index,
+            "resolve_data_dir": resolve_data_dir,
+            "run_execute_mode": run_execute_mode,
+            "run_verify_mode": run_verify_mode,
+            "sync_sent_items": sync_sent_items,
+        },
     )
-
-    if not emails:
-        return {
-            "ok": True,
-            "mode": "pipeline",
-            "message": "No unprocessed emails found in folder.",
-            "total_inspected": 0,
-            "executed_count": 0,
-            "review_needed_count": 0,
-        }
-
-    # 2. Draft & Classify with Sent-Items check
-    if config.get("sync_sent", True):
-        try:
-            sync_sent_items(count=int(config.get("sent_count", 150)), account=account, data_dir=dd, workspace_root=workspace_root)
-        except Exception:
-            pass
-
-    sent_lookup = load_sent_index(dd)
-    draft = draft_manifest(emails, workspace_root=workspace_root, sent_lookup=sent_lookup)
-    all_drafted_items = draft.get("items", [])
-
-    # Filter by confidence threshold
-    confidence_rank = {"high": 3, "medium": 2, "low": 1}
-    min_rank = confidence_rank.get(min_confidence, 3)
-
-    executable_items: list[dict[str, Any]] = []
-    review_items: list[dict[str, Any]] = []
-
-    for item in all_drafted_items:
-        conf = item.get("decision", {}).get("confidence", "low").lower()
-        rank = confidence_rank.get(conf, 1)
-        target_f = item.get("action", {}).get("target_folder", "INBOX")
-
-        if rank >= min_rank and target_f != "INBOX":
-            executable_items.append(item)
-        else:
-            review_items.append(item)
-
-    # 3. Execute High-Confidence Items
-    exec_result: dict[str, Any] = {"ok": True, "results": []}
-    if executable_items:
-        exec_result = run_execute_mode(
-            {"items": executable_items},
-            account=account,
-            data_dir=dd,
-            index_path=index_path,
-        )
-
-    # 4. Verify
-    verify_result: dict[str, Any] | None = None
-    if do_verify and executable_items:
-        verify_result = run_verify_mode(
-            {"items": executable_items, "check_folders": check_folders},
-            account=account,
-            data_dir=dd,
-            index_path=index_path,
-        )
-
-    pipeline_ok = bool(exec_result.get("ok", True))
-    if verify_result and not verify_result.get("ok", True):
-        pipeline_ok = False
-
-    return {
-        "ok": pipeline_ok,
-        "mode": "pipeline",
-        "folder": folder,
-        "order": order,
-        "total_inspected": len(emails),
-        "executed_count": len(executable_items),
-        "verified_count": len(verify_result.get("results", [])) if verify_result else 0,
-        "review_needed_count": len(review_items),
-        "review_needed_items": review_items,
-        "all_succeeded": pipeline_ok,
-        "execute_summary": exec_result,
-        "verify_summary": verify_result,
-    }
 
 
 # ==============================================================================

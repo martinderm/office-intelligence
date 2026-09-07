@@ -15,7 +15,9 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 import mail_desk_batch_runner as runner  # noqa: E402
 from core.modes import draft as draft_mode  # noqa: E402
+from core.modes import execute as execute_mode  # noqa: E402
 from core.modes import inspect as inspect_mode  # noqa: E402
+from core.modes import pipeline as pipeline_mode  # noqa: E402
 from core.modes import resolve as resolve_mode  # noqa: E402
 from core.modes import search as search_mode  # noqa: E402
 from core.modes import sync_sent as sync_sent_mode  # noqa: E402
@@ -258,6 +260,167 @@ class SyncSentModeTests(unittest.TestCase):
         )
 
 
+class ExecuteModeTests(unittest.TestCase):
+    def test_execute_preserves_copy_verify_delete_and_persistence_order(self) -> None:
+        events: list[str] = []
+
+        class Tracker:
+            def __init__(self, **_kwargs):
+                events.append("tracker:init")
+
+            def step(self, *_args, **_kwargs):
+                events.append("tracker:step")
+
+            def advance_item(self, *_args, **_kwargs):
+                events.append("tracker:advance")
+
+            def complete(self, *_args, **_kwargs):
+                events.append("tracker:complete")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            calls = Mock(side_effect=lambda command, **_kwargs: events.append(f"mail:{command[1]}"))
+            verify = Mock(return_value="copied-42")
+            flush = Mock(side_effect=lambda *_args, **_kwargs: events.append("flush"))
+            save = Mock(side_effect=lambda *_args, **_kwargs: events.append("save"))
+            action = Mock(side_effect=lambda *_args, **_kwargs: events.append("action"))
+            reply = Mock(side_effect=lambda *_args, **_kwargs: events.append("reply"))
+            resolve = Mock(side_effect=lambda *_args, **_kwargs: events.append("resolve"))
+            result = execute_mode.run_execute_mode(
+                {"items": [{
+                    "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
+                    "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
+                    "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
+                    "decision": {"needs_reply": True, "reply_candidate": "draft"}, "notes": "route",
+                    "evidence": {"file": "memory/evidence.md", "entry": "- pilot"},
+                }]},
+                account="primary", data_dir=data_dir, index_path=data_dir / "index.json",
+                dependencies={
+                    "BatchProgressTracker": Tracker, "append_action_log_entry": action,
+                    "append_replies_needed_entry": reply, "auto_resolve_replies_from_sent": resolve,
+                    "flush_batch_evidence": flush, "load_final_index": Mock(return_value={"items": {}}),
+                    "run_himalaya": calls, "save_final_index_atomic": save, "sleep": Mock(),
+                    "verify_in_target_folder": verify, "utc_now_iso": Mock(return_value="now"),
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("copied-42", result["results"][0]["new_envelope_id"])
+        self.assertEqual(["mail:copy", "mail:delete"], [event for event in events if event.startswith("mail:")])
+        self.assertLess(events.index("flush"), events.index("save"))
+        self.assertLess(events.index("save"), events.index("resolve"))
+        self.assertEqual(1, action.call_count)
+        self.assertEqual(1, reply.call_count)
+        verify.assert_called_once()
+
+    def test_execute_reuses_matching_index_entry_without_mailbox_calls(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            index_data = {
+                "items": {
+                    "case@example.test": {
+                        "final_folder": "Projects/Pilot",
+                        "envelope_id": "existing-22",
+                    }
+                }
+            }
+            run_mail = Mock()
+            verify = Mock()
+            append_action = Mock()
+            save_index = Mock()
+            result = execute_mode.run_execute_mode(
+                {
+                    "items": [
+                        {
+                            "envelope_id": "source-7",
+                            "message_id": "<Case@Example.test>",
+                            "subject": "Pilot",
+                            "action": {
+                                "type": "copy_as_move",
+                                "target_folder": "Projects/Pilot",
+                            },
+                            "decision": {},
+                        }
+                    ]
+                },
+                data_dir=data_dir,
+                dependencies={
+                    "BatchProgressTracker": Mock(),
+                    "append_action_log_entry": append_action,
+                    "auto_resolve_replies_from_sent": Mock(),
+                    "load_final_index": Mock(return_value=index_data),
+                    "run_himalaya": run_mail,
+                    "save_final_index_atomic": save_index,
+                    "sleep": Mock(),
+                    "utc_now_iso": Mock(return_value="now"),
+                    "verify_in_target_folder": verify,
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("existing-22", result["results"][0]["new_envelope_id"])
+        self.assertEqual("ok", result["results"][0]["routing"])
+        self.assertEqual("existing-22", index_data["items"]["case@example.test"]["envelope_id"])
+        run_mail.assert_not_called()
+        verify.assert_not_called()
+        append_action.assert_called_once()
+        save_index.assert_called_once()
+
+    def test_execute_reports_partial_failure_but_keeps_successful_item_persistence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            save = Mock()
+            result = execute_mode.run_execute_mode(
+                {"items": [
+                    {"envelope_id": "good", "message_id": "good@example.test", "action": {"type": "keep_in_folder"}, "decision": {}},
+                    {"envelope_id": "bad", "message_id": "bad@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"}, "decision": {}},
+                ]},
+                data_dir=data_dir,
+                dependencies={
+                    "BatchProgressTracker": Mock(), "auto_resolve_replies_from_sent": Mock(),
+                    "load_final_index": Mock(return_value={"items": {}}), "run_himalaya": Mock(side_effect=RuntimeError("copy failed")),
+                    "save_final_index_atomic": save, "sleep": Mock(), "verify_in_target_folder": Mock(),
+                },
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual([True, False], [row["success"] for row in result["results"]])
+        self.assertEqual("fail", result["results"][1]["routing"])
+        save.assert_called_once()
+
+
+class PipelineModeTests(unittest.TestCase):
+    def test_pipeline_orchestrates_sync_classification_execute_and_verify(self) -> None:
+        email = {"envelope_id": "1", "message_id": "case@example.test"}
+        executable = {"envelope_id": "1", "decision": {"confidence": "high"}, "action": {"target_folder": "Projects/Pilot"}}
+        review = {"envelope_id": "2", "decision": {"confidence": "low"}, "action": {"target_folder": "Projects/Pilot"}}
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            fetch = Mock(return_value=([email], 0))
+            sync = Mock(side_effect=RuntimeError("sent unavailable"))
+            execute = Mock(return_value={"ok": True, "results": [{"success": True}]})
+            verify = Mock(return_value={"ok": False, "results": [{"consistent": False}]})
+            result = pipeline_mode.run_pipeline_mode(
+                {"count": 1, "query": "subject pilot", "check_folders": True}, account="primary", data_dir=data_dir,
+                dependencies={
+                    "get_unprocessed_emails": fetch, "sync_sent_items": sync, "load_sent_index": Mock(return_value={"sent": []}),
+                    "draft_manifest": Mock(return_value={"items": [executable, review]}),
+                    "run_execute_mode": execute, "run_verify_mode": verify,
+                },
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(1, result["executed_count"])
+        self.assertEqual(1, result["review_needed_count"])
+        self.assertEqual("subject pilot", fetch.call_args.kwargs["query"])
+        execute.assert_called_once()
+        self.assertTrue(verify.call_args.args[0]["check_folders"])
+
+
 class VerifyModeTests(unittest.TestCase):
     def test_verify_uses_batch_file_checks_folder_and_writes_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -393,6 +556,30 @@ class DispatcherCompatibilityTests(unittest.TestCase):
         sync_items.assert_called_once()
         self.assertFalse(verify_result["ok"])
         load_index.assert_called_once()
+
+    def test_runner_facades_keep_execute_and_pipeline_patch_surfaces(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            with patch.object(runner, "run_himalaya") as run_mail, patch.object(
+                runner, "verify_in_target_folder", return_value="22"
+            ) as verify:
+                execute_result = runner.run_execute_mode(
+                    {"items": [{"envelope_id": "2", "message_id": "case@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"}, "decision": {}}]},
+                    data_dir=data_dir,
+                )
+            with patch.object(runner, "get_unprocessed_emails", return_value=([{"envelope_id": "3"}], 0)) as fetch, patch.object(
+                runner, "sync_sent_items", return_value=(1, 1)
+            ), patch.object(runner, "load_sent_index", return_value={}), patch.object(
+                runner, "draft_manifest", return_value={"items": []}
+            ):
+                pipeline_result = runner.run_pipeline_mode({"query": "pilot"}, data_dir=data_dir)
+
+        self.assertTrue(execute_result["ok"])
+        run_mail.assert_called()
+        verify.assert_called_once()
+        self.assertEqual("pilot", fetch.call_args.kwargs["query"])
+        self.assertEqual(0, pipeline_result["executed_count"])
 
 
 if __name__ == "__main__":
