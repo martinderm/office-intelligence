@@ -219,6 +219,110 @@ def _select_project_artifacts(project: dict[str, Any], text: str) -> dict[str, A
     return result
 
 
+def _catalog_artifact_title(
+    project: dict[str, Any],
+    kind: str,
+    identifier: str,
+) -> str:
+    """Return a catalog title for one already-unambiguous decision scalar."""
+    workpackages = project.get("workpackages", [])
+    if kind == "milestone":
+        for milestone in project.get("milestones", []) if isinstance(project.get("milestones"), list) else []:
+            if isinstance(milestone, dict) and str(milestone.get("id", "")).casefold() == identifier.casefold():
+                return str(milestone.get("title", "")).strip()
+        return ""
+    if not isinstance(workpackages, list):
+        return ""
+    for wp in workpackages:
+        if not isinstance(wp, dict):
+            continue
+        if kind == "workpackage" and str(wp.get("id", "")).casefold() == identifier.casefold():
+            return str(wp.get("title", "")).strip()
+        collection = "tasks" if kind == "task" else "deliverables"
+        for artifact in wp.get(collection, []) if isinstance(wp.get(collection), list) else []:
+            if isinstance(artifact, dict) and str(artifact.get("id", "")).casefold() == identifier.casefold():
+                return str(artifact.get("title", "")).strip()
+    return ""
+
+
+def _project_context_label(project: dict[str, Any], decision: dict[str, Any]) -> str:
+    """Build evidence context exclusively from unambiguous catalog-backed scalars."""
+    project_label = str(project.get("kuerzel") or project.get("id", "")).strip().upper()
+    artifact_parts: list[str] = []
+    for kind, display in (
+        ("workpackage", ""),
+        ("task", ""),
+        ("deliverable", ""),
+        ("milestone", ""),
+    ):
+        identifier = decision.get(kind)
+        if not isinstance(identifier, str) or not identifier.strip():
+            continue
+        title = _catalog_artifact_title(project, kind, identifier)
+        label = f"{display}{identifier.upper() if kind == 'workpackage' else identifier}"
+        artifact_parts.append(f"{label} ({title})" if title else label)
+    if project_label and artifact_parts:
+        return f"{project_label} | " + " / ".join(artifact_parts)
+    return project_label or " / ".join(artifact_parts)
+
+
+def _evidence_read_escalation(decision: dict[str, Any]) -> dict[str, Any] | None:
+    """Expose bounded machine metadata while never copying body or error text."""
+    escalation = decision.get("read_escalation")
+    if not isinstance(escalation, dict):
+        return None
+    result: dict[str, Any] = {}
+    for key in ("level", "status"):
+        if isinstance(escalation.get(key), str):
+            result[key] = escalation[key]
+    if isinstance(escalation.get("triggers"), list):
+        result["triggers"] = [value for value in escalation["triggers"] if isinstance(value, str)]
+    if isinstance(escalation.get("error"), dict) and isinstance(escalation["error"].get("type"), str):
+        result["error_type"] = escalation["error"]["type"]
+    return result or None
+
+
+def _build_project_evidence(
+    project: dict[str, Any],
+    decision: dict[str, Any],
+    *,
+    workspace_root: Path,
+    year_month: str,
+    date: str,
+    subject: str,
+    message_id: str,
+    from_str: str,
+    to_str: str,
+) -> dict[str, Any]:
+    """Create a writer-compatible, neutral project evidence spec without mail body."""
+    project_id = str(project.get("id", "")).strip()
+    evidence_dir = resolve_evidence_dir("projects", project_id, workspace_root=workspace_root)
+    try:
+        evidence_dir_rel = str(evidence_dir.relative_to(workspace_root).as_posix())
+    except ValueError:
+        evidence_dir_rel = str(evidence_dir.as_posix())
+
+    participants = from_str or "Unbekannt"
+    if to_str:
+        participants = f"{participants}; An: {to_str}"
+    context = _project_context_label(project, decision)
+    entry_lines = [
+        f"- {date} — {subject}.",
+        f"  - Message-ID: `{message_id}`",
+        f"  - Beteiligte: {participants}",
+        f"  - Kontext: [{context}]" if context else "  - Kontext: [Projekt]",
+        f"  - Mailgegenstand: {subject}",
+    ]
+    spec: dict[str, Any] = {
+        "file": f"{evidence_dir_rel}/{year_month}.md",
+        "entry": "\n".join(entry_lines),
+    }
+    read_escalation = _evidence_read_escalation(decision)
+    if read_escalation:
+        spec["read_escalation"] = read_escalation
+    return spec
+
+
 def full_body_triggers(email: dict[str, Any], preview_item: dict[str, Any]) -> list[str]:
     """Return documented, deterministic reasons to re-read one preview in full."""
     text = "\n".join(
@@ -327,6 +431,28 @@ def classify_email_two_pass(
             "triggers": triggers,
             "status": "completed",
         }
+        if full_item["decision"].get("kind") == "project":
+            project_id = str(full_item["decision"].get("id", "")).casefold()
+            matched_project = next(
+                (
+                    project for project in (projects or [])
+                    if isinstance(project, dict) and str(project.get("id", "")).casefold() == project_id
+                ),
+                None,
+            )
+            if matched_project is not None:
+                full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
+                full_item["evidence"] = _build_project_evidence(
+                    matched_project,
+                    full_item["decision"],
+                    workspace_root=workspace_root or Path.cwd(),
+                    year_month=full_ym,
+                    date=full_ymd,
+                    subject=str(full_email.get("subject", "")),
+                    message_id=normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
+                    from_str=str(full_email.get("from", "")),
+                    to_str=str(full_email.get("to", "")),
+                )
         return full_item
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
         return _full_read_failure(preview_item, triggers, exc)
@@ -486,7 +612,7 @@ def classify_email(
             )
             evidence_spec = {
                 "type": "project_evidence",
-                "target_file": ev_file_rel,
+                "file": ev_file_rel,
                 "entry": ev_entry,
             }
             selected_project = matched_proj_obj
@@ -515,7 +641,7 @@ def classify_email(
             )
             evidence_spec = {
                 "type": "topic_evidence",
-                "target_file": ev_file_rel,
+                "file": ev_file_rel,
                 "entry": ev_entry,
             }
             thread_matched = True
@@ -723,6 +849,17 @@ def classify_email(
             decision["artifact_match_reasons"] = artifact_resolution["match_reasons"]
         if "candidates" in artifact_resolution:
             decision["artifact_candidates"] = artifact_resolution["candidates"]
+        evidence_spec = _build_project_evidence(
+            selected_project,
+            decision,
+            workspace_root=ws,
+            year_month=ym,
+            date=ymd,
+            subject=subject,
+            message_id=norm_mid,
+            from_str=from_str,
+            to_str=to_str,
+        )
 
     # --------------------------------------------------------------------------
     # 3. Sent Items Reply Check

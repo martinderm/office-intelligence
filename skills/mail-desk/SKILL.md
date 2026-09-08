@@ -168,7 +168,17 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   Triggern. Ein Full-Read-Fehler senkt die Confidence auf `low`, hält die Mail
   in `INBOX` zur Review zurück und dokumentiert den Fehler strukturiert. Ein
   aus dem Preview abgeleitetes `needs_reply` ist ausdrücklich kein alleiniger
-  Trigger. Evidence-Format (FR-02c) und FR-06 bleiben unverändert.
+  Trigger. FR-06 bleibt unverändert.
+- FR-02c erzeugt Projekt-Evidence über einen zentralen, writer-kompatiblen
+  Spec mit `file` und `entry`. Der Kontext enthält nur den Projekt-Kürzel und
+  eindeutig entschiedene WP-/Task-/Deliverable-/Milestone-Scalars samt
+  Katalogtiteln; `artifact_candidates` erzeugen keinen scheinbar eindeutigen
+  Kontext. Die Entry-Zeile bewahrt Datum, Betreff, normalisierte Message-ID und
+  Beteiligte und benennt den Betreff neutral als Mailgegenstand — keine
+  generierte Inhaltszusammenfassung. Ein vorhandenes `read_escalation` wird
+  ohne Rohbody als begrenzte Maschinenmetadaten am Spec geführt. Für Thread-
+  Evidence gilt derselbe `file`-Vertrag wie für normale Project- und Topic-
+  Evidence; Dedupe und atomare Writer bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,
