@@ -175,6 +175,36 @@ def merge_artifacts(existing: list[Any], parsed: list[dict[str, Any]], kind: str
     return result
 
 
+def wp_identity(value: Any) -> str:
+    """Normalize only stable WP/Activity-Cluster spellings for conservative matching."""
+    text = str(value or "").casefold()
+    text = re.sub(r"activity\s*cluster", "ac", text)
+    return re.sub(r"[^a-z0-9]", "", text)
+
+
+def match_existing_wp(parsed: dict[str, Any], existing: list[Any], diagnostics: list[dict[str, str]], path: str) -> dict[str, Any] | None:
+    parsed_id = str(parsed.get("id", "")).casefold()
+    exact = [item for item in existing if isinstance(item, dict) and str(item.get("id", "")).casefold() == parsed_id]
+    if len(exact) == 1:
+        return exact[0]
+    title = str(parsed.get("title", "")).casefold().strip()
+    candidates: list[dict[str, Any]] = []
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        aliases = [item.get("id"), *(item.get("aliases") if isinstance(item.get("aliases"), list) else [])]
+        title_match = title and str(item.get("title", "")).casefold().strip() == title
+        alias_match = wp_identity(parsed.get("id")) and any(wp_identity(value) == wp_identity(parsed.get("id")) for value in aliases)
+        if title_match or alias_match:
+            candidates.append(item)
+    unique = {str(item.get("id", "")).casefold(): item for item in candidates}
+    if len(unique) == 1:
+        return next(iter(unique.values()))
+    if len(unique) > 1:
+        diagnostics.append({"path": path, "code": "ambiguous_wp_match", "message": f"multiple existing WPs match parsed {parsed.get('id')}"})
+    return None
+
+
 def parse_milestones(path: Path, diagnostics: list[dict[str, str]]) -> list[dict[str, Any]]:
     lines = section(path.read_text(encoding="utf-8").splitlines(), "Milestones")
     if lines is None: return []
@@ -255,11 +285,17 @@ def transform_project(project: dict[str, Any], projects_root: Path, diagnostics:
     existing = result.get("workpackages", [])
     if source is not None:
         source_wps, source_milestones = source
-        existing_by_id = {item.get("id"): item for item in existing if isinstance(item, dict)}
-        merged: list[dict[str, Any]] = []
+        replacements: dict[str, dict[str, Any]] = {}
+        new_workpackages: list[dict[str, Any]] = []
         for wp in source_wps:
-            prior = copy.deepcopy(existing_by_id.get(wp["id"], {}))
+            diagnostic_count = len(diagnostics)
+            matched = match_existing_wp(wp, existing, diagnostics, f"$.{project_id}.workpackages")
+            if matched is None and any(item.get("code") == "ambiguous_wp_match" for item in diagnostics[diagnostic_count:]):
+                continue
+            prior = copy.deepcopy(matched or {})
             for key, value in wp.items():
+                if key == "id" and matched is not None:
+                    continue
                 if key in {"tasks", "deliverables"}:
                     if not value and key in prior: continue
                     prior[key] = merge_artifacts(prior.get(key, []), value, key[:-1], diagnostics, f"$.{project_id}.{wp['id']}.{key}")
@@ -268,11 +304,18 @@ def transform_project(project: dict[str, Any], projects_root: Path, diagnostics:
             prior.setdefault("status", "active")
             prior.setdefault("tasks", [])
             prior.setdefault("deliverables", [])
-            merged.append(prior)
-        parsed_ids = {wp["id"] for wp in source_wps}
+            if matched is None:
+                new_workpackages.append(prior)
+            else:
+                replacements[str(matched.get("id", "")).casefold()] = prior
+        merged: list[Any] = []
         for prior in existing:
-            if isinstance(prior, dict) and prior.get("id") not in parsed_ids:
-                merged.append(dict(prior, tasks=prior.get("tasks", []), deliverables=prior.get("deliverables", [])))
+            if isinstance(prior, dict):
+                identifier = str(prior.get("id", "")).casefold()
+                merged.append(replacements.get(identifier, dict(prior, tasks=prior.get("tasks", []), deliverables=prior.get("deliverables", []))))
+            else:
+                merged.append(prior)
+        merged.extend(new_workpackages)
         result["workpackages"] = merged
     elif not isinstance(existing, list):
         diagnostics.append({"path": f"$.{project_id}.workpackages", "code": "invalid_catalog", "message": "workpackages is not an array"})

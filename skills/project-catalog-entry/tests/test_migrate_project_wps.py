@@ -57,7 +57,8 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(diagnostics, [])
             self.assertEqual(after[0]["aliases"], ["MESHE"])
             self.assertEqual(after[0]["cloud_sync"], {"x":{"scan_dir":"x"}})
-            self.assertEqual(after[0]["workpackages"][1]["aliases"], ["keep"])
+            self.assertEqual([wp["id"] for wp in after[0]["workpackages"]], ["wp2", "wp1"])
+            self.assertEqual(after[0]["workpackages"][0]["aliases"], ["keep"])
             self.assertEqual(after[0]["milestones"][0]["id"], "MS0")
 
     def test_evolve_task_heading_and_checkpoint_warning_are_not_blocking(self):
@@ -120,6 +121,35 @@ class MigrationTests(unittest.TestCase):
             payload=json.loads(self.run_cli(root,path).stdout)
             self.assertEqual(payload["state"], "PendingReview")
             self.assertIn("task_conflict", str(payload["data"]["diagnostics"]))
+
+    def test_alias_title_wp_match_preserves_canonical_id(self):
+        temp, root, path = self.make_workspace("# AC3 — Institutional Assessment\n")
+        with temp:
+            source = json.loads(path.read_text(encoding="utf-8"))
+            source[0]["workpackages"]=[
+                {"id":"first","title":"Keep first","status":"active"},
+                {"id":"ac3-swot-institutional-assessment","title":"Institutional Assessment","aliases":["Activity Cluster 3"],"status":"active","keywords":["keep"]},
+                {"id":"last","title":"Keep last","status":"active"},
+            ]
+            (root / "memory/references/projects/meshe/index.md").write_text("## Milestones\n- MS1 — Kick-off — Related WPs: ac3-swot-institutional-assessment\n", encoding="utf-8")
+            path.write_text(json.dumps(source),encoding="utf-8")
+            payload=json.loads(self.run_cli(root,path).stdout)
+            self.assertEqual(payload["state"],"DryRun")
+            self.assertNotIn('"id": "ac3"', payload["data"]["diff"])
+            self.assertIn('"ac3-swot-institutional-assessment"', payload["data"]["diff"])
+            after, diagnostics = migration.transform(source, root / "memory/references/projects", [])
+            self.assertEqual(diagnostics, [])
+            self.assertEqual([wp["id"] for wp in after[0]["workpackages"]], ["first", "ac3-swot-institutional-assessment", "last"])
+            self.assertEqual(after[0]["workpackages"][1]["keywords"], ["keep"])
+
+    def test_ambiguous_wp_alias_match_blocks(self):
+        temp, root, path = self.make_workspace("# AC3 — Shared title\n")
+        with temp:
+            source=json.loads(path.read_text(encoding="utf-8")); source[0]["workpackages"]=[{"id":"one","title":"Shared title","status":"active"},{"id":"two","title":"Shared title","status":"active"}]
+            path.write_text(json.dumps(source),encoding="utf-8")
+            payload=json.loads(self.run_cli(root,path).stdout)
+            self.assertEqual(payload["state"],"PendingReview")
+            self.assertIn("ambiguous_wp_match",str(payload["data"]["diagnostics"]))
 
     def test_scoped_dry_run_defers_full_validation_but_apply_refuses_v2_remainder(self):
         temp, root, path = self.make_workspace("# WP1 — Coordination\n")
