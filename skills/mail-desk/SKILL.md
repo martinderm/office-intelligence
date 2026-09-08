@@ -156,6 +156,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   aus der aktuellen Mail. Legacy-Kataloge ohne v3-Struktur bleiben beim
   bisherigen Root-Matching. Diese FR-02a-Ergänzung eskaliert keinen Lesegrad
   und ändert weder Evidence- noch FR-06-Handoff-Formate.
+- FR-02b ergänzt einen deterministischen Zwei-Pass-Read: Zuerst wird das
+  kompatible Preview klassifiziert. Nur bei sichtbaren Artefakt-Signalen
+  (`QM Plan`, `Draft`, `Handbook`, `Deliverable`, `Agreement`, `Red Flags`,
+  `Audit`, `Focus Group`, `Fokusgruppe`), einem im Preview eindeutig
+  aufgelösten Artefaktcode (etwa `wp2`, `t2.2`, `d1.2`, `ms5`), einer sichtbaren
+  Action-/Reply-Bitte oder unzureichender
+  Preview-Evidenz wird genau derselbe Envelope ohne `--preview` vollständig
+  gelesen und erneut klassifiziert. Das Ergebnis trägt dann
+  `decision.read_escalation` mit `level: "full_body"` und den konkreten
+  Triggern. Ein Full-Read-Fehler senkt die Confidence auf `low`, hält die Mail
+  in `INBOX` zur Review zurück und dokumentiert den Fehler strukturiert. Ein
+  aus dem Preview abgeleitetes `needs_reply` ist ausdrücklich kein alleiniger
+  Trigger. Evidence-Format (FR-02c) und FR-06 bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,

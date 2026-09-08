@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping
 
 from ..classifier import draft_manifest
 from ..common import resolve_data_dir
+from ..himalaya import get_single_email_details
 from ..sent_indexer import load_sent_index, sync_sent_items
 from ..synthesis_handoff import canonicalize_synthesis_handoff, empty_synthesis_handoff
 from ..telemetry import canonicalize_telemetry, empty_telemetry
@@ -47,6 +48,7 @@ def run_pipeline_mode(
     sync_sent = _dependency(dependencies, "sync_sent_items", sync_sent_items)
     load_sent = _dependency(dependencies, "load_sent_index", load_sent_index)
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
+    full_reader = _dependency(dependencies, "get_single_email_details", get_single_email_details)
     execute = _dependency(dependencies, "run_execute_mode", run_execute_mode)
     verify = _dependency(dependencies, "run_verify_mode", run_verify_mode)
 
@@ -101,6 +103,8 @@ def run_pipeline_mode(
         emails,
         workspace_root=workspace_root,
         sent_lookup=sent_lookup,
+        full_reader=full_reader,
+        account=account,
     )
     all_drafted_items = draft_result.get("items", [])
     confidence_rank = {"high": 3, "medium": 2, "low": 1}

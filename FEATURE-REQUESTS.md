@@ -7,10 +7,10 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | ID | Status | In dieser Session umgesetzt | Kurzurteil |
 | --- | --- | --- | --- |
 | `FR-01` | ✅ abgeschlossen | v3-Schema, Vorlagen, Beispielkatalog, Validator, konservatives Migrationswerkzeug, Tests und produktiver Backfill | Der BOKU-Katalog ist vollständig v3-valid; der einzige EVOLVE-Hinweis `unstable_checkpoint` wurde konkret akzeptiert, ohne eine Meilenstein-ID zu erfinden. |
-| `FR-02` | 🟡 teilweise | FR-02a: hierarchisches v3-Artefakt-Matching | Eindeutige WP-/Task-/Deliverable-/Milestone-Treffer und Review-Kandidaten sind im Decision-Objekt verfügbar; die Full-Body-Eskalation bleibt offen. |
+| `FR-02` | 🟡 teilweise | FR-02a: hierarchisches v3-Artefakt-Matching; FR-02b: Zweitpass-Volltext | Artefakt-Treffer, Review-Kandidaten und sichere, signalgesteuerte Volltext-Reklassifikation sind verfügbar; die präzise Evidence-Formatierung (FR-02c) bleibt offen. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
-| `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst 952 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
+| `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst aktuell 954 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
@@ -117,7 +117,7 @@ Das Migrationsskript liegt als wiederverwendbares Tool unter `skills/project-cat
 
 ## FR-02: Hierarchische WP-/Deliverable-Erkennung & Full-Body-Eskalation in `mail-desk`
 
-**Status:** 🟡 Teilweise. **FR-02a ist abgeschlossen:** Der Classifier löst nach einem gewählten Projekt schema-v3-konform Workpackages, Tasks, Deliverables und projektweite Milestones aus der aktuellen Mail auf. Exakte Codes überwiegen; bei Mehrdeutigkeit bleiben Kandidaten sichtbar, ohne einen Einzelwert zu erfinden. Thread-Vererbung bleibt auf dem Projektroot und FR-06-Telemetrie/Handoff unverändert. `get_single_email_details()` ruft weiterhin `himalaya message read --preview` auf und schneidet den Body standardmäßig auf 30 Zeilen ab; die signalgesteuerte Volltextstufe bleibt als **FR-02b offen**.
+**Status:** 🟡 Teilweise. **FR-02a und FR-02b sind abgeschlossen:** Der Classifier löst nach einem gewählten Projekt schema-v3-konform Workpackages, Tasks, Deliverables und projektweite Milestones aus der aktuellen Mail auf. Exakte Codes überwiegen; bei Mehrdeutigkeit bleiben Kandidaten sichtbar, ohne einen Einzelwert zu erfinden. Thread-Vererbung bleibt auf dem Projektroot und FR-06-Telemetrie/Handoff unverändert. Die signalgesteuerte Volltextstufe liest bei dokumentierten Triggern exakt denselben Envelope ohne `--preview`, reklassifiziert ihn und hält Full-Read-Fehler fail-closed in Review. **FR-02c (präzise Evidence-Formatierung) bleibt offen.**
 
 ### Problemstellung
 Vor FR-02a matchte [`scripts/core/classifier.py`](skills/mail-desk/scripts/core/classifier.py) Mails nur gegen Root-Metadaten von Projekten. Bei einer Mail wie *„Mesche QM Plan Handbook 1. Draft“* entstand dadurch lediglich ein generischer Evidenzeintrag (*„Projektbezogene Abstimmung zu MESHE“*), ohne Bezug zu Deliverable `D1.2` oder Task `T1.7`. FR-02a ergänzt den strukturierten Decision-Kontext; Evidence bleibt absichtlich unverändert. Zudem werden standardmäßig nur die ersten 30 Zeilen Preview geladen.
@@ -128,7 +128,7 @@ Vor FR-02a matchte [`scripts/core/classifier.py`](skills/mail-desk/scripts/core/
    - Auswertung der neuen `tasks`-, `deliverables`- und `milestones`-Objekte im Speicher.
    - Erkennung von Codes (`T1.7`, `D1.2`, `MS5`) sowie zugehörigen Fachbegriffen im Betreff und Mailtext.
 2. **Programmatische Lesegrad-Eskalation (`Full Body`):**
-   - Sobald Artefakt-Signale (*„QM Plan“*, *„Draft“*, *„Handbook“*, *„Deliverable“*, *„Agreement“*, *„Red Flags“*, *„Audit“*) oder Handlungsbedarfe (`needs_reply: true`) vorliegen, ruft der Runner automatisch `himalaya message read <id>` (Volltext) ab.
+   - Bei begrenzten Artefakt-/Kontextsignalen (*„QM Plan“*, *„Draft“*, *„Handbook“*, *„Deliverable“*, *„Agreement“*, *„Red Flags“*, *„Audit“*, *„Focus Group“*), eindeutig aufgelösten Artefaktcodes, sichtbaren Action-/Reply-Bitten oder unzureichender Preview-Evidenz ruft der Runner automatisch `himalaya message read <id>` ohne `--preview` ab. Ein aus dem Preview abgeleitetes `needs_reply` ist kein alleiniger Trigger.
 3. **Präzise Evidenz-Generierung:**
    - Deterministische Strukturierung des Monatslogs:
      ```markdown

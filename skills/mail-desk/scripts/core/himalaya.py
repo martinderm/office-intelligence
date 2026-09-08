@@ -60,14 +60,17 @@ def get_single_email_details(
     account: str | None = None,
     preview_lines: int = 30,
     fallback_envelope: dict[str, Any] | None = None,
+    full_body: bool = False,
 ) -> dict[str, Any]:
-    """Fetch headers and body preview for a single envelope with fallback support."""
+    """Fetch headers and either a bounded preview or the full body for one envelope."""
     args = [
-        "message", "read", "--preview",
+        "message", "read",
         "-H", "Message-Id", "-H", "In-Reply-To", "-H", "References",
         "-H", "From", "-H", "To", "-H", "Cc", "-H", "Date", "-H", "Subject",
         "-f", folder, str(env_id),
     ]
+    if not full_body:
+        args.insert(2, "--preview")
     stdout = None
     last_err = None
     try:
@@ -88,6 +91,22 @@ def get_single_email_details(
         fb_date = fallback_envelope.get("date", "")
 
     if stdout is None:
+        if full_body:
+            return {
+                "envelope_id": str(env_id),
+                "folder": folder,
+                "message_id": "",
+                "raw_message_id": "",
+                "subject": fb_subj,
+                "from": fb_from,
+                "to": fb_to,
+                "date": fb_date,
+                "in_reply_to": "",
+                "references": "",
+                "preview": "",
+                "error": str(last_err) if last_err else "Full message read failed.",
+                "read_level": "full_body",
+            }
         # Lightweight fallback: try reading just Message-ID
         raw_mid = ""
         try:
@@ -113,6 +132,7 @@ def get_single_email_details(
             "references": "",
             "preview": "",
             "error": None if norm_mid else str(last_err),
+            "read_level": "preview",
         }
 
     try:
@@ -150,8 +170,9 @@ def get_single_email_details(
             "date": headers.get("date", "") or fb_date,
             "in_reply_to": headers.get("in-reply-to", ""),
             "references": headers.get("references", ""),
-            "preview": "\n".join(body_lines[:preview_lines]),
+            "preview": "\n".join(body_lines if full_body else body_lines[:preview_lines]),
             "error": None,
+            "read_level": "full_body" if full_body else "preview",
         }
     except Exception as e:
         return {
@@ -167,6 +188,7 @@ def get_single_email_details(
             "references": "",
             "preview": "",
             "error": str(e),
+            "read_level": "full_body" if full_body else "preview",
         }
 
 

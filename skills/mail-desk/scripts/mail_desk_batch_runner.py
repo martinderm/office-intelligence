@@ -413,6 +413,7 @@ def run_draft_mode(
             "atomic_write_json": atomic_write_json,
             "draft_manifest": draft_manifest,
             "get_unprocessed_emails": get_unprocessed_emails,
+            "get_single_email_details": get_single_email_details,
             "load_sent_index": load_sent_index,
             "resolve_data_dir": resolve_data_dir,
         },
@@ -521,6 +522,7 @@ def run_pipeline_mode(
         dependencies={
             "draft_manifest": draft_manifest,
             "get_unprocessed_emails": get_unprocessed_emails,
+            "get_single_email_details": get_single_email_details,
             "load_sent_index": load_sent_index,
             "resolve_data_dir": resolve_data_dir,
             "run_execute_mode": run_execute_mode,

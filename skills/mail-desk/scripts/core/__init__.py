@@ -38,7 +38,9 @@ from .action_log import (
 
 from .classifier import (
     classify_email,
+    classify_email_two_pass,
     draft_manifest,
+    full_body_triggers,
     load_catalogs,
 )
 from .sent_indexer import (
@@ -76,7 +78,9 @@ __all__ = [
     "resolve_case",
     "update_evidence_file",
     "classify_email",
+    "classify_email_two_pass",
     "draft_manifest",
+    "full_body_triggers",
     "load_catalogs",
     "load_sent_index",
     "sync_sent_items",

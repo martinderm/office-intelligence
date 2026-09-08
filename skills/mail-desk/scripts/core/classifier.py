@@ -6,11 +6,29 @@ import json
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
+
+
+FULL_BODY_ARTIFACT_SIGNALS = (
+    "qm plan",
+    "draft",
+    "handbook",
+    "deliverable",
+    "agreement",
+    "red flags",
+    "audit",
+    "focus group",
+    "fokusgruppe",
+)
+
+FULL_BODY_ACTION_REQUEST = re.compile(
+    r"\b(?:please|kindly|could you|can you|action required|please respond|bitte|kannst du|können sie)\b",
+    re.IGNORECASE,
+)
 
 
 def parse_date_to_year_month(date_str: str) -> tuple[str, str]:
@@ -199,6 +217,119 @@ def _select_project_artifacts(project: dict[str, Any], text: str) -> dict[str, A
     if not result["candidates"]:
         result.pop("candidates")
     return result
+
+
+def full_body_triggers(email: dict[str, Any], preview_item: dict[str, Any]) -> list[str]:
+    """Return documented, deterministic reasons to re-read one preview in full."""
+    text = "\n".join(
+        str(email.get(field, ""))
+        for field in ("subject", "from", "to", "cc", "preview")
+    ).casefold()
+    triggers = [
+        signal
+        for signal in FULL_BODY_ARTIFACT_SIGNALS
+        if _artifact_text_matches(text, signal)
+    ]
+    decision = preview_item.get("decision", {})
+    for field in ("workpackage", "task", "deliverable", "milestone"):
+        value = decision.get(field)
+        if isinstance(value, str) and value.strip():
+            triggers.append(value.casefold())
+    if FULL_BODY_ACTION_REQUEST.search(text):
+        triggers.append("visible_action_or_reply_request")
+    if decision.get("kind") == "unknown" or decision.get("confidence") == "low":
+        triggers.append("insufficient_preview_evidence")
+    return list(dict.fromkeys(triggers))
+
+
+def _full_read_failure(
+    preview_item: dict[str, Any],
+    triggers: list[str],
+    error: object,
+) -> dict[str, Any]:
+    """Fail closed: leave a full-read failure in review, never as a certain result."""
+    decision = dict(preview_item.get("decision", {}))
+    decision["confidence"] = "low"
+    decision["review_required"] = True
+    decision["read_escalation"] = {
+        "level": "full_body",
+        "triggers": triggers,
+        "status": "failed",
+        "error": {"type": type(error).__name__, "message": str(error)},
+    }
+    preview_item["decision"] = decision
+    preview_item["action"] = {"type": "keep_in_folder", "target_folder": "INBOX"}
+    preview_item["evidence"] = None
+    preview_item["notes"] = f"{preview_item.get('notes', '')} Volltextabruf fehlgeschlagen; Review erforderlich.".strip()
+    return preview_item
+
+
+def classify_email_two_pass(
+    email: dict[str, Any],
+    *,
+    workspace_root: Path | None = None,
+    projects: list[dict[str, Any]] | None = None,
+    topics: list[dict[str, Any]] | None = None,
+    sent_lookup: dict[str, Any] | None = None,
+    final_index: dict[str, Any] | None = None,
+    full_reader: Callable[..., dict[str, Any]] | None = None,
+    account: str | None = None,
+) -> dict[str, Any]:
+    """Classify a preview, optionally re-read the same envelope, then classify again."""
+    preview_item = classify_email(
+        email,
+        workspace_root=workspace_root,
+        projects=projects,
+        topics=topics,
+        sent_lookup=sent_lookup,
+        final_index=final_index,
+    )
+    triggers = full_body_triggers(email, preview_item)
+    if not triggers:
+        return preview_item
+
+    # Keep the classifier/manifest layer deterministic. Mailbox I/O is an
+    # explicit orchestration concern: draft, pipeline and inspect-propose pass
+    # a reader, while library callers without one remain preview-only.
+    if full_reader is None:
+        return preview_item
+
+    envelope_id = str(email.get("envelope_id", "")).strip()
+    if not envelope_id:
+        return _full_read_failure(preview_item, triggers, ValueError("Missing envelope_id for full message read."))
+
+    try:
+        full_email_details = full_reader(
+            envelope_id,
+            str(email.get("folder", "INBOX")),
+            account,
+            fallback_envelope=email,
+            full_body=True,
+        )
+        if not isinstance(full_email_details, dict):
+            raise TypeError("Full message reader returned no email object.")
+        if full_email_details.get("error"):
+            raise RuntimeError(str(full_email_details["error"]))
+        full_email = dict(email)
+        for field in ("message_id", "raw_message_id", "subject", "from", "to", "date", "in_reply_to", "references", "preview"):
+            if field in full_email_details:
+                full_email[field] = full_email_details[field]
+        full_item = classify_email(
+            full_email,
+            workspace_root=workspace_root,
+            projects=projects,
+            topics=topics,
+            sent_lookup=sent_lookup,
+            final_index=final_index,
+        )
+        full_item["decision"]["read_escalation"] = {
+            "level": "full_body",
+            "triggers": triggers,
+            "status": "completed",
+        }
+        return full_item
+    except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
+        return _full_read_failure(preview_item, triggers, exc)
 
 
 def classify_email(
@@ -643,6 +774,8 @@ def draft_manifest(
     sent_lookup: dict[str, Any] | None = None,
     sync_sent: bool = True,
     final_index: dict[str, Any] | None = None,
+    full_reader: Callable[..., dict[str, Any]] | None = None,
+    account: str | None = None,
 ) -> dict[str, Any]:
     """Generate a batch manifest dictionary from a list of inspected emails."""
     ws = workspace_root or Path.cwd()
@@ -671,13 +804,15 @@ def draft_manifest(
 
     items: list[dict[str, Any]] = []
     for email in emails:
-        item = classify_email(
+        item = classify_email_two_pass(
             email,
             workspace_root=ws,
             projects=projects,
             topics=topics,
             sent_lookup=sent_lookup,
             final_index=final_index,
+            full_reader=full_reader,
+            account=account,
         )
         items.append(item)
 

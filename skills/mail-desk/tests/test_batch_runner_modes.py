@@ -184,7 +184,11 @@ class DraftModeTests(unittest.TestCase):
 
             fetch.assert_not_called()
             classify.assert_called_once_with(
-                [{"envelope_id": "unseen-1"}], workspace_root=data_dir.parent.parent, sent_lookup={"sent": []}
+                [{"envelope_id": "unseen-1"}],
+                workspace_root=data_dir.parent.parent,
+                sent_lookup={"sent": []},
+                full_reader=runner.get_single_email_details,
+                account=None,
             )
             self.assertEqual(manifest, json.loads(output_path.read_text(encoding="utf-8")))
             self.assertEqual({"ok": True, "mode": "draft", "folder": "INBOX", "order": "oldest", "total_drafted": 1, "manifest_file": str(output_path.resolve()), "draft": manifest}, result)

@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 
 from ..classifier import draft_manifest
 from ..common import atomic_write_json, resolve_data_dir
+from ..himalaya import get_single_email_details
 from ..progress import BatchProgressTracker
 from ..sent_indexer import load_sent_index
 
@@ -43,6 +44,7 @@ def run_draft_mode(
     progress_tracker = _dependency(dependencies, "BatchProgressTracker", BatchProgressTracker)
     load_sent = _dependency(dependencies, "load_sent_index", load_sent_index)
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
+    full_reader = _dependency(dependencies, "get_single_email_details", get_single_email_details)
     write_json = _dependency(dependencies, "atomic_write_json", atomic_write_json)
 
     dd = data_dir or resolve_data()
@@ -84,7 +86,13 @@ def run_draft_mode(
         )
 
     tracker.step("classifying_and_checking_sent")
-    manifest = draft(emails, workspace_root=workspace_root, sent_lookup=load_sent(dd))
+    manifest = draft(
+        emails,
+        workspace_root=workspace_root,
+        sent_lookup=load_sent(dd),
+        full_reader=full_reader,
+        account=account,
+    )
     output_path = Path(output_file).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_path, manifest)

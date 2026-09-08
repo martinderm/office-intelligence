@@ -149,7 +149,12 @@ def run_inspect_mode(
         "emails": ordered_emails,
     }
     if propose_manifest:
-        manifest = draft(ordered_emails, workspace_root=workspace_root)
+        manifest = draft(
+            ordered_emails,
+            workspace_root=workspace_root,
+            full_reader=get_details,
+            account=account,
+        )
         output_data["manifest_proposal"] = manifest
         if manifest_file:
             manifest_path = Path(manifest_file).expanduser().resolve()
