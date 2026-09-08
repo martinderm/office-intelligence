@@ -344,6 +344,8 @@ def args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--project", "--project-scope", action="append", default=[])
     mode = parser.add_mutually_exclusive_group(); mode.add_argument("--apply", action="store_true"); mode.add_argument("--dry-run", action="store_true")
     parser.add_argument("--workspace-root"); parser.add_argument("--lease-id"); parser.add_argument("--conversation-id")
+    parser.add_argument("--accept-warning", action="append", default=[], metavar="CODE",
+                        help="Human-approved warning code required for Apply; repeatable.")
     parser.add_argument("--json", action="store_true"); return parser.parse_args(argv)
 
 
@@ -356,8 +358,20 @@ def main(argv: list[str] | None = None) -> int:
         except json.JSONDecodeError as exc: raise ValueError(f"invalid JSON at {exc.lineno}:{exc.colno}: {exc.msg}")
         after, diagnostics = transform(before, root, options.project)
         plan = {"catalog": str(catalog), "projects_root": str(root), "scopes": options.project, "diff": diff(before, after, str(catalog)), "diagnostics": diagnostics}
+        warnings = [item for item in diagnostics if item.get("severity") == "warning"]
+        warning_codes = sorted({str(item.get("code")) for item in warnings})
+        accepted_codes = sorted(set(options.accept_warning))
+        missing_codes = sorted(set(accepted_codes) - set(warning_codes))
+        accepted_warnings = [item for item in warnings if item.get("code") in accepted_codes]
+        unaccepted_codes = sorted(set(warning_codes) - set(accepted_codes))
+        plan.update({"warning_codes": warning_codes, "accepted_warning_codes": accepted_codes,
+                     "unaccepted_warning_codes": unaccepted_codes, "accepted_warnings": accepted_warnings})
+        if missing_codes:
+            result = envelope(False, "Invalid", "Requested warning acceptance is absent from this run; correct --accept-warning and retry.", plan,
+                              {"code": "unknown_warning_acceptance", "message": ", ".join(missing_codes)})
+            print(json.dumps(result, ensure_ascii=False) if options.json else result["message"]); return 1
         blocking = [item for item in diagnostics if item.get("severity") != "warning"]
-        if blocking or (options.apply and diagnostics):
+        if blocking or (options.apply and unaccepted_codes):
             result = envelope(False, "PendingReview", "Ambiguous or invalid source data; no catalog was written.", plan, {"code": "pending_review", "message": "resolve diagnostics and retry"})
             print(json.dumps(result, ensure_ascii=False) if options.json else result["message"]); return 1
         selected_after = after

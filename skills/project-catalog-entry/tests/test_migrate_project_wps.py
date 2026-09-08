@@ -84,6 +84,27 @@ class MigrationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stdout)
             self.assertEqual(json.loads(result.stdout)["state"], "PendingReview")
 
+    def test_exact_warning_acceptance_permits_owned_apply_and_is_auditable(self):
+        temp, root, path = self.make_workspace("# WP1 — Coordination\n- checkpoint discussed\n")
+        with temp:
+            lease="accepted-warning-lease"; subprocess.run([sys.executable,str(LOCK),"acquire",str(root),"--harness","test","--lease-id",lease,"--json"],text=True,capture_output=True,check=False)
+            result = self.run_cli(root, path, "--apply", "--workspace-root", str(root), "--lease-id", lease, "--accept-warning", "unstable_checkpoint")
+            payload=json.loads(result.stdout); self.assertEqual(result.returncode, 0, payload)
+            self.assertEqual(payload["data"]["accepted_warning_codes"], ["unstable_checkpoint"])
+            self.assertEqual(payload["data"]["unaccepted_warning_codes"], [])
+
+    def test_unknown_warning_acceptance_fails_closed(self):
+        temp, root, path = self.make_workspace("# WP1 — Coordination\n")
+        with temp:
+            result=self.run_cli(root,path,"--accept-warning","typo")
+            payload=json.loads(result.stdout); self.assertEqual(result.returncode,1); self.assertEqual(payload["state"],"Invalid")
+
+    def test_acceptance_never_bypasses_blocking_diagnostic(self):
+        temp, root, path = self.make_workspace("# Coordination without identifier\n")
+        with temp:
+            result=self.run_cli(root,path,"--accept-warning","ambiguous_markdown")
+            self.assertEqual(result.returncode,1); self.assertEqual(json.loads(result.stdout)["state"],"Invalid")
+
     def test_managed_decoy_is_not_promoted(self):
         temp, root, path = self.make_workspace("# WP1 — Coordination\n## Tasks\n- T1.1 — Real task\n## Aktueller Stand (Managed)\n- T9.9 — Decoy\n")
         with temp:

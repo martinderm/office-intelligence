@@ -28,7 +28,7 @@ Zentrales Backlog für `projects.json` und die zugehörigen Vorlagen/Skills.
 
 ## FR-01b2 — Produktiver Dry-run und Backfill
 
-**Status: offen.** Erst nach separatem Scope, Lock-Ownership und Human Review die nachfolgende Matrix gegen reale Quellen anwenden.
+**Status: offen.** Erst nach separatem Scope, Lock-Ownership und Human Review die nachfolgende Matrix gegen reale Quellen anwenden. Bei einer verbleibenden Warnung ist nur eine konkrete, dokumentierte Human-Freigabe wie `--accept-warning unstable_checkpoint` zulässig; sie gilt nur für den im Lauf vorhandenen Code. Kein `--force` oder generisches Ignorieren.
 
 ### Parsing- & Extraktionsmatrix je Projekt
 
