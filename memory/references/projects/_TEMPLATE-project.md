@@ -1,16 +1,14 @@
+---
+type: Project
+schema_version: 3
+---
+
 # Template — Project Folder Layout
 
-Für jedes Projekt wird eine Struktur in beiden Säulen des Dual-Evidence-Standards angelegt:
+Für jedes Projekt wird eine Arbeitsstruktur in beiden Säulen des Dual-Evidence-Standards angelegt:
 
-- **Säule 1 (Referenzen & Struktur):**
-  - `memory/references/projects/<id>/index.md`
-  - `memory/references/projects/<id>/signals.md`
-  - `memory/references/projects/<id>/contacts.md`
-  - `memory/references/projects/<id>/workpackages/` (Workpackages)
-- **Säule 2 (Evidenzen & Logs):**
-  - `memory/evidence/projects/<id>/` (monatliche Logs `YYYY-MM.md`)
-
----
+- **Säule 1 (Referenzen & Struktur):** `index.md`, `signals.md`, `contacts.md`, `workpackages/`
+- **Säule 2 (Evidenzen & Logs):** `memory/evidence/projects/<id>/` mit monatlichen `YYYY-MM.md`-Logs
 
 ## `index.md` (Template)
 
@@ -25,6 +23,8 @@ project_reference: <... | k. A.>
 laufzeit: <... | k. A.>
 gesamtbudget: <... | k. A.>
 institution_budget: <... | k. A.>
+boku_budget: <... | optional legacy alias>
+schema_version: 3
 ---
 
 # <id> — <title>
@@ -60,13 +60,9 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 ## Routing-Signale
 
 - Primäre Domains:
-  -
 - Schlüssel-Kontakte (Name <mail>):
-  -
 - Typische Betreffmuster:
-  -
 - Typische Begriffe / Abkürzungen:
-  -
 
 ## Do-not-route / Ausschlüsse
 
@@ -79,13 +75,9 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, wer ist beteiligt, was ist das 
 <!-- BEGIN:managed-signals -->
 - Letzter relevanter Mailkontakt:
 - Relevante Teilnehmer:innen:
-  -
 - Häufige Themen/Cluster:
-  -
 - Aktuelle nächste Schritte:
-  -
 - Risiken/Blocker:
-  -
 <!-- END:managed-signals -->
 ```
 
@@ -113,27 +105,44 @@ timeframe: YYYY-MM
 
 ## Scope
 
-- 
+- Lead: <Institution | optional>
+- BOKU-Rolle: <Role | optional>
+- Status: active | completed | planned | paused
+- WP-Nummer: <positive number | optional>
 
-## Kontakte
+## Tasks
 
-- 
+- <T1.1> — <Title> — Lead: <optional>
+
+## Deliverables
+
+- <D1.1> — <Title> — Type: <optional> — Due: <optional> — Lead: <optional>
+
+## Kontakte und Routing-Signale
+
+- Kontakte:
+- Aliases:
+- Keywords:
+
+## Projektweite Milestones
+
+Milestones werden ausschließlich auf Projektebene im Katalog geführt. Hier nur auf relevante IDs verweisen, beispielsweise `MS1 — Kick-off held`.
 
 ## Aktueller Stand (Managed)
 
 <!-- BEGIN:managed-workpackage-summary -->
-- 
+-
 <!-- END:managed-workpackage-summary -->
 
 ## Offene Punkte (Managed)
 
 <!-- BEGIN:managed-workpackage-open-items -->
-- 
+-
 <!-- END:managed-workpackage-open-items -->
 
 ## Evidenz (Managed)
 
 <!-- BEGIN:managed-workpackage-evidence -->
-- 
+-
 <!-- END:managed-workpackage-evidence -->
 ```

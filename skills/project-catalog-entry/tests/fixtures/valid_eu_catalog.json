@@ -1,0 +1,30 @@
+{
+  "catalog_name": "Fixture catalog",
+  "projects": [
+    {
+      "id": "eu-example",
+      "title": "EU Example Collaboration",
+      "mailbox_folder": "Projects/EU Example",
+      "aliases": ["EUEX"],
+      "contacts": [{"email": "coordination@example.eu", "role": "coordinator"}],
+      "cloud_sync": {"default": {"scan_dir": "cloud/eu-example", "extension": "future-compatible"}},
+      "workpackages": [
+        {
+          "id": "wp1",
+          "number": 1,
+          "title": "Coordination and quality",
+          "lead": "Example University",
+          "boku_role": "Contributor",
+          "status": "active",
+          "aliases": ["WP1"],
+          "keywords": ["quality"],
+          "contacts": [{"email": "wp1@example.eu", "role": "lead"}],
+          "tasks": [{"id": "T1.1", "title": "Kick-off", "lead": "Example University", "keywords": ["kick-off"]}],
+          "deliverables": [{"id": "D1.1", "title": "Quality plan", "lead": "BOKU", "type": "Report", "due_month": "M6"}]
+        }
+      ],
+      "milestones": [{"id": "MS1", "title": "Kick-off held", "due_month": "M2", "related_wps": ["wp1"], "prerequisites": "Grant agreement signed"}],
+      "schema_version": 3
+    }
+  ]
+}

@@ -1,12 +1,12 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 07.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-06 fortgeschrieben.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 07.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-01a sowie FR-06 fortgeschrieben.
 
 ## Statusabgleich zur Session
 
 | ID | Status | In dieser Session umgesetzt | Kurzurteil |
 | --- | --- | --- | --- |
-| `FR-01` | 🟠 geplant, nicht implementiert | Nur Backlog und Skill-Verweis (`73e86e6`) | Schema, Templates, Validator und Migration fehlen weiterhin. |
+| `FR-01` | 🟡 FR-01a abgeschlossen, FR-01b offen | Normatives v3-Schema, Vorlagen, Beispielkatalog, Validator und Tests | Die produktive Migration und jeder Backfill bleiben ausdrücklich FR-01b. |
 | `FR-02` | ⬜ offen | Nein | Es gibt weiterhin nur Projekt-Root-Matching und ein auf 30 Zeilen begrenztes Preview; keine hierarchische Artefaktauflösung und keine Full-Body-Eskalation. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
@@ -30,7 +30,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 
 ## FR-01: Schema-Erweiterung für `projects.json` & `project-catalog-entry`
 
-**Status:** 🟠 Geplant, nicht implementiert. In dieser Session wurden mit Commit `73e86e6` lediglich `skills/project-catalog-entry/TODO.md` und der Verweis darauf im Skill ergänzt. Das produktive Schema, die Vorlagen und der Beispielkatalog verwenden weiterhin die flache Workpackage-Struktur.
+**Status:** 🟡 **FR-01a abgeschlossen.** Das normative v3-Schema, die Vorlagen, der generische Beispielkatalog, ein read-only Validator und Fixture-Tests sind vorhanden. **FR-01b bleibt offen:** Produktive Migration und Backfill realer Kataloge wurden nicht durchgeführt.
 
 ### Problemstellung
 In [`projects.json`](../../boku-user/memory/references/projects/projects.json) werden Workpackages bisher flach geführt. Tasks (z. B. `T1.7`), Deliverables (z. B. `D1.2`) und Milestones (z. B. `MS1`) liegen unstrukturiert als Strings in `"aliases"`.
@@ -103,9 +103,9 @@ In [`projects.json`](../../boku-user/memory/references/projects/projects.json) w
 }
 ```
 
-### Migrations-Bedarf
-- Erstellung eines Backfill-Skripts (`skills/project-catalog-entry/scripts/migrate_project_wps.py`), das vorhandene Markdown-Workpackages unter `memory/references/projects/*/workpackages/*.md` parst und strukturiert in `projects.json` überführt.
-- Aktualisierung von [`skills/project-catalog-entry/SKILL.md`](skills/project-catalog-entry/SKILL.md) und der Vorlagen unter `skills/project-catalog-entry/references/`.
+### Abgrenzung FR-01a / FR-01b
+
+FR-01a liefert `projects.schema.json`, den read-only `validate_projects.py`, schema-v3-Vorlagen und Fixtures sowie ausschließlich den mitgelieferten generischen Beispielkatalog. FR-01b umfasst erst die Erstellung von `scripts/migrate_project_wps.py` und den separat freizugebenden produktiven Backfill aus vorhandenen Markdown-Workpackages. Keine realen Projektinformationen wurden für FR-01a erfunden oder migriert.
 
 ### Kommentar und Schärfung
 

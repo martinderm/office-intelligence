@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://martinderm.github.io/office-intelligence/projects.schema.json",
+  "title": "Office Intelligence project catalog schema v3",
+  "description": "Canonical schema for project catalog entries. Routing and cloud metadata remain forward-compatible.",
+  "oneOf": [
+    { "$ref": "#/$defs/projectList" },
+    {
+      "type": "object",
+      "required": ["projects"],
+      "properties": {
+        "projects": { "$ref": "#/$defs/projectList" }
+      },
+      "additionalProperties": true
+    }
+  ],
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "contact": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "lead": { "$ref": "#/$defs/nonEmptyString" },
+        "keywords": { "$ref": "#/$defs/stringArray" }
+      },
+      "additionalProperties": false
+    },
+    "deliverable": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "lead": { "$ref": "#/$defs/nonEmptyString" },
+        "type": { "$ref": "#/$defs/nonEmptyString" },
+        "due_month": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "additionalProperties": false
+    },
+    "workpackage": {
+      "type": "object",
+      "required": ["id", "title", "status", "tasks", "deliverables"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "number": { "type": "number", "exclusiveMinimum": 0 },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "lead": { "$ref": "#/$defs/nonEmptyString" },
+        "boku_role": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "enum": ["active", "completed", "planned", "paused"] },
+        "aliases": { "$ref": "#/$defs/stringArray" },
+        "keywords": { "$ref": "#/$defs/stringArray" },
+        "contacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contact" }
+        },
+        "tasks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/task" }
+        },
+        "deliverables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/deliverable" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "milestone": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "lead": { "$ref": "#/$defs/nonEmptyString" },
+        "due_month": { "$ref": "#/$defs/nonEmptyString" },
+        "related_wps": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonEmptyString" }
+        },
+        "prerequisites": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "additionalProperties": false
+    },
+    "project": {
+      "type": "object",
+      "required": ["id", "title", "mailbox_folder", "workpackages", "milestones", "schema_version"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+        "title": { "$ref": "#/$defs/nonEmptyString" },
+        "kuerzel": { "type": "string" },
+        "mailbox_folder": { "$ref": "#/$defs/nonEmptyString" },
+        "project_website": { "type": "string" },
+        "project_reference": { "type": "string" },
+        "laufzeit": { "type": "string" },
+        "gesamtbudget": { "type": "string" },
+        "institution_budget": { "type": "string" },
+        "boku_budget": { "type": "string" },
+        "reference_md": { "type": "string" },
+        "aliases": { "$ref": "#/$defs/stringArray" },
+        "keywords": { "$ref": "#/$defs/stringArray" },
+        "domains": { "$ref": "#/$defs/stringArray" },
+        "contacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/contact" }
+        },
+        "workpackages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/workpackage" }
+        },
+        "milestones": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/milestone" }
+        },
+        "description": { "type": "string" },
+        "typical_subject_patterns": { "$ref": "#/$defs/stringArray" },
+        "routing_priority": { "type": "number" },
+        "do_not_route_if": { "$ref": "#/$defs/stringArray" },
+        "cloud_sync": { "type": "object", "additionalProperties": true },
+        "updated_at": { "type": "string" },
+        "schema_version": { "const": 3 }
+      },
+      "additionalProperties": true
+    },
+    "projectList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/project" }
+    }
+  }
+}

@@ -28,7 +28,10 @@
     "workpackages": [
       {
         "id": "wp1",
+        "number": 1,
         "title": "Coordination",
+        "lead": "Example University",
+        "boku_role": "Contributor",
         "aliases": [
           "WP1",
           "Workpackage 1"
@@ -43,7 +46,38 @@
             "email": "contact@example.org"
           }
         ],
-        "status": "active"
+        "status": "active",
+        "tasks": [
+          {
+            "id": "T1.1",
+            "title": "Kick-off preparation",
+            "lead": "Example University",
+            "keywords": [
+              "kickoff"
+            ]
+          }
+        ],
+        "deliverables": [
+          {
+            "id": "D1.1",
+            "title": "Coordination plan",
+            "lead": "Example University",
+            "type": "Report",
+            "due_month": "M3"
+          }
+        ]
+      }
+    ],
+    "milestones": [
+      {
+        "id": "MS1",
+        "title": "Kick-off held",
+        "lead": "Example University",
+        "due_month": "M2",
+        "related_wps": [
+          "wp1"
+        ],
+        "prerequisites": "Project start confirmed"
       }
     ],
     "description": "Beispielprojekt für den initialen Setup.",
@@ -56,6 +90,6 @@
       "no-reply"
     ],
     "updated_at": "2026-03-06",
-    "schema_version": 2
+    "schema_version": 3
   }
 ]

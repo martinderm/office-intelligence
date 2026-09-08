@@ -1,9 +1,9 @@
-# Project Intake Template
+# Project Intake Template (schema v3)
 
 ## title
 
 ## id
-<!-- slug, z. B. usage-ng -->
+<!-- lowercase slug, z. B. usage-ng -->
 
 ## mailbox_folder
 <!-- z. B. Projekte/USAGE-NG -->
@@ -24,10 +24,10 @@
 <!-- optional, z. B. EUR 490,980 oder k. A. -->
 
 ## institution_budget
-<!-- optional, z. B. EUR 85,000 oder k. A. -->
+<!-- optional, z. B. EUR 85,000 oder k. A.; `boku_budget` bleibt als Legacy-Alias zulässig -->
 
 ## reference_md
-<!-- optional, z. B. memory/references/projects/usage-ng/index.md -->
+<!-- Default: memory/references/projects/<id>/index.md -->
 
 ## description
 
@@ -54,12 +54,41 @@
 
 ## workpackages
 
-- id:
-  title:
-  aliases: []
-  keywords: []
-  contacts: []
-  status: active
+```yaml
+- id: wp1
+  number: 1 # optional positive number
+  title: Coordination and quality
+  lead: Example University # optional
+  boku_role: Contributor # optional
+  status: active # active | completed | planned | paused
+  aliases: [WP1]
+  keywords: [quality]
+  contacts:
+    - email: wp1@example.eu
+      role: lead
+  tasks:
+    - id: T1.1
+      title: Kick-off
+      lead: Example University
+      keywords: [kick-off]
+  deliverables:
+    - id: D1.1
+      title: Quality plan
+      lead: BOKU
+      type: Report
+      due_month: M6
+```
+
+## milestones (project-wide; never WP-owned)
+
+```yaml
+- id: MS1
+  title: Kick-off held
+  lead: Example University
+  due_month: M2
+  related_wps: [wp1]
+  prerequisites: Grant agreement signed
+```
 
 ## routing_priority
 
@@ -69,3 +98,14 @@
 
 - newsletter
 - no-reply
+
+## cloud_sync
+
+```yaml
+default:
+  scan_dir: cloud/projects/<id>
+```
+
+## schema_version
+
+3

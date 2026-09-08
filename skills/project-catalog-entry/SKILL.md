@@ -1,11 +1,11 @@
 ---
 name: project-catalog-entry
-description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill, wenn Projekte im Katalog `memory/references/projects/projects.json` angelegt/aktualisiert werden oder die zugehörige slug-spezifische Projektreferenz als Projektmanagement-, Arbeits- und Wissensstruktur gepflegt werden soll. `mail-processor` nutzt diese Strukturen für Projekt-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Nutze ihn für Neuanlagen und Updates per Q&A oder Markdown-Vorlage (id, title, mailbox_folder, domains, contacts, aliases, keywords, subject patterns, workpackages).
+description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von office-intelligence. Verwende diesen Skill für schema-v3-konforme Projekte, Routing-Metadaten, Workpackages, Tasks, Deliverables und projektweite Milestones.
 ---
 
 # project-catalog-entry
 
-Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`.
+Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`. `mail-processor` nutzt die Strukturen für Root-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. FR-01a erweitert `mail-desk` nicht funktional.
 
 ## Zielbild (verbindlich — Dual Evidence Standard)
 
@@ -17,9 +17,7 @@ Unterscheide immer die beiden Säulen des Dual-Evidence-Standards:
 2. **Säule 2 (De Facto / Empirisch & Operativ):**
    - Chronologische Evidenz-Logs & operative Nachweise → `memory/evidence/projects/<slug>/` (`YYYY-MM.md`)
 
-Diese Ebene gehört fachlich zu `office-intelligence`; `mail-processor` konsumiert davon nur die routing- und matchingrelevanten Teile.
-
-Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch **Projektordner-Struktur in beiden Säulen** anlegen.
+Für neue Projekte gilt: **nicht nur JSON-Eintrag**, sondern auch Projektordner-Struktur in beiden Säulen anlegen.
 
 ## Verbindliche Ordnerstruktur bei Neuanlage
 
@@ -28,139 +26,136 @@ Lege für neue Projekte an:
 - `memory/references/projects/<slug>/index.md`
 - `memory/references/projects/<slug>/contacts.md`
 - `memory/references/projects/<slug>/signals.md`
-- `memory/references/projects/<slug>/workpackages/` (Ordner)
-- `memory/evidence/projects/<slug>/` (Ordner für chronologische Evidenz-Logs `YYYY-MM.md`)
-- optional: `memory/references/projects/<slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
+- `memory/references/projects/<slug>/workpackages/`
+- `memory/evidence/projects/<slug>/` für chronologische Evidenz-Logs `YYYY-MM.md`
+- optional `memory/references/projects/<slug>/events/` für Events und Konferenzen
 
 Regeln & Dual-Path-Fallback:
 
-- **Dual-Path Lesezugriff:** Bei Lesezugriffen auf Evidenzen wird zuerst `memory/evidence/projects/<slug>/` geprüft. Existiert dieser nicht, greift als Abwärtskompatibilität der Fallback auf das Legacy-Verzeichnis `memory/references/projects/<slug>/evidence/`.
-- **Standard für Schreibzugriffe:** Neue Evidenzeinträge, Transkripte und Logs werden **stets in `memory/evidence/projects/<slug>/`** abgelegt.
-- `mailbox_folder` ist der fachliche Parent-Ordner des Projekts.
-- Antwortbedürftige Projektmails landen operativ im Child-Ordner `<mailbox_folder>/_Needs-Reply`.
-- Der `_Needs-Reply`-Child muss nicht in `projects.json` als eigenes Feld gepflegt werden; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.
+- Lesezugriff auf Evidenzen prüft zuerst `memory/evidence/projects/<slug>/`, danach als Legacy-Fallback `memory/references/projects/<slug>/evidence/`.
+- Neue Evidenzeinträge, Transkripte und Logs werden stets in `memory/evidence/projects/<slug>/` abgelegt.
+- `mailbox_folder` ist der fachliche Parent-Ordner. Antwortbedürftige Projektmails gehören operativ in `<mailbox_folder>/_Needs-Reply`.
+- Der `_Needs-Reply`-Child wird nicht als eigenes Katalogfeld gepflegt; `mail-processor` leitet ihn ab und meldet fehlende Ordner als `pending-decisions`.
 - `reference_md` zeigt standardmäßig auf `memory/references/projects/<slug>/index.md`.
-- **Keine ausführliche Projektdoku in `projects.json`.**
-- **Keine Einzeldatei `memory/references/projects/<slug>.md` als Hauptreferenz.**
-- Falls eine alte Einzeldatei existiert: nur als kurzer Redirect/Deprecation-Hinweis verwenden.
+- Keine ausführliche Projektdoku in `projects.json` und keine Einzeldatei `memory/references/projects/<slug>.md` als Hauptreferenz. Alte Einzeldateien bleiben nur kurze Redirect-/Deprecation-Hinweise.
 
 Frontmatter-Regel:
 
 - Katalog-/domänenspezifische Frontmatter-Metadaten sind erlaubt.
-- Bedeutung und Felddefinitionen werden in `memory/references/frontmatter-spec-*.md` gepflegt.
-- Bei Unklarheiten zuerst die passende `frontmatter-spec-*.md` prüfen, dann schreiben.
+- Bedeutung und Felddefinitionen liegen in `memory/references/frontmatter-spec-*.md`.
+- Bei Unklarheit zuerst die passende Spezifikation prüfen, dann schreiben.
 
 ## Arbeitsmodus
 
-1. Modus ermitteln:
-   - Vorlage vorhanden → `template-mode`
-   - sonst → `questionnaire-mode`
+1. Modus ermitteln: Vorlage vorhanden → `template-mode`, sonst `questionnaire-mode`.
 2. Daten im gemeinsamen Zielschema sammeln.
 3. Pflichtfelder validieren (`id`, `title`, `mailbox_folder`).
-4. Bei Neuanlage: Projektordner-Struktur planen/erzeugen.
-5. JSON-Block erzeugen (projects.json-Format).
-6. Vor Schreiben immer eine kurze Review-Zusammenfassung zeigen (JSON + Dateipfade).
+4. Bei Neuanlage die Projektordner-Struktur planen/erzeugen.
+5. JSON-Block erzeugen.
+6. Vor Schreiben eine kurze Review-Zusammenfassung mit JSON und Dateipfaden zeigen.
 7. Erst nach expliziter Freigabe schreiben.
 
-## Zielschema (pro Projekt)
+Vor jeder Mutation ist außerdem die verifizierte `workspace-lock`-Ownership des Ziel-Workspaces erforderlich.
+
+## Zielschema v3 (pro Projekt)
+
+Der formale Vertrag ist [`references/projects.schema.json`](references/projects.schema.json). Der Root akzeptiert aus Kompatibilitätsgründen entweder eine Projektliste oder ein Objekt mit `projects`-Liste. Bestehende Root-Routingfelder und `cloud_sync` bleiben offen und kompatibel.
 
 ```json
 {
-  "id": "string",
-  "title": "string",
-  "kuerzel": "string",
-  "mailbox_folder": "string",
-  "project_website": "string",
-  "project_reference": "string",
-  "laufzeit": "string",
-  "gesamtbudget": "string",
-  "institution_budget": "string",
-  "reference_md": "string",
-  "aliases": ["string"],
-  "keywords": ["string"],
-  "domains": ["string"],
-  "contacts": [{ "name": "string", "email": "string" }],
+  "id": "eu-example",
+  "title": "EU Example Collaboration",
+  "kuerzel": "EUEX",
+  "mailbox_folder": "Projects/EU Example",
+  "reference_md": "memory/references/projects/eu-example/index.md",
+  "aliases": ["EUEX"],
+  "keywords": ["quality"],
+  "domains": ["example.eu"],
+  "contacts": [{"name": "Example Contact", "email": "coordination@example.eu"}],
   "workpackages": [
     {
-      "id": "string",
-      "title": "string",
-      "aliases": ["string"],
-      "keywords": ["string"],
-      "contacts": [{ "email": "string" }],
-      "status": "active"
+      "id": "wp1",
+      "number": 1,
+      "title": "Coordination and quality",
+      "lead": "Example University",
+      "boku_role": "Contributor",
+      "status": "active",
+      "aliases": ["WP1"],
+      "keywords": ["quality"],
+      "contacts": [{"email": "wp1@example.eu"}],
+      "tasks": [{"id": "T1.1", "title": "Kick-off", "lead": "Example University", "keywords": ["kick-off"]}],
+      "deliverables": [{"id": "D1.1", "title": "Quality plan", "lead": "BOKU", "type": "Report", "due_month": "M6"}]
     }
   ],
-  "description": "string",
-  "typical_subject_patterns": ["string"],
+  "milestones": [
+    {"id": "MS1", "title": "Kick-off held", "lead": "Example University", "due_month": "M2", "related_wps": ["wp1"], "prerequisites": "Grant agreement signed"}
+  ],
+  "typical_subject_patterns": ["[EUEX]"],
   "routing_priority": 50,
   "do_not_route_if": ["newsletter", "no-reply"],
-  "cloud_sync": {
-    // Immer als Dictionary von Cloud-Speichern (z. B. {"default": {...}} bei einem Speicher):
-    "<storage_id>": {
-      "scan_dir": "string",
-      "output_json": "string",
-      "output_md": "string",
-      "output_dir": "string",
-      "last_synced_at": "string (optional/automatisch, z. B. YYYY-MM-DD HH:MM:SS)"
-    }
-  },
-  "updated_at": "YYYY-MM-DD",
-  "schema_version": 2
+  "cloud_sync": {"default": {"scan_dir": "cloud/projects/eu-example"}},
+  "schema_version": 3
 }
 ```
 
+Jedes Projekt benötigt mindestens `id` (lowercase slug), `title`, `mailbox_folder`, `workpackages`, `milestones` und exakt `schema_version: 3`. Bestehende Felder wie `project_website`, `project_reference`, `laufzeit`, `gesamtbudget`, `institution_budget`, `boku_budget`, `description`, `updated_at`, Routing-Signale und Cloud-Metadaten bleiben zulässig.
+
+`workpackages[].id` ist ein lowercase slug; `number` ist optional positiv; `status` ist `active`, `completed`, `planned` oder `paused`. WP-Objekte enthalten `tasks` und `deliverables`; deren Objekte benötigen jeweils `id` und `title`. Task- und Deliverable-IDs sind innerhalb des gesamten Projekts case-insensitiv eindeutig. Milestones liegen ausschließlich auf Projektebene, haben `id` und `title` und können `lead`, `due_month`, `related_wps` und `prerequisites` führen. `related_wps` verweist auf vorhandene WP-IDs. Unbekannte Felder sind in WP-, Task-, Deliverable- und Milestone-Objekten unzulässig; Kontakt- und Cloud-Objekte bleiben absichtlich offen.
+
 ## Questionnaire-Mode
 
-Frage in dieser Reihenfolge, kurz und präzise:
+Frage in dieser Reihenfolge kurz und präzise:
 
 1. Projektname (`title`)
-2. Projekt-ID (`id`, sonst aus Titel als slug vorschlagen)
-3. Zielordner (`mailbox_folder`, Parent-Ordner; `_Needs-Reply` wird davon abgeleitet)
+2. Projekt-ID (`id`, sonst slug vorschlagen)
+3. Zielordner (`mailbox_folder`; `_Needs-Reply` wird abgeleitet)
 4. Domains
 5. Kontakte (Name + E-Mail)
 6. Aliases
 7. Keywords
 8. Typical subject patterns
-9. Workpackages (optional)
-10. Routing-Priorität / `do_not_route_if`
+9. Workpackages: pro WP ID, optionale Nummer, Titel, Lead, BOKU-Rolle, Status, Routing-Signale, Tasks und Deliverables
+10. Projektweite Milestones mit `related_wps` und optionalen Vorbedingungen
+11. Routing-Priorität / `do_not_route_if`
 
-Dann:
-
-11. `reference_md` auf `memory/references/projects/<slug>/index.md` setzen (Default)
-12. Fehlende Inhalte für `index.md`, `contacts.md`, `signals.md` kurz abfragen (oder mit Platzhaltern anlegen)
-
-Regeln:
-
-- Wenn Feld unbekannt: leeres Array oder sinnvoller Default.
-- Keine zusätzlichen Felder erfinden.
+Dann `reference_md` auf `memory/references/projects/<slug>/index.md` setzen und fehlende Inhalte für `index.md`, `contacts.md`, `signals.md` abfragen oder mit Platzhaltern anlegen. Wenn ein Feld unbekannt ist, leere optionale Arrays oder sinnvolle Defaults verwenden; keine zusätzlichen normativen Felder erfinden. Projekte ohne WPs führen `"workpackages": []` und `"milestones": []`.
 
 ## Template-Mode
 
-Wenn eine Markdown-Vorlage geliefert wird, parse nach `references/project-template.md`.
+Wenn eine Markdown-Vorlage geliefert wird, nach [`references/project-template.md`](references/project-template.md) parsen.
 
 - Fehlende Pflichtfelder aktiv nachfragen.
-- Leere optionale Felder als `[]` oder weglassen (gemäß bestehendem Stil).
+- Leere optionale Felder als `[]` oder gemäß bestehendem Stil weglassen.
+- WP-Dateien aus [`references/project-folder-template.md`](references/project-folder-template.md) erstellen; die relevante Kopie unter `memory/references/projects/_TEMPLATE-project.md` synchron halten.
 - Auch im Template-Mode bei Neuanlage die Projektordner-Struktur anlegen.
 
 ## Validierung
 
 Vor Ausgabe prüfen:
 
-- `id` nur `[a-z0-9-]`
-- keine doppelten Domains/Kontakte
-- `contacts[].email` syntaktisch plausibel
-- `workpackages[].id` ebenfalls slug
-- `schema_version = 2`
-- `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)
+- `id` und `workpackages[].id` sind lowercase Slugs und eindeutig.
+- Domains/Kontakte sind nicht doppelt, `contacts[].email` ist syntaktisch plausibel.
+- WP-Nummern sind positiv, Statuswerte zulässig und alle erforderlichen Strings nicht leer.
+- Task-, Deliverable- und Milestone-IDs sind projektweit case-insensitiv eindeutig.
+- `related_wps` referenziert nur vorhandene WP-IDs.
+- `reference_md` passt zum `<slug>/index.md`-Pfad, außer bei bewusstem Legacy-Override.
+
+Nutze zusätzlich den read-only Standardbibliotheks-Validator:
+
+```powershell
+python skills/project-catalog-entry/scripts/validate_projects.py --catalog memory/references/projects/projects.json --json
+```
+
+Exit-Code `0` bedeutet `Valid`, `1` Schema-/Invariantenfehler mit JSON-Pfaden und `2` Input-, JSON-, Argument- oder Runtime-Fehler. Der Validator schreibt nie Dateien.
 
 ## Schreibregeln
 
 - Nie blind überschreiben.
 - Bestehenden JSON-Stil beibehalten.
 - Nur minimal patchen.
-- Bei mehreren neuen Projekten: gesammelt als ein Patch.
+- Mehrere neue Projekte gesammelt als einen Patch behandeln.
 - Struktur zuerst konsistent planen, dann in einem sauberen Schritt schreiben.
 
-## Geplante Schema-Erweiterungen & Backlog (unter Vorbehalt)
+## Backlog
 
-- Geplante Schema-Erweiterungen (Workpackages mit Tasks, Deliverables, Milestones) und Migrationspläne sind im zentralen Backlog dokumentiert: [`TODO.md`](TODO.md).
+FR-01a liefert ausschließlich v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. Produktive Migration, `migrate_project_wps.py` und realer Backfill gehören ausdrücklich zu **FR-01b** in [`TODO.md`](TODO.md).
