@@ -35,6 +35,53 @@ class SubtopicClassifierTests(unittest.TestCase):
         }
 
     @staticmethod
+    def cagliari_topics() -> list[dict]:
+        """Focused fixture copied from the BOKU Dienstreisen/Netzwerke contract."""
+        return [
+            {
+                "id": "dienstreisen",
+                "title": "Dienstreisen",
+                "mailbox_folder": "Administratives/Dienstreisen",
+                "aliases": [],
+                "keywords": ["Dienstreise", "Reise"],
+                "typical_subject_patterns": ["A1-Formular zu DR-Auftrag"],
+                "subtopics": [{
+                    "id": "2026-06-cagliari-eucen-conference",
+                    "title": "Cagliari 2026-06 — IACEE Symposium & EUCEN Conference",
+                    "aliases": ["Cagliari 2026-06", "IACEE Symposium 2026"],
+                    "keywords": ["Cagliari", "IACEE"],
+                    "typical_subject_patterns": [
+                        "Cagliari",
+                        "IACEE Symposium 2026",
+                        "Join Us in Cagliari",
+                        "Response submission for Registration Form 56th EUCEN Annual Conference",
+                    ],
+                    "contacts": [
+                        {"email": "spol@unica.it"},
+                        {"email": "alice.sgualdini@unica.it"},
+                    ],
+                    "status": "active",
+                }],
+            },
+            {
+                "id": "netzwerke",
+                "title": "Netzwerke",
+                "mailbox_folder": "Themen/Netzwerke",
+                "aliases": ["Networks"],
+                "keywords": ["EUCEN"],
+                "typical_subject_patterns": ["We are EUCEN", "EUCEN"],
+                "subtopics": [{
+                    "id": "eucen",
+                    "title": "EUCEN",
+                    "aliases": ["European University Continuing Education Network", "We are EUCEN"],
+                    "keywords": ["EUCEN", "eucen annual conference"],
+                    "contacts": [],
+                    "status": "active",
+                }],
+            },
+        ]
+
+    @staticmethod
     def email(subject: str, **extra: object) -> dict:
         return {
             "envelope_id": "subtopic-1",
@@ -108,6 +155,40 @@ class SubtopicClassifierTests(unittest.TestCase):
 
         self.assertEqual("unknown", item["decision"]["kind"])
         self.assertEqual("INBOX", item["action"]["target_folder"])
+
+    def test_cagliari_subject_patterns_beat_generic_eucen_but_keep_generic_network_routing(self) -> None:
+        expected_cagliari = "2026-06-cagliari-eucen-conference"
+        cagliari_subjects = [
+            "Response submission for Registration Form 56th EUCEN Annual Conference",
+            "Join Us in Cagliari | IACEE Symposium 2026 | Register Today",
+            "IACEE/Cagliari",
+        ]
+        for subject in cagliari_subjects:
+            with self.subTest(subject=subject):
+                item = classifier.classify_email(
+                    self.email(subject), projects=[], topics=self.cagliari_topics(),
+                    sent_lookup={}, final_index={"items": {}},
+                )
+                self.assertEqual("dienstreisen", item["decision"]["id"])
+                self.assertEqual(expected_cagliari, item["decision"]["subtopic"])
+                self.assertEqual("Administratives/Dienstreisen", item["action"]["target_folder"])
+
+        for subject in ("EUCEN Annual Conference", "We are EUCEN"):
+            with self.subTest(subject=subject):
+                item = classifier.classify_email(
+                    self.email(subject), projects=[], topics=self.cagliari_topics(),
+                    sent_lookup={}, final_index={"items": {}},
+                )
+                self.assertEqual("netzwerke", item["decision"]["id"])
+                self.assertEqual("eucen", item["decision"]["subtopic"])
+                self.assertEqual("Themen/Netzwerke", item["action"]["target_folder"])
+
+        contact_only = classifier.classify_email(
+            self.email("Weekly update", **{"from": "Contact <spol@unica.it>"}),
+            projects=[], topics=self.cagliari_topics(), sent_lookup={}, final_index={"items": {}},
+        )
+        self.assertEqual("unknown", contact_only["decision"]["kind"])
+        self.assertEqual("INBOX", contact_only["action"]["target_folder"])
 
     def test_ambiguous_and_inactive_subtopics_do_not_create_scalar(self) -> None:
         ambiguous_topic = self.topic(subtopics=[

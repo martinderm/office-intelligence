@@ -994,6 +994,8 @@ def classify_email(
     if not thread_matched and not matched_project:
         matched_topic = None
         matched_topic_confidence = "low"
+        matched_topic_source = ""
+        matched_topic_strength = 0
         subj_norm = re.sub(r"[-_]+", " ", subject)
 
         for top in (topics or []):
@@ -1017,6 +1019,8 @@ def classify_email(
                 if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
                     matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
                     matched_topic_confidence = "high"
+                    matched_topic_source = "root_name"
+                    matched_topic_strength = 400
                     break
             if matched_topic:
                 break
@@ -1027,6 +1031,8 @@ def classify_email(
                 if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
                     matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
                     matched_topic_confidence = "high"
+                    matched_topic_source = "root_pattern"
+                    matched_topic_strength = 300
                     break
             if matched_topic:
                 break
@@ -1044,38 +1050,64 @@ def classify_email(
             if has_kw_subj:
                 matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
                 matched_topic_confidence = "high"
+                matched_topic_source = "root_keyword"
+                matched_topic_strength = 200
                 break
             elif has_kw_body and (has_contact or has_domain):
                 matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
                 matched_topic_confidence = "medium"
+                matched_topic_source = "root_context"
+                matched_topic_strength = 100
                 break
 
         # Preserve established routing for an explicit subtopic-only signal while
-        # refusing to guess between two parent topics. This fallback is deliberately
-        # limited to subtopic resolver results (never raw contact-only matches).
-        if not matched_topic:
-            fallback_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
-            fallback_ambiguity = False
-            for top in (topics or []):
-                if not isinstance(top, dict):
-                    continue
-                resolution = _select_topic_subtopic(
-                    top,
-                    subject=subject,
-                    full_text=full_text,
-                    from_str=from_str,
-                )
-                reasons = resolution.get("match_reasons", [])
-                has_subject_signal = isinstance(reasons, list) and any(
-                    isinstance(reason, str) and reason.startswith("subject_")
-                    for reason in reasons
-                )
-                if isinstance(resolution.get("subtopic"), str) and has_subject_signal:
-                    fallback_matches.append((top, resolution))
-                elif isinstance(resolution.get("candidates"), list):
-                    fallback_ambiguity = True
-            if len(fallback_matches) == 1 and not fallback_ambiguity:
-                fallback_topic, preselected_subtopic_resolution = fallback_matches[0]
+        # refusing to guess between two parent topics. A unique, documented
+        # subtopic subject pattern may also beat a weaker generic root pattern or
+        # keyword from another topic; explicit parent names always remain stronger.
+        fallback_matches: list[tuple[dict[str, Any], dict[str, Any], int]] = []
+        fallback_ambiguity = False
+        for top in (topics or []):
+            if not isinstance(top, dict):
+                continue
+            resolution = _select_topic_subtopic(
+                top,
+                subject=subject,
+                full_text=full_text,
+                from_str=from_str,
+            )
+            reasons = resolution.get("match_reasons", [])
+            subject_strength = 0
+            if isinstance(reasons, list):
+                for reason in reasons:
+                    if not isinstance(reason, str):
+                        continue
+                    if reason.startswith("subject_pattern:"):
+                        subject_strength = max(subject_strength, 500)
+                    elif reason.startswith(("subject_id:", "subject_title:", "subject_alias:")):
+                        subject_strength = max(subject_strength, 400)
+                    elif reason.startswith("subject_keyword:"):
+                        subject_strength = max(subject_strength, 300)
+            if isinstance(resolution.get("subtopic"), str) and subject_strength:
+                fallback_matches.append((top, resolution, subject_strength))
+            elif isinstance(resolution.get("candidates"), list):
+                fallback_ambiguity = True
+        if fallback_matches:
+            strongest_fallback_strength = max(match[2] for match in fallback_matches)
+            strongest_fallbacks = [
+                match for match in fallback_matches if match[2] == strongest_fallback_strength
+            ]
+        else:
+            strongest_fallbacks = []
+        if len(strongest_fallbacks) == 1 and not fallback_ambiguity:
+            fallback_topic, fallback_resolution, fallback_strength = strongest_fallbacks[0]
+            can_select_fallback = not matched_topic
+            can_override_generic_root = (
+                matched_topic_source in {"root_pattern", "root_keyword", "root_context"}
+                and fallback_strength > matched_topic_strength
+                and fallback_strength == 500
+            )
+            if can_select_fallback or can_override_generic_root:
+                preselected_subtopic_resolution = fallback_resolution
                 fallback_id = str(fallback_topic.get("id", "")).strip()
                 fallback_title = str(fallback_topic.get("title", fallback_id)).strip() or fallback_id
                 fallback_folder = fallback_topic.get("mailbox_folder") or f"Themen/{fallback_title}"

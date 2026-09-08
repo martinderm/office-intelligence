@@ -192,7 +192,10 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   kanonische monatliche Topic-Evidence; ein optionales Syntheseziel entsteht
   nur aus einer vorhandenen, kanonisch im Katalog deklarierten
   `subtopics[].reference_md`-Datei, niemals aus Mailinhalt oder geratenen
-  Event-/Abschnittspfaden. FR-06-Preflight und Handoff bleiben unverändert.
+  Event-/Abschnittspfaden. Ein eindeutiges Subtopic-`subject_pattern` darf eine
+  schwächere generische Root-Pattern-/Keyword-Zuordnung eines anderen Topics
+  überstimmen; explizite Parent-Namen sowie Gleichstände bleiben konservativ.
+  FR-06-Preflight und Handoff bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,
