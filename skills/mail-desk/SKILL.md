@@ -115,7 +115,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     konkreten Prüfauftrag je erfolgreichem Item übergeben. Die autonome Pipeline
     leitet diese Ziele nicht aus untrusted Mailfeldern ab und liefert in ihren
     Drafts daher kanonisch `synthesis_targets: []`; ein Mensch oder LLM reichert
-    den Draft zwischen `draft` und `execute` quellengebunden an. Jedes Target
+    den Draft zwischen `draft` und `execute` quellengebunden an; davon ausgenommen
+    ist der deterministische FR-03a-Fall einer vorhandenen, kanonisch im aktiven
+    Subtopic-Katalog deklarierten `reference_md`-Datei. Jedes Target
     benennt nur eine sichere Markdown-Datei unter dem zum Project-/Topic-Slug
     passenden `memory/references/`-Root und ein stabiles `type`-Label. Der
     Execute-Preflight prüft alle Targets vor jeder Mutation. Nur erfolgreiche
@@ -179,6 +181,18 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   ohne Rohbody als begrenzte Maschinenmetadaten am Spec geführt. Für Thread-
   Evidence gilt derselbe `file`-Vertrag wie für normale Project- und Topic-
   Evidence; Dedupe und atomare Writer bleiben unverändert.
+- FR-03a löst nach der Parent-Topic-Zuordnung ausschließlich aktive
+  `subtopics` separat auf: `typical_subject_patterns`, exakte Subtopic-
+  IDs/Titel/Aliase und Betreff-Keywords haben Vorrang vor Preview-Keywords.
+  Ein Kontakt verfeinert nur ein unabhängig im Betreff identifiziertes Parent
+  Topic und nur, wenn er genau einem aktiven Subtopic gehört. Eindeutige
+  Treffer stehen als `decision.subtopic` mit `subtopic_match_reasons`; gleich
+  starke Treffer bleiben als `subtopic_candidates` reviewbar. Das Routing
+  bleibt immer im Parent-`mailbox_folder`. Ein eindeutiger Treffer erhält
+  kanonische monatliche Topic-Evidence; ein optionales Syntheseziel entsteht
+  nur aus einer vorhandenen, kanonisch im Katalog deklarierten
+  `subtopics[].reference_md`-Datei, niemals aus Mailinhalt oder geratenen
+  Event-/Abschnittspfaden. FR-06-Preflight und Handoff bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,

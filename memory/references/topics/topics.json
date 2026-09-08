@@ -16,6 +16,7 @@
         "title": "Example Subtopic",
         "aliases": ["Subtopic Example"],
         "keywords": ["subtopic", "example"],
+        "typical_subject_patterns": ["[EXAMPLE-SUBTOPIC]"],
         "contacts": [{ "email": "topic@example.org" }],
         "status": "active"
       }

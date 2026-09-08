@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
@@ -323,6 +323,201 @@ def _build_project_evidence(
     return spec
 
 
+def _topic_parent_subject_signal(topic: dict[str, Any], subject: str) -> bool:
+    """Return whether the current subject independently identifies the parent topic.
+
+    A subtopic contact is deliberately not enough on its own: it may only refine a
+    topic whose parent has an explicit title, ID, alias, or subject-pattern signal.
+    """
+    subject_normalized = re.sub(r"[-_]+", " ", subject)
+    values = [topic.get("title", ""), topic.get("id", "")]
+    values.extend(topic.get("aliases", []) if isinstance(topic.get("aliases"), list) else [])
+    values.extend(
+        topic.get("typical_subject_patterns", [])
+        if isinstance(topic.get("typical_subject_patterns"), list)
+        else []
+    )
+    for value in values:
+        signal = str(value).strip()
+        if len(signal) < 3:
+            continue
+        normalized = re.sub(r"[-_]+", " ", signal)
+        if re.search(r"(?<!\w)" + re.escape(normalized) + r"(?!\w)", subject_normalized, re.IGNORECASE):
+            return True
+    return False
+
+
+def _subject_signal_matches(subject: str, value: object) -> bool:
+    """Match one documented subject signal without accepting fragments of words."""
+    signal = str(value).strip()
+    if len(signal) < 3:
+        return False
+    normalized_subject = re.sub(r"[-_]+", " ", subject)
+    normalized_signal = re.sub(r"[-_]+", " ", signal)
+    return bool(
+        re.search(r"(?<!\w)" + re.escape(signal) + r"(?!\w)", subject, re.IGNORECASE)
+        or re.search(r"(?<!\w)" + re.escape(normalized_signal) + r"(?!\w)", normalized_subject, re.IGNORECASE)
+    )
+
+
+def _select_topic_subtopic(
+    topic: dict[str, Any],
+    *,
+    subject: str,
+    full_text: str,
+    from_str: str,
+) -> dict[str, Any]:
+    """Resolve only an unambiguous active subtopic after parent-topic selection.
+
+    Subject patterns and exact subject terms outrank preview keywords. A contact may
+    contribute only where the parent is independently explicit in the subject and
+    the contact belongs to exactly one active subtopic.
+    """
+    active_subtopics = [
+        sub for sub in topic.get("subtopics", [])
+        if isinstance(sub, dict) and str(sub.get("status", "")).casefold() in {"", "active"}
+    ] if isinstance(topic.get("subtopics"), list) else []
+    parent_subject_signaled = _topic_parent_subject_signal(topic, subject)
+    sender = from_str.casefold()
+    contact_counts: dict[str, int] = {}
+    for subtopic in active_subtopics:
+        for contact in subtopic.get("contacts", []) if isinstance(subtopic.get("contacts"), list) else []:
+            if isinstance(contact, dict):
+                email = str(contact.get("email", "")).strip().casefold()
+                if email:
+                    contact_counts[email] = contact_counts.get(email, 0) + 1
+
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for subtopic in active_subtopics:
+        identifier = str(subtopic.get("id", "")).strip()
+        title = str(subtopic.get("title", "")).strip()
+        if not identifier or not title:
+            continue
+        reasons: list[str] = []
+        score = 0
+        for pattern in subtopic.get("typical_subject_patterns", []) if isinstance(subtopic.get("typical_subject_patterns"), list) else []:
+            if _subject_signal_matches(subject, pattern):
+                reasons.append(f"subject_pattern:{str(pattern).strip()}")
+                score = max(score, 500)
+        for value, label in ((identifier, "subject_id"), (title, "subject_title")):
+            if _subject_signal_matches(subject, value):
+                reasons.append(f"{label}:{value}")
+                score = max(score, 400)
+        for alias in subtopic.get("aliases", []) if isinstance(subtopic.get("aliases"), list) else []:
+            if _subject_signal_matches(subject, alias):
+                reasons.append(f"subject_alias:{str(alias).strip()}")
+                score = max(score, 400)
+        for keyword in subtopic.get("keywords", []) if isinstance(subtopic.get("keywords"), list) else []:
+            keyword_text = str(keyword).strip()
+            if _subject_signal_matches(subject, keyword_text):
+                reasons.append(f"subject_keyword:{keyword_text}")
+                score = max(score, 300)
+            elif _artifact_text_matches(full_text, keyword_text):
+                reasons.append(f"keyword:{keyword_text}")
+                score = max(score, 100)
+        if parent_subject_signaled:
+            for contact in subtopic.get("contacts", []) if isinstance(subtopic.get("contacts"), list) else []:
+                if not isinstance(contact, dict):
+                    continue
+                email = str(contact.get("email", "")).strip().casefold()
+                if email and contact_counts.get(email) == 1 and email in sender:
+                    reasons.append(f"unique_contact:{email}")
+                    score = max(score, 200)
+        if reasons:
+            candidates.append((score, {"id": identifier, "title": title, "reasons": reasons, "_source": subtopic}))
+
+    if not candidates:
+        return {}
+    highest_score = max(score for score, _ in candidates)
+    choices = [candidate for score, candidate in candidates if score == highest_score]
+    choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    if len(choices) == 1:
+        selected = choices[0]
+        return {
+            "subtopic": selected["id"],
+            "match_reasons": selected["reasons"],
+            "source": selected["_source"],
+        }
+    return {
+        "candidates": [
+            {"id": candidate["id"], "title": candidate["title"], "reasons": candidate["reasons"]}
+            for candidate in choices
+        ]
+    }
+
+
+def _topic_context_label(topic: dict[str, Any], subtopic: dict[str, Any]) -> str:
+    """Build neutral evidence context solely from catalog-backed topic identifiers."""
+    topic_label = str(topic.get("id", "")).strip().upper()
+    subtopic_id = str(subtopic.get("id", "")).strip()
+    subtopic_title = str(subtopic.get("title", "")).strip()
+    subtopic_label = f"{subtopic_id} ({subtopic_title})" if subtopic_title else subtopic_id
+    return f"{topic_label} | {subtopic_label}".strip(" |")
+
+
+def _build_topic_evidence(
+    topic: dict[str, Any],
+    subtopic: dict[str, Any],
+    decision: dict[str, Any],
+    *,
+    workspace_root: Path,
+    year_month: str,
+    date: str,
+    subject: str,
+    message_id: str,
+    from_str: str,
+    to_str: str,
+) -> dict[str, Any]:
+    """Create canonical monthly topic evidence without persisting mail body text."""
+    topic_id = str(topic.get("id", "")).strip()
+    evidence_dir = resolve_evidence_dir("topics", topic_id, workspace_root=workspace_root)
+    try:
+        evidence_dir_rel = str(evidence_dir.relative_to(workspace_root).as_posix())
+    except ValueError:
+        evidence_dir_rel = str(evidence_dir.as_posix())
+    participants = from_str or "Unbekannt"
+    if to_str:
+        participants = f"{participants}; An: {to_str}"
+    entry_lines = [
+        f"- {date} — {subject}.",
+        f"  - Message-ID: `{message_id}`",
+        f"  - Beteiligte: {participants}",
+        f"  - Kontext: [{_topic_context_label(topic, subtopic)}]",
+        f"  - Mailgegenstand: {subject}",
+    ]
+    spec: dict[str, Any] = {
+        "type": "topic_evidence",
+        "file": f"{evidence_dir_rel}/{year_month}.md",
+        "entry": "\n".join(entry_lines),
+    }
+    read_escalation = _evidence_read_escalation(decision)
+    if read_escalation:
+        spec["read_escalation"] = read_escalation
+    return spec
+
+
+def _safe_subtopic_reference_target(
+    topic: dict[str, Any], subtopic: dict[str, Any], workspace_root: Path
+) -> list[dict[str, str]]:
+    """Return one catalog-declared target only for an existing canonical subtopic file."""
+    topic_id = str(topic.get("id", "")).strip()
+    subtopic_id = str(subtopic.get("id", "")).strip()
+    reference = subtopic.get("reference_md")
+    if not topic_id or not subtopic_id or not isinstance(reference, str) or not reference.strip():
+        return []
+    raw_path = reference.strip()
+    expected = f"memory/references/topics/{topic_id}/subtopics/{subtopic_id}.md"
+    if raw_path != expected or "\\" in raw_path:
+        return []
+    path = PurePosixPath(raw_path)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return []
+    candidate = workspace_root.joinpath(*path.parts)
+    if not candidate.is_file():
+        return []
+    return [{"file": raw_path, "type": "subtopic_reference"}]
+
+
 def full_body_triggers(email: dict[str, Any], preview_item: dict[str, Any]) -> list[str]:
     """Return documented, deterministic reasons to re-read one preview in full."""
     text = "\n".join(
@@ -453,6 +648,39 @@ def classify_email_two_pass(
                     from_str=str(full_email.get("from", "")),
                     to_str=str(full_email.get("to", "")),
                 )
+        elif full_item["decision"].get("kind") == "topic":
+            topic_id = str(full_item["decision"].get("id", "")).casefold()
+            subtopic_id = str(full_item["decision"].get("subtopic", "")).casefold()
+            matched_topic = next(
+                (
+                    topic for topic in (topics or [])
+                    if isinstance(topic, dict) and str(topic.get("id", "")).casefold() == topic_id
+                ),
+                None,
+            )
+            if matched_topic is not None and subtopic_id:
+                matched_subtopic = next(
+                    (
+                        subtopic for subtopic in matched_topic.get("subtopics", [])
+                        if isinstance(subtopic, dict)
+                        and str(subtopic.get("id", "")).casefold() == subtopic_id
+                    ),
+                    None,
+                ) if isinstance(matched_topic.get("subtopics"), list) else None
+                if matched_subtopic is not None:
+                    full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
+                    full_item["evidence"] = _build_topic_evidence(
+                        matched_topic,
+                        matched_subtopic,
+                        full_item["decision"],
+                        workspace_root=workspace_root or Path.cwd(),
+                        year_month=full_ym,
+                        date=full_ymd,
+                        subject=str(full_email.get("subject", "")),
+                        message_id=normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
+                        from_str=str(full_email.get("from", "")),
+                        to_str=str(full_email.get("to", "")),
+                    )
         return full_item
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
         return _full_read_failure(preview_item, triggers, exc)
@@ -511,6 +739,9 @@ def classify_email(
     notes = ""
     evidence_spec: dict[str, Any] | None = None
     selected_project: dict[str, Any] | None = None
+    selected_topic: dict[str, Any] | None = None
+    synthesis_targets: list[dict[str, str]] = []
+    preselected_subtopic_resolution: dict[str, Any] | None = None
 
     # Check for reply requirement directed at Martin
     needs_reply = False
@@ -644,6 +875,7 @@ def classify_email(
                 "file": ev_file_rel,
                 "entry": ev_entry,
             }
+            selected_topic = matched_topic_obj
             thread_matched = True
         else:
             target_folder = parent_folder
@@ -778,12 +1010,6 @@ def classify_email(
             ]
             mb_folder = top.get("mailbox_folder") or f"Themen/{title or t_id}"
 
-            # Check subtopics keywords & aliases as well
-            for sub in top.get("subtopics", []):
-                if isinstance(sub, dict):
-                    aliases.extend([str(a).strip() for a in sub.get("aliases", []) if str(a).strip()])
-                    keywords.extend([str(k).strip() for k in sub.get("keywords", []) if str(k).strip()])
-
             # 2a. Match Title, ID, or Alias in Subject
             t_names = [n for n in [title, t_id] + aliases if n and len(n) >= 3]
             for name in t_names:
@@ -824,6 +1050,38 @@ def classify_email(
                 matched_topic_confidence = "medium"
                 break
 
+        # Preserve established routing for an explicit subtopic-only signal while
+        # refusing to guess between two parent topics. This fallback is deliberately
+        # limited to subtopic resolver results (never raw contact-only matches).
+        if not matched_topic:
+            fallback_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            fallback_ambiguity = False
+            for top in (topics or []):
+                if not isinstance(top, dict):
+                    continue
+                resolution = _select_topic_subtopic(
+                    top,
+                    subject=subject,
+                    full_text=full_text,
+                    from_str=from_str,
+                )
+                reasons = resolution.get("match_reasons", [])
+                has_subject_signal = isinstance(reasons, list) and any(
+                    isinstance(reason, str) and reason.startswith("subject_")
+                    for reason in reasons
+                )
+                if isinstance(resolution.get("subtopic"), str) and has_subject_signal:
+                    fallback_matches.append((top, resolution))
+                elif isinstance(resolution.get("candidates"), list):
+                    fallback_ambiguity = True
+            if len(fallback_matches) == 1 and not fallback_ambiguity:
+                fallback_topic, preselected_subtopic_resolution = fallback_matches[0]
+                fallback_id = str(fallback_topic.get("id", "")).strip()
+                fallback_title = str(fallback_topic.get("title", fallback_id)).strip() or fallback_id
+                fallback_folder = fallback_topic.get("mailbox_folder") or f"Themen/{fallback_title}"
+                matched_topic = {"id": fallback_id, "folder": fallback_folder, "title": fallback_title}
+                matched_topic_confidence = "high"
+
         if matched_topic:
             target_folder = matched_topic["folder"]
             tid = matched_topic["id"]
@@ -834,6 +1092,13 @@ def classify_email(
                 "needs_reply": needs_reply,
             }
             notes = f"Themenbezogene Zuordnung zu {matched_topic['title']} (Betreff: {subject})."
+            selected_topic = next(
+                (
+                    topic for topic in (topics or [])
+                    if isinstance(topic, dict) and str(topic.get("id", "")).casefold() == tid.casefold()
+                ),
+                None,
+            )
 
     # --------------------------------------------------------------------------
     # 2a. Project artifact matching (FR-02a)
@@ -860,6 +1125,35 @@ def classify_email(
             from_str=from_str,
             to_str=to_str,
         )
+
+    # --------------------------------------------------------------------------
+    # 2b. Topic subtopic matching (FR-03a)
+    # --------------------------------------------------------------------------
+    # Parent routing is intentionally complete before this step. Subtopic signals
+    # therefore refine context only and can never select another mailbox folder.
+    if selected_topic is not None and decision.get("kind") == "topic":
+        subtopic_resolution = preselected_subtopic_resolution or _select_topic_subtopic(
+            selected_topic, subject=subject, full_text=full_text, from_str=from_str
+        )
+        subtopic_source = subtopic_resolution.get("source")
+        if isinstance(subtopic_source, dict) and isinstance(subtopic_resolution.get("subtopic"), str):
+            decision["subtopic"] = subtopic_resolution["subtopic"]
+            decision["subtopic_match_reasons"] = subtopic_resolution.get("match_reasons", [])
+            evidence_spec = _build_topic_evidence(
+                selected_topic,
+                subtopic_source,
+                decision,
+                workspace_root=ws,
+                year_month=ym,
+                date=ymd,
+                subject=subject,
+                message_id=norm_mid,
+                from_str=from_str,
+                to_str=to_str,
+            )
+            synthesis_targets = _safe_subtopic_reference_target(selected_topic, subtopic_source, ws)
+        elif isinstance(subtopic_resolution.get("candidates"), list):
+            decision["subtopic_candidates"] = subtopic_resolution["candidates"]
 
     # --------------------------------------------------------------------------
     # 3. Sent Items Reply Check
@@ -900,7 +1194,7 @@ def classify_email(
         "decision": decision,
         "notes": notes or f"Klassifikation: {subject}",
         "evidence": evidence_spec,
-        "synthesis_targets": [],
+        "synthesis_targets": synthesis_targets,
     }
 
 

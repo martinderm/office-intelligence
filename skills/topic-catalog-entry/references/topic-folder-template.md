@@ -94,7 +94,12 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, warum ist das Topic routingrele
 
 ## Signale
 
-- 
+- Aliases:
+  -
+- Keywords:
+  -
+- Typical subject patterns:
+  -
 
 ## Stand (Managed)
 

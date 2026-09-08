@@ -80,7 +80,9 @@ Frontmatter-Regel:
       "title": "string",
       "aliases": ["string"],
       "keywords": ["string"],
+      "typical_subject_patterns": ["string"],
       "contacts": [{ "email": "string" }],
+      "reference_md": "memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>.md (optional)",
       "cloud_sync": {
         "<storage_id>": {
           "scan_dir": "string",
@@ -124,7 +126,7 @@ Frage in dieser Reihenfolge, kurz und präzise:
 6. Aliases
 7. Keywords
 8. Typical subject patterns
-9. Subtopics (optional)
+9. Subtopics (optional; je Subtopic Aliase, Keywords, `typical_subject_patterns` und Kontakte getrennt erheben)
 10. Routing-Priorität / `do_not_route_if`
 
 Dann:
@@ -153,6 +155,9 @@ Vor Ausgabe prüfen:
 - keine doppelten Domains/Kontakte
 - `contacts[].email` syntaktisch plausibel
 - `subtopics[].id` ebenfalls slug
+- `subtopics[].typical_subject_patterns` ist das einzige Feld für Subtopic-Betreffmuster; keine parallelen Feldnamen einführen.
+- `status: active` wird automatisch klassifiziert; für Legacy-Kataloge gilt ein fehlender Status kompatibel als aktiv, während explizit inaktive Einträge ignoriert werden. Ein Subtopic-Kontakt darf nur bei einem unabhängigen Parent-Topic-Betreffsignal als ergänzendes, eindeutiges Signal wirken.
+- Ein optionales `subtopics[].reference_md` ist nur dann ein automatisches Syntheseziel, wenn es exakt auf die vorhandene kanonische Datei `memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>.md` verweist; Event- oder Abschnittssemantik wird nicht geraten.
 - Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen und bei plausibler Relevanz dessen Filemap oder passende Spiegelungen prüfen; zusätzliche, ausschließlich subtopic-spezifische Speicher dürfen als `subtopics[].cloud_sync` im Cloud-Atlas-Schema gepflegt werden.
 - `schema_version = 1`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)

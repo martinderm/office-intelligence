@@ -30,7 +30,9 @@
   title:
   aliases: []
   keywords: []
+  typical_subject_patterns: []
   contacts: []
+  reference_md: memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>.md
   status: active
 
 ## description
