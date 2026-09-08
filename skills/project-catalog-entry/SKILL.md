@@ -148,6 +148,22 @@ python skills/project-catalog-entry/scripts/validate_projects.py --catalog memor
 
 Exit-Code `0` bedeutet `Valid`, `1` Schema-/Invariantenfehler mit JSON-Pfaden und `2` Input-, JSON-, Argument- oder Runtime-Fehler. Der Validator schreibt nie Dateien.
 
+## Migration von v2 auf v3
+
+Vor einem Backfill zuerst einen schreibfreien Gesamtlauf ausführen:
+
+```powershell
+python skills/project-catalog-entry/scripts/migrate_project_wps.py --catalog memory/references/projects/projects.json --projects-root memory/references/projects --json
+```
+
+`--project <slug>` darf für wiederholbare, projektweise Dry-runs verwendet werden; dabei wird die Vollkatalogvalidierung ausdrücklich als `deferred` ausgewiesen. Ein Apply wird nur ausgeführt, wenn der gesamte resultierende Katalog v3-valid ist, keine Diagnostics einschließlich Warnungen verbleiben und die Lock-Ownership des Ziel-Workspaces nachgewiesen ist:
+
+```powershell
+python skills/project-catalog-entry/scripts/migrate_project_wps.py --catalog memory/references/projects/projects.json --projects-root memory/references/projects --apply --workspace-root . --lease-id <lease-id> --json
+```
+
+`PendingReview` und `Invalid` schreiben nie. Vor jedem Apply den vollständigen Dry-run-Diff und alle Diagnostics human reviewen; reale Quellen oder Statuswerte nicht ergänzen, wenn sie nicht eindeutig belegt sind.
+
 ## Schreibregeln
 
 - Nie blind überschreiben.
@@ -158,4 +174,4 @@ Exit-Code `0` bedeutet `Valid`, `1` Schema-/Invariantenfehler mit JSON-Pfaden un
 
 ## Backlog
 
-FR-01a liefert ausschließlich v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. Produktive Migration, `migrate_project_wps.py` und realer Backfill gehören ausdrücklich zu **FR-01b** in [`TODO.md`](TODO.md).
+FR-01a liefert v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. **FR-01b1** liefert zusätzlich `migrate_project_wps.py`: standardmäßig read-only Dry-run, nur eindeutig strukturierte Markdown-Quellen, `PendingReview` bei Mehrdeutigkeit und Apply ausschließlich mit kanonisch verifizierter Lock-Ownership. Der produktive Dry-run und jeder Backfill realer Kataloge bleiben **FR-01b2** in [`TODO.md`](TODO.md).

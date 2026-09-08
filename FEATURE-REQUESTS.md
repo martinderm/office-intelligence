@@ -1,12 +1,12 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 07.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-01a sowie FR-06 fortgeschrieben.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 08.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-01b1 sowie FR-06 fortgeschrieben.
 
 ## Statusabgleich zur Session
 
 | ID | Status | In dieser Session umgesetzt | Kurzurteil |
 | --- | --- | --- | --- |
-| `FR-01` | 🟡 FR-01a abgeschlossen, FR-01b offen | Normatives v3-Schema, Vorlagen, Beispielkatalog, Validator und Tests | Die produktive Migration und jeder Backfill bleiben ausdrücklich FR-01b. |
+| `FR-01` | 🟡 FR-01a/FR-01b1 abgeschlossen, FR-01b2 offen | v3-Schema, Vorlagen, Beispielkatalog, Validator, konservatives Migrationswerkzeug und Tests | Produktiver Dry-run und Backfill bleiben ausdrücklich FR-01b2. |
 | `FR-02` | ⬜ offen | Nein | Es gibt weiterhin nur Projekt-Root-Matching und ein auf 30 Zeilen begrenztes Preview; keine hierarchische Artefaktauflösung und keine Full-Body-Eskalation. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
@@ -30,7 +30,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 
 ## FR-01: Schema-Erweiterung für `projects.json` & `project-catalog-entry`
 
-**Status:** 🟡 **FR-01a abgeschlossen.** Das normative v3-Schema, die Vorlagen, der generische Beispielkatalog, ein read-only Validator und Fixture-Tests sind vorhanden. **FR-01b bleibt offen:** Produktive Migration und Backfill realer Kataloge wurden nicht durchgeführt.
+**Status:** 🟡 **FR-01a und FR-01b1 abgeschlossen.** Das normative v3-Schema, Vorlagen, generische Fixtures, Validator und ein konservatives Migrationswerkzeug sind vorhanden. **FR-01b2 bleibt offen:** Produktiver Dry-run und Backfill realer Kataloge wurden nicht durchgeführt.
 
 ### Problemstellung
 In [`projects.json`](../../boku-user/memory/references/projects/projects.json) werden Workpackages bisher flach geführt. Tasks (z. B. `T1.7`), Deliverables (z. B. `D1.2`) und Milestones (z. B. `MS1`) liegen unstrukturiert als Strings in `"aliases"`.
@@ -105,13 +105,13 @@ In [`projects.json`](../../boku-user/memory/references/projects/projects.json) w
 
 ### Abgrenzung FR-01a / FR-01b
 
-FR-01a liefert `projects.schema.json`, den read-only `validate_projects.py`, schema-v3-Vorlagen und Fixtures sowie ausschließlich den mitgelieferten generischen Beispielkatalog. FR-01b umfasst erst die Erstellung von `scripts/migrate_project_wps.py` und den separat freizugebenden produktiven Backfill aus vorhandenen Markdown-Workpackages. Keine realen Projektinformationen wurden für FR-01a erfunden oder migriert.
+FR-01a liefert `projects.schema.json`, den read-only `validate_projects.py`, schema-v3-Vorlagen und Fixtures. FR-01b1 liefert `scripts/migrate_project_wps.py`: Default-Dry-run, deterministischen Diff, atomaren Apply nur mit kanonisch verifizierter Lock-Ownership, v3-Validierung und Pending-Diagnostics für mehrdeutige Quellen. FR-01b2 umfasst erst den separat freizugebenden produktiven Dry-run und Backfill aus realen Markdown-Workpackages. Keine realen Projektinformationen wurden erfunden oder migriert.
 
 ### Kommentar und Schärfung
 
-Die Erweiterung ist sinnvoll und Voraussetzung für FR-02. Vor der Implementierung muss jedoch eine Inkonsistenz bereinigt werden: Dieses Dokument ordnet `milestones` auf Projektebene an, während `skills/project-catalog-entry/TODO.md` sie derzeit innerhalb eines Workpackages zeigt. Projektebene plus `related_wps` ist für WP-übergreifende Meilensteine das robustere Modell.
+Die Erweiterung ist Voraussetzung für FR-02. Die Milestone-Inkonsistenz ist bereinigt: Milestones liegen normativ auf Projektebene und verweisen über `related_wps` auf WPs.
 
-Das Migrationsskript gehört als wiederverwendbares Skill-Werkzeug unter `skills/project-catalog-entry/scripts/`, nicht unter `scratch/`. Es sollte zunächst nur `--dry-run`-Diffs erzeugen, idempotent sein, atomar schreiben und die bestehende `schema_version` bewusst migrieren. Vor dem Backfill sind ein formales Katalogschema und Fixture-Tests für mindestens ein EU-Projekt sowie ein Projekt ohne Workpackages nötig.
+Das Migrationsskript liegt als wiederverwendbares Tool unter `skills/project-catalog-entry/scripts/`. Es arbeitet standardmäßig im Dry-run, ist idempotent, schreibt atomar nur nach explizitem Apply und Lock-Check und migriert mehrdeutige Quellen nie autonom. Ein realer Backfill bleibt FR-01b2.
 
 ---
 

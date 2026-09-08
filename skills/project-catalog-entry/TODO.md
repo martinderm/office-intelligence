@@ -11,9 +11,9 @@ Zentrales Backlog für `projects.json` und die zugehörigen Vorlagen/Skills.
 - [x] Read-only Validator mit JSON-Envelope, präzisen Pfaden und Fixture-Tests.
 - [x] Questionnaire, Vorlagen und generischer Beispielkatalog auf v3 aktualisiert.
 
-## FR-01b — Produktive Migration und Backfill
+## FR-01b1 — Migrationswerkzeug
 
-**Status: offen.** FR-01a migriert keine realen Projektkataloge.
+**Status: abgeschlossen.** FR-01a/FR-01b1 migrieren keine realen Projektkataloge.
 
 ### Architektur & Konformität
 
@@ -21,8 +21,14 @@ Zentrales Backlog für `projects.json` und die zugehörigen Vorlagen/Skills.
 - **Standard:** Python 3 Standard Library only (keine externen pip-Dependencies).
 - **Dateisystem & I/O:** `pathlib.Path`, Cross-Platform-Pfade, atomare Schreibweise via `tempfile` und `os.replace`.
 - **Encoding:** UTF-8 mit Erhaltung nativer deutscher Umlaute (`ensure_ascii=False`).
-- **CLI:** Standard-Envelope mit `--json`, `--dry-run` und optionalem Pfadargument `--catalog`.
-- [ ] Vor jedem produktiven Write Dry-Run-Diff zeigen, separat reviewen und anschließend den v3-Validator ausführen.
+- **CLI:** Standard-Envelope mit `--json`, standardmäßigem `--dry-run`, optionalem Pfadargument `--catalog`, `--projects-root`, wiederholbarem `--project` und explizitem `--apply`.
+- [x] Deterministischer Dry-run-Diff, atomarer Apply, UTF-8 und nachgelagerte v3-Validierung.
+- [x] Apply fail-closed über den kanonischen `workspace_lock_guard.py` mit Lease-/Conversation-Ownership.
+- [x] Stabile `### Task … — …`-Überschriften und T/D/MS-Listen werden konservativ gelesen; unklare Quellen blockieren als `PendingReview`, Checkpoints ohne stabile MS-ID bleiben sichtbare Warnungen und Managed-/Freitext wird nicht normativ übernommen.
+
+## FR-01b2 — Produktiver Dry-run und Backfill
+
+**Status: offen.** Erst nach separatem Scope, Lock-Ownership und Human Review die nachfolgende Matrix gegen reale Quellen anwenden.
 
 ### Parsing- & Extraktionsmatrix je Projekt
 
@@ -32,7 +38,7 @@ Zentrales Backlog für `projects.json` und die zugehörigen Vorlagen/Skills.
 | **EVOLVE** | `memory/references/projects/evolve/workpackages/wp*.md` | WP1–WP5 parsen: Tasks (`Task 1.1`–`5.3`), Deliverables (`D1.1`–`D5.2`), Checkpoints/Milestones auf Projektebene, Leads (`MFHEA`, `UoA`, `UM`, `ACS`, `HHUAS`) und BOKU-Beitrag. |
 | **WEEK** | `memory/references/projects/week/index.md` & `workpackages/*.md` | Activity Clusters `ac1` bis `ac6` als strukturierte Einheiten beibehalten; `ac3-swot` aus Detaildatei anreichern. |
 | **LI4LAM** | `memory/references/projects/li4lam/workpackages/README.md` | WP1 bis WP9 mit Nummerierung `1..9` strukturieren, bestehende Keywords/Aliases beibehalten. |
-| **ATAEL** | `memory/references/projects/atael/workpackages/README.md` | WP1 mit Nummer `1` strukturieren; vorhandenen Status fachlich prüfen und auf erlaubte v3-Statuswerte abbilden. |
+| **ATAEL** | `memory/references/projects/atael/workpackages/README.md` | Overview-only: erst nach einer eindeutigen strukturierten Quelle migrieren; vorhandenen Status fachlich prüfen und auf erlaubte v3-Statuswerte abbilden. |
 | **USAGE-NG** | `memory/references/projects/usage-ng/index.md` | `workpackages: []` und `milestones: []` für das abgeschlossene Projekt beibehalten. |
 | **RELLDE** | `memory/references/projects/rellde/index.md` | `workpackages: []` und `milestones: []` für den Antrag in Ausarbeitung beibehalten. |
 
