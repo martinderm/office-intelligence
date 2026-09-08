@@ -174,6 +174,6 @@ python skills/project-catalog-entry/scripts/migrate_project_wps.py --catalog mem
 
 ## Backlog
 
-FR-01a liefert v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. **FR-01b1** liefert zusätzlich `migrate_project_wps.py`: standardmäßig read-only Dry-run, nur eindeutig strukturierte Markdown-Quellen, `PendingReview` bei Mehrdeutigkeit und Apply ausschließlich mit kanonisch verifizierter Lock-Ownership. Der produktive Dry-run und jeder Backfill realer Kataloge bleiben **FR-01b2** in [`TODO.md`](TODO.md).
+FR-01a liefert v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. **FR-01b1** liefert zusätzlich `migrate_project_wps.py`: standardmäßig read-only Dry-run, nur eindeutig strukturierte Markdown-Quellen, `PendingReview` bei Mehrdeutigkeit und Apply ausschließlich mit kanonisch verifizierter Lock-Ownership. **FR-01b2 ist abgeschlossen:** Der produktive BOKU-Katalog wurde nach Human Review auf v3 migriert; Details und die bewusst akzeptierte EVOLVE-Warnung stehen in [`TODO.md`](TODO.md). Jeder spätere reale Backfill bleibt ein eigener, erneut freizugebender Lauf.
 
 Ein menschlich freigegebener, konkreter Warning-Code kann für einen Apply explizit dokumentiert werden, etwa `--accept-warning unstable_checkpoint`. Der Code muss im selben Lauf tatsächlich auftreten; unbekannte Codes, Blocking-Diagnostics und pauschale Ignore-/Force-Mechanismen sind nicht zulässig.
