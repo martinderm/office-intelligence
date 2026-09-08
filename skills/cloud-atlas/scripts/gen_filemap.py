@@ -496,6 +496,7 @@ def parse_args():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
     group.add_argument("--topic-id", help="Topic-ID (z. B. lifelong-learning)")
+    parser.add_argument("--subtopic-id", help="Explizite Subtopic-ID unter --topic-id")
     parser.add_argument("--project-title", required=False, help="Titel des Projekts oder Themas")
     parser.add_argument("--scan-dir", required=False, help="Relativer Pfad zum Scan-Verzeichnis vom Workspace-Root aus (z. B. data/cloud/MESHE)")
     parser.add_argument("--output-json", required=False, help="Relativer Pfad zur Ziel-JSON-Datei (z. B. memory/references/projects/meshe/filemap.json)")
@@ -504,7 +505,24 @@ def parse_args():
     parser.add_argument("--storage-id", required=False, help="Optionale Storage-ID bei mehreren Cloud-Speichern")
     parser.add_argument("--workspace-root", required=False, help="Expliziter Pfad zum Workspace-Root")
     parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen Structured-CLI-Envelope aus")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.subtopic_id and not args.topic_id:
+        parser.error("--subtopic-id requires --topic-id")
+    if args.subtopic_id:
+        direct_paths = [
+            flag for flag, value in (
+                ("--scan-dir", args.scan_dir),
+                ("--output-json", args.output_json),
+                ("--output-md", args.output_md),
+            )
+            if value is not None
+        ]
+        if direct_paths:
+            parser.error(
+                "--subtopic-id uses only catalogued subtopic cloud_sync paths; "
+                f"direct overrides are not allowed: {', '.join(direct_paths)}"
+            )
+    return args
 
 # Regex patterns for version extraction
 version_patterns = [
@@ -547,7 +565,7 @@ def find_workspace_root(start_dir=None):
         current = parent
     return os.path.abspath(start_dir or os.getcwd())
 
-def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None):
+def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None, subtopic_id=None):
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
     project_meta = None
     is_topic = force_topic
@@ -576,6 +594,40 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                         break
         except Exception as e:
             print(f"Warning: Could not read topics.json: {e}")
+
+    if subtopic_id:
+        if not topic_meta:
+            raise ValueError(f"Topic '{project_id}' was not found for subtopic '{subtopic_id}'.")
+        matches = [
+            sub for sub in topic_meta.get("subtopics", [])
+            if isinstance(sub, dict) and str(sub.get("id", "")) == subtopic_id
+        ] if isinstance(topic_meta.get("subtopics"), list) else []
+        if len(matches) != 1:
+            raise ValueError(f"Subtopic '{subtopic_id}' must resolve exactly once under topic '{project_id}'.")
+        subtopic = matches[0]
+        if str(subtopic.get("status", "")).casefold() not in {"", "active"}:
+            raise ValueError(f"Subtopic '{subtopic_id}' under topic '{project_id}' is not active.")
+        cloud_sync = subtopic.get("cloud_sync")
+        if not isinstance(cloud_sync, dict) or not cloud_sync:
+            raise ValueError(f"Subtopic '{subtopic_id}' under topic '{project_id}' has no cloud_sync configuration.")
+        configs = {}
+        for sid, sconfig in cloud_sync.items():
+            if not isinstance(sconfig, dict):
+                raise ValueError(f"Subtopic storage '{sid}' must be a dictionary.")
+            values = {
+                "scan_dir": sconfig.get("scan_dir") or sconfig.get("cloud_dir"),
+                "output_json": sconfig.get("output_json") or sconfig.get("filemap_json"),
+                "output_md": sconfig.get("output_md") or sconfig.get("filemap_md"),
+                "output_dir": sconfig.get("output_dir") or sconfig.get("cloud_mirror_dir"),
+            }
+            if not all(isinstance(value, str) and value.strip() for value in values.values()):
+                raise ValueError(f"Subtopic storage '{sid}' must declare scan_dir, output_json, output_md and output_dir.")
+            configs[sid] = {"title": str(subtopic.get("title") or subtopic_id), **values, "is_topic": True, "subtopic_id": subtopic_id}
+        if storage_id:
+            if storage_id not in configs:
+                raise ValueError(f"Storage ID '{storage_id}' was not found for subtopic '{subtopic_id}'.")
+            return {storage_id: configs[storage_id]}
+        return configs
 
     meta = project_meta or topic_meta
     
@@ -657,7 +709,7 @@ def get_file_info(filepath):
     sha256 = calculate_sha256(filepath)
     return size_str, mtime, version, sha256
 
-def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id):
+def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id, subtopic_id=None):
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
     topics_file = os.path.normpath(os.path.join(workspace_root, "memory/references/topics/topics.json"))
@@ -677,6 +729,19 @@ def update_config_last_synced_at(workspace_root, target_id, is_topic, storage_id
             updated = False
             for item in items:
                 if isinstance(item, dict) and item.get("id") == target_id:
+                    if subtopic_id:
+                        matches = [
+                            sub for sub in item.get("subtopics", [])
+                            if isinstance(sub, dict) and str(sub.get("id", "")) == subtopic_id
+                        ] if isinstance(item.get("subtopics"), list) else []
+                        if len(matches) != 1:
+                            return bounded_message(f"Could not update last_synced_at: subtopic '{subtopic_id}' must resolve exactly once.")
+                        cloud_sync = matches[0].get("cloud_sync")
+                        if not isinstance(cloud_sync, dict) or not isinstance(cloud_sync.get(storage_id), dict):
+                            return bounded_message(f"Could not update last_synced_at: storage '{storage_id}' is not declared for subtopic '{subtopic_id}'.")
+                        cloud_sync[storage_id]["last_synced_at"] = now_str
+                        updated = True
+                        break
                     cloud_sync = item.get("cloud_sync")
                     if isinstance(cloud_sync, dict):
                         if storage_id in cloud_sync and isinstance(cloud_sync[storage_id], dict):
@@ -704,7 +769,7 @@ def run_generation(args):
     project_id = args.project_id or args.topic_id
     is_topic = args.topic or (args.topic_id is not None)
     
-    configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id)
+    configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id, args.subtopic_id)
     
     if not configs:
         raise RuntimeError(f"No cloud sync configurations resolved for ID '{project_id}'.")
@@ -714,9 +779,16 @@ def run_generation(args):
     for sid, resolved in configs.items():
         print(f"\n--- Generiere Filemap fuer Storage: {sid} ---")
         project_title = args.project_title or resolved["title"]
-        scan_dir = args.scan_dir or resolved["scan_dir"]
-        output_json = args.output_json or resolved["output_json"]
-        output_md = args.output_md or resolved["output_md"]
+        if args.subtopic_id:
+            # Do not permit programmatic callers to replace the explicit
+            # subtopic's catalogued storage paths after argument validation.
+            scan_dir = resolved["scan_dir"]
+            output_json = resolved["output_json"]
+            output_md = resolved["output_md"]
+        else:
+            scan_dir = args.scan_dir or resolved["scan_dir"]
+            output_json = args.output_json or resolved["output_json"]
+            output_md = args.output_md or resolved["output_md"]
         output_dir = resolved["output_dir"]
         
         # Convert relative paths to absolute paths
@@ -955,11 +1027,14 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
         
         # Update last_synced_at in projects.json / topics.json
         storage_results.append(current_result)
-        warning = update_config_last_synced_at(workspace_root, project_id, is_topic, sid)
+        warning = update_config_last_synced_at(workspace_root, project_id, is_topic, sid, args.subtopic_id)
         if warning:
             warnings.append({"storage_id": sid, "message": bounded_message(warning)})
     return {
-        "target": {"kind": "topic" if is_topic else "project", "id": project_id},
+        "target": (
+            {"kind": "subtopic", "topic_id": project_id, "subtopic_id": args.subtopic_id}
+            if args.subtopic_id else {"kind": "topic" if is_topic else "project", "id": project_id}
+        ),
         "storages": storage_results,
         "warnings": warnings,
     }
@@ -1013,7 +1088,12 @@ def main():
             phase = "validation"
         elif isinstance(exc, OSError):
             phase = "write"
-        emit_json(envelope(False, FAILED, "Filemap-Generierung fehlgeschlagen.", {"target": {"kind": "topic" if (args.topic or args.topic_id) else "project", "id": args.project_id or args.topic_id}, "storages": completed_storages, "partial_storage": partial_storage, "warnings": []}, _error_details(phase, exc, storage_id)))
+        target = (
+            {"kind": "subtopic", "topic_id": args.topic_id, "subtopic_id": args.subtopic_id}
+            if args.subtopic_id
+            else {"kind": "topic" if (args.topic or args.topic_id) else "project", "id": args.project_id or args.topic_id}
+        )
+        emit_json(envelope(False, FAILED, "Filemap-Generierung fehlgeschlagen.", {"target": target, "storages": completed_storages, "partial_storage": partial_storage, "warnings": []}, _error_details(phase, exc, storage_id)))
         return 1
 
     emit_json(envelope(True, COMPLETED, "Filemap-Generierung erfolgreich abgeschlossen.", data))

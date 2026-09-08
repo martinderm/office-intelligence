@@ -29,6 +29,7 @@ def parse_args():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
     group.add_argument("--topic-id", help="Topic-ID (z. B. lifelong-learning)")
+    parser.add_argument("--subtopic-id", help="Explizite Subtopic-ID unter --topic-id")
     parser.add_argument("--force", action="store_true", help="Alle Konvertierungen erzwingen")
     parser.add_argument("--topic", action="store_true", help="Erzwinge die Behandlung als Topic")
     parser.add_argument("--storage-id", help="Optionale Storage-ID bei mehreren Cloud-Speichern")
@@ -39,7 +40,10 @@ def parse_args():
     parser.add_argument("--ocr-policy", choices=["enrich_source", "local_derivative", "disabled"], default="local_derivative", help="OCR-Policy fuer PDFs")
     parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge die Neuerstellung bestehender OCR-Ebenen")
     parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen Structured-CLI-Envelope aus")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.subtopic_id and not args.topic_id:
+        parser.error("--subtopic-id requires --topic-id")
+    return args
 
 
 def envelope(success, state, message, data, error=None):
@@ -58,9 +62,12 @@ def emit_json(result):
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
 
 
-def command_data(target_kind, target_id, completed_steps):
+def command_data(target_kind, target_id, completed_steps, subtopic_id=None):
     return {
-        "target": {"kind": target_kind, "id": target_id},
+        "target": (
+            {"kind": "subtopic", "topic_id": target_id, "subtopic_id": subtopic_id}
+            if subtopic_id else {"kind": target_kind, "id": target_id}
+        ),
         "completed_steps": completed_steps,
     }
 
@@ -132,6 +139,7 @@ def main():
     target_flag = "--project-id" if args.project_id else "--topic-id"
     target_kind = "project" if args.project_id else "topic"
     target_id = args.project_id or args.topic_id
+    target_subtopic = args.subtopic_id
     completed_steps = []
     conversion_required_error = None
 
@@ -153,6 +161,8 @@ def main():
         convert_command.append("--topic")
     if args.storage_id:
         convert_command.extend(["--storage-id", args.storage_id])
+    if target_subtopic:
+        convert_command.extend(["--subtopic-id", target_subtopic])
     if args.no_ocr:
         convert_command.append("--no-ocr")
     else:
@@ -172,7 +182,7 @@ def main():
             conversion_required_error = error
         else:
             if args.json:
-                emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+                emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps, target_subtopic), error))
             else:
                 print("Fehler beim Konvertieren der Cloud-Dokumente. Abbruch.")
             return error["exit_code"] if error["exit_code"] is not None else 1
@@ -185,6 +195,8 @@ def main():
         filemap_command.append("--topic")
     if args.storage_id:
         filemap_command.extend(["--storage-id", args.storage_id])
+    if target_subtopic:
+        filemap_command.extend(["--subtopic-id", target_subtopic])
     if args.json:
         filemap_command.append("--json")
 
@@ -193,7 +205,7 @@ def main():
     _, error = run_step("filemap", filemap_command, args.json)
     if error:
         if args.json:
-            emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps), error))
+            emit_json(envelope(False, FAILED, "Cloud-Synchronisation fehlgeschlagen.", command_data(target_kind, target_id, completed_steps, target_subtopic), error))
         else:
             print("Fehler beim Generieren der Filemap.")
         return error["exit_code"] if error["exit_code"] is not None else 1
@@ -205,7 +217,7 @@ def main():
                 False,
                 "ConversionRequired",
                 conversion_required_error["message"],
-                command_data(target_kind, target_id, completed_steps),
+                command_data(target_kind, target_id, completed_steps, target_subtopic),
                 conversion_required_error,
             ))
         else:
@@ -213,7 +225,7 @@ def main():
         return conversion_required_error["exit_code"] if conversion_required_error["exit_code"] is not None else 1
 
     if args.json:
-        emit_json(envelope(True, COMPLETED, "Cloud-Synchronisation erfolgreich abgeschlossen.", command_data(target_kind, target_id, completed_steps)))
+        emit_json(envelope(True, COMPLETED, "Cloud-Synchronisation erfolgreich abgeschlossen.", command_data(target_kind, target_id, completed_steps, target_subtopic)))
     else:
         print("\n=== Cloud-Synchronisation erfolgreich abgeschlossen! ===")
     return 0

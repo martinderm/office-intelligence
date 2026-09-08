@@ -189,6 +189,25 @@ python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --project-id <pr
 python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --topic-id <topic_id>
 ```
 
+#### 2a. Katalogisiertes Subtopic synchronisieren
+```bash
+python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --topic-id <topic_id> --subtopic-id <subtopic_id>
+```
+`--subtopic-id` ist nur zusammen mit `--topic-id` zulässig. Der Lauf verwendet
+ausschließlich den exakt einmal vorhandenen aktiven (oder Legacy-statuslosen)
+`topics[].subtopics[]`-Eintrag und dessen `cloud_sync`; er fällt niemals auf
+Parent-Topic-Speicher oder abgeleitete Standardpfade zurück. Inaktive, unbekannte
+oder doppelte Subtopics sowie fehlendes `cloud_sync` brechen fail-closed ab.
+`--storage-id` begrenzt dabei nur die deklarierte Subtopic-Storage-ID. Konverter,
+Filemap und Orchestrator geben das Ziel als `kind: subtopic`, `topic_id` und
+`subtopic_id` im JSON-Envelope aus; `last_synced_at` wird ausschließlich im
+verwendeten verschachtelten Storage aktualisiert. Bei einem Subtopic-Lauf sind
+direkte Pfad-Overrides des Konverters (`--cloud-dir`, `--output-dir`,
+`--filemap-json`) und der Filemap (`--scan-dir`, `--output-json`,
+`--output-md`) unzulässig: Die Pfade stammen ausschließlich aus dem
+verschachtelten `cloud_sync`-Eintrag. `--project-title` ist weiterhin nur ein
+Anzeige-Label.
+
 #### 3. Einzelnen Speicher gezielt synchronisieren
 ```bash
 python .agents/skills/cloud-atlas/scripts/sync_project_cloud.py --project-id week --storage-id bokudrive

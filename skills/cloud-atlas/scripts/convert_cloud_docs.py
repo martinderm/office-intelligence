@@ -126,6 +126,7 @@ def parse_args(argv=None):
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--project-id", help="Projekt-ID (z. B. meshe)")
     group.add_argument("--topic-id", help="Topic-ID (z. B. lifelong-learning)")
+    parser.add_argument("--subtopic-id", help="Explizite Subtopic-ID unter --topic-id")
     parser.add_argument("--cloud-dir", required=False, help="Relativer Pfad zum Cloud-Scan-Verzeichnis (z. B. data/cloud/MESHE)")
     parser.add_argument("--output-dir", required=False, help="Relativer Pfad zum Spiegelungs-Verzeichnis im Project-Memory (z. B. memory/references/projects/meshe/cloud)")
     parser.add_argument("--filemap-json", required=False, help="Relativer Pfad zur filemap.json (z. B. memory/references/projects/meshe/filemap.json)")
@@ -140,7 +141,24 @@ def parse_args(argv=None):
     parser.add_argument("--no-ocr", action="store_true", help="Deaktiviere automatisches OCR-Fallback (entspricht --ocr-policy disabled)")
     parser.add_argument("--redo-ocr", action="store_true", help="Erzwinge Neuerstellung bestehender OCR-Ebenen (--redo-ocr)")
     parser.add_argument("--json", action="store_true", help="Gibt einen kanonischen JSON-Envelope auf stdout aus")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.subtopic_id and not args.topic_id:
+        parser.error("--subtopic-id requires --topic-id")
+    if args.subtopic_id:
+        direct_paths = [
+            flag for flag, value in (
+                ("--cloud-dir", args.cloud_dir),
+                ("--output-dir", args.output_dir),
+                ("--filemap-json", args.filemap_json),
+            )
+            if value is not None
+        ]
+        if direct_paths:
+            parser.error(
+                "--subtopic-id uses only catalogued subtopic cloud_sync paths; "
+                f"direct overrides are not allowed: {', '.join(direct_paths)}"
+            )
+    return args
 
 # Setup markitdown conversion
 try:
@@ -1031,7 +1049,7 @@ def resolve_cloud_metadata_policy(project_or_topic, storage_config, identifier, 
     }
 
 
-def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None):
+def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, storage_id=None, subtopic_id=None):
     projects_file = os.path.normpath(os.path.join(workspace_root, "memory/references/projects/projects.json"))
     project_meta = None
     is_topic = force_topic
@@ -1060,6 +1078,44 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                         break
         except Exception as e:
             print(f"Warning: Could not read topics.json: {e}")
+
+    if subtopic_id:
+        if not topic_meta:
+            raise ValueError(f"Topic '{project_id}' was not found for subtopic '{subtopic_id}'.")
+        matches = [
+            sub for sub in topic_meta.get("subtopics", [])
+            if isinstance(sub, dict) and str(sub.get("id", "")) == subtopic_id
+        ] if isinstance(topic_meta.get("subtopics"), list) else []
+        if len(matches) != 1:
+            raise ValueError(f"Subtopic '{subtopic_id}' must resolve exactly once under topic '{project_id}'.")
+        subtopic = matches[0]
+        if str(subtopic.get("status", "")).casefold() not in {"", "active"}:
+            raise ValueError(f"Subtopic '{subtopic_id}' under topic '{project_id}' is not active.")
+        cloud_sync = subtopic.get("cloud_sync")
+        if not isinstance(cloud_sync, dict) or not cloud_sync:
+            raise ValueError(f"Subtopic '{subtopic_id}' under topic '{project_id}' has no cloud_sync configuration.")
+        configs = {}
+        for sid, sconfig in cloud_sync.items():
+            if not isinstance(sconfig, dict):
+                raise ValueError(f"Subtopic storage '{sid}' must be a dictionary.")
+            values = {
+                "scan_dir": sconfig.get("scan_dir") or sconfig.get("cloud_dir"),
+                "output_json": sconfig.get("output_json") or sconfig.get("filemap_json"),
+                "output_md": sconfig.get("output_md") or sconfig.get("filemap_md"),
+                "output_dir": sconfig.get("output_dir") or sconfig.get("cloud_mirror_dir"),
+            }
+            if not all(isinstance(value, str) and value.strip() for value in values.values()):
+                raise ValueError(f"Subtopic storage '{sid}' must declare scan_dir, output_json, output_md and output_dir.")
+            configs[sid] = {
+                "title": str(subtopic.get("title") or subtopic_id), **values,
+                "is_topic": True, "subtopic_id": subtopic_id,
+                **resolve_cloud_metadata_policy(subtopic, sconfig, subtopic_id, True),
+            }
+        if storage_id:
+            if storage_id not in configs:
+                raise ValueError(f"Storage ID '{storage_id}' was not found for subtopic '{subtopic_id}'.")
+            return {storage_id: configs[storage_id]}
+        return configs
 
     meta = project_meta or topic_meta
     title = project_id.upper()
@@ -1297,23 +1353,33 @@ def run_conversion(args, run_state):
 
     project_id = args.project_id or args.topic_id
     is_topic = args.topic or (args.topic_id is not None)
-    run_state["target"] = {"kind": "topic" if is_topic else "project", "id": project_id}
+    run_state["target"] = (
+        {"kind": "subtopic", "topic_id": project_id, "subtopic_id": args.subtopic_id}
+        if args.subtopic_id else {"kind": "topic" if is_topic else "project", "id": project_id}
+    )
 
     ocr_policy = args.ocr_policy
     if args.no_ocr:
         ocr_policy = "disabled"
     redo_ocr = args.redo_ocr
 
-    configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id)
+    configs = resolve_all_sync_configs(workspace_root, project_id, is_topic, args.storage_id, args.subtopic_id)
 
     if not configs:
         raise ConversionRunError("config", f"No cloud sync configurations resolved for ID '{project_id}'.")
 
     for sid, resolved in configs.items():
         print(f"\n--- Konvertiere Dokumente fuer Storage: {sid} ---")
-        cloud_dir = args.cloud_dir or resolved["scan_dir"]
-        output_dir = args.output_dir or resolved["output_dir"]
-        filemap_json = args.filemap_json or resolved["output_json"]
+        if args.subtopic_id:
+            # Keep the explicit subtopic contract intact even for programmatic
+            # callers that bypass parse_args(): all storage paths are catalog data.
+            cloud_dir = resolved["scan_dir"]
+            output_dir = resolved["output_dir"]
+            filemap_json = resolved["output_json"]
+        else:
+            cloud_dir = args.cloud_dir or resolved["scan_dir"]
+            output_dir = args.output_dir or resolved["output_dir"]
+            filemap_json = args.filemap_json or resolved["output_json"]
 
         cloud_path_abs = os.path.normpath(os.path.join(workspace_root, cloud_dir))
         output_path_abs = os.path.normpath(os.path.join(workspace_root, output_dir))
