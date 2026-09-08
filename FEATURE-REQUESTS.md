@@ -7,7 +7,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | ID | Status | In dieser Session umgesetzt | Kurzurteil |
 | --- | --- | --- | --- |
 | `FR-01` | ✅ abgeschlossen | v3-Schema, Vorlagen, Beispielkatalog, Validator, konservatives Migrationswerkzeug, Tests und produktiver Backfill | Der BOKU-Katalog ist vollständig v3-valid; der einzige EVOLVE-Hinweis `unstable_checkpoint` wurde konkret akzeptiert, ohne eine Meilenstein-ID zu erfinden. |
-| `FR-02` | ⬜ offen | Nein | Es gibt weiterhin nur Projekt-Root-Matching und ein auf 30 Zeilen begrenztes Preview; keine hierarchische Artefaktauflösung und keine Full-Body-Eskalation. |
+| `FR-02` | 🟡 teilweise | FR-02a: hierarchisches v3-Artefakt-Matching | Eindeutige WP-/Task-/Deliverable-/Milestone-Treffer und Review-Kandidaten sind im Decision-Objekt verfügbar; die Full-Body-Eskalation bleibt offen. |
 | `FR-03` | 🟡 teilweise, bereits vor der Session | Nein, abgesehen von einer redaktionellen Frontmatter-Korrektur | Subtopics besitzen bereits Aliase, Keywords, Kontakte und optionales `cloud_sync`; der Classifier konsumiert jedoch nur Aliase und Keywords und gibt keinen Subtopic-Treffer aus. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst 952 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
@@ -117,10 +117,10 @@ Das Migrationsskript liegt als wiederverwendbares Tool unter `skills/project-cat
 
 ## FR-02: Hierarchische WP-/Deliverable-Erkennung & Full-Body-Eskalation in `mail-desk`
 
-**Status:** ⬜ Offen. Der aktuelle Classifier wertet bei Projekten ausschließlich Root-Felder aus. `tasks`, `deliverables` und `milestones` werden nicht gelesen. `get_single_email_details()` ruft zwar `himalaya message read --preview` auf, schneidet den Body aber weiterhin auf standardmäßig 30 Zeilen ab; eine zweite, signalgesteuerte Volltextstufe fehlt.
+**Status:** 🟡 Teilweise. **FR-02a ist abgeschlossen:** Der Classifier löst nach einem gewählten Projekt schema-v3-konform Workpackages, Tasks, Deliverables und projektweite Milestones aus der aktuellen Mail auf. Exakte Codes überwiegen; bei Mehrdeutigkeit bleiben Kandidaten sichtbar, ohne einen Einzelwert zu erfinden. Thread-Vererbung bleibt auf dem Projektroot und FR-06-Telemetrie/Handoff unverändert. `get_single_email_details()` ruft weiterhin `himalaya message read --preview` auf und schneidet den Body standardmäßig auf 30 Zeilen ab; die signalgesteuerte Volltextstufe bleibt als **FR-02b offen**.
 
 ### Problemstellung
-Derzeit matched [`scripts/core/classifier.py`](skills/mail-desk/scripts/core/classifier.py) Mails nur gegen Root-Metadaten von Projekten. Wird eine Mail wie *„Mesche QM Plan Handbook 1. Draft“* verarbeitet, entsteht lediglich ein generischer Evidenzeintrag (*„Projektbezogene Abstimmung zu MESHE“*), ohne Bezug zu Deliverable `D1.2` oder Task `T1.7`. Zudem werden standardmäßig nur die ersten 30 Zeilen Preview geladen.
+Vor FR-02a matchte [`scripts/core/classifier.py`](skills/mail-desk/scripts/core/classifier.py) Mails nur gegen Root-Metadaten von Projekten. Bei einer Mail wie *„Mesche QM Plan Handbook 1. Draft“* entstand dadurch lediglich ein generischer Evidenzeintrag (*„Projektbezogene Abstimmung zu MESHE“*), ohne Bezug zu Deliverable `D1.2` oder Task `T1.7`. FR-02a ergänzt den strukturierten Decision-Kontext; Evidence bleibt absichtlich unverändert. Zudem werden standardmäßig nur die ersten 30 Zeilen Preview geladen.
 
 ### Ziel-Spezifikation
 

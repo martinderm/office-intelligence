@@ -143,6 +143,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
 - Starke Project-Signale sind Projekt-ID/Akronym, Kontakt/Partner, Workpackage,
   Deliverable, Meeting oder laufender Projektthread; starke Topic-Signale sind
   fachliche Querschnittssignale ohne tragfähigen Projektbezug.
+- Bei einem bereits gewählten Projekt wertet der Classifier zusätzlich den
+  schema-v3-Katalogkontext aus: `workpackages`, deren `tasks` und
+  `deliverables` sowie projektweite `milestones`. Eindeutige Treffer stehen
+  optional als `decision.workpackage`, `decision.task`,
+  `decision.deliverable` und `decision.milestone`; die zugrunde liegenden
+  `decision.artifact_match_reasons` bleiben nachvollziehbar. Exakte Codes
+  (etwa `WP2`, `T1.7`, `D1.2`, `MS5`) haben Vorrang vor Titel-, Alias- und
+  Keyword-Signalen. Mehrere plausible Treffer werden ausschließlich unter
+  `decision.artifact_candidates` ausgegeben; es wird kein Einzelwert geraten.
+  Thread-Vererbung übernimmt nur das Projektziel, die Artefakte kommen weiter
+  aus der aktuellen Mail. Legacy-Kataloge ohne v3-Struktur bleiben beim
+  bisherigen Root-Matching. Diese FR-02a-Ergänzung eskaliert keinen Lesegrad
+  und ändert weder Evidence- noch FR-06-Handoff-Formate.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,

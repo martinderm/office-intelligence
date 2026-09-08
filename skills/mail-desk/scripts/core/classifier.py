@@ -75,6 +75,132 @@ def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict
     return projects, topics
 
 
+def _artifact_text_matches(text: str, value: object) -> bool:
+    """Return a conservative whole-term match for a descriptive artifact signal."""
+    signal = str(value).strip()
+    if len(signal) < 3:
+        return False
+    return bool(re.search(r"(?<!\w)" + re.escape(signal) + r"(?!\w)", text, re.IGNORECASE))
+
+
+def _artifact_code_matches(text: str, identifier: object) -> bool:
+    """Match a stable artifact code without accepting it as part of another token."""
+    code = str(identifier).strip()
+    if not code:
+        return False
+    return bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])", text, re.IGNORECASE))
+
+
+def _artifact_candidate(
+    kind: str,
+    item: dict[str, Any],
+    text: str,
+    *,
+    workpackage: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return one catalog-backed candidate with deterministic, inspectable reasons."""
+    identifier = str(item.get("id", "")).strip()
+    title = str(item.get("title", "")).strip()
+    if not identifier or not title:
+        return None
+
+    reasons: list[str] = []
+    if _artifact_code_matches(text, identifier):
+        reasons.append(f"exact_code:{identifier}")
+
+    if kind == "workpackage":
+        number = item.get("number")
+        if isinstance(number, (int, float)) and not isinstance(number, bool):
+            wp_code = f"WP{number:g}"
+            if wp_code.casefold() != identifier.casefold() and _artifact_code_matches(text, wp_code):
+                reasons.append(f"exact_code:{wp_code}")
+
+    if _artifact_text_matches(text, title):
+        reasons.append(f"title:{title}")
+    for alias in item.get("aliases", []) if isinstance(item.get("aliases"), list) else []:
+        if _artifact_text_matches(text, alias):
+            reasons.append(f"alias:{str(alias).strip()}")
+    for keyword in item.get("keywords", []) if isinstance(item.get("keywords"), list) else []:
+        if _artifact_text_matches(text, keyword):
+            reasons.append(f"keyword:{str(keyword).strip()}")
+
+    if not reasons:
+        return None
+
+    candidate: dict[str, Any] = {"id": identifier, "title": title, "reasons": reasons}
+    if workpackage is not None:
+        parent_id = str(workpackage.get("id", "")).strip()
+        if parent_id:
+            candidate["workpackage"] = parent_id
+    return candidate
+
+
+def _select_project_artifacts(project: dict[str, Any], text: str) -> dict[str, Any]:
+    """Resolve v3 artifacts only when the current mail makes one candidate unambiguous.
+
+    Exact codes outrank descriptive matches.  A descriptive match is selected only
+    when it yields one candidate for its artifact type; otherwise candidates remain
+    visible for review and no scalar decision field is emitted.
+    """
+    candidates: dict[str, list[dict[str, Any]]] = {
+        "workpackage": [], "task": [], "deliverable": [], "milestone": []
+    }
+    workpackages = project.get("workpackages")
+    if isinstance(workpackages, list):
+        for wp in workpackages:
+            if not isinstance(wp, dict):
+                continue
+            candidate = _artifact_candidate("workpackage", wp, text)
+            if candidate:
+                candidates["workpackage"].append(candidate)
+            for task in wp.get("tasks", []) if isinstance(wp.get("tasks"), list) else []:
+                if isinstance(task, dict):
+                    candidate = _artifact_candidate("task", task, text, workpackage=wp)
+                    if candidate:
+                        candidates["task"].append(candidate)
+            for deliverable in wp.get("deliverables", []) if isinstance(wp.get("deliverables"), list) else []:
+                if isinstance(deliverable, dict):
+                    candidate = _artifact_candidate("deliverable", deliverable, text, workpackage=wp)
+                    if candidate:
+                        candidates["deliverable"].append(candidate)
+
+    milestones = project.get("milestones")
+    if isinstance(milestones, list):
+        for milestone in milestones:
+            if isinstance(milestone, dict):
+                candidate = _artifact_candidate("milestone", milestone, text)
+                if candidate:
+                    candidates["milestone"].append(candidate)
+
+    result: dict[str, Any] = {"match_reasons": {}, "candidates": {}}
+    selected_parent_wps: list[str] = []
+    for kind in ("workpackage", "task", "deliverable", "milestone"):
+        matches = sorted(candidates[kind], key=lambda row: (row["id"].casefold(), row["title"].casefold()))
+        exact = [row for row in matches if any(reason.startswith("exact_code:") for reason in row["reasons"])]
+        choices = exact if exact else matches
+        if len(choices) == 1:
+            selected = choices[0]
+            result[kind] = selected["id"]
+            result["match_reasons"][kind] = selected["reasons"]
+            parent_id = selected.get("workpackage")
+            if isinstance(parent_id, str):
+                selected_parent_wps.append(parent_id)
+        elif choices:
+            result["candidates"][kind] = choices
+
+    if "workpackage" not in result and selected_parent_wps:
+        parent_ids = sorted(set(selected_parent_wps), key=str.casefold)
+        if len(parent_ids) == 1:
+            result["workpackage"] = parent_ids[0]
+            result["match_reasons"]["workpackage"] = ["inferred_from_nested_artifact"]
+
+    if not result["match_reasons"]:
+        result.pop("match_reasons")
+    if not result["candidates"]:
+        result.pop("candidates")
+    return result
+
+
 def classify_email(
     email: dict[str, Any],
     workspace_root: Path | None = None,
@@ -127,6 +253,7 @@ def classify_email(
     }
     notes = ""
     evidence_spec: dict[str, Any] | None = None
+    selected_project: dict[str, Any] | None = None
 
     # Check for reply requirement directed at Martin
     needs_reply = False
@@ -231,6 +358,7 @@ def classify_email(
                 "target_file": ev_file_rel,
                 "entry": ev_entry,
             }
+            selected_project = matched_proj_obj
             thread_matched = True
         elif matched_topic_obj:
             tid = matched_topic_obj.get("id", "")
@@ -275,6 +403,7 @@ def classify_email(
     # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     matched_project = None
+    matched_project_obj: dict[str, Any] | None = None
     matched_proj_confidence = "low"
 
     if not thread_matched:
@@ -299,6 +428,7 @@ def classify_email(
                 name_norm = re.sub(r"[-_]+", " ", name)
                 if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
                     matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                    matched_project_obj = proj
                     matched_proj_confidence = "high"
                     break
             if matched_project:
@@ -309,6 +439,7 @@ def classify_email(
                 pat_norm = re.sub(r"[-_]+", " ", pat)
                 if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
                     matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                    matched_project_obj = proj
                     matched_proj_confidence = "high"
                     break
             if matched_project:
@@ -325,14 +456,17 @@ def classify_email(
 
             if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_project_obj = proj
                 matched_proj_confidence = "high"
                 break
             elif has_contact_match or (has_domain_match and not any(gen in parties for gen in ["boku.ac.at", "gmail.com", "outlook.com", "yahoo.com"])):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_project_obj = proj
                 matched_proj_confidence = "high"
                 break
             elif has_kw_match and (has_contact_match or has_domain_match):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_project_obj = proj
                 matched_proj_confidence = "medium"
                 break
 
@@ -363,6 +497,7 @@ def classify_email(
                 "file": ev_file_rel,
                 "entry": ev_entry,
             }
+            selected_project = matched_project_obj
 
     # --------------------------------------------------------------------------
     # 2. Dynamic Topic Catalog Matching (High / Medium confidence)
@@ -442,6 +577,21 @@ def classify_email(
                 "needs_reply": needs_reply,
             }
             notes = f"Themenbezogene Zuordnung zu {matched_topic['title']} (Betreff: {subject})."
+
+    # --------------------------------------------------------------------------
+    # 2a. Project artifact matching (FR-02a)
+    # --------------------------------------------------------------------------
+    # Thread inheritance establishes only the project root.  Current-mail artifact
+    # context is always resolved from the current visible mail fields.
+    if selected_project is not None and decision.get("kind") == "project":
+        artifact_resolution = _select_project_artifacts(selected_project, full_text)
+        for field in ("workpackage", "task", "deliverable", "milestone"):
+            if field in artifact_resolution:
+                decision[field] = artifact_resolution[field]
+        if "match_reasons" in artifact_resolution:
+            decision["artifact_match_reasons"] = artifact_resolution["match_reasons"]
+        if "candidates" in artifact_resolution:
+            decision["artifact_candidates"] = artifact_resolution["candidates"]
 
     # --------------------------------------------------------------------------
     # 3. Sent Items Reply Check
