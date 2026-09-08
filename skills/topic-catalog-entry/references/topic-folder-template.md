@@ -11,6 +11,8 @@ Für jedes Topic wird eine Arbeitsstruktur in beiden Säulen des Dual-Evidence-S
   - `memory/references/topics/<id>/contacts.md`
   - `memory/references/topics/<id>/signals.md`
   - `memory/references/topics/<id>/subtopics/`
+  - `memory/references/topics/<id>/subtopics/<subtopic-id>/operations/<operation-id>/index.md` (optional, nur für Dauerprozesse)
+  - `memory/operations/topics/<id>/subtopics/<subtopic-id>/<operation-id>/` (aktiver Arbeitsstand)
 - **Säule 2 (Evidenzen & Logs):**
   - `memory/evidence/topics/<id>/` (chronologische Logs `YYYY-MM.md`)
 
@@ -106,4 +108,34 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, warum ist das Topic routingrele
 <!-- BEGIN:managed-subtopic-summary -->
 - 
 <!-- END:managed-subtopic-summary -->
+```
+
+## `subtopics/<subtopic-id>/operations/<operation-id>/index.md` (Template)
+
+```md
+# <operation-id> — <Title>
+
+## Scope
+
+- Wiederkehrender/laufender Dauerprozess innerhalb von `<subtopic-id>`.
+
+## Signale
+
+- Aliases:
+  -
+- Keywords:
+  -
+- Typical subject patterns:
+  -
+
+## Referenzen & Evidenz
+
+- Aktiver Arbeitsstand: `memory/operations/topics/<topic-id>/subtopics/<subtopic-id>/<operation-id>/`
+- Mail-Evidence: `memory/evidence/topics/<topic-id>/subtopics/<subtopic-id>/operations/<operation-id>/`
+
+## Stand (Managed)
+
+<!-- BEGIN:managed-operation-summary -->
+-
+<!-- END:managed-operation-summary -->
 ```

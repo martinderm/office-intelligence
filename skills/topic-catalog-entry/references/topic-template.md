@@ -33,6 +33,14 @@
   typical_subject_patterns: []
   contacts: []
   reference_md: memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>.md
+  operations:
+  - id: <operation-slug>
+    title: <Operation title>
+    aliases: []
+    keywords: []
+    typical_subject_patterns: []
+    reference_md: memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>/operations/<operation-slug>/index.md
+    status: active
   status: active
 
 ## description

@@ -455,6 +455,92 @@ def _topic_context_label(topic: dict[str, Any], subtopic: dict[str, Any]) -> str
     return f"{topic_label} | {subtopic_label}".strip(" |")
 
 
+def _select_subtopic_operation(
+    subtopic: dict[str, Any],
+    *,
+    subject: str,
+    full_text: str,
+) -> dict[str, Any]:
+    """Resolve a documented operation only within one already-selected subtopic.
+
+    Operations deliberately have no contact signal: an operation is a durable
+    process taxonomy node, not a recipient-based routing override.  The same
+    score order as subtopics keeps a visible subject signal stronger than a
+    preview-only keyword, and equal candidates remain reviewable.
+    """
+    operations = [
+        operation for operation in subtopic.get("operations", [])
+        if isinstance(operation, dict)
+        and str(operation.get("status", "")).casefold() in {"", "active"}
+    ] if isinstance(subtopic.get("operations"), list) else []
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for operation in operations:
+        identifier = str(operation.get("id", "")).strip()
+        title = str(operation.get("title", "")).strip()
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identifier) or not title:
+            continue
+        reasons: list[str] = []
+        score = 0
+        for pattern in operation.get("typical_subject_patterns", []) if isinstance(operation.get("typical_subject_patterns"), list) else []:
+            if _subject_signal_matches(subject, pattern):
+                reasons.append(f"subject_pattern:{str(pattern).strip()}")
+                score = max(score, 500)
+        for value, label in ((identifier, "subject_id"), (title, "subject_title")):
+            if _subject_signal_matches(subject, value):
+                reasons.append(f"{label}:{value}")
+                score = max(score, 400)
+        for alias in operation.get("aliases", []) if isinstance(operation.get("aliases"), list) else []:
+            if _subject_signal_matches(subject, alias):
+                reasons.append(f"subject_alias:{str(alias).strip()}")
+                score = max(score, 400)
+        for keyword in operation.get("keywords", []) if isinstance(operation.get("keywords"), list) else []:
+            keyword_text = str(keyword).strip()
+            if _subject_signal_matches(subject, keyword_text):
+                reasons.append(f"subject_keyword:{keyword_text}")
+                score = max(score, 300)
+            elif _artifact_text_matches(full_text, keyword_text):
+                reasons.append(f"keyword:{keyword_text}")
+                score = max(score, 100)
+        if reasons:
+            candidates.append((score, {"id": identifier, "title": title, "reasons": reasons, "_source": operation}))
+
+    if not candidates:
+        return {}
+    highest_score = max(score for score, _ in candidates)
+    choices = [candidate for score, candidate in candidates if score == highest_score]
+    choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    # Duplicate active/legacy operation IDs make every matching operation
+    # structurally ambiguous, even if one duplicate happened to score lower.
+    ids = [str(operation.get("id", "")).strip().casefold() for operation in operations]
+    duplicate_ids = {identifier for identifier in ids if identifier and ids.count(identifier) > 1}
+    if duplicate_ids and any(candidate["id"].casefold() in duplicate_ids for candidate in choices):
+        choices.extend(
+            {"id": operation["id"], "title": str(operation.get("title", "")).strip(), "reasons": ["duplicate_operation_id"], "_source": operation}
+            for operation in operations
+            if str(operation.get("id", "")).strip().casefold() in duplicate_ids
+            and not any(candidate["_source"] is operation for candidate in choices)
+        )
+        choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    if len(choices) == 1:
+        selected = choices[0]
+        return {"operation": selected["id"], "match_reasons": selected["reasons"], "source": selected["_source"]}
+    return {
+        "candidates": [
+            {"id": candidate["id"], "title": candidate["title"], "reasons": candidate["reasons"]}
+            for candidate in choices
+        ]
+    }
+
+
+def _operation_context_label(topic: dict[str, Any], subtopic: dict[str, Any], operation: dict[str, Any]) -> str:
+    """Build an evidence label only from the chosen catalog objects."""
+    subtopic_context = _topic_context_label(topic, subtopic)
+    operation_id = str(operation.get("id", "")).strip()
+    operation_title = str(operation.get("title", "")).strip()
+    operation_label = f"{operation_id} ({operation_title})" if operation_title else operation_id
+    return f"{subtopic_context} / {operation_label}".strip(" / ")
+
+
 def _build_topic_evidence(
     topic: dict[str, Any],
     subtopic: dict[str, Any],
@@ -496,6 +582,48 @@ def _build_topic_evidence(
     return spec
 
 
+def _build_operation_evidence(
+    topic: dict[str, Any],
+    subtopic: dict[str, Any],
+    operation: dict[str, Any],
+    decision: dict[str, Any],
+    *,
+    year_month: str,
+    date: str,
+    subject: str,
+    message_id: str,
+    from_str: str,
+    to_str: str,
+) -> dict[str, Any]:
+    """Create operation-scoped evidence without making process claims from mail text."""
+    topic_id = str(topic.get("id", "")).strip()
+    subtopic_id = str(subtopic.get("id", "")).strip()
+    operation_id = str(operation.get("id", "")).strip()
+    evidence_file = (
+        f"memory/evidence/topics/{topic_id}/subtopics/{subtopic_id}/operations/"
+        f"{operation_id}/{year_month}.md"
+    )
+    participants = from_str or "Unbekannt"
+    if to_str:
+        participants = f"{participants}; An: {to_str}"
+    entry_lines = [
+        f"- {date} — {subject}.",
+        f"  - Message-ID: `{message_id}`",
+        f"  - Beteiligte: {participants}",
+        f"  - Kontext: [{_operation_context_label(topic, subtopic, operation)}]",
+        f"  - Mailgegenstand: {subject}",
+    ]
+    spec: dict[str, Any] = {
+        "type": "operation_evidence",
+        "file": evidence_file,
+        "entry": "\n".join(entry_lines),
+    }
+    read_escalation = _evidence_read_escalation(decision)
+    if read_escalation:
+        spec["read_escalation"] = read_escalation
+    return spec
+
+
 def _safe_subtopic_reference_target(
     topic: dict[str, Any], subtopic: dict[str, Any], workspace_root: Path
 ) -> list[dict[str, str]]:
@@ -516,6 +644,48 @@ def _safe_subtopic_reference_target(
     if not candidate.is_file():
         return []
     return [{"file": raw_path, "type": "subtopic_reference"}]
+
+
+def _safe_operation_reference_target(
+    topic: dict[str, Any], subtopic: dict[str, Any], operation: dict[str, Any], workspace_root: Path
+) -> list[dict[str, str]]:
+    """Return an operation target only for its exact catalogued index.md path."""
+    topic_id = str(topic.get("id", "")).strip()
+    subtopic_id = str(subtopic.get("id", "")).strip()
+    operation_id = str(operation.get("id", "")).strip()
+    reference = operation.get("reference_md")
+    if not all((topic_id, subtopic_id, operation_id)) or not isinstance(reference, str) or not reference.strip():
+        return []
+    expected = (
+        f"memory/references/topics/{topic_id}/subtopics/{subtopic_id}/operations/"
+        f"{operation_id}/index.md"
+    )
+    raw_path = reference.strip()
+    if raw_path != expected or "\\" in raw_path:
+        return []
+    path = PurePosixPath(raw_path)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return []
+    if not workspace_root.joinpath(*path.parts).is_file():
+        return []
+    return [{"file": raw_path, "type": "operation_reference"}]
+
+
+def _has_canonical_operation_reference(
+    topic: dict[str, Any], subtopic: dict[str, Any], operation: dict[str, Any]
+) -> bool:
+    """Accept an omitted reference, but reject a supplied noncanonical one."""
+    reference = operation.get("reference_md")
+    if reference in (None, ""):
+        return True
+    if not isinstance(reference, str):
+        return False
+    expected = (
+        f"memory/references/topics/{str(topic.get('id', '')).strip()}/subtopics/"
+        f"{str(subtopic.get('id', '')).strip()}/operations/"
+        f"{str(operation.get('id', '')).strip()}/index.md"
+    )
+    return reference.strip() == expected and "\\" not in reference
 
 
 def full_body_triggers(email: dict[str, Any], preview_item: dict[str, Any]) -> list[str]:
@@ -669,18 +839,35 @@ def classify_email_two_pass(
                 ) if isinstance(matched_topic.get("subtopics"), list) else None
                 if matched_subtopic is not None:
                     full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
-                    full_item["evidence"] = _build_topic_evidence(
-                        matched_topic,
-                        matched_subtopic,
-                        full_item["decision"],
-                        workspace_root=workspace_root or Path.cwd(),
-                        year_month=full_ym,
-                        date=full_ymd,
-                        subject=str(full_email.get("subject", "")),
-                        message_id=normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
-                        from_str=str(full_email.get("from", "")),
-                        to_str=str(full_email.get("to", "")),
-                    )
+                    operation_id = str(full_item["decision"].get("operation", "")).casefold()
+                    matched_operation = next(
+                        (
+                            operation for operation in matched_subtopic.get("operations", [])
+                            if isinstance(operation, dict)
+                            and str(operation.get("id", "")).casefold() == operation_id
+                        ),
+                        None,
+                    ) if operation_id and isinstance(matched_subtopic.get("operations"), list) else None
+                    common = {
+                        "year_month": full_ym,
+                        "date": full_ymd,
+                        "subject": str(full_email.get("subject", "")),
+                        "message_id": normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
+                        "from_str": str(full_email.get("from", "")),
+                        "to_str": str(full_email.get("to", "")),
+                    }
+                    if matched_operation is not None:
+                        full_item["evidence"] = _build_operation_evidence(
+                            matched_topic, matched_subtopic, matched_operation, full_item["decision"], **common
+                        )
+                    else:
+                        full_item["evidence"] = _build_topic_evidence(
+                            matched_topic,
+                            matched_subtopic,
+                            full_item["decision"],
+                            workspace_root=workspace_root or Path.cwd(),
+                            **common,
+                        )
         return full_item
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
         return _full_read_failure(preview_item, triggers, exc)
@@ -1184,6 +1371,40 @@ def classify_email(
                 to_str=to_str,
             )
             synthesis_targets = _safe_subtopic_reference_target(selected_topic, subtopic_source, ws)
+            # An operation may only refine an already proven subtopic.  It never
+            # changes parent routing and thread inheritance supplies neither an
+            # operation scalar nor operation evidence on its own.
+            operation_resolution = _select_subtopic_operation(
+                subtopic_source, subject=subject, full_text=full_text
+            )
+            operation_source = operation_resolution.get("source")
+            if isinstance(operation_source, dict) and isinstance(operation_resolution.get("operation"), str):
+                if _has_canonical_operation_reference(selected_topic, subtopic_source, operation_source):
+                    decision["operation"] = operation_resolution["operation"]
+                    decision["operation_match_reasons"] = operation_resolution.get("match_reasons", [])
+                    evidence_spec = _build_operation_evidence(
+                        selected_topic,
+                        subtopic_source,
+                        operation_source,
+                        decision,
+                        year_month=ym,
+                        date=ymd,
+                        subject=subject,
+                        message_id=norm_mid,
+                        from_str=from_str,
+                        to_str=to_str,
+                    )
+                    synthesis_targets = _safe_operation_reference_target(
+                        selected_topic, subtopic_source, operation_source, ws
+                    )
+                else:
+                    decision["operation_candidates"] = [{
+                        "id": operation_resolution["operation"],
+                        "title": str(operation_source.get("title", "")).strip(),
+                        "reasons": list(operation_resolution.get("match_reasons", [])) + ["noncanonical_reference_md"],
+                    }]
+            elif isinstance(operation_resolution.get("candidates"), list):
+                decision["operation_candidates"] = operation_resolution["candidates"]
         elif isinstance(subtopic_resolution.get("candidates"), list):
             decision["subtopic_candidates"] = subtopic_resolution["candidates"]
 

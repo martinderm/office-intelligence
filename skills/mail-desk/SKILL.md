@@ -196,6 +196,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   schwächere generische Root-Pattern-/Keyword-Zuordnung eines anderen Topics
   überstimmen; explizite Parent-Namen sowie Gleichstände bleiben konservativ.
   FR-06-Preflight und Handoff bleiben unverändert.
+- FR-03b2b ergänzt unter einem bereits eindeutig entschiedenen Subtopic eine
+  optionale `operations[]`-Auflösung für wiederkehrende Dauerprozesse. Sie wertet
+  nur aktive (oder Legacy-statuslose) Operations anhand von dokumentierten
+  Betreffmustern, IDs/Titeln/Aliasen und Keywords aus; Betreffsignale haben
+  Vorrang vor Preview-Keywords, Kontakte sind kein Operationssignal. Eindeutige
+  Treffer erhalten `decision.operation` und `operation_match_reasons`; gleiche
+  oder strukturell doppelte IDs bleiben als `operation_candidates` reviewbar.
+  Thread-Vererbung übernimmt keine Operation. Routing bleibt beim Parent-
+  `mailbox_folder`. Nur ein vorhandener, exakt katalogisierter kanonischer
+  Operations-`index.md` kann einen `operation_reference`-Syntheseauftrag erzeugen;
+  Operation-Evidence landet quellengebunden unter
+  `memory/evidence/topics/<topic>/subtopics/<subtopic>/operations/<operation>/YYYY-MM.md`.
+  Mailtext kann keine Pfade oder Ziele einschleusen.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,

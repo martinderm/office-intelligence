@@ -32,6 +32,15 @@ Lege für neue Topics an:
 - `memory/evidence/topics/<slug>/` (Ordner für chronologische Evidenz-Logs `YYYY-MM.md`)
 - optional: `memory/references/topics/<slug>/subtopics/<subtopic-slug>/events/` (Ordner für Events und Konferenzen; Dokumentations-Workflow siehe Skill `event-documentation`)
 
+Ein Subtopic ist Taxonomie. Ein wiederkehrender oder laufender Dauerprozess wird
+nicht als Event modelliert, sondern optional als
+`subtopics[].operations[]`. Der kanonische Operations-Index ist
+`memory/references/topics/<topic>/subtopics/<subtopic>/operations/<operation>/index.md`;
+der aktive Arbeitsstand liegt unter
+`memory/operations/topics/<topic>/subtopics/<subtopic>/<operation>/` und seine
+quellengebundene Mail-Evidence unter
+`memory/evidence/topics/<topic>/subtopics/<subtopic>/operations/<operation>/YYYY-MM.md`.
+
 Regeln & Dual-Path-Fallback:
 
 - **Dual-Path Lesezugriff:** Bei Lesezugriffen auf Evidenzen wird zuerst `memory/evidence/topics/<slug>/` geprüft. Existiert dieser nicht, greift als Abwärtskompatibilität der Fallback auf das Legacy-Verzeichnis `memory/references/topics/<slug>/evidence/`.
@@ -92,6 +101,17 @@ Frontmatter-Regel:
           "last_synced_at": "string (optional/automatisch, z. B. YYYY-MM-DD HH:MM:SS)"
         }
       },
+      "operations": [
+        {
+          "id": "string-slug",
+          "title": "string",
+          "aliases": ["string"],
+          "keywords": ["string"],
+          "typical_subject_patterns": ["string"],
+          "reference_md": "memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>/operations/<operation-slug>/index.md (optional)",
+          "status": "active"
+        }
+      ],
       "status": "active"
     }
   ],
@@ -127,7 +147,10 @@ Frage in dieser Reihenfolge, kurz und präzise:
 7. Keywords
 8. Typical subject patterns
 9. Subtopics (optional; je Subtopic Aliase, Keywords, `typical_subject_patterns` und Kontakte getrennt erheben)
-10. Routing-Priorität / `do_not_route_if`
+10. Dauerprozesse je Subtopic (optional; je Operation ID, Titel, Aliase, Keywords,
+    `typical_subject_patterns`, optionaler kanonischer Index und Status; keine
+    Kontakte oder Cloud-Felder ohne konkret belegten Bedarf)
+11. Routing-Priorität / `do_not_route_if`
 
 Dann:
 
@@ -158,6 +181,16 @@ Vor Ausgabe prüfen:
 - `subtopics[].typical_subject_patterns` ist das einzige Feld für Subtopic-Betreffmuster; keine parallelen Feldnamen einführen.
 - `status: active` wird automatisch klassifiziert; für Legacy-Kataloge gilt ein fehlender Status kompatibel als aktiv, während explizit inaktive Einträge ignoriert werden. Ein Subtopic-Kontakt darf nur bei einem unabhängigen Parent-Topic-Betreffsignal als ergänzendes, eindeutiges Signal wirken.
 - Ein optionales `subtopics[].reference_md` ist nur dann ein automatisches Syntheseziel, wenn es exakt auf die vorhandene kanonische Datei `memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>.md` verweist; Event- oder Abschnittssemantik wird nicht geraten.
+- `subtopics[].operations[].id` ist ein eindeutiger slug innerhalb seines
+  Subtopics; fehlender Status bleibt Legacy-kompatibel aktiv, explizit inaktive
+  Operations werden ignoriert. Doppelte IDs sind ein Review-Fall und dürfen nicht
+  automatisch aufgelöst werden.
+- `operations[].typical_subject_patterns` ist das einzige Operations-Feld für
+  Betreffmuster. Ein optionales `operations[].reference_md` ist ausschließlich
+  dann ein Syntheseziel, wenn es exakt auf die vorhandene kanonische
+  `.../operations/<operation-slug>/index.md` zeigt; nichtkanonische Pfade bleiben
+  ohne Ziel und reviewbar. Operations erhalten keine Kontakt- oder Cloud-Felder,
+  solange dafür kein belegter Fachbedarf besteht.
 - Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen und bei plausibler Relevanz dessen Filemap oder passende Spiegelungen prüfen; zusätzliche, ausschließlich subtopic-spezifische Speicher dürfen als `subtopics[].cloud_sync` im Cloud-Atlas-Schema gepflegt werden.
 - `schema_version = 1`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)

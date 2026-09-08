@@ -8,7 +8,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | --- | --- | --- | --- |
 | `FR-01` | ✅ abgeschlossen | v3-Schema, Vorlagen, Beispielkatalog, Validator, konservatives Migrationswerkzeug, Tests und produktiver Backfill | Der BOKU-Katalog ist vollständig v3-valid; der einzige EVOLVE-Hinweis `unstable_checkpoint` wurde konkret akzeptiert, ohne eine Meilenstein-ID zu erfinden. |
 | `FR-02` | ✅ abgeschlossen | FR-02a: hierarchisches v3-Artefakt-Matching; FR-02b: Zweitpass-Volltext; FR-02c: strukturierte Evidence | Artefakt-Treffer, Review-Kandidaten, sichere Volltext-Reklassifikation und neutrale, kataloggestützte Project-Evidence sind vollständig verfügbar. |
-| `FR-03` | 🟡 teilweise — FR-03a, FR-03b1 und FR-03b2a abgeschlossen | Ja: Signalvertrag, Subtopic-Matching, Cagliari-Anreicherung, Konfliktauflösung und ausführbarer Subtopic-Cloud-Sync | FR-03b2b bleibt offen: `operations/`-Vertrag und allgemeine Event-Fachlogik. |
+| `FR-03` | 🟡 teilweise — FR-03a, FR-03b1, FR-03b2a und FR-03b2b abgeschlossen | Ja: Signalvertrag, Subtopic-Matching, Cagliari-Anreicherung, Subtopic-Cloud-Sync und Operations-Vertrag | Allgemeine Event-Fachlogik bleibt offen. |
 | `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst aktuell 954 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
@@ -169,7 +169,7 @@ Die Full-Body-Logik sollte als klarer Zwei-Pass-Flow gebaut werden: Preview klas
 
 ## FR-03: Subtopic-Strukturierung & Signalisierung in `topics.json`
 
-**Status:** 🟡 Teilweise — **FR-03a, FR-03b1 und FR-03b2a abgeschlossen.** Der normative Vertrag umfasst `subtopics[].aliases`, `keywords`, `typical_subject_patterns`, `contacts`, optionales `reference_md`, `cloud_sync` und `status`. Der Classifier löst aktive Subtopics konservativ und deterministisch auf und dokumentiert eindeutige Gründe oder gleichrangige Kandidaten. Eine eindeutige Cagliari-/IACEE-Subtopic-`subject_pattern` kann einen schwächeren generischen EUCEN-Root-Treffer überstimmen; gleich starke Kandidaten bleiben fail-closed. Katalogisierte aktive Subtopic-`cloud_sync`-Storages sind nun per expliziter Topic-/Subtopic-CLI ausführbar, ohne Parent-Fallback und mit verschachteltem Zeitstempel. **FR-03b2b bleibt offen:** ein `operations/`-Vertrag sowie allgemeine Event-Fachlogik.
+**Status:** 🟡 Teilweise — **FR-03a, FR-03b1, FR-03b2a und FR-03b2b abgeschlossen.** Der normative Vertrag umfasst `subtopics[].aliases`, `keywords`, `typical_subject_patterns`, `contacts`, optionales `reference_md`, `cloud_sync`, `operations` und `status`. Der Classifier löst aktive Subtopics und – erst danach – aktive oder Legacy-statuslose Operations konservativ und deterministisch auf und dokumentiert eindeutige Gründe oder gleichrangige Kandidaten. Eine eindeutige Cagliari-/IACEE-Subtopic-`subject_pattern` kann einen schwächeren generischen EUCEN-Root-Treffer überstimmen; gleich starke Kandidaten bleiben fail-closed. Katalogisierte aktive Subtopic-`cloud_sync`-Storages sind nun per expliziter Topic-/Subtopic-CLI ausführbar, ohne Parent-Fallback und mit verschachteltem Zeitstempel. Operations sind Dauerprozesse mit kanonischem Index, aktivem Arbeitsstand und quellengebundener Evidence; sie ändern nie das Parent-Routing. Allgemeine Event-Fachlogik bleibt offen.
 
 ### Problemstellung
 Themen (Topics) sind Linien-, Dauer- und Betriebsaufgaben ohne starre EU-Workpackages. Bisher sind `subtopics` in [`topics.json`](../../boku-user/memory/references/topics/topics.json) häufig leere Arrays ohne funktionale Routing-Signale, was zu unpräziser Klassifikation führt.
@@ -213,9 +213,14 @@ FR-03a legt die Kontaktregel fest: Ein Subtopic-Kontakt ergänzt nur dann die Au
   ]
   ```
 
-### Verbleibend: FR-03b2b / fachliche Definition
+### Abgeschlossen: FR-03b2b / Operations-Vertrag
 
-- Ein normativer `operations/`-Vertrag und allgemeine Event-spezifische Dossierlogik sind nicht Teil dieser Pakete.
+- `subtopics[].operations[]` modelliert ausschließlich wiederkehrende oder laufende Dauerprozesse, nicht Events. Jede Operation hat mindestens slug-ID, Titel, `aliases`, `keywords`, `typical_subject_patterns` und Status; ein optionaler `reference_md` darf nur der kanonische Operations-Index sein. Der aktive Arbeitsstand und die monatliche Mail-Evidence haben getrennte, feste Pfade.
+- Mail-Desk löst eine Operation nur nach eindeutiger Parent-Topic- und Subtopic-Entscheidung der aktuellen Mail auf. Operationssignale sind kataloggebunden und deterministisch, Kontakte und Thread-Historie liefern keine Operationsvererbung. Gleichstände, doppelte IDs und nichtkanonische Referenzen bleiben fail-closed/reviewbar.
+
+### Verbleibend: allgemeine Event-Fachlogik
+
+- Event-spezifische Dossierlogik, Event-Lebenszyklus und produktive Event-Anreicherung sind nicht Teil von FR-03b2b.
 
 ---
 
