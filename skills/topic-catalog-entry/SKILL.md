@@ -41,6 +41,12 @@ der aktive Arbeitsstand liegt unter
 quellengebundene Mail-Evidence unter
 `memory/evidence/topics/<topic>/subtopics/<subtopic>/operations/<operation>/YYYY-MM.md`.
 
+Ein Event ist dagegen eine endliche, terminierte Veranstaltung und wird optional
+als `subtopics[].events[]` gepflegt. Sein kanonisches Dossier liegt unter
+`memory/references/topics/<topic>/subtopics/<subtopic>/events/<event>/index.md`;
+seine empirische Evidenz (inklusive `YYYY-MM.md`, `recordings/`, `notes/` und
+`action-items.md`) liegt unter `memory/evidence/topics/<topic>/events/<event>/`.
+
 Regeln & Dual-Path-Fallback:
 
 - **Dual-Path Lesezugriff:** Bei Lesezugriffen auf Evidenzen wird zuerst `memory/evidence/topics/<slug>/` geprüft. Existiert dieser nicht, greift als Abwärtskompatibilität der Fallback auf das Legacy-Verzeichnis `memory/references/topics/<slug>/evidence/`.
@@ -112,6 +118,21 @@ Frontmatter-Regel:
           "status": "active"
         }
       ],
+      "events": [
+        {
+          "id": "string-slug",
+          "title": "string",
+          "starts_on": "YYYY-MM-DD",
+          "ends_on": "YYYY-MM-DD (optional; not before starts_on)",
+          "aliases": ["string"],
+          "keywords": ["string"],
+          "typical_subject_patterns": ["string"],
+          "reference_md": "memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>/events/<event-slug>/index.md",
+          "cloud_storage": {"scope": "topic|subtopic", "storage_id": "existing cloud_sync key"},
+          "status": "active",
+          "phase": "planned|live|completed|cancelled (optional)"
+        }
+      ],
       "status": "active"
     }
   ],
@@ -150,7 +171,10 @@ Frage in dieser Reihenfolge, kurz und präzise:
 10. Dauerprozesse je Subtopic (optional; je Operation ID, Titel, Aliase, Keywords,
     `typical_subject_patterns`, optionaler kanonischer Index und Status; keine
     Kontakte oder Cloud-Felder ohne konkret belegten Bedarf)
-11. Routing-Priorität / `do_not_route_if`
+11. Terminierte Events je Subtopic (optional; ID, Titel, ISO-Start/Ende, Signale,
+    kanonisches Dossier, vorhandener `cloud_storage`-Scope/ID, Routingstatus und
+    optionale Phase; keine eigenen Mounts oder Pfade)
+12. Routing-Priorität / `do_not_route_if`
 
 Dann:
 
@@ -191,6 +215,17 @@ Vor Ausgabe prüfen:
   `.../operations/<operation-slug>/index.md` zeigt; nichtkanonische Pfade bleiben
   ohne Ziel und reviewbar. Operations erhalten keine Kontakt- oder Cloud-Felder,
   solange dafür kein belegter Fachbedarf besteht.
+- `subtopics[].events[].id` ist ein eindeutiger slug innerhalb seines Subtopics;
+  fehlender Routingstatus ist Legacy-kompatibel aktiv, ein explizit inaktives Event
+  wird nicht klassifiziert. `starts_on` ist ein ISO-Datum; `ends_on` ist optional,
+  aber nie vor `starts_on`. `phase` ist optional und ausschließlich
+  `planned|live|completed|cancelled`; sie ist vom Routingstatus getrennt.
+- Ein Event braucht das exakt kanonische, vorhandene Dossier
+  `.../events/<event-slug>/index.md` und `cloud_storage` mit ausschließlich
+  `scope: topic|subtopic` sowie einer tatsächlich vorhandenen passenden
+  `cloud_sync`-Storage-ID. Kein Parent-/Subtopic-Fallback, keine eigenen Mounts,
+  Pfade oder Storage-Felder. Doppelte IDs, ungültige Daten, Dossier oder Storage
+  bleiben reviewbar und dürfen nicht automatisch als Event aufgelöst werden.
 - Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen und bei plausibler Relevanz dessen Filemap oder passende Spiegelungen prüfen; zusätzliche, ausschließlich subtopic-spezifische Speicher dürfen als `subtopics[].cloud_sync` im Cloud-Atlas-Schema gepflegt werden.
 - `schema_version = 1`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)

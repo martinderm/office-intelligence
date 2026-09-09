@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
@@ -541,6 +541,140 @@ def _operation_context_label(topic: dict[str, Any], subtopic: dict[str, Any], op
     return f"{subtopic_context} / {operation_label}".strip(" / ")
 
 
+def _select_subtopic_event(
+    subtopic: dict[str, Any],
+    *,
+    subject: str,
+    full_text: str,
+) -> dict[str, Any]:
+    """Resolve a documented, active event inside one proven subtopic only."""
+    events = [
+        event for event in subtopic.get("events", [])
+        if isinstance(event, dict) and str(event.get("status", "")).casefold() != "inactive"
+    ] if isinstance(subtopic.get("events"), list) else []
+    candidates: list[tuple[int, dict[str, Any]]] = []
+    for event in events:
+        identifier = str(event.get("id", "")).strip()
+        title = str(event.get("title", "")).strip()
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identifier) or not title:
+            continue
+        reasons: list[str] = []
+        score = 0
+        for pattern in event.get("typical_subject_patterns", []) if isinstance(event.get("typical_subject_patterns"), list) else []:
+            if _subject_signal_matches(subject, pattern):
+                reasons.append(f"subject_pattern:{str(pattern).strip()}")
+                score = max(score, 500)
+        for value, label in ((identifier, "subject_id"), (title, "subject_title")):
+            if _subject_signal_matches(subject, value):
+                reasons.append(f"{label}:{value}")
+                score = max(score, 400)
+        for alias in event.get("aliases", []) if isinstance(event.get("aliases"), list) else []:
+            if _subject_signal_matches(subject, alias):
+                reasons.append(f"subject_alias:{str(alias).strip()}")
+                score = max(score, 400)
+        for keyword in event.get("keywords", []) if isinstance(event.get("keywords"), list) else []:
+            keyword_text = str(keyword).strip()
+            if _subject_signal_matches(subject, keyword_text):
+                reasons.append(f"subject_keyword:{keyword_text}")
+                score = max(score, 300)
+            elif _artifact_text_matches(full_text, keyword_text):
+                reasons.append(f"keyword:{keyword_text}")
+                score = max(score, 100)
+        if reasons:
+            candidates.append((score, {"id": identifier, "title": title, "reasons": reasons, "_source": event}))
+    if not candidates:
+        return {}
+    highest_score = max(score for score, _ in candidates)
+    choices = [candidate for score, candidate in candidates if score == highest_score]
+    choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    ids = [str(event.get("id", "")).strip().casefold() for event in events]
+    duplicate_ids = {identifier for identifier in ids if identifier and ids.count(identifier) > 1}
+    if duplicate_ids and any(candidate["id"].casefold() in duplicate_ids for candidate in choices):
+        choices.extend(
+            {"id": str(event.get("id", "")).strip(), "title": str(event.get("title", "")).strip(), "reasons": ["duplicate_event_id"], "_source": event}
+            for event in events
+            if str(event.get("id", "")).strip().casefold() in duplicate_ids
+            and not any(candidate["_source"] is event for candidate in choices)
+        )
+        choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    if len(choices) == 1:
+        selected = choices[0]
+        return {"event": selected["id"], "match_reasons": selected["reasons"], "source": selected["_source"]}
+    return {
+        "candidates": [
+            {"id": candidate["id"], "title": candidate["title"], "reasons": candidate["reasons"]}
+            for candidate in choices
+        ]
+    }
+
+
+def _event_validation_reasons(
+    topic: dict[str, Any], subtopic: dict[str, Any], event: dict[str, Any], workspace_root: Path
+) -> list[str]:
+    """Validate catalog-only event structure before it becomes a scalar or path."""
+    reasons: list[str] = []
+    identifier = str(event.get("id", "")).strip()
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identifier):
+        reasons.append("invalid_event_id")
+    if not isinstance(event.get("title"), str) or not event["title"].strip():
+        reasons.append("missing_event_title")
+    if str(event.get("status", "")).casefold() not in {"", "active", "inactive"}:
+        reasons.append("invalid_event_status")
+    starts_on = event.get("starts_on")
+    ends_on = event.get("ends_on")
+    try:
+        start_date = (
+            date.fromisoformat(starts_on)
+            if isinstance(starts_on, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", starts_on)
+            else None
+        )
+    except ValueError:
+        start_date = None
+    if start_date is None:
+        reasons.append("invalid_starts_on")
+    if ends_on is not None:
+        try:
+            end_date = (
+                date.fromisoformat(ends_on)
+                if isinstance(ends_on, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", ends_on)
+                else None
+            )
+        except ValueError:
+            end_date = None
+        if end_date is None or (start_date is not None and end_date < start_date):
+            reasons.append("invalid_ends_on")
+    phase = event.get("phase")
+    if phase is not None and str(phase).casefold() not in {"planned", "live", "completed", "cancelled"}:
+        reasons.append("invalid_event_phase")
+    expected_reference = (
+        f"memory/references/topics/{str(topic.get('id', '')).strip()}/subtopics/"
+        f"{str(subtopic.get('id', '')).strip()}/events/{identifier}/index.md"
+    )
+    reference = event.get("reference_md")
+    if not isinstance(reference, str) or reference.strip() != expected_reference or "\\" in reference:
+        reasons.append("noncanonical_event_reference_md")
+    elif not workspace_root.joinpath(*PurePosixPath(reference.strip()).parts).is_file():
+        reasons.append("missing_event_dossier")
+    storage = event.get("cloud_storage")
+    if not isinstance(storage, dict) or set(storage) != {"scope", "storage_id"}:
+        reasons.append("invalid_cloud_storage")
+    else:
+        scope = storage.get("scope")
+        storage_id = storage.get("storage_id")
+        source = topic.get("cloud_sync") if scope == "topic" else subtopic.get("cloud_sync") if scope == "subtopic" else None
+        if not isinstance(storage_id, str) or not storage_id.strip() or not isinstance(source, dict) or not isinstance(source.get(storage_id), dict):
+            reasons.append("invalid_cloud_storage")
+    return list(dict.fromkeys(reasons))
+
+
+def _event_context_label(topic: dict[str, Any], subtopic: dict[str, Any], event: dict[str, Any]) -> str:
+    """Build evidence context from catalog-backed event fields only."""
+    base = _topic_context_label(topic, subtopic)
+    identifier = str(event.get("id", "")).strip()
+    title = str(event.get("title", "")).strip()
+    return f"{base} / {identifier} ({title})".strip(" / ")
+
+
 def _build_topic_evidence(
     topic: dict[str, Any],
     subtopic: dict[str, Any],
@@ -624,6 +758,42 @@ def _build_operation_evidence(
     return spec
 
 
+def _build_event_evidence(
+    topic: dict[str, Any],
+    subtopic: dict[str, Any],
+    event: dict[str, Any],
+    decision: dict[str, Any],
+    *,
+    year_month: str,
+    date: str,
+    subject: str,
+    message_id: str,
+    from_str: str,
+    to_str: str,
+) -> dict[str, Any]:
+    """Create event-scoped monthly evidence without persisting mail body text."""
+    topic_id = str(topic.get("id", "")).strip()
+    event_id = str(event.get("id", "")).strip()
+    participants = from_str or "Unbekannt"
+    if to_str:
+        participants = f"{participants}; An: {to_str}"
+    spec: dict[str, Any] = {
+        "type": "event_evidence",
+        "file": f"memory/evidence/topics/{topic_id}/events/{event_id}/{year_month}.md",
+        "entry": "\n".join([
+            f"- {date} — {subject}.",
+            f"  - Message-ID: `{message_id}`",
+            f"  - Beteiligte: {participants}",
+            f"  - Kontext: [{_event_context_label(topic, subtopic, event)}]",
+            f"  - Mailgegenstand: {subject}",
+        ]),
+    }
+    read_escalation = _evidence_read_escalation(decision)
+    if read_escalation:
+        spec["read_escalation"] = read_escalation
+    return spec
+
+
 def _safe_subtopic_reference_target(
     topic: dict[str, Any], subtopic: dict[str, Any], workspace_root: Path
 ) -> list[dict[str, str]]:
@@ -669,6 +839,15 @@ def _safe_operation_reference_target(
     if not workspace_root.joinpath(*path.parts).is_file():
         return []
     return [{"file": raw_path, "type": "operation_reference"}]
+
+
+def _safe_event_dossier_target(
+    topic: dict[str, Any], subtopic: dict[str, Any], event: dict[str, Any], workspace_root: Path
+) -> list[dict[str, str]]:
+    """Return the already-validated, existing canonical event dossier target."""
+    if _event_validation_reasons(topic, subtopic, event, workspace_root):
+        return []
+    return [{"file": str(event["reference_md"]).strip(), "type": "event_dossier"}]
 
 
 def _has_canonical_operation_reference(
@@ -839,6 +1018,15 @@ def classify_email_two_pass(
                 ) if isinstance(matched_topic.get("subtopics"), list) else None
                 if matched_subtopic is not None:
                     full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
+                    event_id = str(full_item["decision"].get("event", "")).casefold()
+                    matched_event = next(
+                        (
+                            event for event in matched_subtopic.get("events", [])
+                            if isinstance(event, dict)
+                            and str(event.get("id", "")).casefold() == event_id
+                        ),
+                        None,
+                    ) if event_id and isinstance(matched_subtopic.get("events"), list) else None
                     operation_id = str(full_item["decision"].get("operation", "")).casefold()
                     matched_operation = next(
                         (
@@ -856,7 +1044,11 @@ def classify_email_two_pass(
                         "from_str": str(full_email.get("from", "")),
                         "to_str": str(full_email.get("to", "")),
                     }
-                    if matched_operation is not None:
+                    if matched_event is not None:
+                        full_item["evidence"] = _build_event_evidence(
+                            matched_topic, matched_subtopic, matched_event, full_item["decision"], **common
+                        )
+                    elif matched_operation is not None:
                         full_item["evidence"] = _build_operation_evidence(
                             matched_topic, matched_subtopic, matched_operation, full_item["decision"], **common
                         )
@@ -1405,6 +1597,83 @@ def classify_email(
                     }]
             elif isinstance(operation_resolution.get("candidates"), list):
                 decision["operation_candidates"] = operation_resolution["candidates"]
+
+            # Events are finite/dated and deliberately separate from durable
+            # operations. They can only be considered after the same current-mail
+            # topic and subtopic proof; no contact or thread value participates.
+            event_resolution = _select_subtopic_event(subtopic_source, subject=subject, full_text=full_text)
+            event_source = event_resolution.get("source")
+            if isinstance(event_source, dict) and isinstance(event_resolution.get("event"), str):
+                validation_reasons = _event_validation_reasons(selected_topic, subtopic_source, event_source, ws)
+                if validation_reasons:
+                    decision["event_candidates"] = [{
+                        "id": event_resolution["event"],
+                        "title": str(event_source.get("title", "")).strip(),
+                        "reasons": list(event_resolution.get("match_reasons", [])) + validation_reasons,
+                    }]
+                else:
+                    decision["event"] = event_resolution["event"]
+                    decision["event_match_reasons"] = event_resolution.get("match_reasons", [])
+                    evidence_spec = _build_event_evidence(
+                        selected_topic,
+                        subtopic_source,
+                        event_source,
+                        decision,
+                        year_month=ym,
+                        date=ymd,
+                        subject=subject,
+                        message_id=norm_mid,
+                        from_str=from_str,
+                        to_str=to_str,
+                    )
+                    synthesis_targets = _safe_event_dossier_target(selected_topic, subtopic_source, event_source, ws)
+            elif isinstance(event_resolution.get("candidates"), list):
+                decision["event_candidates"] = event_resolution["candidates"]
+
+            # A mail that plausibly identifies both activity kinds is structurally
+            # ambiguous even when only one side was individually unique. Convert
+            # every scalar back into a candidate and retain only subtopic-level
+            # evidence/targets; no event or operation path may survive the conflict.
+            operation_present = isinstance(decision.get("operation"), str) or bool(decision.get("operation_candidates"))
+            event_present = isinstance(decision.get("event"), str) or bool(decision.get("event_candidates"))
+            if operation_present and event_present:
+                if isinstance(decision.get("operation"), str):
+                    decision["operation_candidates"] = [{
+                        "id": decision.pop("operation"),
+                        "title": str(operation_source.get("title", "")).strip() if isinstance(operation_source, dict) else "",
+                        "reasons": list(decision.pop("operation_match_reasons", [])),
+                    }]
+                if isinstance(decision.get("event"), str):
+                    decision["event_candidates"] = [{
+                        "id": decision.pop("event"),
+                        "title": str(event_source.get("title", "")).strip() if isinstance(event_source, dict) else "",
+                        "reasons": list(decision.pop("event_match_reasons", [])),
+                    }]
+                for field in ("operation_candidates", "event_candidates"):
+                    normalized_candidates = []
+                    for candidate in decision.get(field, []):
+                        if not isinstance(candidate, dict):
+                            continue
+                        normalized = dict(candidate)
+                        reasons = list(normalized.get("reasons", []))
+                        if "cross_kind_conflict" not in reasons:
+                            reasons.append("cross_kind_conflict")
+                        normalized["reasons"] = reasons
+                        normalized_candidates.append(normalized)
+                    decision[field] = normalized_candidates
+                evidence_spec = _build_topic_evidence(
+                    selected_topic,
+                    subtopic_source,
+                    decision,
+                    workspace_root=ws,
+                    year_month=ym,
+                    date=ymd,
+                    subject=subject,
+                    message_id=norm_mid,
+                    from_str=from_str,
+                    to_str=to_str,
+                )
+                synthesis_targets = _safe_subtopic_reference_target(selected_topic, subtopic_source, ws)
         elif isinstance(subtopic_resolution.get("candidates"), list):
             decision["subtopic_candidates"] = subtopic_resolution["candidates"]
 

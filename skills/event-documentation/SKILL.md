@@ -24,7 +24,7 @@ Größere Veranstaltungen werden nach dem Dual-Evidence-Standard sauber in norma
   - `action-items.md` — Liste offener To-Dos und Folgeaufgaben aus Sitzungen (Triage vor Todoist).
   - 📂 `recordings/` — Lokale Meeting-Zusammenfassungen und Transkripte des Events (`*.summary.md`, `*.transcript.md`).
   - 📂 `notes/` — Manuelle Notizen, Mitschriften oder Beobachtungen.
-  - **Monats-Log:** Zusammenfassender Eintrag mit Beleganker (`### [EVID-...]`) in `memory/evidence/topics/<topic>/YYYY-MM.md`.
+  - **Monats-Log:** Zusammenfassender Eintrag mit Beleganker (`### [EVID-...]`) in `memory/evidence/topics/<topic>/events/<event-slug>/YYYY-MM.md`.
 
 *(Hinweis: Zur Abwärtskompatibilität in noch nicht migrierten Legacy-Workspaces wird auch die Altablage im kombinierten Unterordner unter `memory/references/.../events/<event-slug>/` fehlerfrei erkannt.)*
 
@@ -47,10 +47,19 @@ Bestehende `/Agent-Share/`-Links sind Migrationsaltbestand: Sie werden nicht neu
 ## Arbeitsmodus & Workflow
 
 ### 1. Initialisierung
-- Lege die Verzeichnisse gemäß der 2-Säulen-Konvention an.
-- Nutze die Vorlage unter `references/event-folder-template.md` als Basis für `index.md` (Säule 1) und `action-items.md` (Säule 2).
-- Prüfe den zuständigen Projekt- oder Topic-Katalog, wähle einen vorhandenen `cloud_sync.<storage_id>` und löse dessen workspace-relativen `scan_dir` sowie Filemap-Ausgaben auf.
-- Trage alle grundlegenden Eckdaten (Datum, Ort, Webseite), `cloud_storage_id` und den aufgelösten `cloud_filemap`-Pfad im Frontmatter der `index.md` ein.
+- Für Topic-Events zuerst den Eintrag unter `subtopics[].events[]` katalogisieren und
+  prüfen: slug-ID, Titel, ISO-Start/optional Ende, Routingstatus, optionale Phase,
+  kanonisches Dossier und `cloud_storage` mit `scope` und `storage_id`.
+- Löse `cloud_storage` strikt im deklarierten Scope auf: `topic` nur gegen das
+  Parent-`cloud_sync`, `subtopic` nur gegen dessen `cloud_sync`. Die ID muss dort
+  bereits existieren; kein Scope-Fallback, eigener Mount oder eigener Pfad ist
+  zulässig.
+- Erst nach gültigem Katalogeintrag die 2-Säulen-Ordner gemäß
+  `references/event-folder-template.md` anlegen und das kanonische `index.md` als
+  Dossier verwenden. Das Event-Dossier wird nicht aus Mailtext abgeleitet.
+- Trage Eckdaten, `cloud_storage.scope`, `cloud_storage.storage_id` und den aus
+  genau dieser Konfiguration aufgelösten Filemap-Pfad im Frontmatter der `index.md`
+  ein.
 
 ### 2. Programm-Extraktion & Archivierung
 - Lade das offizielle Programm (meist PDF) herunter.
@@ -65,7 +74,9 @@ Bestehende `/Agent-Share/`-Links sind Migrationsaltbestand: Sie werden nicht neu
   - **Qualitäts-Check (Summary)**: Wenn die importierte Zusammenfassung unzureichende Inhalte hat (z. B. leere Abschnitte aufgrund aufgebrauchter Fireflies-Credits), erstelle die Zusammenfassung **aktiv neu anhand des immer verfügbaren Transkripts** (gemäß den Formatregeln aus dem `fireflies-api` Skill).
   - Speichere das Transkript als `<YYYY-MM-DD>-<vortrag>.transcript.md` und die Zusammenfassung als `<YYYY-MM-DD>-<vortrag>.summary.md` im `recordings/`-Ordner des Events.
   - Verlinke die Zusammenfassung im entsprechenden Programmpunkt in der `index.md` des Events.
-  - Trage einen Belegeintrag in das zentrale Monats-Evidenz-Log ein (z. B. `memory/evidence/topics/<topic>/<YYYY-MM>.md` mit Anker `### [EVID-YYYY-MM-DD-XX]`).
+  - Trage Mail- und Veranstaltungsbelege in das Event-Monatslog
+    `memory/evidence/topics/<topic>/events/<event>/<YYYY-MM>.md` ein;
+    `recordings/`, `notes/` und `action-items.md` bleiben dort kompatibel.
   - **CRITICAL**: Aktualisiere den `summary_path` und `transcript_path` des entsprechenden Meetings in `meetings.json` auf die neuen Speicherorte im Event-Verzeichnis.
 
 ### 4. Fristen & Action-Items Triage (Todoist-Integration)

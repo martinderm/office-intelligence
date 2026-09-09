@@ -12,6 +12,7 @@ Für jedes Topic wird eine Arbeitsstruktur in beiden Säulen des Dual-Evidence-S
   - `memory/references/topics/<id>/signals.md`
   - `memory/references/topics/<id>/subtopics/`
   - `memory/references/topics/<id>/subtopics/<subtopic-id>/operations/<operation-id>/index.md` (optional, nur für Dauerprozesse)
+  - `memory/references/topics/<id>/subtopics/<subtopic-id>/events/<event-id>/index.md` (optional, nur für terminierte Events)
   - `memory/operations/topics/<id>/subtopics/<subtopic-id>/<operation-id>/` (aktiver Arbeitsstand)
 - **Säule 2 (Evidenzen & Logs):**
   - `memory/evidence/topics/<id>/` (chronologische Logs `YYYY-MM.md`)
@@ -138,4 +139,31 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, warum ist das Topic routingrele
 <!-- BEGIN:managed-operation-summary -->
 -
 <!-- END:managed-operation-summary -->
+```
+
+## `subtopics/<subtopic-id>/events/<event-id>/index.md` (Template)
+
+```md
+# <event-id> — <Title>
+
+## Eckdaten
+
+- Start: YYYY-MM-DD
+- Ende: YYYY-MM-DD (optional)
+- Routingstatus: active | inactive
+- Phase: planned | live | completed | cancelled
+- Cloud-Storage: `<scope>:<storage-id>` (bestehender Katalogeintrag)
+
+## Referenzen & Evidenz
+
+- Event-Evidence: `memory/evidence/topics/<topic-id>/events/<event-id>/`
+- Aufzeichnungen: `../../../../../../../evidence/topics/<topic-id>/events/<event-id>/recordings/`
+- Notizen: `../../../../../../../evidence/topics/<topic-id>/events/<event-id>/notes/`
+- Action Items: `../../../../../../../evidence/topics/<topic-id>/events/<event-id>/action-items.md`
+
+## Stand (Managed)
+
+<!-- BEGIN:managed-event-summary -->
+-
+<!-- END:managed-event-summary -->
 ```

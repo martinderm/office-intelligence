@@ -209,6 +209,18 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   Operation-Evidence landet quellengebunden unter
   `memory/evidence/topics/<topic>/subtopics/<subtopic>/operations/<operation>/YYYY-MM.md`.
   Mailtext kann keine Pfade oder Ziele einschleusen.
+- FR-03b2c ergänzt getrennte, terminierte `events[]` unter einem bereits eindeutig
+  entschiedenen Subtopic. Ein Event benötigt ein gültiges ISO-Startdatum, ein
+  optionales Ende nicht vor dem Start, kanonisches vorhandenes Dossier und eine
+  exakt im deklarierten Topic- oder Subtopic-Scope vorhandene `cloud_storage`-ID.
+  Signale folgen derselben konservativen Wertung wie Operations, jedoch ohne
+  Kontakte oder Thread-Vererbung. Nur strukturell valide Eindeutigkeiten erhalten
+  `decision.event`, `event_match_reasons`, Event-Evidence unter
+  `memory/evidence/topics/<topic>/events/<event>/YYYY-MM.md` und ein vorhandenes
+  `event_dossier`-Target. Daten-, Dossier- und Storage-Fehler sowie doppelte IDs
+  bleiben `event_candidates`; ein gleichzeitiger Operations-/Event-Treffer erzeugt
+  nie zwei Scalars, sondern reviewbare Kandidaten beider Arten. Parent-Routing,
+  FR-06-Target-Preflight und Handoff bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,

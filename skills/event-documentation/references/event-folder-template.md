@@ -26,6 +26,7 @@ memory/
 │   └── index.md                # Die offizielle Event-Übersicht (Programm, Keynotes, Links)
 │
 └── evidence/topics/<topic>/events/<event-slug>/
+    ├── YYYY-MM.md              # Quellengebundene Mail- und Veranstaltungs-Evidence
     ├── action-items.md         # Triage-Liste offener Aufgaben vor Todoist
     ├── recordings/             # Lokale Meeting-Zusammenfassungen & Transkripte (*.summary.md)
     └── notes/                  # Manuelle Notizen, Mitschriften & Beobachtungen
@@ -39,12 +40,15 @@ memory/
 ---
 document_type: event-spec
 evidence_level: normative
-status: accepted
 title: "<Event-Titel>"
-date: "YYYY-MM-DD"
+starts_on: "YYYY-MM-DD"
+ends_on: "YYYY-MM-DD"
+status: active
+phase: planned
 location: "<Ort, Land>"
 website: "<Link zur Event-Website>"
 cloud_storage_id: "<storage_id>"
+cloud_storage_scope: "topic|subtopic"
 cloud_filemap: "<workspace-relativer Pfad aus cloud_sync.<storage_id>.output_json>"
 ---
 
@@ -55,7 +59,8 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 ---
 
 ## 📅 Allgemeine Eckdaten
-* **Datum:** YYYY-MM-DD
+* **Start:** YYYY-MM-DD
+* **Ende:** YYYY-MM-DD (optional)
 * **Ort:** <Ort, Land>
 * **Gastgeber:** <Institution/Veranstalter>
 * **Thema/Titel:** *<Fokus/Thema der Veranstaltung>*
@@ -120,7 +125,8 @@ Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage we
 ---
 
 ## Pfad- und Linkregeln
-1. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden. Vom Topic-/Subtopic-Event-`index.md` führt ein Link zu `memory/evidence/topics/<topic>/events/<event-slug>/recordings/...` über `../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/...`; vom Projekt-Event-`index.md` über `../../../../../evidence/projects/<project>/events/<event-slug>/recordings/...`. Bei anderen Quell- oder Zielpfaden den relativen Link aus den tatsächlichen Workspace-Pfaden ableiten, nicht eines dieser Beispiele übernehmen.
-2. **Cloud-Atlas-Routing:** Vor dem Ausfüllen einen bestehenden `cloud_sync.<storage_id>` im zuständigen Projekt- oder Topic-Katalog wählen. Fehlt die Konfiguration, sie ausschließlich mit `project-catalog-entry` (Projekt) beziehungsweise `topic-catalog-entry` (Topic oder Subtopic) pflegen; erst danach Cloud Atlas für Synchronisation, Konvertierung und Filemap nutzen. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Speicher verwenden.
-3. **Cloud-Atlas-Links:** Originale werden aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. `cloud_storage_id` und `cloud_filemap` müssen zur gewählten Konfiguration passen.
-4. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.
+1. **Katalog zuerst:** Ein Topic-Event wird vor jeder Ordneranlage als strukturell valider `subtopics[].events[]`-Eintrag erfasst: slug, Titel, ISO-Start/optional Ende, kanonisches Dossier und `cloud_storage` mit Scope/ID. Die Storage-ID muss im deklarierten Scope einem bestehenden `cloud_sync.<storage_id>` entsprechen. Ein nichtkanonisches oder fehlendes Dossier sowie unpassender Storage sind Review, nie ein improvisierter Pfad.
+2. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden. Vom Topic-/Subtopic-Event-`index.md` führt ein Link zu `memory/evidence/topics/<topic>/events/<event-slug>/recordings/...` über `../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/...`; vom Projekt-Event-`index.md` über `../../../../../evidence/projects/<project>/events/<event-slug>/recordings/...`. Bei anderen Quell- oder Zielpfaden den relativen Link aus den tatsächlichen Workspace-Pfaden ableiten, nicht eines dieser Beispiele übernehmen.
+3. **Cloud-Atlas-Routing:** `cloud_storage.scope: topic` löst die ID nur im Parent-`cloud_sync` auf, `scope: subtopic` nur im Subtopic-`cloud_sync`; es gibt keinen Fallback. Fehlt die Konfiguration, sie ausschließlich mit `project-catalog-entry` beziehungsweise `topic-catalog-entry` pflegen; erst danach Cloud Atlas für Synchronisation, Konvertierung und Filemap nutzen. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Legacy-Ablagen.
+4. **Cloud-Atlas-Links:** Originale werden aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. `cloud_storage_scope`, `cloud_storage_id` und `cloud_filemap` müssen zur gewählten Konfiguration passen.
+5. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.

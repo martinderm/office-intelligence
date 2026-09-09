@@ -31,6 +31,16 @@ class EventStorageContractTests(unittest.TestCase):
         self.assertIn("cloud_filemap:", TEMPLATE)
         self.assertRegex(TEMPLATE, r"`scan_dir`, `output_dir`.*workspace-relativ")
 
+    def test_topic_event_template_matches_catalog_lifecycle_fields(self):
+        index_template = TEMPLATE.split("## `index.md`", 1)[1].split("```md", 1)[1].split("```", 1)[0]
+        self.assertIn('starts_on: "YYYY-MM-DD"', index_template)
+        self.assertIn('ends_on: "YYYY-MM-DD"', index_template)
+        self.assertIn("status: active", index_template)
+        self.assertIn("phase: planned", index_template)
+        self.assertIn('cloud_storage_scope: "topic|subtopic"', index_template)
+        self.assertNotRegex(index_template, r"(?m)^date:")
+        self.assertEqual(1, len(re.findall(r"(?m)^status:", index_template)))
+
     def test_links_preserve_dual_evidence_and_are_portable(self):
         self.assertIn("memory/references/", SKILL)
         self.assertIn("memory/evidence/", SKILL)
