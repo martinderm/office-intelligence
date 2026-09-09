@@ -17,6 +17,7 @@ try:
         CANONICAL_CLOUD_METADATA_KEYS,
         validate_cloud_artifact_metadata,
     )
+    from core.curation import load_curation_overlay, merge_curated_metadata
 except ModuleNotFoundError:
     # Keep direct imports from a test loader portable while preserving the
     # standalone script's bundled ``scripts/core`` import path.
@@ -25,9 +26,11 @@ except ModuleNotFoundError:
         CANONICAL_CLOUD_METADATA_KEYS,
         validate_cloud_artifact_metadata,
     )
+    from core.curation import load_curation_overlay, merge_curated_metadata
 
 
 MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
+VALID_OCR_POLICIES = {"enrich_source", "local_derivative", "disabled"}
 FILEMAP_SCHEMA_VERSION = 1
 FILEMAP_SCHEMA_URI = "https://raw.githubusercontent.com/martinderm/office-intelligence/main/skills/cloud-atlas/references/filemap.schema.json"
 CANONICAL_ARTIFACT_METADATA_KEYS = CANONICAL_CLOUD_METADATA_KEYS
@@ -426,38 +429,6 @@ def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, ex
     return None
 
 
-AUTOMATED_METADATA_KEYS = {
-    "version", "mtime", "size", "sha256",
-    "markdown_mirror", "derivative",
-    "conversion_status", "conversion_error", "artifact_metadata"
-}
-
-
-def merge_curated_metadata(existing_entry, new_entry):
-    """
-    Merge newly computed automatic fields into existing metadata,
-    ensuring manually maintained descriptions and custom keys are never lost.
-    """
-    if not isinstance(existing_entry, dict):
-        return new_entry
-    
-    result = dict(new_entry)
-    
-    # Preserve manual description if existing was not default/empty
-    existing_desc = existing_entry.get("description")
-    if existing_desc and existing_desc != "-":
-        result["description"] = existing_desc
-    elif "description" not in result:
-        result["description"] = existing_desc or "-"
-        
-    # Preserve all other non-automated keys
-    for k, v in existing_entry.items():
-        if k not in AUTOMATED_METADATA_KEYS and k not in result:
-            result[k] = v
-            
-    return result
-
-
 def select_derivative(workspace_root, source_path, scan_dir, output_dir, existing_info):
     """Select an existing derivative for .doc files or derive from canonical location."""
     canonical = canonical_derivative_path(source_path, scan_dir, output_dir)
@@ -478,6 +449,40 @@ def select_derivative(workspace_root, source_path, scan_dir, output_dir, existin
         if normalized and path_is_within(normalized, output_dir) and workspace_file_exists(workspace_root, normalized):
             return existing
     return None
+
+
+def preserve_existing_ocr_metadata(source_path, existing_info, generated_entry):
+    """Carry validated OCR provenance into a regenerated technical entry.
+
+    OCR state is converter-owned metadata, not curation.  It is retained only
+    for a current PDF mirror and, for local OCR derivatives, a current local
+    PDF derivative.  Invalid or contextless legacy values are deliberately not
+    copied into the new filemap.
+    """
+    if (
+        not isinstance(existing_info, dict)
+        or not isinstance(generated_entry, dict)
+        or not str(source_path).lower().endswith(".pdf")
+        or "markdown_mirror" not in generated_entry
+    ):
+        return
+    applied = existing_info.get("ocr_applied")
+    policy = existing_info.get("ocr_policy")
+    if type(applied) is not bool or policy not in VALID_OCR_POLICIES:
+        return
+    if applied:
+        if policy == "disabled":
+            return
+        if policy == "local_derivative":
+            derivative = generated_entry.get("derivative")
+            if (
+                not isinstance(derivative, dict)
+                or derivative.get("format") != "pdf"
+                or not str(derivative.get("path", "")).lower().endswith(".pdf")
+            ):
+                return
+    generated_entry["ocr_applied"] = applied
+    generated_entry["ocr_policy"] = policy
 
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -622,7 +627,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             }
             if not all(isinstance(value, str) and value.strip() for value in values.values()):
                 raise ValueError(f"Subtopic storage '{sid}' must declare scan_dir, output_json, output_md and output_dir.")
-            configs[sid] = {"title": str(subtopic.get("title") or subtopic_id), **values, "is_topic": True, "subtopic_id": subtopic_id}
+            configs[sid] = {"title": str(subtopic.get("title") or subtopic_id), **values, "curation_json": sconfig.get("curation_json"), "is_topic": True, "subtopic_id": subtopic_id}
         if storage_id:
             if storage_id not in configs:
                 raise ValueError(f"Storage ID '{storage_id}' was not found for subtopic '{subtopic_id}'.")
@@ -645,6 +650,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_json": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.json",
             "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
             "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
+            "curation_json": None,
             "is_topic": is_topic
         }
         kuerzel = (meta.get("kuerzel") or project_id) if meta else project_id
@@ -677,6 +683,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_json": output_json or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.json",
                 "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
+                "curation_json": sconfig.get("curation_json"),
                 "is_topic": is_topic
             }
                 
@@ -774,6 +781,22 @@ def run_generation(args):
     if not configs:
         raise RuntimeError(f"No cloud sync configurations resolved for ID '{project_id}'.")
 
+    overlay_scope = "subtopic" if args.subtopic_id else ("topic" if is_topic else "project")
+    curation_overlays = {}
+    for sid, resolved in configs.items():
+        try:
+            curation_overlays[sid] = load_curation_overlay(
+                workspace_root,
+                resolved.get("curation_json"),
+                scope=overlay_scope,
+                target_id=project_id,
+                subtopic_id=args.subtopic_id,
+                storage_id=sid,
+                scan_dir=resolved["scan_dir"],
+            )
+        except ValueError as exc:
+            raise GenerationError("curation", sid, exc, storage_results=[]) from exc
+
     storage_results = []
     warnings = []
     for sid, resolved in configs.items():
@@ -798,6 +821,8 @@ def run_generation(args):
         
         if not os.path.exists(scan_path_abs):
             raise GenerationError("scan", sid, FileNotFoundError(f"Scan directory '{scan_path_abs}' does not exist."), storage_results)
+
+        curation_overlay = curation_overlays[sid]
 
         # Load existing files data from JSON if it exists to preserve descriptions and custom keys
         existing_files_data = {}
@@ -888,6 +913,12 @@ def run_generation(args):
             if derivative:
                 file_entry["derivative"] = derivative
 
+            preserve_existing_ocr_metadata(
+                rel_to_workspace_forward,
+                existing_info,
+                file_entry,
+            )
+
             # Status handling
             if rel_to_workspace_forward.lower().endswith(".doc"):
                 if markdown_mirror and derivative:
@@ -905,7 +936,16 @@ def run_generation(args):
                 if existing_info.get("conversion_error"):
                     file_entry["conversion_error"] = existing_info["conversion_error"]
 
-            files_data[rel_to_workspace_forward] = merge_curated_metadata(existing_info, file_entry)
+            try:
+                overlay_entry = curation_overlay.match(rel_to_workspace_forward, sha256) if curation_overlay else None
+            except ValueError as exc:
+                raise GenerationError("curation", sid, exc, storage_results) from exc
+            files_data[rel_to_workspace_forward] = merge_curated_metadata(
+                existing_info,
+                file_entry,
+                overlay_entry,
+                overlay_active=curation_overlay is not None,
+            )
 
         # Keep file ordering stable even when the filesystem returns directory
         # entries in a different order between runs.

@@ -10,6 +10,9 @@ Dieser Skill verwaltet die Synchronisation, Konvertierung und Erstellung von Dat
 Das maschinenlesbare Container-Schema für `filemap.json` und die zugehörige
 Schemaentscheidung stehen in [references/filemap.schema.json](references/filemap.schema.json)
 und [references/filemap-schema.md](references/filemap-schema.md).
+Für versionierte manuelle Metadaten pro Storage ist zusätzlich
+[references/filemap-curation.schema.json](references/filemap-curation.schema.json)
+mit der [Curation-Overlay-Referenz](references/filemap-curation.md) zu lesen.
 
 ---
 
@@ -115,6 +118,7 @@ Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintra
     "output_json": "Relative path to output filemap.json (e.g. memory/cloud/projects/meshe/filemap.json)",
     "output_md": "Relative path to output filemap.md (e.g. memory/cloud/projects/meshe/filemap.md)",
     "output_dir": "Relative path to local markdown mirror directory (e.g. memory/cloud/projects/meshe/default oder memory/cloud/topics/<slug>/<storage_id>)",
+    "curation_json": "Optional relative path to the tracked filemap curation overlay",
     "last_synced_at": "Automated timestamp of last successful sync (e.g. 2026-08-05 21:09:12)"
   }
 }
@@ -317,7 +321,7 @@ ocr_notice: "Hinweis: Text wurde mittels OCR aus einem Bild-PDF erfasst. Bei kri
 ### Hybrid-Modell für Cloud-Filemaps (`cloud-atlas`)
 
 Um Dateiverteilungen in den Cloud-Speichern sauber zu dokumentieren, nutzt dieser Workspace das `cloud-atlas`-Modell:
-* **Source of Truth & View**: Eine `filemap.json` speichert Dateimetadaten, SHA-256, Konvertierungs-Status und manuelle Beschreibungen (`"description"`), woraus eine Markdown-Tabelle (`filemap.md`) generiert wird.
+* **Tracked Curation & abgeleitete View**: Ist `memory/cloud/` gitignoriert, ist die im Storage deklarierte, getrackte `curation_json` das SSOT für manuelle Beschreibungen und Zusatzfelder. `filemap.json` bleibt lokaler, abgeleiteter Zustand mit aktuellen Scanner-/Konvertierungsdaten. Ohne Overlay bleibt das bestehende kompatible Verhalten aktiv.
 * **Lokale Spiegelung & Derivate**: Konvertierte Markdown-Kopien liegen lokal unter `memory/cloud/` (niemals direkt im Cloud-Speicher). `.doc`-Derivate werden isoliert unter `memory/cloud/.../_derivatives/` abgelegt.
 * **.gitignore-Schutz**: Das Verzeichnis `data/cloud/` für Cloud-Junctions wird zwingend in `.gitignore` eingetragen (`data/cloud/`).
 * **Automatisierung (24h-Regel, Cleanups & Fallbacks)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Quelländerungen, die task-gebundene Zeitstempel-Kontrolle (`last_synced_at` >6h/12h bei Cloud-Zugriff) und die Bereinigung verwaister Dateien erfolgen über den Skill **`cloud-atlas`**.

@@ -202,6 +202,31 @@ class MetadataPreservationTests(unittest.TestCase):
         self.assertTrue(entry["ocr_applied"])
         self.assertEqual(entry["derivative"]["path"], "memory/cloud/projects/test_proj/_derivatives/scan.pdf")
 
+        sys.argv = ["gen_filemap.py", "--project-id", "test_proj", "--workspace-root", str(self.root)]
+        self.assertEqual(0, gen_filemap.main())
+        regenerated = json.loads((self.output_dir / "filemap.json").read_text(encoding="utf-8"))
+        regenerated_entry = regenerated["files"]["data/cloud/TEST_PROJ/scan.pdf"]
+        self.assertTrue(regenerated_entry["ocr_applied"])
+        self.assertEqual("local_derivative", regenerated_entry["ocr_policy"])
+
+    def test_generator_drops_invalid_existing_ocr_metadata(self):
+        source = self.cloud_dir / "invalid-ocr.pdf"
+        source.write_bytes(b"cloud source")
+        mirror = self.output_dir / "invalid-ocr.md"
+        mirror.write_text("# Existing mirror\n", encoding="utf-8")
+        key = "data/cloud/TEST_PROJ/invalid-ocr.pdf"
+        (self.output_dir / "filemap.json").write_text(json.dumps({"files": {
+            key: {
+                "description": "-", "ocr_applied": "true", "ocr_policy": "not-a-policy"
+            }
+        }}), encoding="utf-8")
+
+        sys.argv = ["gen_filemap.py", "--project-id", "test_proj", "--workspace-root", str(self.root)]
+        self.assertEqual(0, gen_filemap.main())
+        entry = json.loads((self.output_dir / "filemap.json").read_text(encoding="utf-8"))["files"][key]
+        self.assertNotIn("ocr_applied", entry)
+        self.assertNotIn("ocr_policy", entry)
+
     def test_actual_refresh_upgrades_legacy_frontmatter_to_canonical(self):
         source = self.cloud_dir / "refresh.pdf"
         source.write_bytes(b"version one")

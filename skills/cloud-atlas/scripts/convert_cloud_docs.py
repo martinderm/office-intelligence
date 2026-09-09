@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 
 from core.metadata import build_cloud_artifact_metadata
+from core.curation import load_curation_overlay, merge_curated_metadata
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -1151,6 +1152,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 raise ValueError(f"Subtopic storage '{sid}' must declare scan_dir, output_json, output_md and output_dir.")
             configs[sid] = {
                 "title": str(subtopic.get("title") or subtopic_id), **values,
+                "curation_json": sconfig.get("curation_json"),
                 "is_topic": True, "subtopic_id": subtopic_id,
                 **resolve_cloud_metadata_policy(subtopic, sconfig, subtopic_id, True),
             }
@@ -1175,6 +1177,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_json": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.json",
             "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
             "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
+            "curation_json": None,
             "is_topic": is_topic,
             **resolve_cloud_metadata_policy(meta, {}, project_id, is_topic),
         }
@@ -1208,6 +1211,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_json": output_json or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.json",
                 "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
+                "curation_json": sconfig.get("curation_json"),
                 "is_topic": is_topic,
                 **resolve_cloud_metadata_policy(meta, sconfig, project_id, is_topic),
             }
@@ -1221,12 +1225,6 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
 
     return configs
 
-
-AUTOMATED_METADATA_KEYS = {
-    "version", "mtime", "size", "sha256",
-    "markdown_mirror", "derivative",
-    "conversion_status", "conversion_error", "ocr_applied", "ocr_policy"
-}
 
 def is_protected_output_file(rel_workspace_path, resolved_config=None):
     """Return True if a file should never be touched by orphaned mirror cleanup."""
@@ -1251,30 +1249,6 @@ def is_protected_output_file(rel_workspace_path, resolved_config=None):
         if normalized in (out_json, out_md):
             return True
     return False
-
-def merge_curated_metadata(existing_entry, new_entry):
-    """
-    Merge newly computed automatic fields into existing metadata,
-    ensuring manually maintained descriptions and custom keys are never lost.
-    """
-    if not isinstance(existing_entry, dict):
-        return new_entry
-
-    result = dict(new_entry)
-
-    # Preserve manual description if existing was not default/empty
-    existing_desc = existing_entry.get("description")
-    if existing_desc and existing_desc != "-":
-        result["description"] = existing_desc
-    elif "description" not in result:
-        result["description"] = existing_desc or "-"
-
-    # Preserve all other non-automated keys
-    for k, v in existing_entry.items():
-        if k not in AUTOMATED_METADATA_KEYS and k not in result:
-            result[k] = v
-
-    return result
 
 def parse_markdown_file(filepath):
     """Read canonical or legacy mirror frontmatter without rewriting either.
@@ -1411,6 +1385,22 @@ def run_conversion(args, run_state):
     if not configs:
         raise ConversionRunError("config", f"No cloud sync configurations resolved for ID '{project_id}'.")
 
+    overlay_scope = "subtopic" if args.subtopic_id else ("topic" if is_topic else "project")
+    curation_overlays = {}
+    for sid, resolved in configs.items():
+        try:
+            curation_overlays[sid] = load_curation_overlay(
+                workspace_root,
+                resolved.get("curation_json"),
+                scope=overlay_scope,
+                target_id=project_id,
+                subtopic_id=args.subtopic_id,
+                storage_id=sid,
+                scan_dir=resolved["scan_dir"],
+            )
+        except ValueError as exc:
+            raise ConversionRunError("curation", str(exc), sid) from exc
+
     for sid, resolved in configs.items():
         print(f"\n--- Konvertiere Dokumente fuer Storage: {sid} ---")
         if args.subtopic_id:
@@ -1460,6 +1450,8 @@ def run_conversion(args, run_state):
             })
             run_state.pop("partial_storage", None)
             continue
+
+        curation_overlay = curation_overlays[sid]
 
         filemap_data = {}
         if os.path.exists(filemap_json_abs):
@@ -1548,6 +1540,10 @@ def run_conversion(args, run_state):
                 print(f"Uebernehme Metadaten von verschobener/umbenannter Datei {old_path} -> {src_rel_workspace}")
             else:
                 base_existing = {}
+            try:
+                overlay_entry = curation_overlay.match(src_rel_workspace, src_sha256) if curation_overlay else None
+            except ValueError as exc:
+                raise ConversionRunError("curation", str(exc), sid) from exc
 
             dest_rel_workspace = os.path.join(output_dir, os.path.splitext(rel_to_cloud)[0] + ".md").replace("\\", "/")
             dest_abs = os.path.normpath(os.path.join(workspace_root, dest_rel_workspace))
@@ -1574,7 +1570,10 @@ def run_conversion(args, run_state):
                     "conversion_status": "conversion_required",
                     "conversion_error": message
                 }
-                new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, raw_entry)
+                new_files_in_json[src_rel_workspace] = merge_curated_metadata(
+                    base_existing, raw_entry, overlay_entry,
+                    overlay_active=curation_overlay is not None,
+                )
                 preflight_conversion_requirements.append({
                     "source": bounded_text(src_rel_workspace),
                     "capability": "doc_converter",
@@ -1627,6 +1626,7 @@ def run_conversion(args, run_state):
                 "redo_ocr": redo_ocr,
                 "needs_conversion": needs_conversion,
                 "base_existing": base_existing,
+                "overlay_entry": overlay_entry,
                 "metadata_policy": {
                     "data_classification": resolved["data_classification"],
                     "retention_class": resolved["retention_class"],
@@ -1651,6 +1651,7 @@ def run_conversion(args, run_state):
                 src_rel_workspace = t["src_rel"]
                 dest_rel_workspace = t["dest_rel"]
                 base_existing = t.get("base_existing", {})
+                overlay_entry = t.get("overlay_entry")
 
                 updated_entry = {
                     "version": t["src_version"],
@@ -1675,7 +1676,10 @@ def run_conversion(args, run_state):
                             f"Konvertierung von binärem .doc (Word 97-2003) über {doc_converter or 'libreoffice-headless'} nach .docx." if t.get("is_doc") else "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt."
                         )
                     }
-                new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, updated_entry)
+                new_files_in_json[src_rel_workspace] = merge_curated_metadata(
+                    base_existing, updated_entry, overlay_entry,
+                    overlay_active=curation_overlay is not None,
+                )
 
         if tasks_to_convert:
             results = run_conversion_tasks(
@@ -1693,6 +1697,7 @@ def run_conversion(args, run_state):
                 dest_abs = t["dest_abs"]
                 res = results.get(src_rel_workspace, {"success": False, "error": "Unknown error"})
                 base_existing = t.get("base_existing", {})
+                overlay_entry = t.get("overlay_entry")
 
                 if res.get("success"):
                     count_converted += 1
@@ -1756,7 +1761,10 @@ def run_conversion(args, run_state):
                     )
                     write_markdown_file(dest_abs, metadata, markdown_body)
                     processed_mirrors.add(dest_rel_workspace)
-                    new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, file_entry)
+                    new_files_in_json[src_rel_workspace] = merge_curated_metadata(
+                        base_existing, file_entry, overlay_entry,
+                        overlay_active=curation_overlay is not None,
+                    )
 
                 elif res.get("conversion_required") or t.get("is_doc"):
                     count_conversion_required += 1
@@ -1770,7 +1778,10 @@ def run_conversion(args, run_state):
                         "conversion_status": "conversion_required",
                         "conversion_error": str(err_msg)
                     }
-                    new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, file_entry)
+                    new_files_in_json[src_rel_workspace] = merge_curated_metadata(
+                        base_existing, file_entry, overlay_entry,
+                        overlay_active=curation_overlay is not None,
+                    )
                     conversion_requirements.append({
                         "source": bounded_text(src_rel_workspace),
                         "capability": bounded_text(res.get("capability") or conversion_capability(err_msg)),
