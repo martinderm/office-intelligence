@@ -19,6 +19,14 @@ Zentraler Workflow- und Triage-Skill für alle operativen Aufgaben, Fristen und 
 - **SaaS-Adapter (`todoist-api`, etc.)** sind die **technischen Treiber**:
   - Führen reine REST-Aufrufe, Quick Adds und Sync-Operationen aus.
 
+### Empfangsgrenze für Mail-Dossier-Handoffs
+
+Ein `mail-desk`-`dossier_handoff` liefert nur reviewbare Action-Candidates mit
+einem `mail_message_id`-EVID-Anker. Er ist kein Task-Entwurf und keine
+Synchronisationsfreigabe. Task-Desk bewertet die Candidate, wendet seine
+Routing-Regeln an, dedupliziert gegen den eigenen Evidenzindex und erzeugt erst
+dann eine vollständige Factored Attribution vor einem Adapter-Dispatch.
+
 ---
 
 ## 🏛️ Wissensschichten (Dual-Evidence-Standard)

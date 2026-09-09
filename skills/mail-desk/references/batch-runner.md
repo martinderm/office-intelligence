@@ -37,6 +37,8 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Dossier-Apply-Anforderung (Input)** | `data/mail-desk/batch-dossier-apply.json` | `dossier_apply` | Menschlich freigegebener, hash-gebundener Execute-Request für genau ein Projekt; bleibt als Approval-Receipt erhalten. |
 | **Dossier-Synthese-Anforderung (Input)** | `data/mail-desk/batch-dossier-synthesis-request.json` | `dossier_synthesis` | Hash-gebundener Snapshot eines erfolgreichen Dossier-Apply-Ergebnisses; bleibt zur Review erhalten. |
 | **Dossier-Synthese-Auftrag (Output)** | `data/mail-desk/batch-dossier-synthesis.json` | `dossier_synthesis` | Lokaler, quellengebundener LLM-Arbeitsauftrag; führt keine Synthese oder Wissensmutation aus. |
+| **Dossier-Handoff-Anforderung (Input)** | `data/mail-desk/batch-dossier-handoff-request.json` | `dossier_handoff` | Hash-gebundener abgeschlossener Synthese-Review; bleibt zur Review erhalten. |
+| **Dossier-Handoffs (Output)** | `data/mail-desk/batch-dossier-handoff.json` | `dossier_handoff` | Lokale, projektgebundene Übergaben an Cloud-Atlas und Task-Desk; führt keine externe Operation aus. |
 
 ---
 
@@ -134,6 +136,10 @@ ihn aber nicht. Abgesehen von dieser lokalen Ausgabe gibt es keine Mailbox-, Ind
 Evidence-, Wissens-, Cloud- oder Task-Mutation und weder automatisches Drafting,
 Execute, Pipeline, Synthese noch Cloud-Sync. Vor dem separaten Inspect-Schritt ist die erzeugte Query zu prüfen;
 erst danach darf ein Mensch einen normalen Inspect-/Draft-Flow anstoßen.
+Zusätzlich enthält der Manifest einen rein deklarativen, kataloggebundenen
+`cloud_atlas_preflight`: Bei fehlendem `project.cloud_sync` steht er ausdrücklich
+auf `not_configured`; bei einer gültigen Deklaration nennt er höchstens
+Storage-IDs, nie Pfade oder einen auszuführenden Sync.
 
 ```json
 {
@@ -246,6 +252,64 @@ setzen und bleibt immer erhalten.
   "delete_input_on_success": false,
   "dossier_apply_result": {"...": "vollständiges erfolgreiches dossier_apply-Ergebnis"},
   "dossier_apply_result_sha256": "<sha256-des-kanonischen-eingebetteten-ergebnisses>"
+}
+```
+
+---
+
+## Modus: `dossier_handoff` (FR-04d, reine Fach-Handoffs)
+
+`dossier_handoff` führt weder Cloud-Atlas noch Task-Desk aus. Er akzeptiert nur
+den vollständigen, durch seinen `work_order_sha256` gebundenen FR-04c-
+`dossier_synthesis`-Arbeitsauftrag sowie einen separat hash-gebundenen,
+abgeschlossenen Synthese-Review mit `reviewed_at` und `reviewed_by`. Dieser Review darf ausschließlich
+Action-Candidates mit einer bereits im Source-Snapshot vorhandenen normalisierten
+Mail-ID und dem exakt passenden `{"kind":"mail_message_id","value":"..."}`-
+EVID-Anker enthalten. Candidate-Text ist untrusted data; er wird weder zu einer
+Aufgabe umformuliert noch mit Priorität, Termin, Routing oder Todoist-Daten
+angereichert.
+
+Ein FR-04c-Work-Order mit leerem `synthesis_targets` und
+`target_selection_required: true` bleibt für diesen Review zulässig: Die Auswahl
+vorhandener Wissensziele gehört ausdrücklich in den separat reviewten
+Synthese-Schritt. Der Handoff akzeptiert ihn nur in der unveränderten kanonischen
+FR-04c-Form und erzeugt daraus trotzdem weder ein Wissens-Update noch automatisch
+eine Action-Candidate.
+
+Der Output enthält stets einen katalogabgeleiteten `cloud_atlas_preflight` für
+dieselbe Projekt-ID. Fehlt `project.cloud_sync`, ist sein Zustand ausdrücklich
+`not_configured`; bei ungültiger Deklaration `review_required`. Nur eine gültige
+Storage-Mapping liefert deklarierte Storage-IDs, nie Pfade oder CLI-Overrides.
+Der Cloud-Atlas-Empfänger prüft Katalog, Lock und Human Gate selbst.
+
+Bei vorhandenen Action-Candidates trägt `task_desk_handoff.state` den Wert
+`review_and_dedupe_required`; ohne Candidates ist er `not_required`. Task-Desk
+wendet anschließend selbst Routing, Dedupe, Factored Attribution und erst bei
+eigener Freigabe einen Adapter an. Das Eingabemanifest muss
+`delete_input_on_success: false` setzen und bleibt erhalten.
+
+```json
+{
+  "mode": "dossier_handoff",
+  "project": "meshe",
+  "delete_input_on_success": false,
+  "dossier_synthesis_work_order": {"...": "vollständiger FR-04c-Arbeitsauftrag"},
+  "dossier_synthesis_work_order_sha256": "<work-order-hash>",
+  "synthesis_review": {
+    "state": "completed",
+    "dossier_synthesis_work_order_sha256": "<work-order-hash>",
+    "source_snapshot_sha256": "<source-snapshot-hash>",
+    "reviewed_at": "2026-09-09T12:00:00Z",
+    "reviewed_by": "human-reviewer",
+    "action_candidates": [
+      {
+        "message_id": "msg-2026-001@partner.example.org",
+        "evidence_anchor": {"kind": "mail_message_id", "value": "msg-2026-001@partner.example.org"},
+        "candidate": "Untrusted, quellengebundener Prüfhinweis"
+      }
+    ]
+  },
+  "synthesis_review_sha256": "<review-hash>"
 }
 ```
 

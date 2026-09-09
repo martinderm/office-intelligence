@@ -20,6 +20,7 @@ MAX_DOSSIER_COUNT = 50
 MAX_QUERY_CLAUSES = 24
 _SAFE_QUERY_VALUE = re.compile(r'^[^\x00-\x1f"\\]{2,120}$')
 _SAFE_DOMAIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+_SAFE_STORAGE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _ALLOWED_KEYS = {
     "mode", "project", "source_folder", "max_count", "auto_query_from_catalog",
     "delete_input_on_success", "account",
@@ -96,6 +97,62 @@ def _require_max_count(value: object) -> int:
     return value
 
 
+def build_cloud_atlas_preflight(project: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a catalog-only Cloud-Atlas preflight handoff for one project.
+
+    This deliberately names no paths and invokes no Cloud-Atlas command.  The
+    receiving skill remains responsible for interpreting its ``cloud_sync``
+    entries, acquiring the consuming-workspace lock and obtaining any required
+    human approval before a sync.
+    """
+    project_id = project.get("id")
+    if not isinstance(project_id, str) or not project_id:
+        raise ValueError("project must have a non-empty ID for cloud preflight")
+    cloud_sync = project.get("cloud_sync")
+    base = {
+        "schema_version": 1,
+        "receiver": "cloud-atlas",
+        "operation": "project_preflight",
+        "project_id": project_id,
+        "required_receiving_steps": [
+            "verify_catalog_cloud_sync",
+            "acquire_consuming_workspace_lock",
+            "obtain_required_human_approval",
+        ],
+        "prohibited_automatic_steps": ["cloud_sync", "path_override", "storage_invention"],
+    }
+    if cloud_sync is None:
+        return {
+            **base,
+            "state": "not_configured",
+            "storage_ids": [],
+            "reason": "project.cloud_sync is not configured",
+        }
+    if not isinstance(cloud_sync, Mapping) or not cloud_sync:
+        return {
+            **base,
+            "state": "review_required",
+            "storage_ids": [],
+            "reason": "project.cloud_sync is not a non-empty storage mapping",
+        }
+    storage_ids = list(cloud_sync)
+    if (
+        not all(isinstance(storage_id, str) and _SAFE_STORAGE_ID.fullmatch(storage_id) for storage_id in storage_ids)
+        or not all(isinstance(storage, Mapping) for storage in cloud_sync.values())
+    ):
+        return {
+            **base,
+            "state": "review_required",
+            "storage_ids": [],
+            "reason": "project.cloud_sync contains an invalid storage declaration",
+        }
+    return {
+        **base,
+        "state": "pending_review",
+        "storage_ids": storage_ids,
+    }
+
+
 def run_dossier_mode(
     config: dict[str, Any], account: str | None = None, data_dir: Path | None = None,
     *, dependencies: Mapping[str, Callable[..., Any]] | None = None,
@@ -132,6 +189,7 @@ def run_dossier_mode(
         "project_title": str(project.get("title", project["id"])), "source_folder": "INBOX",
         "max_count": max_count, "auto_query_from_catalog": True, "catalog_signals": signals,
         "signals_truncated": signals_truncated, "next_request": inspect_request,
+        "cloud_atlas_preflight": build_cloud_atlas_preflight(project),
         "review": {
             "required": True, "state": "pending_inspect", "allowed_next_modes": ["inspect", "draft"],
             "prohibited_automatic_steps": ["execute", "pipeline", "sync_sent", "synthesis", "cloud_sync", "task_sync"],

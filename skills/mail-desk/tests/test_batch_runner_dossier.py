@@ -58,6 +58,8 @@ class DossierModeTests(unittest.TestCase):
         self.assertEqual("INBOX", dossier["next_request"]["folder"])
         self.assertIn('subject "MESHE"', dossier["next_request"]["query"])
         self.assertIn('from "eucen.eu"', dossier["next_request"]["query"])
+        self.assertEqual("not_configured", dossier["cloud_atlas_preflight"]["state"])
+        self.assertEqual([], dossier["cloud_atlas_preflight"]["storage_ids"])
         self.assertEqual(["inspect", "draft"], dossier["review"]["allowed_next_modes"])
         self.assertIn("execute", dossier["review"]["prohibited_automatic_steps"])
 
@@ -66,6 +68,16 @@ class DossierModeTests(unittest.TestCase):
         result, _, _ = self.run_mode({"mode": "dossier", "project": "meshe"}, [project])
 
         self.assertIn('from "eucen.eu"', result["dossier"]["next_request"]["query"])
+
+    def test_prepares_cloud_preflight_only_from_declared_storage_ids(self) -> None:
+        project = dict(PROJECT, cloud_sync={"primary": {"scan_dir": "data/cloud/MESHE"}})
+        result, _, _ = self.run_mode({"mode": "dossier", "project": "meshe"}, [project])
+
+        handoff = result["dossier"]["cloud_atlas_preflight"]
+        self.assertEqual("pending_review", handoff["state"])
+        self.assertEqual(["primary"], handoff["storage_ids"])
+        self.assertNotIn("scan_dir", handoff)
+        self.assertIn("cloud_sync", handoff["prohibited_automatic_steps"])
 
     def test_excludes_empty_repeated_and_invalid_catalog_domains(self) -> None:
         project = dict(PROJECT, domains=["@", "@@eucen.eu", "eucen .eu", "https://eucen.eu"], contacts=[])

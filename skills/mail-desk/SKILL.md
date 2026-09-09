@@ -30,6 +30,17 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   und Message-ID-Bezüge und schreibt nur einen reviewbaren Arbeitsauftrag mit
   EVID-Ankern. Er ruft kein LLM auf, wählt fehlende Targets nicht, ändert keine
   Wissensdatei und startet weder Cloud- noch Task-Synchronisation.
+- FR-04d ergänzt zwei reine Empfangs-Handoffs: Bereits `dossier` legt für die
+  exakt katalogisierte Projekt-ID einen Cloud-Atlas-Preflight an (`pending_review`,
+  bei fehlendem `project.cloud_sync` ausdrücklich `not_configured`) und
+  `dossier_handoff` akzeptiert nach einer abgeschlossenen Synthese nur
+  hash-gebundene, exakt kanonische FR-04c-Work-Orders plus separat reviewte,
+  mail-EVID-verankerte Action-Candidates. Auch leere FR-04c-Targets mit
+  `target_selection_required` bleiben nur im separat reviewten Synthese-Schritt
+  zulässig. Er ruft weder
+  Cloud-Atlas noch Task-Desk auf, erfindet weder Pfade, Storage, Priorität,
+  Termin oder Aufgaben und übergibt die Candidates ausschließlich zur dortigen
+  Review, Routing- und Dedupe-Entscheidung.
 - Backend-Zugriff, Locator und Transport bleiben beim gewählten Adapter;
   Projekt-/Topic-Katalogpflege bei `project-catalog-entry` bzw.
   `topic-catalog-entry`.

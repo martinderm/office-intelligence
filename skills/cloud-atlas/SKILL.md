@@ -76,6 +76,15 @@ Operator hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ein lockfreier
 ausschließlich ein expliziter Single-Session-Legacy-Modus: keine parallelen Writer,
 sichtbare Warnung und dokumentierte Ausnahme. Er ist nie der sichere Default.
 
+### Empfangsgrenze für Mail-Dossier-Preflights
+
+Ein `mail-desk`-Dossier kann einen rein deklarativen `cloud_atlas_preflight` für
+eine exakte Projekt-ID übergeben. `pending_review` benennt höchstens bereits im
+Projektkatalog deklarierte Storage-IDs; `not_configured` bedeutet, dass keine
+Synchronisation anzufordern ist. Der Empfang übernimmt weder Pfade noch eine
+Sync-Autorisierung: Cloud-Atlas prüft `cloud_sync`, Lock und Human Gate selbst.
+Ohne diese Prüfung wird kein Sync gestartet.
+
 ---
 
 ## 2. Konfiguration & Datenmodell (Schema)

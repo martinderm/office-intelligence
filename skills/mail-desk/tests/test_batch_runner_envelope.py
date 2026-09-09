@@ -56,6 +56,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
             patch.object(runner, "run_draft_mode", side_effect=successful_handler),
             patch.object(runner, "run_dossier_mode", side_effect=successful_handler),
             patch.object(runner, "run_dossier_apply_mode", side_effect=successful_handler),
+            patch.object(runner, "run_dossier_handoff_mode", side_effect=successful_handler),
             patch.object(runner, "run_dossier_synthesis_mode", side_effect=successful_handler),
             patch.object(runner, "run_sync_sent_mode", side_effect=successful_handler),
             patch.object(runner, "run_pipeline_mode", side_effect=successful_handler),
@@ -99,6 +100,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
             "dossier": ("dossier",),
             "dossier_apply": ("dossier_apply",),
             "dossier_synthesis": ("dossier_synthesis",),
+            "dossier_handoff": ("dossier_handoff",),
             "sync_sent": ("sync_sent", "sync-sent", "sent"),
             "pipeline": ("pipeline", "auto"),
             "execute": ("execute", "process"),
@@ -115,7 +117,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
                     self.assert_envelope(envelope, operation=operation)
                     self.assertTrue(envelope["success"])
                     self.assertEqual("Completed", envelope["state"])
-                    expected_cleanup = operation not in {"dossier", "dossier_apply", "dossier_synthesis"}
+                    expected_cleanup = operation not in {"dossier", "dossier_apply", "dossier_synthesis", "dossier_handoff"}
                     self.assertEqual(expected_cleanup, envelope["data"]["input_file_deleted"])
                     self.assertEqual(not expected_cleanup, manifest.exists())
                     self.assertIn("progress belongs on stderr", stderr)
