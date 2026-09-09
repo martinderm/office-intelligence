@@ -29,6 +29,13 @@ if hasattr(sys.stderr, 'reconfigure'):
 DEFAULT_EXTENSIONS = ".pdf,.docx,.xlsx,.pptx,.doc"
 ACTION = "convert_cloud_docs"
 MAX_ENVELOPE_MESSAGE_LENGTH = 1000
+LOCAL_IMAGE_EXTENSIONS = frozenset({
+    ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg",
+    ".tif", ".tiff", ".webp",
+})
+MARKDOWN_IMAGE_LINK_RE = re.compile(
+    r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<target><[^>]+>|[^\s)]+)(?:\s+\"[^\"]*\")?\s*\)"
+)
 
 # Mirrors are Cloud-zone artifacts.  New writes are deliberately constrained to
 # the data-zone schema properties so conversion/OCR implementation details stay
@@ -56,6 +63,42 @@ def calculate_markdown_payload_sha256(markdown_body):
     """
     payload = (markdown_body or "").encode("utf-8", errors="replace")
     return hashlib.sha256(payload).hexdigest()
+
+
+def neutralize_missing_local_image_links(markdown_body, mirror_path):
+    """Replace only missing relative image assets with non-link provenance text.
+
+    MarkItDown can emit image syntax for document-embedded images without
+    materializing the corresponding asset beside the Markdown mirror.  Such a
+    link is misleading and produces a false workspace link.  This deliberately
+    leaves ordinary links, URI targets, anchors, absolute paths and existing
+    image assets untouched so downstream link validation retains its signal.
+    """
+    if not markdown_body:
+        return markdown_body
+
+    mirror_parent = Path(mirror_path).resolve().parent
+
+    def replace_missing_image(match):
+        target_token = match.group("target")
+        target = target_token[1:-1] if target_token.startswith("<") and target_token.endswith(">") else target_token
+        target_path = PurePosixPath(target.replace("\\", "/"))
+
+        if (
+            target.startswith(("#", "/", "\\"))
+            or ":" in target_path.parts[0]
+            or target_path.suffix.lower() not in LOCAL_IMAGE_EXTENSIONS
+        ):
+            return match.group(0)
+
+        resolved_asset = (mirror_parent / Path(*target_path.parts)).resolve()
+        if resolved_asset.is_file():
+            return match.group(0)
+
+        alt = match.group("alt") or "ohne Alternativtext"
+        return f"[Nicht materialisierte Grafik: {alt}; ursprüngliches Ziel: {target}]"
+
+    return MARKDOWN_IMAGE_LINK_RE.sub(replace_missing_image, markdown_body)
 
 class ConversionRunError(RuntimeError):
     """A conversion failure with enough context for a CLI envelope."""
@@ -1697,17 +1740,21 @@ def run_conversion(args, run_state):
                     source_uri = normalize_workspace_relative_path(src_rel_workspace)
                     if source_uri is None:
                         raise ValueError(f"source URI must be workspace-relative: {src_rel_workspace}")
+                    markdown_body = neutralize_missing_local_image_links(
+                        res["markdown_body"],
+                        dest_abs,
+                    )
                     metadata = build_cloud_artifact_metadata(
                         source_uri=source_uri,
                         source_sha256=t["src_sha256"],
-                        artifact_sha256=calculate_markdown_payload_sha256(res["markdown_body"]),
+                        artifact_sha256=calculate_markdown_payload_sha256(markdown_body),
                         converter=res.get("conversion_method") or "markitdown-direct",
                         data_classification=t["metadata_policy"]["data_classification"],
                         retention_class=t["metadata_policy"]["retention_class"],
                         owner=t["metadata_policy"]["owner"],
                         synced_at=datetime.datetime.now(datetime.timezone.utc),
                     )
-                    write_markdown_file(dest_abs, metadata, res["markdown_body"])
+                    write_markdown_file(dest_abs, metadata, markdown_body)
                     processed_mirrors.add(dest_rel_workspace)
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(base_existing, file_entry)
 

@@ -687,6 +687,119 @@ class DocConversionTests(unittest.TestCase):
         self.assertIn("Path.home()", source)
         self.assertNotRegex(source, r"[A-Za-z]:\\Users\\[^\\]+")
 
+    def test_conversion_hashes_and_writes_the_postprocessed_image_body(self):
+        source = self.cloud_dir / "embedded-image.pdf"
+        source.write_bytes(b"cloud source")
+        raw_body = "![Skizze](images/missing.png)"
+        source_rel = source.relative_to(self.root).as_posix()
+        result = {
+            "success": True,
+            "markdown_body": raw_body,
+            "ocr_applied": False,
+            "derivative_path": None,
+            "derivative_sha256": None,
+            "conversion_method": "markitdown-direct",
+            "potential_quality_loss": None,
+            "ocr_policy": "disabled",
+            "new_src_sha256": None,
+            "new_src_size": None,
+            "new_src_mtime": None,
+            "error": None,
+        }
+        with mock.patch.object(convert_cloud_docs, "run_conversion_tasks", return_value={source_rel: result}):
+            sys.argv = [
+                "convert_cloud_docs.py", "--project-id", "test_proj",
+                "--workspace-root", str(self.root),
+            ]
+            convert_cloud_docs.main()
+
+        metadata, stored_body = convert_cloud_docs.parse_markdown_file(
+            str(self.output_dir / "embedded-image.md")
+        )
+        self.assertEqual(
+            "[Nicht materialisierte Grafik: Skizze; ursprüngliches Ziel: images/missing.png]",
+            stored_body,
+        )
+        self.assertEqual(
+            metadata["artifact_sha256"],
+            convert_cloud_docs.calculate_markdown_payload_sha256(stored_body),
+        )
+
+
+class MissingImageLinkHardeningTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.mirror = self.root / "memory" / "cloud" / "projects" / "test" / "document.md"
+        self.mirror.parent.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_missing_relative_jpg_becomes_non_link_provenance_marker(self):
+        body = "Vorher ![Rechnungsfoto](images/receipt.jpg) Nachher"
+
+        actual = convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror)
+
+        self.assertEqual(
+            "Vorher [Nicht materialisierte Grafik: Rechnungsfoto; ursprüngliches Ziel: images/receipt.jpg] Nachher",
+            actual,
+        )
+        self.assertNotIn("![", actual)
+
+    def test_existing_relative_image_remains_unchanged(self):
+        asset = self.mirror.parent / "images" / "receipt.jpg"
+        asset.parent.mkdir()
+        asset.write_bytes(b"image")
+        body = "![Rechnungsfoto](images/receipt.jpg)"
+
+        self.assertEqual(body, convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror))
+
+    def test_remote_data_and_anchor_image_targets_remain_unchanged(self):
+        body = (
+            "![Remote](https://example.test/receipt.jpg) "
+            "![Data](data:image/png;base64,AAAA) "
+            "![Anchor](#receipt.jpg)"
+        )
+
+        self.assertEqual(body, convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror))
+
+    def test_normal_markdown_links_and_invalid_file_uri_remain_unchanged(self):
+        document = self.mirror.parent / "notice.md"
+        document.write_text("# Notice\n", encoding="utf-8")
+        body = "[Notice](notice.md) [Fehlt](missing.md) [Ungültig](file://missing/path.jpg)"
+
+        self.assertEqual(body, convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror))
+
+    def test_neutralization_is_idempotent(self):
+        body = "![Skizze](images/missing.png)"
+
+        first = convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror)
+
+        self.assertEqual(first, convert_cloud_docs.neutralize_missing_local_image_links(first, self.mirror))
+
+    def test_written_mirror_hashes_postprocessed_body(self):
+        body = "![Skizze](images/missing.png)"
+        processed = convert_cloud_docs.neutralize_missing_local_image_links(body, self.mirror)
+        metadata = convert_cloud_docs.build_cloud_artifact_metadata(
+            source_uri="data/cloud/TEST/document.pdf",
+            source_sha256="a" * 64,
+            artifact_sha256=convert_cloud_docs.calculate_markdown_payload_sha256(processed),
+            converter="markitdown-direct",
+            data_classification="internal",
+            retention_class="project-lifecycle",
+            owner="project:test",
+        )
+
+        convert_cloud_docs.write_markdown_file(str(self.mirror), metadata, processed)
+        stored_metadata, stored_body = convert_cloud_docs.parse_markdown_file(str(self.mirror))
+
+        self.assertEqual(processed, stored_body)
+        self.assertEqual(
+            stored_metadata["artifact_sha256"],
+            convert_cloud_docs.calculate_markdown_payload_sha256(stored_body),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

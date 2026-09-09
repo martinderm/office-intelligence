@@ -18,6 +18,7 @@ und [references/filemap-schema.md](references/filemap-schema.md).
 Der Skill kapselt folgende Aufgaben:
 1. **Dokumenten-Konvertierung & Hänge-Schutz**:
    - Scannt einen Cloud-Speicher nach Standard-Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und kann sie mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory konvertieren.
+   - **Nicht materialisierte Bildverweise**: Gibt MarkItDown für ein eingebettetes Bild nur einen lokalen relativen Verweis aus, dessen Asset beim Mirror fehlt, wird genau dieser Verweis als nicht klickbarer Provenienzmarker mit Alttext und ursprünglichem Ziel gespeichert. Bestehende Bilddateien sowie normale Markdown-Links, URI-Links und Anker bleiben unverändert.
    - **Kontrollierte `.doc`-Unterstützung (Word 97–2003)**: Binäre Legacy-`.doc`-Dateien werden in einem kontrollierten 2-Stufen-Verfahren über LibreOffice (`soffice`) oder Word COM in ein separates `.docx`-Derivat unter `_derivatives/` konvertiert und daraus der Markdown-Spiegel erzeugt.
    - **Kontrollierte PDF-OCR & Policy-Steuerung (`--ocr-policy`)**:
      - *`local_derivative` (Standard & sichere Voreinstellung)*: Bei bildbasierten PDFs wird das OCR-Ergebnis als durchsuchbares PDF unter `_derivatives/` abgelegt; das Original im Cloud-Speicher bleibt 100% unberührt.
