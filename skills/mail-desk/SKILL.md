@@ -24,6 +24,12 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   katalogisierten Zielordner-Grenzen delegiert er ausschließlich an den bestehenden
   `execute`→`verify`-Pfad; Fehl- oder Teilfehler bleiben Review und löschen den
   Approval-Manifest nicht.
+- FR-04c-`dossier_synthesis` nimmt ausschließlich einen hash-gebundenen Snapshot
+  eines vollständig erfolgreichen `dossier_apply` inklusive Verify und eines exakt
+  kanonischen FR-06-`synthesis_handoff` an. Er prüft Projekt-, Execute-, Verify-
+  und Message-ID-Bezüge und schreibt nur einen reviewbaren Arbeitsauftrag mit
+  EVID-Ankern. Er ruft kein LLM auf, wählt fehlende Targets nicht, ändert keine
+  Wissensdatei und startet weder Cloud- noch Task-Synchronisation.
 - Backend-Zugriff, Locator und Transport bleiben beim gewählten Adapter;
   Projekt-/Topic-Katalogpflege bei `project-catalog-entry` bzw.
   `topic-catalog-entry`.

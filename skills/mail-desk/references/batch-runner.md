@@ -13,7 +13,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ### Implementierungsstruktur
 
-Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
+Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `dossier_synthesis.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
 
 ---
 
@@ -35,6 +35,8 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Dossier-Anforderung (Input)** | `data/mail-desk/batch-dossier-request.json` | `dossier` | Mailbox-read-only Auswahl eines routingfähigen Projekts; Eingabe bleibt zur Review erhalten. |
 | **Dossier-Ergebnis (Output)** | `data/mail-desk/batch-dossier.json` | `dossier` | Lokale, reviewbare Ausgabe eines katalogbasierten `inspect`-Folgeauftrags; führt keine Mailbox-Aktion aus. |
 | **Dossier-Apply-Anforderung (Input)** | `data/mail-desk/batch-dossier-apply.json` | `dossier_apply` | Menschlich freigegebener, hash-gebundener Execute-Request für genau ein Projekt; bleibt als Approval-Receipt erhalten. |
+| **Dossier-Synthese-Anforderung (Input)** | `data/mail-desk/batch-dossier-synthesis-request.json` | `dossier_synthesis` | Hash-gebundener Snapshot eines erfolgreichen Dossier-Apply-Ergebnisses; bleibt zur Review erhalten. |
+| **Dossier-Synthese-Auftrag (Output)** | `data/mail-desk/batch-dossier-synthesis.json` | `dossier_synthesis` | Lokaler, quellengebundener LLM-Arbeitsauftrag; führt keine Synthese oder Wissensmutation aus. |
 
 ---
 
@@ -207,6 +209,43 @@ und `synthesis_handoff` mit einem erneuten Review-Status zurück.
       "execute_request_sha256": "<sha256-des-kanonischen-execute_request>"
     }
   }
+}
+```
+
+---
+
+## Modus: `dossier_synthesis` (FR-04c, quellengebundener Arbeitsauftrag)
+
+`dossier_synthesis` ist nicht die Synthese selbst. Er akzeptiert nur den
+hash-gebundenen, eingebetteten Snapshot eines erfolgreichen `dossier_apply`-
+Ergebnisses: gleiche exakte Projekt-ID, `review.state: completed`, unveränderter
+Approval-Receipt, erfolgreiche Execute- und Verify-Summaries und einen exakt
+kanonischen FR-06c-`synthesis_handoff` mit `status: pending`. Jede Handoff-
+Nachrichten-ID muss in derselben Reihenfolge zur erfolgreichen Execute- und
+Verify-Evidenz passen; jedes Item muss zum angeforderten Projekt gehören und seine
+bereits validierten Targets unverändert vom Execute-Ergebnis übernehmen. Malformed
+oder gefälschte Inputs sind Fehler, nicht ein stiller leerer Handoff.
+
+Der Handler erzeugt ausschließlich `batch-dossier-synthesis.json`. Die
+`source_snapshot` enthält je Mail die normalisierte ID als EVID-Anker, den
+untrusted Betreff als Daten und die bereits geprüften Targets. Sowohl der
+eingebettete Apply-Snapshot als auch der daraus gebildete Source-Snapshot und der
+Work-Order sind über kanonisches UTF-8-JSON (`sort_keys`, Separatoren `,`/`:`, kein
+NaN) SHA-256-gebunden. Der Hash stellt Integrität des eingebetteten Snapshots fest,
+ersetzt aber keine externe Authentizität oder Human Review.
+
+Leere `synthesis_targets` bleiben `target_selection_required`; der Auftrag erfindet
+keine Dateien oder Inhalte. Er ruft kein LLM auf und schreibt weder Knowledge-,
+Cloud- noch Task-Daten. Das Eingabemanifest muss `delete_input_on_success: false`
+setzen und bleibt immer erhalten.
+
+```json
+{
+  "mode": "dossier_synthesis",
+  "project": "meshe",
+  "delete_input_on_success": false,
+  "dossier_apply_result": {"...": "vollständiges erfolgreiches dossier_apply-Ergebnis"},
+  "dossier_apply_result_sha256": "<sha256-des-kanonischen-eingebetteten-ergebnisses>"
 }
 ```
 
