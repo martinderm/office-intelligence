@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract tests for Cloud-Atlas-backed event storage documentation."""
+"""Contract tests for optional inherited Cloud-Atlas event storage."""
 
 import os
 from pathlib import Path
@@ -13,22 +13,22 @@ TEMPLATE = (SKILL_ROOT / "references" / "event-folder-template.md").read_text(en
 
 
 class EventStorageContractTests(unittest.TestCase):
-    def test_new_events_require_an_existing_catalogued_cloud_atlas_storage(self):
-        self.assertRegex(SKILL, r"bestehenden(?:\*\*)?\s+`cloud_sync\.<storage_id>`")
-        self.assertRegex(SKILL, r"Fehlt er, keinen Event-Speicher improvisieren")
-        self.assertRegex(TEMPLATE, r"bestehenden\s+`cloud_sync\.<storage_id>`")
+    def test_events_do_not_require_or_own_cloud_storage(self):
+        self.assertIn("Ein Event besitzt und benötigt keinen eigenen Cloud-Speicher", SKILL)
+        self.assertIn("Cloud-Speicher ist keine Voraussetzung", TEMPLATE)
+        self.assertIn("Ein Event besitzt kein `cloud_sync`", TEMPLATE)
         self.assertIn("`project-catalog-entry`", SKILL)
         self.assertIn("`topic-catalog-entry`", SKILL)
-        self.assertIn("Erst danach löst `cloud-atlas`", SKILL)
-        self.assertIn("`project-catalog-entry`", TEMPLATE)
-        self.assertIn("`topic-catalog-entry`", TEMPLATE)
         self.assertNotIn("Katalogeintrag mit `cloud-atlas` pflegen", SKILL)
 
-    def test_storage_configuration_separates_relative_mount_from_local_outputs(self):
+    def test_optional_inherited_storage_separates_relative_mount_from_local_outputs(self):
         self.assertRegex(SKILL, r"cloud_sync\.<storage_id>\.scan_dir.*workspace-relativer Pfad")
         self.assertRegex(SKILL, r"output_dir`, `output_json` und `output_md`")
         self.assertIn('cloud_storage_id: "<storage_id>"', TEMPLATE)
         self.assertIn("cloud_filemap:", TEMPLATE)
+        self.assertIn("Bei tatsächlichem Cloud-Bezug", TEMPLATE)
+        self.assertIn("Keine Kandidaten blockieren Cloud Atlas, aber nicht das", SKILL)
+        self.assertIn("ein Kandidat wird geerbt; mehrere Kandidaten", SKILL)
         self.assertRegex(TEMPLATE, r"`scan_dir`, `output_dir`.*workspace-relativ")
 
     def test_topic_event_template_matches_catalog_lifecycle_fields(self):
@@ -37,7 +37,9 @@ class EventStorageContractTests(unittest.TestCase):
         self.assertIn('ends_on: "YYYY-MM-DD"', index_template)
         self.assertIn("status: active", index_template)
         self.assertIn("phase: planned", index_template)
-        self.assertIn('cloud_storage_scope: "topic|subtopic"', index_template)
+        self.assertNotIn("cloud_storage_scope", index_template)
+        self.assertNotIn("cloud_storage_id", index_template)
+        self.assertNotIn("cloud_filemap", index_template)
         self.assertNotRegex(index_template, r"(?m)^date:")
         self.assertEqual(1, len(re.findall(r"(?m)^status:", index_template)))
 

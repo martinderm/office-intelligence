@@ -103,6 +103,39 @@ class EventClassifierTests(unittest.TestCase):
         self.assertNotIn("event", rejected["decision"])
         self.assertIn("invalid_cloud_storage", rejected["decision"]["event_candidates"][0]["reasons"])
 
+    def test_event_without_cloud_storage_is_valid_and_routes_normally(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            event = self.event()
+            event.pop("cloud_storage")
+            topic = self.topic(events=[event])
+            topic.pop("cloud_sync")
+            topic["subtopics"][0].pop("cloud_sync")
+            self.add_dossier(workspace, event)
+            item = classifier.classify_email(
+                self.email("Operations — Course Redesign Spring Forum"),
+                workspace_root=workspace, projects=[], topics=[topic],
+                sent_lookup={}, final_index={"items": {}},
+            )
+
+        self.assertEqual("spring-forum-2026", item["decision"]["event"])
+        self.assertEqual("event_evidence", item["evidence"]["type"])
+        self.assertEqual([{"file": event["reference_md"], "type": "event_dossier"}], item["synthesis_targets"])
+
+    def test_explicit_null_cloud_storage_is_invalid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            event = self.event(cloud_storage=None)
+            self.add_dossier(workspace, event)
+            item = classifier.classify_email(
+                self.email("Operations — Course Redesign Spring Forum"),
+                workspace_root=workspace, projects=[], topics=[self.topic(events=[event])],
+                sent_lookup={}, final_index={"items": {}},
+            )
+
+        self.assertNotIn("event", item["decision"])
+        self.assertIn("invalid_cloud_storage", item["decision"]["event_candidates"][0]["reasons"])
+
     def test_invalid_dates_missing_dossier_duplicate_and_inactive_events_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

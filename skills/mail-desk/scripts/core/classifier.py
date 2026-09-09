@@ -655,15 +655,16 @@ def _event_validation_reasons(
         reasons.append("noncanonical_event_reference_md")
     elif not workspace_root.joinpath(*PurePosixPath(reference.strip()).parts).is_file():
         reasons.append("missing_event_dossier")
-    storage = event.get("cloud_storage")
-    if not isinstance(storage, dict) or set(storage) != {"scope", "storage_id"}:
-        reasons.append("invalid_cloud_storage")
-    else:
-        scope = storage.get("scope")
-        storage_id = storage.get("storage_id")
-        source = topic.get("cloud_sync") if scope == "topic" else subtopic.get("cloud_sync") if scope == "subtopic" else None
-        if not isinstance(storage_id, str) or not storage_id.strip() or not isinstance(source, dict) or not isinstance(source.get(storage_id), dict):
+    if "cloud_storage" in event:
+        storage = event.get("cloud_storage")
+        if not isinstance(storage, dict) or set(storage) != {"scope", "storage_id"}:
             reasons.append("invalid_cloud_storage")
+        else:
+            scope = storage.get("scope")
+            storage_id = storage.get("storage_id")
+            source = topic.get("cloud_sync") if scope == "topic" else subtopic.get("cloud_sync") if scope == "subtopic" else None
+            if not isinstance(storage_id, str) or not storage_id.strip() or not isinstance(source, dict) or not isinstance(source.get(storage_id), dict):
+                reasons.append("invalid_cloud_storage")
     return list(dict.fromkeys(reasons))
 
 

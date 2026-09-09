@@ -50,9 +50,6 @@
     keywords: []
     typical_subject_patterns: []
     reference_md: memory/references/topics/<topic-slug>/subtopics/<subtopic-slug>/events/<event-slug>/index.md
-    cloud_storage:
-      scope: topic
-      storage_id: <existing-cloud-sync-id>
     status: active
     phase: planned
   status: active

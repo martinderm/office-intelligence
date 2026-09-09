@@ -152,7 +152,7 @@ Kurzbeschreibung (1–3 Sätze): Worum geht’s, warum ist das Topic routingrele
 - Ende: YYYY-MM-DD (optional)
 - Routingstatus: active | inactive
 - Phase: planned | live | completed | cancelled
-- Cloud-Storage: `<scope>:<storage-id>` (bestehender Katalogeintrag)
+- Cloud-Storage (optional bei Cloud-Bezug und mehreren geerbten Speichern): `<scope>:<storage-id>`
 
 ## Referenzen & Evidenz
 

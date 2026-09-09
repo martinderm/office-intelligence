@@ -210,7 +210,7 @@ Das Root-`requirements.txt` enthält `markitdown` und `ocrmypdf`, obwohl nur `cl
 
 `event-documentation` verwendet `/Agent-Share/...` als festen BokuDrive-Pfad.
 
-**Soll:** Neue Event-Ablagen verwenden ausschließlich einen bestehenden, im Projekt- oder Topic-Katalog konfigurierten Cloud-Atlas-Speicher (`cloud_sync.<storage_id>`). Mount, Mirrors und Filemaps werden aus dessen workspace-relativen Pfaden aufgelöst; institutionsspezifische Speicherpfade sind kein zulässiger Default. Bestehende `/Agent-Share/`-Links gelten nur als Migrationsaltbestand, werden weder neu erzeugt noch blind global ersetzt und dürfen erst nach eindeutiger Zuordnung zu einer konkreten Cloud-Atlas-Storage-ID kontrolliert migriert werden.
+**Soll:** Events besitzen und benötigen keinen eigenen Cloud-Speicher. Falls Event-Assets über Cloud Atlas archiviert oder erschlossen werden, verwenden sie ausschließlich einen bestehenden, vom zugehörigen Projekt beziehungsweise Parent-Topic/Subtopic geerbten `cloud_sync.<storage_id>`. Bei mehreren geeigneten Konfigurationen wählt ein optionaler Event-Selektor exakt eine davon; ohne geeignete Parent-Konfiguration bleibt das Event gültig, nur die Cloud-Verarbeitung entfällt. Mount, Mirrors und Filemaps werden aus den workspace-relativen Pfaden der geerbten Konfiguration aufgelöst; institutionsspezifische Speicherpfade sind kein zulässiger Default. Bestehende `/Agent-Share/`-Links gelten nur als Migrationsaltbestand, werden weder neu erzeugt noch blind global ersetzt und dürfen erst nach eindeutiger Zuordnung zu einer konkreten Cloud-Atlas-Storage-ID kontrolliert migriert werden.
 
 ### P2-05 — Paketkonventionen sind nicht vollständig konsistent
 
@@ -283,7 +283,7 @@ Jedes Paket ist so geschnitten, dass ein kleiner Coding Agent nur wenige Dateien
 | `OI-14c` | ✅ abgeschlossen | Manifest- und Compliance-Details auslagern | `mail-desk/SKILL.md`, neue Referenzen | Formate und Sicherheitsregeln ohne Verlust verlinkt | `OI-14b` | Terra-high korrigierte nach Parent-Finding die fünf kanonischen Batch-Runner-Beispiele und die JSON/JSONL-Abgrenzung; Parent-Review, 52 Mail-Desk-Tests, Linkprüfung und `quick_validate` grün |
 | `OI-14d` | ✅ abgeschlossen | Mail-Desk-Router final kürzen | `mail-desk/SKILL.md`, Linkprüfung | Zielgröße erreicht; progressive Disclosure vollständig | `OI-14c` | Terra-high implementiert; Parent-Review mit gezielter Korrekturrunde zu Lock-Richtung, Todo-/Reply-Prüfpflicht und Spam-Fast-Path; Router auf 141 Zeilen verdichtet, 52 Mail-Desk-Tests, Linkprüfung und `quick_validate` grün |
 | `OI-15` | ✅ abgeschlossen | Cloud-Abhängigkeiten isolieren | `requirements.txt`, Cloud-Atlas-Doku, Fehlerpfade | Nicht-Cloud-Desks ohne Pakete nutzbar; fehlende Konverter strukturiert | `OI-09a/b/c` | Terra-high implementiert; Parent-Review mit zwei gezielten Korrekturrunden zu Signaturschutz, Filemap-Fortsetzung, Capability-Klassifikation und einheitlichem `ConversionRequired`-Vertrag; 93 Cloud-Atlas-Tests, 52 Mail-Desk-Regressionstests, Bundle-/Skill-Validierung und `git diff --check` grün |
-| `OI-16` | ✅ abgeschlossen | Event-Speicher über Cloud Atlas abstrahieren | Event-Skill, Template und Contract-Test | neue Events ausschließlich über konfiguriertes `cloud_sync.<storage_id>`; `/Agent-Share/` nur kontrollierter Migrationsinput | keine | Terra-high implementiert; Nutzer-Override auf Cloud-Atlas-only übernommen; Parent-Review mit einer Korrekturrunde zu Katalogzuständigkeit und rechnerisch korrekten Topic-/Projekt-Relativlinks; 5 Event-Contract-Tests, Bundle-/Skill-Validierung, Katalogvalidator und `git diff --check` grün |
+| `OI-16` | ✅ abgeschlossen, fachlich nachgeschärft | Optionale Event-Cloud-Nutzung über Cloud Atlas abstrahieren | Event-Skill, Template, Mail-Classifier und Contract-Tests | Events ohne Cloud gültig; Cloud-Assets nur über geerbtes `cloud_sync.<storage_id>`; explizite Selektoren streng; `/Agent-Share/` nur kontrollierter Migrationsinput | keine | Terra-high implementierte die ursprüngliche Abstraktion; Nutzerkorrektur anschließend im Parent umgesetzt: kein Event-eigener oder verpflichtender Speicher, optionale Parent-/Subtopic-Vererbung; 6 Event-Contract- und 152 Mail-Desk-Tests, Bundle-/Skill-Validierung und `git diff --check` grün |
 | `OI-17` | ✅ abgeschlossen | Abschlussaudit und Regression | gesamte Testsuite, Katalogvalidator, Diff und gezielte Restkorrekturen | keine P0/P1-Findings; Evidence-Matrix vollständig | alle Pflichtpakete | Parent-Audit auf neu eingelesener Governance-/Reportbasis; Restbefunde in `4b4d620` geschlossen; 153 Bundle-Tests und 12 Guard-Tests grün, acht Skill-Entrypoints valide |
 
 ### Paketvorlage für kleine Coding Agents
@@ -340,7 +340,7 @@ Die Stränge sind logisch teilweise unabhängig, sollen im selben physischen Wor
 | Cloud-PDF-Anreicherung | konform | Policy, Signaturschutz, atomare Mutation und Provenienz sind getestet |
 | Locking | konform | gemeinsamer ownership-gebundener Guard am Harness-Gate; kein autonomes Force; Legacy nur explizit |
 | Atomare Writes | konform | ersetzende Cloud- und Mail-Desk-Writes verwenden sibling-temp + replace; Append-only ist lockgebunden |
-| Data-Zone-Pfade | konform | kanonische Cloud-Pfade; Legacy-Pfade nur kontrolliert gelesen/migriert; Events Cloud-Atlas-only |
+| Data-Zone-Pfade | konform | kanonische Cloud-Pfade; Legacy-Pfade nur kontrolliert gelesen/migriert; optionale Event-Cloud-Assets nur über geerbte Cloud-Atlas-Konfigurationen |
 | Cloud-Metadaten | konform | Canonical-Write, Dual-Read und Schema-Tests vorhanden |
 | CLI-Envelopes | konform | kanonische Contract-Tests für Cloud- und Mail-Desk-Einstiegspunkte; Legacy nur über Opt-in-Adapter |
 | Dual Evidence | konform | Beleganker und normative/empirische Trennung regressionsfrei |
@@ -403,5 +403,5 @@ Ausführungsdetail, kein Encoding-Fehler der UTF-8-Skilldateien.
 | `P2-01` Router/Katalog | geschlossen | sieben konsistente Routen in `SKILL.md`, `README.md` und `skills-catalog.yaml` |
 | `P2-02` Mail-Desk-Größe | geschlossen | aktuell 146-zeiliger Router plus gezielt geladene Referenzen |
 | `P2-03` optionale Cloud-Abhängigkeiten | geschlossen | `cloud-atlas/requirements-conversion.txt`, `ConversionRequired`-Tests |
-| `P2-04` Event-Speicher | geschlossen | Cloud-Atlas-only-Vertrag und fünf Event-Storage-Tests |
+| `P2-04` Event-Speicher | geschlossen und nachgeschärft | Events ohne Cloud gültig; optionale Assets über geerbte Cloud-Atlas-Konfiguration; sechs Event-Storage-Tests |
 | `P2-05` Paketkonventionen | geschlossen | `LICENSE.txt`; acht erfolgreiche Skill-Validierungen |

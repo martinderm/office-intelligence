@@ -47,9 +47,6 @@ status: active
 phase: planned
 location: "<Ort, Land>"
 website: "<Link zur Event-Website>"
-cloud_storage_id: "<storage_id>"
-cloud_storage_scope: "topic|subtopic"
-cloud_filemap: "<workspace-relativer Pfad aus cloud_sync.<storage_id>.output_json>"
 ---
 
 # <Event-Titel>
@@ -94,9 +91,18 @@ Kompakte Zusammenfassung der wichtigsten Informationen, Termine und Quellen zum 
 
 ## 🔗 Wichtige Quellen & Kontakte
 * **Offizielle Event-Seite:** [<Name>](<Link>)
-* **Cloud-Atlas-Speicher:** `cloud_sync.<storage_id>` — Filemap: `<cloud_filemap>`
-* **Programm-Download (PDF):** [<Name>](<Link-Online>) | [Cloud-Atlas-Original](<relativer-Link-aus-scan_dir>) | [Cloud-Atlas-Markdown-Mirror](<relativer-Link-aus-output_dir>)
+* **Programm-Download (PDF):** [<Name>](<Link-Online>)
+* **Cloud-Atlas-Original und Mirror (optional):** [Original](<relativer-Link-aus-scan_dir>) | [Markdown-Mirror](<relativer-Link-aus-output_dir>)
 * **Kontakte:** [Name <email>](mailto:email)
+```
+
+Bei tatsächlichem Cloud-Bezug können diese Metadaten zusätzlich in das Frontmatter
+aufgenommen werden; ohne Cloud-Assets werden sie weggelassen:
+
+```yaml
+cloud_storage_id: "<storage_id>"
+cloud_storage_scope: "topic|subtopic"
+cloud_filemap: "<workspace-relativer Pfad aus cloud_sync.<storage_id>.output_json>"
 ```
 
 ---
@@ -125,8 +131,8 @@ Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage we
 ---
 
 ## Pfad- und Linkregeln
-1. **Katalog zuerst:** Ein Topic-Event wird vor jeder Ordneranlage als strukturell valider `subtopics[].events[]`-Eintrag erfasst: slug, Titel, ISO-Start/optional Ende, kanonisches Dossier und `cloud_storage` mit Scope/ID. Die Storage-ID muss im deklarierten Scope einem bestehenden `cloud_sync.<storage_id>` entsprechen. Ein nichtkanonisches oder fehlendes Dossier sowie unpassender Storage sind Review, nie ein improvisierter Pfad.
+1. **Katalog zuerst:** Ein Topic-Event wird vor jeder Ordneranlage als strukturell valider `subtopics[].events[]`-Eintrag erfasst: slug, Titel, ISO-Start/optional Ende und kanonisches Dossier. Cloud-Speicher ist keine Voraussetzung. Ein nichtkanonisches oder fehlendes Dossier bleibt Review.
 2. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden. Vom Topic-/Subtopic-Event-`index.md` führt ein Link zu `memory/evidence/topics/<topic>/events/<event-slug>/recordings/...` über `../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/...`; vom Projekt-Event-`index.md` über `../../../../../evidence/projects/<project>/events/<event-slug>/recordings/...`. Bei anderen Quell- oder Zielpfaden den relativen Link aus den tatsächlichen Workspace-Pfaden ableiten, nicht eines dieser Beispiele übernehmen.
-3. **Cloud-Atlas-Routing:** `cloud_storage.scope: topic` löst die ID nur im Parent-`cloud_sync` auf, `scope: subtopic` nur im Subtopic-`cloud_sync`; es gibt keinen Fallback. Fehlt die Konfiguration, sie ausschließlich mit `project-catalog-entry` beziehungsweise `topic-catalog-entry` pflegen; erst danach Cloud Atlas für Synchronisation, Konvertierung und Filemap nutzen. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Legacy-Ablagen.
-4. **Cloud-Atlas-Links:** Originale werden aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. `cloud_storage_scope`, `cloud_storage_id` und `cloud_filemap` müssen zur gewählten Konfiguration passen.
+3. **Cloud-Atlas-Routing:** Ein Event besitzt kein `cloud_sync`. Cloud-Assets verwenden geeignete Konfigurationen des Projekts beziehungsweise des Parent-Topics/Subtopics: kein Kandidat bedeutet keine Cloud-Verarbeitung, ein Kandidat wird geerbt, mehrere Kandidaten erfordern einen expliziten Selektor. `cloud_storage.scope: topic` löst eine ID nur im Parent-`cloud_sync` auf, `scope: subtopic` nur im Subtopic-`cloud_sync`; es gibt keinen Fallback. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Legacy-Ablagen.
+4. **Cloud-Atlas-Links:** Falls Cloud-Assets existieren, werden Originale aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. Optionale `cloud_storage_scope`-, `cloud_storage_id`- und `cloud_filemap`-Metadaten müssen zur geerbten Konfiguration passen.
 5. **Deadlines & Todoist-Attribution:** Zukunftsfristen in Todoist eintragen und im Feld `description` stets den Beleganker mitführen.
