@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unified batch runner for mail-desk operations.
 
-Supports 9 modes:
+Supports 10 modes:
 1. inspect: Parallel/sequential header & preview fetching with deduplication check
 2. draft:    Inspect unprocessed emails and draft a ready-to-review batch-manifest.json
 3. sync_sent: Index recent Sent Items for reply-status reconciliation
@@ -11,6 +11,7 @@ Supports 9 modes:
 7. search:   Global mailbox search by query or message_ids
 8. resolve:  Batch resolution and archival of replies-needed and review cases
 9. dossier:  Mailbox-read-only, non-executing project dossier inspection handoff
+10. dossier_apply: Human-approved, project-bound execute -> verify delegation
 """
 
 from __future__ import annotations
@@ -61,6 +62,7 @@ from core import (
 from core.envelope import build_error, build_success, emit_json
 from core.modes import (
     run_draft_mode as _run_draft_mode,
+    run_dossier_apply_mode as _run_dossier_apply_mode,
     run_dossier_mode as _run_dossier_mode,
     run_execute_mode as _run_execute_mode,
     run_inspect_mode as _run_inspect_mode,
@@ -439,6 +441,28 @@ def run_dossier_mode(
     )
 
 
+def run_dossier_apply_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+    index_path: Path | None = None,
+) -> dict[str, Any]:
+    """Compatibility facade for the reviewed dossier execution handler."""
+    return _run_dossier_apply_mode(
+        config,
+        account=account,
+        data_dir=data_dir,
+        index_path=index_path,
+        dependencies={
+            "load_catalogs": load_catalogs,
+            "normalize_message_id": normalize_message_id,
+            "resolve_data_dir": resolve_data_dir,
+            "run_execute_mode": run_execute_mode,
+            "run_verify_mode": run_verify_mode,
+        },
+    )
+
+
 # ==============================================================================
 # Sync Sent Mode
 # ==============================================================================
@@ -562,6 +586,7 @@ MODE_ALIASES = {
     "draft": "draft",
     "propose": "draft",
     "dossier": "dossier",
+    "dossier_apply": "dossier_apply",
     "sync_sent": "sync_sent",
     "sync-sent": "sync_sent",
     "sent": "sync_sent",
@@ -720,7 +745,7 @@ def _failure_envelope(
 def _build_parser() -> EnvelopeArgumentParser:
     parser = EnvelopeArgumentParser(
         add_help=False,
-        description="Unified batch runner for mail-desk (inspect, draft, dossier, execute, verify, pipeline, search, resolve).",
+        description="Unified batch runner for mail-desk (inspect, draft, dossier, dossier_apply, execute, verify, pipeline, search, resolve).",
     )
     parser.add_argument("-h", "--help", action="store_true", help="Show JSON-compatible CLI help metadata")
     parser.add_argument("--input", "-i", help="Path to input JSON file in data/")
@@ -849,6 +874,7 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
         data_dir / "batch-pipeline.json",
         data_dir / "batch-draft.json",
         data_dir / "batch-dossier-request.json",
+        data_dir / "batch-dossier-apply.json",
         data_dir / "batch-inspect.json",
         data_dir / "batch-verify.json",
         data_dir / "batch-search.json",
@@ -895,6 +921,8 @@ def _dispatch(
             return run_draft_mode(config, account=account, data_dir=data_dir), operation
         if operation == "dossier":
             return run_dossier_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "dossier_apply":
+            return run_dossier_apply_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
         if operation == "sync_sent":
             return run_sync_sent_mode(config, account=account, data_dir=data_dir), operation
         if operation == "pipeline":
@@ -921,7 +949,7 @@ def main() -> int:
         config, input_path = _load_configuration(args, data_dir)
         if not isinstance(config, dict):
             raise ArgumentParseError("configuration must be a JSON object")
-        if str(config.get("mode", "")).lower() == "dossier":
+        if str(config.get("mode", "")).lower() in {"dossier", "dossier_apply"}:
             # The result is a review artifact; retain its request unless a caller
             # attempts the explicitly rejected destructive lifecycle override.
             config.setdefault("delete_input_on_success", False)

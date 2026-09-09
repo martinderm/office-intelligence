@@ -17,6 +17,13 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
 - Bearbeite einzeln; kleine, ausdrücklich beauftragte Batches folgen pro Mail dem
   vollständigen Flow. Details zu Batch-Modi und Manifesten stehen in
   [`references/batch-runner.md`](references/batch-runner.md).
+- Ein FR-04b-`dossier_apply` ist kein autonomer Batch: Er benötigt eine separat
+  erteilte Human Review als hash-gebundenen Receipt für den exakten kanonischen
+  Execute-Request einschließlich eines optionalen `execute_request.account`.
+  Ein äußerer Account darf nur exakt diesem reviewten Wert entsprechen. Nach vollständigem Preflight der Projekt-, INBOX- und
+  katalogisierten Zielordner-Grenzen delegiert er ausschließlich an den bestehenden
+  `execute`→`verify`-Pfad; Fehl- oder Teilfehler bleiben Review und löschen den
+  Approval-Manifest nicht.
 - Backend-Zugriff, Locator und Transport bleiben beim gewählten Adapter;
   Projekt-/Topic-Katalogpflege bei `project-catalog-entry` bzw.
   `topic-catalog-entry`.

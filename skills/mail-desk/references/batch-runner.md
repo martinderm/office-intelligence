@@ -13,7 +13,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ### Implementierungsstruktur
 
-Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
+Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
 
 ---
 
@@ -34,6 +34,7 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Falllösungs-Anforderung (Input)** | `data/mail-desk/batch-resolve.json` | `resolve` | Schließt und archiviert offene Fälle aus `replies-needed.jsonl` / `pending-review.jsonl`. |
 | **Dossier-Anforderung (Input)** | `data/mail-desk/batch-dossier-request.json` | `dossier` | Mailbox-read-only Auswahl eines routingfähigen Projekts; Eingabe bleibt zur Review erhalten. |
 | **Dossier-Ergebnis (Output)** | `data/mail-desk/batch-dossier.json` | `dossier` | Lokale, reviewbare Ausgabe eines katalogbasierten `inspect`-Folgeauftrags; führt keine Mailbox-Aktion aus. |
+| **Dossier-Apply-Anforderung (Input)** | `data/mail-desk/batch-dossier-apply.json` | `dossier_apply` | Menschlich freigegebener, hash-gebundener Execute-Request für genau ein Projekt; bleibt als Approval-Receipt erhalten. |
 
 ---
 
@@ -140,6 +141,72 @@ erst danach darf ein Mensch einen normalen Inspect-/Draft-Flow anstoßen.
   "max_count": 50,
   "auto_query_from_catalog": true,
   "delete_input_on_success": false
+}
+```
+
+---
+
+## Modus: `dossier_apply` (FR-04b, menschlich freigegebene Ausführung)
+
+`dossier_apply` akzeptiert ausschließlich einen selbst enthaltenen, kanonischen
+`execute_request` für genau ein exakt katalogisiertes, routingfähiges Projekt.
+Vor **jeder** Mailbox-, Evidence-, Index-, Log- oder Progress-Mutation prüft der
+Handler alle Items: `source_folder` ist exakt `INBOX`, `decision.kind` exakt
+`project`, `decision.id` exakt die angeforderte Projekt-ID und
+`action.type: copy_as_move` mit exakt dem katalogisierten `mailbox_folder`.
+Andere Decision-Kinds, andere Projekte, andere Quell- oder Zielordner, leere
+Requests und ungültige Message-IDs werden fail-closed abgewiesen.
+
+Die externe Human-Freigabe ist kein Boolean: Das Manifest trägt einen
+`review.approval_receipt` mit `reviewed_at`, `reviewed_by` und dem kleingeschriebenen
+SHA-256 des kanonischen JSON-Inhalts von `execute_request` (UTF-8,
+`sort_keys=true`, Separatoren `,` und `:`, kein NaN). Nur ein exakt passender Hash
+berechtigt die Ausführung; jede nachträgliche Item-, Evidence- oder Target-Änderung
+macht die Freigabe ungültig. Das Manifest muss `delete_input_on_success: false` setzen
+und bleibt damit auch bei erfolgreichem Lauf als Review-/Approval-Receipt erhalten.
+
+Ein optionaler `execute_request.account` ist Teil dieses gehashten Inhalts und
+damit der einzige zulässige Account für Execute und Verify. Ein äußerer
+`--account`- oder Manifest-Account wird nur akzeptiert, wenn er exakt diesem
+reviewten Wert entspricht; fehlt `execute_request.account`, ist jeder äußere
+Account fail-closed. Der Runner übergibt anschließend ausschließlich den
+reviewten Account an beide bestehenden Handler.
+
+Nach vollständig erfolgreichem Preflight delegiert der Handler ausschließlich an
+den bestehenden `execute`-Handler und übergibt bei dessen vollständigem Erfolg
+die betroffenen normalisierten Message-IDs an den bestehenden `verify`-Handler.
+Er implementiert weder eine zweite Routing-, Index-, Evidence- noch
+Verify-Logik. Execute- oder Verify-Fehler sind fail-closed, starten keinen
+weiteren Schritt und geben den Execute-Summary einschließlich FR-06-Telemetrie
+und `synthesis_handoff` mit einem erneuten Review-Status zurück.
+
+```json
+{
+  "mode": "dossier_apply",
+  "project": "meshe",
+  "delete_input_on_success": false,
+  "execute_request": {
+    "mode": "execute",
+    "account": "primary",
+    "items": [
+      {
+        "envelope_id": "101",
+        "source_folder": "INBOX",
+        "message_id": "msg-2026-001@partner.example.org",
+        "action": {"type": "copy_as_move", "target_folder": "Projekte/MESHE"},
+        "decision": {"kind": "project", "id": "meshe", "confidence": "high", "needs_reply": false}
+      }
+    ]
+  },
+  "review": {
+    "required": true,
+    "state": "approved",
+    "approval_receipt": {
+      "reviewed_at": "2026-09-09T12:00:00Z",
+      "reviewed_by": "human-reviewer",
+      "execute_request_sha256": "<sha256-des-kanonischen-execute_request>"
+    }
+  }
 }
 ```
 

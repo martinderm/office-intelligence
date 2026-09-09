@@ -2,6 +2,7 @@
 
 from .draft import run_draft_mode
 from .dossier import run_dossier_mode
+from .dossier_apply import run_dossier_apply_mode
 from .execute import run_execute_mode
 from .inspect import run_inspect_mode
 from .pipeline import run_pipeline_mode
@@ -13,6 +14,7 @@ from .verify import run_verify_mode
 __all__ = [
     "run_draft_mode",
     "run_dossier_mode",
+    "run_dossier_apply_mode",
     "run_execute_mode",
     "run_inspect_mode",
     "run_pipeline_mode",
