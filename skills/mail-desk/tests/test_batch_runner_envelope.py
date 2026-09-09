@@ -54,6 +54,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
             patch.object(runner, "resolve_final_index_path", return_value=self.index_path),
             patch.object(runner, "run_inspect_mode", side_effect=successful_handler),
             patch.object(runner, "run_draft_mode", side_effect=successful_handler),
+            patch.object(runner, "run_dossier_mode", side_effect=successful_handler),
             patch.object(runner, "run_sync_sent_mode", side_effect=successful_handler),
             patch.object(runner, "run_pipeline_mode", side_effect=successful_handler),
             patch.object(runner, "run_execute_mode", side_effect=successful_handler),
@@ -93,6 +94,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
         aliases = {
             "inspect": ("inspect", "fetch"),
             "draft": ("draft", "propose"),
+            "dossier": ("dossier",),
             "sync_sent": ("sync_sent", "sync-sent", "sent"),
             "pipeline": ("pipeline", "auto"),
             "execute": ("execute", "process"),
@@ -109,8 +111,9 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
                     self.assert_envelope(envelope, operation=operation)
                     self.assertTrue(envelope["success"])
                     self.assertEqual("Completed", envelope["state"])
-                    self.assertTrue(envelope["data"]["input_file_deleted"])
-                    self.assertFalse(manifest.exists())
+                    expected_cleanup = operation != "dossier"
+                    self.assertEqual(expected_cleanup, envelope["data"]["input_file_deleted"])
+                    self.assertEqual(not expected_cleanup, manifest.exists())
                     self.assertIn("progress belongs on stderr", stderr)
 
     def test_direct_cli_modes_are_canonical(self) -> None:
@@ -118,6 +121,7 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
             "pipeline": (["--pipeline", "3"], "pipeline"),
             "draft": (["--draft", "3"], "draft"),
             "inspect": (["--inspect", "3"], "inspect"),
+            "dossier": (["--dossier", "example-project"], "dossier"),
             "sync_sent": (["--sync-sent", "3"], "sync_sent"),
             "resolve": (["--resolve"], "resolve"),
         }
@@ -133,6 +137,29 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
         self.assert_envelope(envelope, operation="help")
         self.assertIn("usage:", stderr)
         self.assertIn("--pipeline", stderr)
+
+    def test_dossier_direct_cli_rejects_free_query(self) -> None:
+        exit_code, envelope, _ = self.invoke(["--dossier", "example-project", "--query", "from attacker"])
+
+        self.assertEqual(2, exit_code)
+        self.assert_envelope(envelope, operation="argument_parse")
+        self.assertIn("derives its query", envelope["message"])
+
+    def test_dossier_cli_rejects_unscoped_count_and_competing_direct_modes(self) -> None:
+        invalid_arguments = (
+            ["--max-count", "7"],
+            ["--dossier", "example-project", "--pipeline", "1"],
+            ["--dossier", "example-project", "--draft", "1"],
+            ["--dossier", "example-project", "--inspect", "1"],
+            ["--dossier", "example-project", "--sync-sent", "1"],
+            ["--dossier", "example-project", "--resolve"],
+        )
+        for arguments in invalid_arguments:
+            with self.subTest(arguments=arguments):
+                exit_code, envelope, _ = self.invoke(arguments)
+                self.assertEqual(2, exit_code)
+                self.assert_envelope(envelope, operation="argument_parse")
+                self.assertFalse(envelope["success"])
 
     def test_stdin_success_and_error_paths_are_canonical(self) -> None:
         exit_code, envelope, _ = self.invoke(["--stdin"], stdin=json.dumps({"mode": "inspect"}))

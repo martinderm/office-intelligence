@@ -13,7 +13,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ### Implementierungsstruktur
 
-Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Alle acht Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen. Im 952-zeiligen Runner verbleiben bewusst diese Fassaden, CLI-/Envelope-/Konfigurations- und Dispatch-Helfer sowie die gemeinsamen Fetch-Helper; `dossier.py` ist nicht Teil dieses abgeschlossenen FR-05.
+Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
 
 ---
 
@@ -32,6 +32,8 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Verifikations-Anforderung (Input)** | `data/mail-desk/batch-verify.json` | `verify` | Temporäre Liste von Message-IDs / Batch-Files zur Konsistenzprüfung (Index, Log, Evidenz, Ordner). |
 | **Such-Anforderung (Input)** | `data/mail-desk/batch-search.json` | `search` | Suchauftrag nach Text oder Message-IDs über mehrere Mailbox-Ordner hinweg. |
 | **Falllösungs-Anforderung (Input)** | `data/mail-desk/batch-resolve.json` | `resolve` | Schließt und archiviert offene Fälle aus `replies-needed.jsonl` / `pending-review.jsonl`. |
+| **Dossier-Anforderung (Input)** | `data/mail-desk/batch-dossier-request.json` | `dossier` | Mailbox-read-only Auswahl eines routingfähigen Projekts; Eingabe bleibt zur Review erhalten. |
+| **Dossier-Ergebnis (Output)** | `data/mail-desk/batch-dossier.json` | `dossier` | Lokale, reviewbare Ausgabe eines katalogbasierten `inspect`-Folgeauftrags; führt keine Mailbox-Aktion aus. |
 
 ---
 
@@ -58,6 +60,9 @@ python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
 
 # Standard 7: Einen gefilterten Pipeline-Lauf starten
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@example.org'
+
+# Standard 8: Mailbox-read-only Dossier-Folgeauftrag für ein exakt katalogisiertes Projekt
+python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 ```
 
 ### Argumente
@@ -68,6 +73,8 @@ python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@ex
 | `--pipeline [N]` | `-p` | Führt die End-to-End-Pipeline für N Mails aus (Inspect, Classify, Execute, Verify). |
 | `--draft [N]` | `-d` | Inspiziert N unverarbeitete Mails und schreibt einen `batch-manifest.json`-Entwurf. |
 | `--inspect [N]` | | Inspiziert N Mails und schreibt `batch-inspected.json`. |
+| `--dossier <PROJECT_ID>` | | Erzeugt ausschließlich einen mailbox-read-only, katalogbasierten `inspect`-Folgeauftrag für exakt ein routingfähiges Projekt. |
+| `--max-count <1..50>` | | Strikte Obergrenze für den durch `--dossier` vorbereiteten Inspect-Auftrag (Standard: 50). |
 | `--order <oldest\|newest>` | | Verarbeitungsreihenfolge nach Alter (Standard: `oldest`). |
 | `--folder <ORDNER>` | `-f` | Quellordner im Postfach (Standard: `INBOX`). |
 | `--skip-known` / `--no-skip-known` | | Überspringt bereits verarbeitete E-Mails aus `final-location-index.json` (Standard: `True`). |
@@ -103,6 +110,38 @@ Temporäre Manifest-Lese- und Löschoperationen behandeln transiente Windows-
 Dateisperren mit maximal drei Versuchen und kurzem exponentiellem Backoff
 (0,1 s, 0,2 s). Danach bleibt das Manifest erhalten und der Lauf meldet den
 Fehler.
+
+---
+
+## Modus: `dossier` (Mailbox-read-only Projekt-Fokus)
+
+`dossier` ist FR-04a. Der Handler liest `projects.json`, akzeptiert genau eine
+exakte Projekt-ID mit Status `active` oder ohne Status (bei v3-Root-Projekten regulär) und
+erzeugt lokal `batch-dossier.json`; jeder andere explizite Status bleibt fail-closed.
+Die lokale Ausgabe ist eine Workspace-Mutation und benötigt den normalen
+`workspace-lock`, auch wenn der Modus mailbox-read-only und non-executing bleibt. Aus dem sicheren
+Katalograum werden maximal 24 Suchklauseln in fester Reihenfolge abgeleitet:
+Projekt-ID, Kürzel, Aliase sowie valide Domains und Kontaktadressen. Freie
+`query`-/`date`-Felder, Action-Blöcke, andere Quellordner und unbounded Counts
+werden fail-closed abgewiesen. `source_folder` ist immer `INBOX`, `max_count`
+liegt strikt zwischen 1 und 50.
+
+Der Ergebnis-Manifest enthält einen mit `inspect` kompatiblen Folgeauftrag, startet
+ihn aber nicht. Abgesehen von dieser lokalen Ausgabe gibt es keine Mailbox-, Index-,
+Evidence-, Wissens-, Cloud- oder Task-Mutation und weder automatisches Drafting,
+Execute, Pipeline, Synthese noch Cloud-Sync. Vor dem separaten Inspect-Schritt ist die erzeugte Query zu prüfen;
+erst danach darf ein Mensch einen normalen Inspect-/Draft-Flow anstoßen.
+
+```json
+{
+  "mode": "dossier",
+  "project": "meshe",
+  "source_folder": "INBOX",
+  "max_count": 50,
+  "auto_query_from_catalog": true,
+  "delete_input_on_success": false
+}
+```
 
 ---
 

@@ -9,7 +9,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-01` | ✅ abgeschlossen | v3-Schema, Vorlagen, Beispielkatalog, Validator, konservatives Migrationswerkzeug, Tests und produktiver Backfill | Der BOKU-Katalog ist vollständig v3-valid; der einzige EVOLVE-Hinweis `unstable_checkpoint` wurde konkret akzeptiert, ohne eine Meilenstein-ID zu erfinden. |
 | `FR-02` | ✅ abgeschlossen | FR-02a: hierarchisches v3-Artefakt-Matching; FR-02b: Zweitpass-Volltext; FR-02c: strukturierte Evidence | Artefakt-Treffer, Review-Kandidaten, sichere Volltext-Reklassifikation und neutrale, kataloggestützte Project-Evidence sind vollständig verfügbar. |
 | `FR-03` | ✅ abgeschlossen — FR-03a, FR-03b1 und FR-03b2a–c | Ja: Signalvertrag, Subtopic-Matching, Cagliari-Anreicherung, Subtopic-Cloud-Sync sowie Operations- und Event-Vertrag | Events benötigen keinen eigenen Cloud-Speicher; ein optionaler Selektor kann bei Cloud-Bezug einen geerbten Parent-/Subtopic-Speicher wählen. Keine automatische produktive Event-Migration. |
-| `FR-04` | ⏸️ zurückgestellt / depriorisiert | Nein | Auf Nutzeranweisung nach hinten gestellt; Fokus liegt auf der inhaltlichen Synthese (FR-06) und Schema-Vertiefung. |
+| `FR-04` | 🟡 in Arbeit — FR-04a abgeschlossen | Ja: kataloggestützter, mailbox-read-only Dossier-Manifestmodus | `batch-dossier.json` bereitet einen begrenzten Inspect-Auftrag vor; Routing/Indexing, Synthese und Cloud-/Task-Handover folgen getrennt in FR-04b–d. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst aktuell 954 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 
@@ -22,7 +22,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 1. [FR-01: Schema-Erweiterung für `projects.json` & `project-catalog-entry`](#fr-01-schema-erweiterung-für-projectsjson--project-catalog-entry)
 2. [FR-02: Hierarchische WP-/Deliverable-Erkennung & Full-Body-Eskalation in `mail-desk`](#fr-02-hierarchische-wp-deliverable-erkennung--full-body-eskalation-in-mail-desk)
 3. [FR-03: Subtopic-Strukturierung & Signalisierung in `topics.json`](#fr-03-subtopic-strukturierung--signalisierung-in-topicsjson)
-4. [FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`) — ZURÜCKGESTELLT](#fr-04-thematischer-dossier-modus--projekt-fokus-workflow-batch-dossierjson)
+4. [FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`)](#fr-04-thematischer-dossier-modus--projekt-fokus-workflow-batch-dossierjson)
 5. [FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)](#fr-05-modulare-reorganisation-des-batch-runners-scriptscoremodes)
 6. [FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation](#fr-06-post-batch-llm-projekt-synthese--knowledge-layer-synchronisation)
 
@@ -228,7 +228,9 @@ FR-03a legt die Kontaktregel fest: Ein Subtopic-Kontakt ergänzt nur dann die Au
 
 ## FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`)
 
-**Status:** ⬜ Offen. Im Runner existieren nur `inspect`, `draft`, `sync_sent`, `execute`, `verify`, `pipeline`, `search` und `resolve`. Es gibt weder einen Dossier-Manifestkandidaten noch Dossier-spezifische Handler oder Tests.
+**Status:** 🟡 In Arbeit. FR-04a ist abgeschlossen: `dossier` löst ausschließlich eine exakte Projekt-ID mit Status `active` oder ohne Status (bei v3-Root-Projekten regulär und routingfähig) aus `projects.json` auf und erzeugt lokal einen begrenzten, reviewbaren `batch-dossier.json`-Inspect-Folgeauftrag. Der Modus ist mailbox-read-only/non-executing, aber die lokale Ausgabe benötigt den normalen Workspace-Lock; freie Query sowie Execute, Synthese, Cloud- und Task-Schritte bleiben ausgeschlossen.
+
+**Verbleibend:** FR-04b kontrolliertes Routing/Indexing nach Human Review; FR-04c quellengebundene, reviewbare Synthese; FR-04d Übergabe an `cloud-atlas` und `task-desk`.
 
 ### Problemstellung
 Bisher erfolgt die Abarbeitung der Mailbox rein chronologisch (Tag für Tag über alle Themen gemischt). Wenn der Nutzer jedoch gezielt an einem Projekt (z. B. `MESHE`) arbeiten möchte, müssen alle dazu gehörenden Mails aus der `INBOX` extrahiert, verarbeitet und die entsprechenden Projektunterlagen vorab synchronisiert werden.
@@ -314,7 +316,7 @@ skills/mail-desk/scripts/
 
 FR-05 sollte vor FR-04 abgeschlossen werden: Die im Request genannte 1.500-Zeilen-Schwelle war bereits überschritten und wurde durch den ersten Schnitt knapp unterschritten. Die Zielgröße von ungefähr 150 Zeilen für den Dispatcher ist plausibel, sollte aber kein hartes Abnahmekriterium sein; wichtiger sind stabile Imports, genau ein kanonischer Envelope am CLI-Rand und unveränderte Modussemantik.
 
-Die Auslagerung erfolgte inkrementell. `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` sind abgeschlossen. Die Regressionen decken Envelope-, Partial-Failure-, Cleanup- und Manifest-Sicherheit sowie die Laufzeit-DI-Fassaden für die Mutations- und Orchestrierungspfade ab. `dossier.py` bleibt ausdrücklich Teil des zurückgestellten FR-04 und wurde nicht angelegt.
+Die Auslagerung erfolgte inkrementell. `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` sind als FR-05-Schnitt abgeschlossen. Die Regressionen decken Envelope-, Partial-Failure-, Cleanup- und Manifest-Sicherheit sowie die Laufzeit-DI-Fassaden für die Mutations- und Orchestrierungspfade ab. Der später als eigenständiges FR-04a-Paket ergänzte `dossier.py`-Handler erweitert diese Struktur, ohne den abgeschlossenen FR-05-Schnitt rückwirkend umzudeuten.
 
 ### Umsetzungsnachweis: inkrementelle Modulschnitte
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unified batch runner for mail-desk operations.
 
-Supports 8 modes:
+Supports 9 modes:
 1. inspect: Parallel/sequential header & preview fetching with deduplication check
 2. draft:    Inspect unprocessed emails and draft a ready-to-review batch-manifest.json
 3. sync_sent: Index recent Sent Items for reply-status reconciliation
@@ -10,6 +10,7 @@ Supports 8 modes:
 6. pipeline: End-to-end autonomous cycle (inspect -> classify -> execute -> verify)
 7. search:   Global mailbox search by query or message_ids
 8. resolve:  Batch resolution and archival of replies-needed and review cases
+9. dossier:  Mailbox-read-only, non-executing project dossier inspection handoff
 """
 
 from __future__ import annotations
@@ -60,6 +61,7 @@ from core import (
 from core.envelope import build_error, build_success, emit_json
 from core.modes import (
     run_draft_mode as _run_draft_mode,
+    run_dossier_mode as _run_dossier_mode,
     run_execute_mode as _run_execute_mode,
     run_inspect_mode as _run_inspect_mode,
     run_pipeline_mode as _run_pipeline_mode,
@@ -420,6 +422,23 @@ def run_draft_mode(
     )
 
 
+def run_dossier_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Compatibility facade for the mailbox-read-only dossier-mode handler."""
+    return _run_dossier_mode(
+        config,
+        account=account,
+        data_dir=data_dir,
+        dependencies={
+            "atomic_write_json": atomic_write_json,
+            "load_catalogs": load_catalogs,
+        },
+    )
+
+
 # ==============================================================================
 # Sync Sent Mode
 # ==============================================================================
@@ -542,6 +561,7 @@ MODE_ALIASES = {
     "fetch": "inspect",
     "draft": "draft",
     "propose": "draft",
+    "dossier": "dossier",
     "sync_sent": "sync_sent",
     "sync-sent": "sync_sent",
     "sent": "sync_sent",
@@ -700,7 +720,7 @@ def _failure_envelope(
 def _build_parser() -> EnvelopeArgumentParser:
     parser = EnvelopeArgumentParser(
         add_help=False,
-        description="Unified batch runner for mail-desk (inspect, draft, execute, verify, pipeline, search, resolve).",
+        description="Unified batch runner for mail-desk (inspect, draft, dossier, execute, verify, pipeline, search, resolve).",
     )
     parser.add_argument("-h", "--help", action="store_true", help="Show JSON-compatible CLI help metadata")
     parser.add_argument("--input", "-i", help="Path to input JSON file in data/")
@@ -714,6 +734,8 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--pipeline", "-p", type=int, nargs="?", const=20, help="Run autonomous pipeline for N items")
     parser.add_argument("--draft", "-d", type=int, nargs="?", const=20, help="Inspect N items and draft batch-manifest.json")
     parser.add_argument("--inspect", nargs="?", const=20, type=int, help="Inspect N emails")
+    parser.add_argument("--dossier", metavar="PROJECT_ID", help="Prepare a mailbox-read-only project dossier inspection handoff")
+    parser.add_argument("--max-count", type=int, help="Maximum dossier matches (1-50; default: 50)")
     parser.add_argument("--sync-sent", nargs="?", const=150, type=int, help="Fetch and index N recent Sent Items")
     parser.add_argument("--resolve", "-r", action="store_true", help="Auto-audit and resolve replies-needed cases against Sent Items")
     parser.add_argument("--order", choices=["oldest", "newest"], default="oldest", help="Processing order (default: oldest)")
@@ -728,6 +750,21 @@ def _build_parser() -> EnvelopeArgumentParser:
 
 
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
+    if args.dossier is not None:
+        if args.query or args.date:
+            raise ArgumentParseError("--dossier derives its query from the project catalog; --query/--date are not allowed")
+        if any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.sync_sent is not None, args.resolve)):
+            raise ArgumentParseError("--dossier cannot be combined with another direct mode")
+        return {
+            "mode": "dossier",
+            "project": args.dossier,
+            "source_folder": args.folder,
+            "max_count": args.max_count,
+            "auto_query_from_catalog": True,
+            "delete_input_on_success": False,
+        }
+    if args.max_count is not None:
+        raise ArgumentParseError("--max-count requires --dossier")
     if args.pipeline is not None:
         cfg = {
             "mode": "pipeline",
@@ -811,6 +848,7 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
         data_dir / "batch-manifest.json",
         data_dir / "batch-pipeline.json",
         data_dir / "batch-draft.json",
+        data_dir / "batch-dossier-request.json",
         data_dir / "batch-inspect.json",
         data_dir / "batch-verify.json",
         data_dir / "batch-search.json",
@@ -855,6 +893,8 @@ def _dispatch(
             return run_inspect_mode(config, account=account, data_dir=data_dir), operation
         if operation == "draft":
             return run_draft_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "dossier":
+            return run_dossier_mode(config, account=account, data_dir=data_dir), operation
         if operation == "sync_sent":
             return run_sync_sent_mode(config, account=account, data_dir=data_dir), operation
         if operation == "pipeline":
@@ -881,6 +921,10 @@ def main() -> int:
         config, input_path = _load_configuration(args, data_dir)
         if not isinstance(config, dict):
             raise ArgumentParseError("configuration must be a JSON object")
+        if str(config.get("mode", "")).lower() == "dossier":
+            # The result is a review artifact; retain its request unless a caller
+            # attempts the explicitly rejected destructive lifecycle override.
+            config.setdefault("delete_input_on_success", False)
 
         index_path = resolve_final_index_path(args.index, data_dir=data_dir)
         account = args.account or config.get("account")

@@ -1,6 +1,7 @@
 """Batch-runner mode handlers with stable imports for the CLI dispatcher."""
 
 from .draft import run_draft_mode
+from .dossier import run_dossier_mode
 from .execute import run_execute_mode
 from .inspect import run_inspect_mode
 from .pipeline import run_pipeline_mode
@@ -11,6 +12,7 @@ from .verify import run_verify_mode
 
 __all__ = [
     "run_draft_mode",
+    "run_dossier_mode",
     "run_execute_mode",
     "run_inspect_mode",
     "run_pipeline_mode",
