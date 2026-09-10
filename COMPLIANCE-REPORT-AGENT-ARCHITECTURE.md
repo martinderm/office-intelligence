@@ -452,10 +452,21 @@ den Architektur- noch den Conformance-Scope dieses Shared-Skill-Berichts.
 
 ### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
 
+Human-Entscheidung vom 10.09.2026: BOKUdrive und beide BOKU-OneDrive-Bestände
+bleiben vorerst als parallele Cloud-Quellen bestehen. Es gibt daher keine offene
+Ablöse-, Konsolidierungs- oder Plattformmigration zwischen diesen drei Speichern.
+Mehrere benannte Storages dürfen projektbezogen nebeneinander bestehen; ihre
+Filemaps bleiben getrennt.
+
 Die Produktionsabnahmen schließen keine derzeit über die BOKUdrive-Junction bzw.
 deren Server-Interna nicht verfügbaren Storages: Evolve (BOKUdrive-backed), Li4Lam
 und `week.bokudrive` sowie Frameworks und Lifelong Learning bleiben blockiert oder
-ungeklärt. Für Frameworks liegen zwei identische OneDrive-Kandidaten vor, die
-Katalog-Policy weist jedoch keinen aktiven Cloud-Bedarf aus; ohne Human-Entscheidung
-erfolgt keine kanonische Neuzuweisung. Für Li4Lam wurde die erwartete Quelle nicht
-gefunden. Diese Punkte sind ausdrücklich nicht als geschlossen zu lesen.
+ungeklärt. Der gemeinsame BOKUdrive-Blocker ist damit rein operativ: Die aktuelle
+Junction zeigt Server-Interna statt der benötigten Klartextverzeichnisse. Nach
+Wiederherstellung des Klartextzugriffs sind die bereits katalogisierten Storages
+einzeln zu validieren; sie werden nicht auf OneDrive umgedeutet. Für Frameworks
+liegen zwei identische OneDrive-Kandidaten vor, die Katalog-Policy weist jedoch
+keinen aktiven Cloud-Bedarf aus; offen bleibt nur, ob Frameworks aktiviert und
+welcher der beiden Ordner dann kanonisch zugeordnet wird. Für Li4Lam wurde die
+erwartete Quelle nicht gefunden. Diese Punkte sind ausdrücklich nicht als
+geschlossen zu lesen.
