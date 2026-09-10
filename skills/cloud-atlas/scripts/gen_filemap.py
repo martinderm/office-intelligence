@@ -18,6 +18,10 @@ try:
         validate_cloud_artifact_metadata,
     )
     from core.curation import load_curation_overlay, merge_curated_metadata
+    from core.mirror_paths import (
+        explicit_custom_mirror_path, legacy_canonical_mirror_path,
+        plan_markdown_mirrors,
+    )
 except ModuleNotFoundError:
     # Keep direct imports from a test loader portable while preserving the
     # standalone script's bundled ``scripts/core`` import path.
@@ -27,9 +31,12 @@ except ModuleNotFoundError:
         validate_cloud_artifact_metadata,
     )
     from core.curation import load_curation_overlay, merge_curated_metadata
+    from core.mirror_paths import (
+        explicit_custom_mirror_path, legacy_canonical_mirror_path,
+        plan_markdown_mirrors,
+    )
 
 
-MIRROR_SOURCE_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".doc"}
 VALID_OCR_POLICIES = {"enrich_source", "local_derivative", "disabled"}
 FILEMAP_SCHEMA_VERSION = 1
 FILEMAP_SCHEMA_URI = "https://raw.githubusercontent.com/martinderm/office-intelligence/main/skills/cloud-atlas/references/filemap.schema.json"
@@ -239,6 +246,7 @@ def validate_filemap(filemap, workspace_root=None):
     required_entry = {"version", "mtime", "size", "sha256", "description"}
     valid_statuses = {"converted", "conversion_required"}
     valid_ocr_policies = {"enrich_source", "local_derivative", "disabled"}
+    seen_mirrors = {}
     for source_path, entry in files.items():
         normalized_source = normalize_workspace_relative_path(source_path)
         if not normalized_source or not path_is_within(normalized_source, scan_dir):
@@ -270,6 +278,13 @@ def validate_filemap(filemap, workspace_root=None):
             mirror = normalize_workspace_relative_path(mirror)
             if not mirror or not path_is_within(mirror, output_dir):
                 raise ValueError(f"filemap.files[{source_path!r}].markdown_mirror is outside output_dir")
+            previous_source = seen_mirrors.get(mirror.casefold())
+            if previous_source is not None:
+                raise ValueError(
+                    "filemap.files has duplicate markdown_mirror targets under "
+                    f"case-insensitive comparison: {previous_source!r} and {source_path!r}"
+                )
+            seen_mirrors[mirror.casefold()] = source_path
         status = entry.get("conversion_status")
         if "conversion_status" in entry and (
             not isinstance(status, str) or status not in valid_statuses
@@ -356,21 +371,7 @@ def calculate_markdown_payload_sha256(markdown_body):
 
 def canonical_mirror_path(source_path, scan_dir, output_dir):
     """Derive the converter's canonical mirror path for a supported source."""
-    source_rel = normalize_workspace_relative_path(source_path)
-    scan_rel = normalize_workspace_relative_path(scan_dir)
-    output_rel = normalize_workspace_relative_path(output_dir)
-    if not source_rel or not scan_rel or not output_rel:
-        return None
-
-    source = PurePosixPath(source_rel)
-    scan = PurePosixPath(scan_rel)
-    try:
-        relative_source = source.relative_to(scan)
-    except ValueError:
-        return None
-    if relative_source.suffix.lower() not in MIRROR_SOURCE_EXTENSIONS:
-        return None
-    return (PurePosixPath(output_rel) / relative_source.with_suffix(".md")).as_posix()
+    return legacy_canonical_mirror_path(source_path, scan_dir, output_dir)
 
 
 def canonical_derivative_path(source_path, scan_dir, output_dir):
@@ -417,8 +418,13 @@ def encode_markdown_link_target(relative_path):
     return quote(relative_path.replace("\\", "/"), safe="/-._~")
 
 
-def select_markdown_mirror(workspace_root, source_path, scan_dir, output_dir, existing_info):
+def select_markdown_mirror(
+    workspace_root, source_path, scan_dir, output_dir, existing_info,
+    planned_mirror=None,
+):
     """Select an existing mirror without allowing stale or cross-zone paths."""
+    if planned_mirror is not None:
+        return planned_mirror if workspace_file_exists(workspace_root, planned_mirror) else None
     canonical = canonical_mirror_path(source_path, scan_dir, output_dir)
     if canonical and workspace_file_exists(workspace_root, canonical):
         return canonical
@@ -854,6 +860,10 @@ def run_generation(args):
                     "sha256": sha256
                 })
 
+        raw_scanned_files.sort(
+            key=lambda item: (item["rel_to_workspace"].casefold(), item["rel_to_workspace"])
+        )
+
         current_scanned_paths = {item["rel_to_workspace"] for item in raw_scanned_files}
         
         # Build index of unmapped existing entries by sha256 to track renames/moves
@@ -861,6 +871,32 @@ def run_generation(args):
         for old_path, old_info in existing_files_data.items():
             if old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256"):
                 unmapped_by_sha256.setdefault(old_info["sha256"], []).append((old_path, old_info))
+
+        existing_mirrors = {
+            item["rel_to_workspace"]: existing_files_data.get(item["rel_to_workspace"], {}).get("markdown_mirror")
+            for item in raw_scanned_files
+            if isinstance(existing_files_data.get(item["rel_to_workspace"]), dict)
+        }
+        for item in raw_scanned_files:
+            if item["rel_to_workspace"] in existing_mirrors:
+                continue
+            prior = unmapped_by_sha256.get(item["sha256"], [])
+            if len(prior) == 1 and isinstance(prior[0][1], dict):
+                old_path, old_info = prior[0]
+                custom = explicit_custom_mirror_path(
+                    old_path, scan_dir, output_dir, old_info.get("markdown_mirror"),
+                )
+                if custom:
+                    existing_mirrors[item["rel_to_workspace"]] = custom
+        try:
+            planned_mirrors = plan_markdown_mirrors(
+                [item["rel_to_workspace"] for item in raw_scanned_files],
+                scan_dir,
+                output_dir,
+                existing_mirrors,
+            )
+        except ValueError as exc:
+            raise GenerationError("mirror-plan", sid, exc, storage_results) from exc
 
         files_data = {}
         for item in raw_scanned_files:
@@ -894,6 +930,7 @@ def run_generation(args):
                 scan_dir,
                 output_dir,
                 existing_info,
+                planned_mirrors.get(rel_to_workspace_forward),
             )
             if markdown_mirror:
                 file_entry["markdown_mirror"] = markdown_mirror

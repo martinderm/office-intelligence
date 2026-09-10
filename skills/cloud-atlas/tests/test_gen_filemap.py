@@ -424,6 +424,10 @@ class FilemapSchemaTests(unittest.TestCase):
             Path(MODULE.__file__).resolve().parent / "core" / "curation.py",
             runtime_core / "curation.py",
         )
+        shutil.copy2(
+            Path(MODULE.__file__).resolve().parent / "core" / "mirror_paths.py",
+            runtime_core / "mirror_paths.py",
+        )
 
         with mock.patch.dict(
             os.environ,

@@ -15,6 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from core.metadata import build_cloud_artifact_metadata
 from core.curation import load_curation_overlay, merge_curated_metadata
+from core.mirror_paths import explicit_custom_mirror_path, plan_markdown_mirrors
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -1508,12 +1509,40 @@ def run_conversion(args, run_state):
                 })
 
         current_scanned_paths = {item["src_rel"] for item in raw_scanned_files}
+        raw_scanned_files.sort(key=lambda item: (item["src_rel"].casefold(), item["src_rel"]))
 
         # Build index of unmapped existing entries by sha256 to track renames/moves
         unmapped_by_sha256 = {}
         for old_path, old_info in files_in_json.items():
             if old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256"):
                 unmapped_by_sha256.setdefault(old_info["sha256"], []).append((old_path, old_info))
+
+        existing_mirrors = {
+            item["src_rel"]: files_in_json.get(item["src_rel"], {}).get("markdown_mirror")
+            for item in raw_scanned_files
+            if isinstance(files_in_json.get(item["src_rel"]), dict)
+        }
+        for item in raw_scanned_files:
+            if item["src_rel"] in existing_mirrors:
+                continue
+            prior = unmapped_by_sha256.get(item["src_sha256"], [])
+            if len(prior) == 1 and isinstance(prior[0][1], dict):
+                old_path, old_info = prior[0]
+                custom = explicit_custom_mirror_path(
+                    old_path, cloud_dir, output_dir, old_info.get("markdown_mirror"),
+                )
+                if custom:
+                    existing_mirrors[item["src_rel"]] = custom
+        try:
+            planned_mirrors = plan_markdown_mirrors(
+                [item["src_rel"] for item in raw_scanned_files],
+                cloud_dir,
+                output_dir,
+                existing_mirrors,
+                supported_extensions=extensions,
+            )
+        except ValueError as exc:
+            raise ConversionRunError("mirror-plan", str(exc), sid) from exc
 
         new_files_in_json = {}
         candidate_tasks = []
@@ -1545,7 +1574,9 @@ def run_conversion(args, run_state):
             except ValueError as exc:
                 raise ConversionRunError("curation", str(exc), sid) from exc
 
-            dest_rel_workspace = os.path.join(output_dir, os.path.splitext(rel_to_cloud)[0] + ".md").replace("\\", "/")
+            dest_rel_workspace = planned_mirrors.get(src_rel_workspace)
+            if dest_rel_workspace is None:
+                raise ConversionRunError("mirror-plan", f"No planned Markdown mirror for {src_rel_workspace}", sid)
             dest_abs = os.path.normpath(os.path.join(workspace_root, dest_rel_workspace))
 
             derivative_rel_workspace = None

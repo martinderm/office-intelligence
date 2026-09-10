@@ -419,6 +419,7 @@ Wartungspakete abgeleitet:
 | B2b Konvertierungshärtung | Fehlende lokale Bildassets werden im Markdown-Mirror neutralisiert, ohne normale, externe oder andersartige Links umzudeuten. | Commit `33f923b`; fokussierte Konvertertests |
 | B2c Filemap-Curation | Versionierte Curation-Overlays sind gemeinsame SSOT für Konverter und Generator; entfernte Overlay-Felder werden nicht aus generiertem Altstand wiederhergestellt, technische OCR-Metadaten bleiben erhalten. | Commit `31843be`; Schema-, Generator- und Konvertertests |
 | B2d5 JSON-Fortschritt | Der Orchestrator hält `stdout` als kanonischen Abschluss-Envelope rein, puffert aber den Child-Fortschritt auf `stderr` nicht mehr bis zum Prozessende. | `sync_project_cloud.py`, Contract-Tests und Cloud-Atlas-Skillvertrag |
+| B2d7 Mirror-Zielkollisionen | Reale WEEK-Evidenz: 112 unterstützte Quellen, aber 108 bisherige Stem-Mirrors; vier Gruppen mit verschiedenen Endungen und unterschiedlichen Source-SHAs konnten Provenienz überschreiben. Gemeinsame, case-insensitive Pfadplanung disambiguiert jede Gruppe zu `original.ext.md`, prüft vor Writes auf Eindeutigkeit/Output-Zone und lässt den Generator dieselbe Policy verwenden. Derivate und OCR-Pfade bleiben mangels analoger Evidenz unverändert. | `scripts/core/mirror_paths.py`, Konverter-/Generator-/Validator-Regressionen, Cloud-Atlas-Suite |
 
 Der erste produktive WEEK-Regenerationsversuch wurde nach rund neun Minuten
 kontrolliert beendet. Die nachträgliche Codeanalyse zeigte, dass die damals
@@ -427,7 +428,8 @@ belegten: Der JSON-Orchestrator pufferte `stderr`, während der Konverter die
 Mirrors erst nach Abschluss des gesamten Batches schreibt. B2d5 behebt diese
 Beobachtbarkeitslücke; die Konvertierungs- und OCR-Semantik bleibt unverändert.
 
-Abnahme am 10.09.2026: 120/120 Cloud-Atlas-Tests grün. Dabei wurde auch das
-Stand-alone-Test-Fixture an die seit B2c gebündelte Laufzeitabhängigkeit
-`core/curation.py` angepasst. Das Abschlussurteil `conformant` bleibt bestehen;
+Abnahme am 10.09.2026: Der historische B2c-Prüfstand von 120/120 Cloud-Atlas-Tests
+bleibt dokumentiert. B2d7 ergänzt pure Planungs-, Konverter-/Generator-,
+Validator- und Stand-alone-Import-Regressionen; der aktuelle Suite-Stand beträgt
+132/132 grüne Tests. Das Abschlussurteil `conformant` bleibt bestehen;
 eine erfolgreiche produktive WEEK-Regeneration ist damit noch nicht behauptet.

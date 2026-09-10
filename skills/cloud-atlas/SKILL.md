@@ -33,6 +33,16 @@ Der Skill kapselt folgende Aufgaben:
 3. **Fallback & Katalogisierung (`conversion_required`)**: Fehlt ein Konverter für `.doc`-Dateien, scheitert die OCR-Verarbeitung oder ist ein PDF digital signiert bei `enrich_source`, bricht der Scan nicht ab; die Datei wird vollständig katalogisiert und als `conversion_required` markiert.
 4. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen und Derivate unter `_derivatives/` (wenn das Original in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse.
 
+### Mirror-Zielkollisionen
+
+Vor jedem Write planen Konverter und Filemap-Generator dieselben Mirror-Ziele und
+prüfen sie fail-closed auf Output-Zone und case-insensitive Eindeutigkeit. Quellen,
+deren bisheriger Pfad `relative/stem.md` innerhalb desselben Storage-Scans kollidieren
+wäre, erhalten ausnahmslos `relative/original.ext.md`; nicht kollidierende Quellen
+behalten ihren bisherigen Pfad. Ein vorhandener expliziter Custom-Mirror bleibt nur
+innerhalb der Output-Zone und ohne Zielkollision erhalten. Derivate und OCR-Ziele
+bleiben in diesem Paket unverändert: für sie liegt keine analoge reale Kollision vor.
+
 ### Optionale Konvertierungs- und OCR-Voraussetzungen
 
 Der Office-Intelligence-Router und alle Nicht-Cloud-Desks benötigen **keine**
