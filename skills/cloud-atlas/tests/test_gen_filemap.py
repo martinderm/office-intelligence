@@ -420,6 +420,10 @@ class FilemapSchemaTests(unittest.TestCase):
             Path(MODULE.__file__).resolve().parent / "core" / "metadata.py",
             runtime_core / "metadata.py",
         )
+        shutil.copy2(
+            Path(MODULE.__file__).resolve().parent / "core" / "curation.py",
+            runtime_core / "curation.py",
+        )
 
         with mock.patch.dict(
             os.environ,

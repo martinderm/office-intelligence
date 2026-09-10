@@ -41,7 +41,10 @@ class SyncProjectCloudContractTests(unittest.TestCase):
         self.assertEqual("Completed", result["state"])
         self.assertEqual(["convert", "filemap"], result["data"]["completed_steps"])
         self.assertIsNone(result["error"])
-        self.assertTrue(all(call.kwargs["capture_output"] for call in run_mock.call_args_list))
+        self.assertTrue(all(call.kwargs["stdout"] is subprocess.PIPE for call in run_mock.call_args_list))
+        self.assertTrue(all(call.kwargs["text"] for call in run_mock.call_args_list))
+        self.assertTrue(all("stderr" not in call.kwargs for call in run_mock.call_args_list))
+        self.assertTrue(all("capture_output" not in call.kwargs for call in run_mock.call_args_list))
 
     def test_converter_error_stops_before_filemap(self):
         exit_code, stdout, run_mock = self.run_main(
@@ -131,7 +134,10 @@ class SyncProjectCloudContractTests(unittest.TestCase):
 
     def test_json_stdout_stays_pure_when_child_writes_output(self):
         def noisy_child(*args, **kwargs):
-            self.assertTrue(kwargs["capture_output"])
+            self.assertIs(subprocess.PIPE, kwargs["stdout"])
+            self.assertTrue(kwargs["text"])
+            self.assertNotIn("stderr", kwargs)
+            self.assertNotIn("capture_output", kwargs)
             return subprocess.CompletedProcess(args[0], 0, stdout="simulated child output", stderr="simulated child error")
 
         exit_code, stdout, _ = self.run_main("--project-id", "example", "--json", side_effect=noisy_child)
@@ -140,6 +146,37 @@ class SyncProjectCloudContractTests(unittest.TestCase):
         self.assertEqual(0, exit_code)
         self.assertTrue(result["success"])
         self.assertNotIn("simulated child output", stdout)
+
+    def test_json_mode_captures_child_envelope_but_inherits_live_stderr(self):
+        child = {
+            "state": "ConversionRequired",
+            "message": "Conversion requires attention.",
+            "error": {"requirements": [{"capability": "markitdown"}]},
+        }
+
+        def conversion_required_child(*args, **kwargs):
+            self.assertIs(subprocess.PIPE, kwargs["stdout"])
+            self.assertTrue(kwargs["text"])
+            self.assertNotIn("stderr", kwargs)
+            self.assertNotIn("capture_output", kwargs)
+            return subprocess.CompletedProcess(args[0], 1, stdout=json.dumps(child))
+
+        def child_process(*args, **kwargs):
+            if "convert_cloud_docs.py" in args[0][1]:
+                return conversion_required_child(*args, **kwargs)
+            self.assertIs(subprocess.PIPE, kwargs["stdout"])
+            self.assertNotIn("stderr", kwargs)
+            return subprocess.CompletedProcess(args[0], 0, stdout=json.dumps({"success": True}))
+
+        exit_code, stdout, run_mock = self.run_main(
+            "--project-id", "example", "--json", side_effect=child_process
+        )
+
+        result = self.json_result(stdout)
+        self.assertEqual(1, exit_code)
+        self.assertEqual("ConversionRequired", result["state"])
+        self.assertEqual(child["error"]["requirements"], result["error"]["requirements"])
+        self.assertEqual(2, run_mock.call_count)
 
     def test_human_mode_remains_readable_without_envelope(self):
         def visible_child(*args, **kwargs):

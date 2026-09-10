@@ -186,6 +186,13 @@ Jede Datei wird mit kryptografischem SHA-256 Hash und detailliertem Status erfas
 
 Die Steuerung erfolgt über das zentrale Orchestrator-Skript `sync_project_cloud.py`. Dieses ruft nacheinander die Konvertierungs- und Mapping-Skripte auf.
 
+Im `--json`-Modus bleibt die Standardausgabe des Orchestrators kanonisch: Sie
+enthält ausschließlich den abschließenden JSON-Envelope. Die JSON-Envelopes der
+Child-Prozesse werden intern für Fehlerauswertung erfasst; deren laufender
+Fortschritt und Diagnostik werden dagegen unverzögert über `stderr` an den
+aufrufenden Prozess durchgereicht. Daher konsumieren Automationen `stdout` als
+JSON und beobachten `stderr` für Live-Fortschritt.
+
 ### Speicherort der Skripte im Skill:
 * Orchestrator: `skills/cloud-atlas/scripts/sync_project_cloud.py`
 * Konvertierung: `skills/cloud-atlas/scripts/convert_cloud_docs.py`

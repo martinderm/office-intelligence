@@ -405,3 +405,29 @@ Ausführungsdetail, kein Encoding-Fehler der UTF-8-Skilldateien.
 | `P2-03` optionale Cloud-Abhängigkeiten | geschlossen | `cloud-atlas/requirements-conversion.txt`, `ConversionRequired`-Tests |
 | `P2-04` Event-Speicher | geschlossen und nachgeschärft | Events ohne Cloud gültig; optionale Assets über geerbte Cloud-Atlas-Konfiguration; sechs Event-Storage-Tests |
 | `P2-05` Paketkonventionen | geschlossen | `LICENSE.txt`; acht erfolgreiche Skill-Validierungen |
+
+---
+
+## 11. Post-Audit-Wartung
+
+Der historische Prüfstand in Abschnitt 10 bleibt unverändert. Nach `OI-17`
+wurden aus der kontrollierten BOKU-Migration drei eng begrenzte Cloud-Atlas-
+Wartungspakete abgeleitet:
+
+| Paket | Ergebnis | Evidenz |
+| :--- | :--- | :--- |
+| B2b Konvertierungshärtung | Fehlende lokale Bildassets werden im Markdown-Mirror neutralisiert, ohne normale, externe oder andersartige Links umzudeuten. | Commit `33f923b`; fokussierte Konvertertests |
+| B2c Filemap-Curation | Versionierte Curation-Overlays sind gemeinsame SSOT für Konverter und Generator; entfernte Overlay-Felder werden nicht aus generiertem Altstand wiederhergestellt, technische OCR-Metadaten bleiben erhalten. | Commit `31843be`; Schema-, Generator- und Konvertertests |
+| B2d5 JSON-Fortschritt | Der Orchestrator hält `stdout` als kanonischen Abschluss-Envelope rein, puffert aber den Child-Fortschritt auf `stderr` nicht mehr bis zum Prozessende. | `sync_project_cloud.py`, Contract-Tests und Cloud-Atlas-Skillvertrag |
+
+Der erste produktive WEEK-Regenerationsversuch wurde nach rund neun Minuten
+kontrolliert beendet. Die nachträgliche Codeanalyse zeigte, dass die damals
+fehlende Parent-Ausgabe und noch nicht geschriebenen Mirrors keinen Stall
+belegten: Der JSON-Orchestrator pufferte `stderr`, während der Konverter die
+Mirrors erst nach Abschluss des gesamten Batches schreibt. B2d5 behebt diese
+Beobachtbarkeitslücke; die Konvertierungs- und OCR-Semantik bleibt unverändert.
+
+Abnahme am 10.09.2026: 120/120 Cloud-Atlas-Tests grün. Dabei wurde auch das
+Stand-alone-Test-Fixture an die seit B2c gebündelte Laufzeitabhängigkeit
+`core/curation.py` angepasst. Das Abschlussurteil `conformant` bleibt bestehen;
+eine erfolgreiche produktive WEEK-Regeneration ist damit noch nicht behauptet.

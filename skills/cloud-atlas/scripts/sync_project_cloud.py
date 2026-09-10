@@ -73,10 +73,18 @@ def command_data(target_kind, target_id, completed_steps, subtopic_id=None):
 
 
 def run_step(step, command, json_mode):
-    """Run one child command and avoid any child output on JSON stdout."""
+    """Run one child command and keep JSON stdout canonical.
+
+    JSON child envelopes remain available for structured error handling, while
+    the child's progress stream stays connected to the invoking process.
+    """
     try:
         if json_mode:
-            result = subprocess.run(command, capture_output=True, text=True)
+            # Capture only stdout: it is the child's canonical envelope and
+            # must never leak into this command's own JSON stdout.  Leaving
+            # stderr inherited deliberately preserves live conversion progress
+            # (and diagnostics) for an operator.
+            result = subprocess.run(command, stdout=subprocess.PIPE, text=True)
         else:
             result = subprocess.run(command)
     except OSError as exc:
