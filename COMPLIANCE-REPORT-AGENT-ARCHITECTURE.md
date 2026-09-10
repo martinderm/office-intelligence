@@ -430,6 +430,32 @@ Beobachtbarkeitslücke; die Konvertierungs- und OCR-Semantik bleibt unverändert
 
 Abnahme am 10.09.2026: Der historische B2c-Prüfstand von 120/120 Cloud-Atlas-Tests
 bleibt dokumentiert. B2d7 ergänzt pure Planungs-, Konverter-/Generator-,
-Validator- und Stand-alone-Import-Regressionen; der aktuelle Suite-Stand beträgt
-132/132 grüne Tests. Das Abschlussurteil `conformant` bleibt bestehen;
-eine erfolgreiche produktive WEEK-Regeneration ist damit noch nicht behauptet.
+Validator- und Stand-alone-Import-Regressionen; Commit
+`198e284d8f459f254cfb81b8449db22168232c2b` belegt 132/132 grüne Tests. Das
+Abschlussurteil `conformant` bleibt bestehen. Die anschließenden produktiven
+Regenerationen und ihre Abnahmegrenzen sind nachstehend separat belegt.
+
+### 11.1 Produktive Validierung in `boku-user` (10.09.2026)
+
+Die folgenden Ergebnisse betreffen ausschließlich die jeweils benannte
+`cloud_sync`-Storage-Konfiguration im BOKU-Workspace. Alle akzeptierten Läufe
+verwendeten `--no-ocr` (`enrich_source: false`); ihre Receipts belegen keine
+Mutation eines Cloud-Originals. Lokale Mirrors und Filemaps unter `memory/cloud/`
+sind abgeleiteter, ignorierter Zustand. Diese Storage-Ergebnisse erweitern weder
+den Architektur- noch den Conformance-Scope dieses Shared-Skill-Berichts.
+
+| Storage | Abnahmestatus und dauerhafte Kennzahlen | Beleg |
+| :--- | :--- | :--- |
+| `week.onedrive-legacy` | **accepted**: 128 Filemap-Einträge, davon 112 unterstützte Quellen mit 112 vorhandenen, case-insensitiv eindeutigen Mirrors; Filemap-/Curation-Vertrag gültig. | Commit `deb56124281b588666a29a82c300b8348ab859dd`; Receipt `boku-user/runs/20260910-091116-cloud-filemap-regeneration-b2d8-week-onedrive-retry/receipt.json` |
+| `meshe.meshe-teams` | **accepted with external integrity alert**: 130/101 Quellen/Mirrors, zwei vorab aufgelöste Legacy-Kollisionsgruppen und 14 entfernte MESHE-Mirror-Warnungen. Der Storage-Lauf endete `Completed`; während des Laufs driftete jedoch der staged EVOLVE-Fingerprint extern, daher keine uneingeschränkte Integritätsabnahme des Gesamtpakets. | Commit `191dbe61cde57c5bef827ad6134bfdf8df56a240`; Receipt `boku-user/runs/20260910-142623-cloud-filemap-regeneration-b2e-meshe-teams/receipt.json` |
+| `usage-ng.onedrive-legacy` | **accepted after one fail-closed retry**: Der erste Lauf hatte genau einen 120-Sekunden-Timeout und blieb nicht akzeptiert. Der einzelne Retry lieferte 2.226 generische Quellen, 873/873 vorhandene, casefold-eindeutige Mirrors, 38 aufgelöste Kollisionsgruppen und alle 88 Ziele über 260 Zeichen; Filemap-Vertrag gültig, Linter 0 Fehler/1.082 Warnungen. Die DOCX-Decoding-Warnung wurde im finalen Mirror ohne U+FFFD bestätigt. | Timeout-Commit `83ec0a21d97ad9680e1df314979e941c113de7fd`, Receipt `boku-user/runs/20260910-154800-cloud-filemap-regeneration-b2g-usage-ng-onedrive-legacy/receipt.json`; Retry-Commit `8b1efd20cc5a84a5aff721871ecfa112508f19b1`, Receipt `boku-user/runs/20260910-193910-cloud-filemap-regeneration-b2h-usage-ng-onedrive-legacy/receipt.json` |
+
+### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
+
+Die Produktionsabnahmen schließen keine derzeit über die BOKUdrive-Junction bzw.
+deren Server-Interna nicht verfügbaren Storages: Evolve (BOKUdrive-backed), Li4Lam
+und `week.bokudrive` sowie Frameworks und Lifelong Learning bleiben blockiert oder
+ungeklärt. Für Frameworks liegen zwei identische OneDrive-Kandidaten vor, die
+Katalog-Policy weist jedoch keinen aktiven Cloud-Bedarf aus; ohne Human-Entscheidung
+erfolgt keine kanonische Neuzuweisung. Für Li4Lam wurde die erwartete Quelle nicht
+gefunden. Diese Punkte sind ausdrücklich nicht als geschlossen zu lesen.
