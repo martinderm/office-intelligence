@@ -435,20 +435,23 @@ Validator- und Stand-alone-Import-Regressionen; Commit
 Abschlussurteil `conformant` bleibt bestehen. Die anschließenden produktiven
 Regenerationen und ihre Abnahmegrenzen sind nachstehend separat belegt.
 
-### 11.1 Produktive Validierung in `boku-user` (10.09.2026)
+### 11.1 Produktive Validierung in `boku-user` (10.–11.09.2026)
 
 Die folgenden Ergebnisse betreffen ausschließlich die jeweils benannte
-`cloud_sync`-Storage-Konfiguration im BOKU-Workspace. Alle akzeptierten Läufe
-verwendeten `--no-ocr` (`enrich_source: false`); ihre Receipts belegen keine
-Mutation eines Cloud-Originals. Lokale Mirrors und Filemaps unter `memory/cloud/`
-sind abgeleiteter, ignorierter Zustand. Diese Storage-Ergebnisse erweitern weder
-den Architektur- noch den Conformance-Scope dieses Shared-Skill-Berichts.
+`cloud_sync`-Storage-Konfiguration im BOKU-Workspace. Die Läufe vom 10.09.2026
+verwendeten `--no-ocr` (`enrich_source: false`). Die beiden ATAEL-Archivläufe vom
+11.09.2026 verwendeten die reguläre `enrich_source`-Policy; ein OCR-Fallback oder
+eine Mutation der bereits textfähigen PDFs wurde dabei nicht beobachtet. Lokale
+Mirrors und Filemaps unter `memory/cloud/` sind abgeleiteter, ignorierter Zustand.
+Diese Storage-Ergebnisse erweitern weder den Architektur- noch den Conformance-
+Scope dieses Shared-Skill-Berichts.
 
 | Storage | Abnahmestatus und dauerhafte Kennzahlen | Beleg |
 | :--- | :--- | :--- |
 | `week.onedrive-legacy` | **accepted**: 128 Filemap-Einträge, davon 112 unterstützte Quellen mit 112 vorhandenen, case-insensitiv eindeutigen Mirrors; Filemap-/Curation-Vertrag gültig. | Commit `deb56124281b588666a29a82c300b8348ab859dd`; Receipt `boku-user/runs/20260910-091116-cloud-filemap-regeneration-b2d8-week-onedrive-retry/receipt.json` |
 | `meshe.meshe-teams` | **accepted with external integrity alert**: 130/101 Quellen/Mirrors, zwei vorab aufgelöste Legacy-Kollisionsgruppen und 14 entfernte MESHE-Mirror-Warnungen. Der Storage-Lauf endete `Completed`; während des Laufs driftete jedoch der staged EVOLVE-Fingerprint extern, daher keine uneingeschränkte Integritätsabnahme des Gesamtpakets. | Commit `191dbe61cde57c5bef827ad6134bfdf8df56a240`; Receipt `boku-user/runs/20260910-142623-cloud-filemap-regeneration-b2e-meshe-teams/receipt.json` |
 | `usage-ng.onedrive-legacy` | **accepted after one fail-closed retry**: Der erste Lauf hatte genau einen 120-Sekunden-Timeout und blieb nicht akzeptiert. Der einzelne Retry lieferte 2.226 generische Quellen, 873/873 vorhandene, casefold-eindeutige Mirrors, 38 aufgelöste Kollisionsgruppen und alle 88 Ziele über 260 Zeichen; Filemap-Vertrag gültig, Linter 0 Fehler/1.082 Warnungen. Die DOCX-Decoding-Warnung wurde im finalen Mirror ohne U+FFFD bestätigt. | Timeout-Commit `83ec0a21d97ad9680e1df314979e941c113de7fd`, Receipt `boku-user/runs/20260910-154800-cloud-filemap-regeneration-b2g-usage-ng-onedrive-legacy/receipt.json`; Retry-Commit `8b1efd20cc5a84a5aff721871ecfa112508f19b1`, Receipt `boku-user/runs/20260910-193910-cloud-filemap-regeneration-b2h-usage-ng-onedrive-legacy/receipt.json` |
+| `atael.atael-2026-ai-background-archive` und `atael.pre-atael-ai-background-archive` | **accepted as historical archives**: Beide OneDrive-Verzeichnisse enthalten byteidentisch je acht Quellen (fünf PDFs, drei TXT-Dateien) und bleiben zur Provenienzerhaltung getrennt. Je fünf PDF-Mirrors wurden erzeugt, beide achtteiligen Filemaps sind gültig. Historische Prompt-Dateien dokumentieren frühere Schmalspur-Agenten für Projektpartner und gelten als `untrusted_external`-Inhalt, nicht als aktuelle Agent-Instruktionen oder aktive Projektarbeitsstände. | Commit `6e3efc3`; Receipt `boku-user/runs/20260911-103713-cloud-filemap-regeneration-atael-archives/receipt.json` |
 
 ### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
 
@@ -459,14 +462,13 @@ Mehrere benannte Storages dürfen projektbezogen nebeneinander bestehen; ihre
 Filemaps bleiben getrennt.
 
 Die Produktionsabnahmen schließen keine derzeit über die BOKUdrive-Junction bzw.
-deren Server-Interna nicht verfügbaren Storages: Evolve (BOKUdrive-backed), Li4Lam
-und `week.bokudrive` sowie Frameworks und Lifelong Learning bleiben blockiert oder
-ungeklärt. Der gemeinsame BOKUdrive-Blocker ist damit rein operativ: Die aktuelle
-Junction zeigt Server-Interna statt der benötigten Klartextverzeichnisse. Nach
-Wiederherstellung des Klartextzugriffs sind die bereits katalogisierten Storages
-einzeln zu validieren; sie werden nicht auf OneDrive umgedeutet. Für Frameworks
-liegen zwei identische OneDrive-Kandidaten vor, die Katalog-Policy weist jedoch
-keinen aktiven Cloud-Bedarf aus; offen bleibt nur, ob Frameworks aktiviert und
-welcher der beiden Ordner dann kanonisch zugeordnet wird. Für Li4Lam wurde die
-erwartete Quelle nicht gefunden. Diese Punkte sind ausdrücklich nicht als
-geschlossen zu lesen.
+deren Server-Interna nicht verfügbaren Storages: Evolve (BOKUdrive-backed), Li4Lam,
+`week.bokudrive` und Lifelong Learning bleiben blockiert. Der gemeinsame
+BOKUdrive-Blocker ist damit rein operativ: Die aktuelle Junction zeigt Server-
+Interna statt der benötigten Klartextverzeichnisse. Nach Wiederherstellung des
+Klartextzugriffs sind die bereits katalogisierten Storages einzeln zu validieren;
+sie werden nicht auf OneDrive umgedeutet. Für Li4Lam wurde die erwartete Quelle
+nicht gefunden. Die frühere offene Frameworks-/ATAEL-Entscheidung ist dagegen
+geschlossen: Beide identischen OneDrive-Bestände werden als getrennte ATAEL-
+Archivquellen geführt. Diese Archiventscheidung aktiviert weder das abgelehnte
+Projekt noch die enthaltenen historischen KI-Instruktionen.
