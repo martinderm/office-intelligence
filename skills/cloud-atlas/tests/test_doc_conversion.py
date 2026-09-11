@@ -140,6 +140,61 @@ class DocConversionTests(unittest.TestCase):
         self.assertIn("Spiegelung: [Vertrag_v2.md]", md_text)
         self.assertIn("Derivat: [Vertrag_v2.docx]", md_text)
 
+    def test_doc_short_path_stage_promotes_derivative_without_touching_source(self):
+        """Long external converter paths use a unique short stage and atomic promotion."""
+        source = self.cloud_dir / "Long_Path_Source.doc"
+        original = b"\xd0\xcf\x11\xe0" + b"ORIGINAL"
+        source.write_bytes(original)
+        derivative_dir = self.output_dir / "_derivatives"
+        calls = []
+
+        def staged_libreoffice(src, out_dir, timeout=120):
+            calls.append((src, out_dir))
+            produced = Path(out_dir) / "source.docx"
+            produced.write_bytes(b"STAGED_DOCX")
+            return True, str(produced)
+
+        with mock.patch.object(convert_cloud_docs, "get_doc_converter", return_value="libreoffice-headless"), \
+             mock.patch.object(convert_cloud_docs, "requires_short_external_converter_paths", return_value=True), \
+             mock.patch.object(convert_cloud_docs, "convert_doc_to_docx_libreoffice", side_effect=staged_libreoffice):
+            ok, result, method = convert_cloud_docs.convert_doc_file(str(source), str(derivative_dir))
+
+        promoted = derivative_dir / "Long_Path_Source.docx"
+        self.assertTrue(ok)
+        self.assertEqual(str(promoted), result)
+        self.assertEqual("libreoffice-headless", method)
+        self.assertEqual(b"STAGED_DOCX", promoted.read_bytes())
+        self.assertEqual(original, source.read_bytes())
+        self.assertEqual(1, len(calls))
+        self.assertNotEqual(str(source), calls[0][0])
+        self.assertEqual("source.doc", Path(calls[0][0]).name)
+        self.assertEqual([], list(derivative_dir.glob(".*.tmp")))
+
+    def test_doc_path_length_error_retries_libreoffice_once_through_short_stage(self):
+        source = self.cloud_dir / "Retry_Source.doc"
+        source.write_bytes(b"\xd0\xcf\x11\xe0" + b"ORIGINAL")
+        derivative_dir = self.output_dir / "_derivatives"
+        calls = []
+
+        def libreoffice(src, out_dir, timeout=120):
+            calls.append((src, out_dir))
+            if len(calls) == 1:
+                return False, "The specified path is too long"
+            produced = Path(out_dir) / "source.docx"
+            produced.write_bytes(b"RETRIED_DOCX")
+            return True, str(produced)
+
+        with mock.patch.object(convert_cloud_docs, "get_doc_converter", return_value="libreoffice-headless"), \
+             mock.patch.object(convert_cloud_docs, "requires_short_external_converter_paths", return_value=False), \
+             mock.patch.object(convert_cloud_docs, "convert_doc_to_docx_libreoffice", side_effect=libreoffice):
+            ok, result, _ = convert_cloud_docs.convert_doc_file(str(source), str(derivative_dir))
+
+        self.assertTrue(ok)
+        self.assertEqual(str(derivative_dir / "Retry_Source.docx"), result)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(str(source), calls[0][0])
+        self.assertEqual("source.doc", Path(calls[1][0]).name)
+
     def test_missing_converter_fallback(self):
         """When no converter is found, .doc files are cataloged as conversion_required without error."""
         os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"] = "none"
@@ -709,7 +764,7 @@ class DocConversionTests(unittest.TestCase):
         with mock.patch.object(convert_cloud_docs, "run_conversion_tasks", return_value={source_rel: result}):
             sys.argv = [
                 "convert_cloud_docs.py", "--project-id", "test_proj",
-                "--workspace-root", str(self.root),
+                "--workspace-root", str(self.root), "--no-ocr",
             ]
             convert_cloud_docs.main()
 

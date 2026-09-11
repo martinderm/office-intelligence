@@ -31,6 +31,9 @@ if hasattr(sys.stderr, 'reconfigure'):
 DEFAULT_EXTENSIONS = ".pdf,.docx,.xlsx,.pptx,.doc"
 ACTION = "convert_cloud_docs"
 MAX_ENVELOPE_MESSAGE_LENGTH = 1000
+# External Windows converters can still reject paths well below the extended
+# Win32 limit.  Keep a conservative margin for their temporary output names.
+EXTERNAL_CONVERTER_PATH_LIMIT = 240
 LOCAL_IMAGE_EXTENSIONS = frozenset({
     ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".svg",
     ".tif", ".tiff", ".webp",
@@ -135,7 +138,7 @@ def conversion_capability(error, default="converter"):
     if isinstance(error, ConversionRequiredError):
         return error.capability
     text = str(error).lower()
-    for capability in ("markitdown", "ocrmypdf", "tesseract", "ghostscript", "doc_converter"):
+    for capability in ("markitdown", "ocrmypdf", "tesseract_hocr", "tesseract_deu", "tesseract", "ghostscript", "doc_converter"):
         if capability in text:
             return capability
     return default
@@ -320,6 +323,72 @@ def get_doc_converter():
         return "msword-com"
     return None
 
+
+def requires_short_external_converter_paths(*paths):
+    """Return whether a Windows external converter should use a short staging path."""
+    if os.name != "nt":
+        return False
+    return any(len(os.path.abspath(path)) >= EXTERNAL_CONVERTER_PATH_LIMIT for path in paths if path)
+
+
+def is_path_length_converter_error(message):
+    """Recognize only unambiguous path-length diagnostics for a controlled retry."""
+    text = str(message or "").lower()
+    return bool(re.search(r"(?:path|file ?name).{0,20}too long", text)) or any(marker in text for marker in (
+        "path too long", "filename too long", "file name too long",
+        "path length", "maximum path", "max path", "enametoolong",
+    ))
+
+
+def promote_staged_derivative(staged_path, final_path):
+    """Copy a staged derivative through a flushed sibling and atomically promote it."""
+    final_dir = os.path.dirname(os.path.abspath(final_path))
+    os.makedirs(get_safe_path(final_dir), exist_ok=True)
+    fd, sibling_stage = tempfile.mkstemp(
+        prefix=f".{os.path.basename(final_path)}.", suffix=".tmp", dir=get_safe_path(final_dir)
+    )
+    os.close(fd)
+    try:
+        shutil.copyfile(get_safe_path(staged_path), get_safe_path(sibling_stage))
+        with open(get_safe_path(sibling_stage), "rb+") as handle:
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(get_safe_path(sibling_stage), get_safe_path(final_path))
+    finally:
+        try:
+            if os.path.exists(get_safe_path(sibling_stage)):
+                os.unlink(get_safe_path(sibling_stage))
+        except OSError:
+            pass
+
+
+def convert_doc_with_short_staging(src_abs, out_dir_abs, converter, timeout=120):
+    """Run an external legacy-DOC converter on short, isolated paths only.
+
+    The source is copied, never moved, so the cloud original remains untouched.
+    A unique temporary directory avoids basename collisions across workers.
+    """
+    expected_filename = os.path.splitext(os.path.basename(src_abs))[0] + ".docx"
+    final_path = os.path.join(out_dir_abs, expected_filename)
+    with tempfile.TemporaryDirectory(prefix="ca-doc-") as staging_dir:
+        staged_source = os.path.join(staging_dir, "source.doc")
+        shutil.copyfile(get_safe_path(src_abs), get_safe_path(staged_source))
+        if converter == "libreoffice-headless":
+            ok, result = convert_doc_to_docx_libreoffice(staged_source, staging_dir, timeout=timeout)
+        else:
+            ok, result = convert_doc_to_docx_word_com(staged_source, staging_dir, timeout=timeout)
+        if not ok:
+            return False, result
+        if not os.path.isfile(get_safe_path(result)) or os.path.getsize(get_safe_path(result)) == 0:
+            return False, f"Staged DOCX output missing or empty at {result}"
+        try:
+            promote_staged_derivative(result, final_path)
+        except Exception as exc:
+            return False, f"Could not safely promote staged DOCX derivative: {exc}"
+    if not os.path.isfile(get_safe_path(final_path)) or os.path.getsize(get_safe_path(final_path)) == 0:
+        return False, f"Promoted DOCX derivative missing or empty at {final_path}"
+    return True, final_path
+
 def convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=120):
     """Convert .doc to .docx via LibreOffice in headless mode with isolated user profile."""
     soffice = find_soffice_binary()
@@ -407,12 +476,21 @@ def convert_doc_file(src_abs, out_dir_abs, timeout=120):
     if not converter:
         return False, "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)", None
 
-    if converter == "libreoffice-headless":
-        ok, res = convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=timeout)
-        return ok, res, "libreoffice-headless"
-    elif converter == "msword-com":
-        ok, res = convert_doc_to_docx_word_com(src_abs, out_dir_abs, timeout=timeout)
-        return ok, res, "msword-com"
+    if converter in {"libreoffice-headless", "msword-com"}:
+        expected_path = os.path.join(out_dir_abs, os.path.splitext(os.path.basename(src_abs))[0] + ".docx")
+        if requires_short_external_converter_paths(src_abs, expected_path):
+            ok, res = convert_doc_with_short_staging(src_abs, out_dir_abs, converter, timeout=timeout)
+            return ok, res, converter
+
+        if converter == "libreoffice-headless":
+            ok, res = convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=timeout)
+            # LibreOffice sometimes reports a clear path-length failure only after
+            # startup; retry exactly that case through the isolated short stage.
+            if not ok and is_path_length_converter_error(res):
+                ok, res = convert_doc_with_short_staging(src_abs, out_dir_abs, converter, timeout=timeout)
+        else:
+            ok, res = convert_doc_to_docx_word_com(src_abs, out_dir_abs, timeout=timeout)
+        return ok, res, converter
     elif converter.startswith("mock:"):
         expected_filename = os.path.splitext(os.path.basename(src_abs))[0] + ".docx"
         expected_path = os.path.join(out_dir_abs, expected_filename)
@@ -436,6 +514,61 @@ def ensure_tesseract_path():
             if os.path.exists(os.path.join(cand, "tesseract.exe")) and cand not in path_dirs:
                 os.environ["PATH"] = cand + os.pathsep + os.environ.get("PATH", "")
                 break
+
+
+def ocr_runtime_preflight():
+    """Verify the exact local Tesseract features OCRmyPDF needs for ``-l deu``.
+
+    This is intentionally a read-only, disposable probe: language discovery and
+    a one-pixel hOCR invocation exercise the configured tessdata tree without
+    changing host configuration or processing a cloud source.
+    """
+    # The worker's explicit test-only OCR mock is a complete local substitute;
+    # do not couple deterministic unit tests to a host Tesseract installation.
+    if os.environ.get("CLOUD_ATLAS_OCR_MOCK"):
+        return
+    ensure_tesseract_path()
+    if not shutil.which("ocrmypdf"):
+        raise ConversionRequiredError("ocrmypdf", "OCRmyPDF CLI is unavailable (capability: ocrmypdf).")
+    if not shutil.which("tesseract"):
+        raise ConversionRequiredError("tesseract", "Tesseract CLI is unavailable (capability: tesseract).")
+    try:
+        languages = subprocess.run(
+            ["tesseract", "--list-langs"], capture_output=True, timeout=15
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ConversionRequiredError("tesseract_deu", "Tesseract language discovery timed out.") from exc
+    except Exception as exc:
+        raise ConversionRequiredError("tesseract_deu", f"Tesseract language discovery failed: {exc}") from exc
+    language_output = decode_subprocess_output(languages.stdout) + "\n" + decode_subprocess_output(languages.stderr)
+    available_languages = {line.strip() for line in language_output.splitlines() if re.fullmatch(r"[A-Za-z0-9_.-]+", line.strip())}
+    if languages.returncode != 0 or "deu" not in available_languages:
+        raise ConversionRequiredError(
+            "tesseract_deu",
+            "Tesseract language 'deu' is unavailable in the configured tessdata tree (capability: tesseract_deu).",
+        )
+    with tempfile.TemporaryDirectory(prefix="ca-ocr-preflight-") as staging_dir:
+        probe_input = os.path.join(staging_dir, "probe.pgm")
+        probe_output = os.path.join(staging_dir, "probe")
+        with open(probe_input, "w", encoding="ascii", newline="\n") as handle:
+            handle.write("P2\n1 1\n255\n255\n")
+        try:
+            hocr = subprocess.run(
+                ["tesseract", probe_input, probe_output, "-l", "deu", "hocr"],
+                capture_output=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ConversionRequiredError("tesseract_hocr", "Tesseract hOCR preflight timed out.") from exc
+        except Exception as exc:
+            raise ConversionRequiredError("tesseract_hocr", f"Tesseract hOCR preflight failed: {exc}") from exc
+        hocr_output = probe_output + ".hocr"
+        if hocr.returncode != 0 or not os.path.isfile(hocr_output) or os.path.getsize(hocr_output) == 0:
+            detail = decode_subprocess_output(hocr.stderr).strip() or decode_subprocess_output(hocr.stdout).strip()
+            suffix = f": {detail}" if detail else ""
+            raise ConversionRequiredError(
+                "tesseract_hocr",
+                "Tesseract hOCR configuration is unavailable in the configured tessdata tree (capability: tesseract_hocr)" + suffix,
+            )
 
 def decode_subprocess_output(raw_bytes):
     if raw_bytes is None:
@@ -732,12 +865,16 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 "potential_quality_loss": quality_loss_note
             }))
         elif is_pdf:
-            raw_text = ""
-            raw_convert_err = None
-            try:
-                raw_text = convert_to_markdown_raw(src_abs)
-            except Exception as e:
-                raw_convert_err = str(e)
+            if "preflight_raw_text" in task:
+                raw_text = task["preflight_raw_text"]
+                raw_convert_err = task.get("preflight_raw_convert_error")
+            else:
+                raw_text = ""
+                raw_convert_err = None
+                try:
+                    raw_text = convert_to_markdown_raw(src_abs)
+                except Exception as e:
+                    raw_convert_err = str(e)
 
             needs_ocr = (task_ocr_policy != "disabled") and (task_redo_ocr or is_image_based_pdf(src_abs, raw_text))
 
@@ -1712,15 +1849,54 @@ def run_conversion(args, run_state):
                     overlay_active=curation_overlay is not None,
                 )
 
+        # Avoid discovering a broken Tesseract setup halfway through a costly
+        # worker batch.  Reuse the precise raw Markdown extraction the worker
+        # would otherwise do, so PDFs with both fonts and images (for example a
+        # digital notice with a logo) cannot be falsely blocked as scans.
+        ocr_preflight_results = {}
+        ocr_preflight_tasks = []
+        if ocr_policy != "disabled":
+            for task in tasks_to_convert:
+                if not task.get("is_pdf"):
+                    continue
+                if redo_ocr:
+                    ocr_preflight_tasks.append(task)
+                    continue
+                raw_text = ""
+                raw_convert_err = None
+                try:
+                    raw_text = convert_to_markdown_raw(task["src_abs"])
+                except Exception as exc:
+                    raw_convert_err = str(exc)
+                task["preflight_raw_text"] = raw_text
+                task["preflight_raw_convert_error"] = raw_convert_err
+                if is_image_based_pdf(task["src_abs"], raw_text):
+                    ocr_preflight_tasks.append(task)
+        if ocr_preflight_tasks:
+            try:
+                ocr_runtime_preflight()
+            except ConversionRequiredError as exc:
+                print(f"[SKIP] OCR runtime preflight failed: {exc}")
+                for task in ocr_preflight_tasks:
+                    ocr_preflight_results[task["src_rel"]] = {
+                        "success": False,
+                        "conversion_required": True,
+                        "error": str(exc),
+                        "capability": exc.capability,
+                    }
+
         if tasks_to_convert:
-            results = run_conversion_tasks(
-                tasks_to_convert,
-                file_timeout=args.file_timeout,
-                max_jobs=args.jobs,
-                ocr_policy=ocr_policy,
-                redo_ocr=redo_ocr,
-                total_count=total_files
-            )
+            results = dict(ocr_preflight_results)
+            runnable_tasks = [task for task in tasks_to_convert if task["src_rel"] not in ocr_preflight_results]
+            if runnable_tasks:
+                results.update(run_conversion_tasks(
+                    runnable_tasks,
+                    file_timeout=args.file_timeout,
+                    max_jobs=args.jobs,
+                    ocr_policy=ocr_policy,
+                    redo_ocr=redo_ocr,
+                    total_count=total_files
+                ))
 
             for t in tasks_to_convert:
                 src_rel_workspace = t["src_rel"]

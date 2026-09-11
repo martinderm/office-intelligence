@@ -22,7 +22,7 @@ Der Skill kapselt folgende Aufgaben:
 1. **Dokumenten-Konvertierung & Hänge-Schutz**:
    - Scannt einen Cloud-Speicher nach Standard-Dateitypen (`.pdf`, `.docx`, `.xlsx`, `.pptx`) und kann sie mittels `markitdown` in lesbare Markdown-Kopien (Mirrors) im lokalen Workspace-Memory konvertieren.
    - **Nicht materialisierte Bildverweise**: Gibt MarkItDown für ein eingebettetes Bild nur einen lokalen relativen Verweis aus, dessen Asset beim Mirror fehlt, wird genau dieser Verweis als nicht klickbarer Provenienzmarker mit Alttext und ursprünglichem Ziel gespeichert. Bestehende Bilddateien sowie normale Markdown-Links, URI-Links und Anker bleiben unverändert.
-   - **Kontrollierte `.doc`-Unterstützung (Word 97–2003)**: Binäre Legacy-`.doc`-Dateien werden in einem kontrollierten 2-Stufen-Verfahren über LibreOffice (`soffice`) oder Word COM in ein separates `.docx`-Derivat unter `_derivatives/` konvertiert und daraus der Markdown-Spiegel erzeugt.
+   - **Kontrollierte `.doc`-Unterstützung (Word 97–2003)**: Binäre Legacy-`.doc`-Dateien werden in einem kontrollierten 2-Stufen-Verfahren über LibreOffice (`soffice`) oder Word COM in ein separates `.docx`-Derivat unter `_derivatives/` konvertiert und daraus der Markdown-Spiegel erzeugt. Bei überlangen Windows-Pfaden (oder einer eindeutigen LibreOffice-Pfadlängenmeldung) nutzt der Konverter automatisch eine isolierte Kurzpfad-Kopie und promotet nur das geprüfte Derivat atomar; die Cloud-Quelle bleibt unverändert.
    - **Kontrollierte PDF-OCR & Policy-Steuerung (`--ocr-policy`)**:
      - *`local_derivative` (Standard & sichere Voreinstellung)*: Bei bildbasierten PDFs wird das OCR-Ergebnis als durchsuchbares PDF unter `_derivatives/` abgelegt; das Original im Cloud-Speicher bleibt 100% unberührt.
      - *`enrich_source`*: Kontrollierte In-place-Anreicherung des Cloud-Originals nur bei beschreibbarem Speicher und nicht signierten PDFs.
@@ -62,13 +62,17 @@ Systemvoraussetzungen werden weder vom Bundle noch von der Python-Requirements-D
 installiert. Für Legacy-`.doc` ist außerdem LibreOffice (`soffice`, bevorzugt) oder
 unter Windows Microsoft Word mit PowerShell-COM erforderlich.
 
-Fehlt eine dieser optionalen Fähigkeiten, bleibt der Scan deterministisch: Das
+Vor einem tatsächlich benötigten OCR-Batch prüft Cloud Atlas einmalig die reale
+Runtime: OCRmyPDF, Tesseract, die Sprache `deu` und einen disposablen hOCR-Probeaufruf
+gegen den konfigurierten tessdata-Baum. Digitale oder mit `--no-ocr` ausgeschlossene
+PDFs lösen diesen Preflight nicht aus. Fehlt eine dieser optionalen Fähigkeiten,
+bleibt der Scan deterministisch: Das
 Original wird katalogisiert mit `conversion_status: "conversion_required"`, andere
 Dateien und weitere Storages laufen weiter, und es wird kein freier
 Installationsbefehl ausgegeben. Im `--json`-Envelope ist dies ein nicht-erfolgreicher
 Zustand `state: "ConversionRequired"` mit `error.type: "ConversionRequired"` und
 maschinell lesbaren `error.requirements` (jeweils `storage_id`, `source`,
-`capability`, `message`). Der Aufrufer entscheidet anschließend ausdrücklich, ob er
+`capability`, `message`; bei OCR insbesondere `tesseract_deu` oder `tesseract_hocr`). Der Aufrufer entscheidet anschließend ausdrücklich, ob er
 die optionale Funktion bereitstellt oder die Datei unverändert katalogisiert lässt.
 
 ### Mutations- und Lock-Vorbedingung
@@ -274,6 +278,11 @@ Für die Konvertierung alter Word 97–2003 `.doc`-Dateien:
 Diese hostseitigen Konverter gehören nicht zu den optionalen Python-Paketen. Fehlt
 beides, liefert der Lauf `ConversionRequired`/`conversion_required`; er fordert keine
 ungeprüfte Systeminstallation an.
+
+Bei überlangen Windows-Quell- oder Derivatpfaden wird der externe Konverter automatisch
+in einem isolierten Kurzpfad-Staging ausgeführt. Das Ergebnis wird erst nach Prüfung
+und atomarer Promotion am vorgesehenen lokalen Derivatpfad sichtbar; temporäre Dateien
+werden bereinigt.
 
 ---
 

@@ -178,7 +178,7 @@ class ConvertCloudDocsContractTests(unittest.TestCase):
 
         with mock.patch.object(MODULE, "run_conversion_tasks", side_effect=failed_conversion):
             exit_code, stdout, stderr = self.run_main(
-                "--project-id", "example", "--workspace-root", str(self.root), "--json"
+                "--project-id", "example", "--workspace-root", str(self.root), "--no-ocr", "--json"
             )
 
         result = self.json_result(stdout)
@@ -291,6 +291,129 @@ class ConvertCloudDocsContractTests(unittest.TestCase):
             success, message = MODULE.run_ocr_on_pdf(str(source), str(output))
         self.assertFalse(success)
         self.assertEqual("Tesseract CLI is unavailable (capability: tesseract).", message)
+
+    def test_ocr_runtime_preflight_requires_deu_and_hocr(self):
+        missing_deu = mock.Mock(returncode=0, stdout=b'List of available languages in "C:/tessdata/" (1):\neng\n', stderr=b"")
+        with mock.patch.object(MODULE.shutil, "which", side_effect=["/tools/ocrmypdf", "/tools/tesseract"]), \
+             mock.patch.object(MODULE.subprocess, "run", return_value=missing_deu):
+            with self.assertRaisesRegex(MODULE.ConversionRequiredError, "language 'deu' is unavailable") as raised:
+                MODULE.ocr_runtime_preflight()
+        self.assertEqual("tesseract_deu", raised.exception.capability)
+
+        languages = mock.Mock(returncode=0, stdout=b'List of available languages in "C:/tessdata/" (2):\ndeu\neng\n', stderr=b"")
+        missing_hocr = mock.Mock(returncode=1, stdout=b"", stderr=b"read_params_file: Can't open hocr")
+        with mock.patch.object(MODULE.shutil, "which", side_effect=["/tools/ocrmypdf", "/tools/tesseract"]), \
+             mock.patch.object(MODULE.subprocess, "run", side_effect=[languages, missing_hocr]):
+            with self.assertRaisesRegex(MODULE.ConversionRequiredError, "hOCR configuration is unavailable") as raised:
+                MODULE.ocr_runtime_preflight()
+        self.assertEqual("tesseract_hocr", raised.exception.capability)
+
+        def successful_hocr(command, **_kwargs):
+            if command[1] == "--list-langs":
+                return languages
+            Path(command[2] + ".hocr").write_text("<html><body>hOCR probe</body></html>", encoding="utf-8")
+            return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+        with mock.patch.object(MODULE.shutil, "which", side_effect=["/tools/ocrmypdf", "/tools/tesseract"]), \
+             mock.patch.object(MODULE.subprocess, "run", side_effect=successful_hocr):
+            self.assertIsNone(MODULE.ocr_runtime_preflight())
+
+    def test_ocr_runtime_preflight_is_conversion_required_before_workers(self):
+        self.configure(document_extension=".pdf")
+        requirement = MODULE.ConversionRequiredError(
+            "tesseract_hocr", "Tesseract hOCR configuration is unavailable (capability: tesseract_hocr)."
+        )
+        with mock.patch.object(MODULE, "convert_to_markdown_raw", return_value=""), \
+             mock.patch.object(MODULE, "ocr_runtime_preflight", side_effect=requirement) as preflight, \
+             mock.patch.object(MODULE, "run_conversion_tasks") as workers:
+            exit_code, stdout, _ = self.run_main(
+                "--project-id", "example", "--workspace-root", str(self.root), "--json"
+            )
+
+        result = self.json_result(stdout)
+        self.assertEqual(1, exit_code)
+        self.assertEqual("ConversionRequired", result["state"])
+        self.assertEqual("ConversionRequired", result["error"]["type"])
+        self.assertEqual("tesseract_hocr", result["error"]["requirements"][0]["capability"])
+        self.assertIn("hOCR configuration", result["error"]["requirements"][0]["message"])
+        preflight.assert_called_once()
+        workers.assert_not_called()
+
+    def test_ocr_preflight_does_not_block_digital_pdf(self):
+        self.configure(document_extension=".pdf")
+
+        def converted(tasks, **_kwargs):
+            return {
+                task["src_rel"]: {
+                    "success": True,
+                    "markdown_body": "Digital source.",
+                    "ocr_applied": False,
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "markitdown-direct",
+                    "potential_quality_loss": None,
+                    "ocr_policy": "local_derivative",
+                    "new_src_sha256": None,
+                    "new_src_size": None,
+                    "new_src_mtime": None,
+                }
+                for task in tasks
+            }
+
+        with mock.patch.object(MODULE, "is_image_based_pdf", return_value=False), \
+             mock.patch.object(MODULE, "ocr_runtime_preflight") as preflight, \
+             mock.patch.object(MODULE, "run_conversion_tasks", side_effect=converted):
+            exit_code, stdout, _ = self.run_main(
+                "--project-id", "example", "--workspace-root", str(self.root), "--json"
+            )
+
+        result = self.json_result(stdout)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(result["success"])
+        preflight.assert_not_called()
+
+    def test_digital_pdf_with_logo_and_text_bypasses_failed_ocr_preflight(self):
+        """A logo must not turn an otherwise readable digital PDF into an OCR candidate."""
+        self.configure(document_extension=".pdf")
+        source = self.root / "data" / "cloud" / "DEFAULT" / "default.pdf"
+        source.write_bytes(
+            b"%PDF-1.4\n/Type /Font\n/FontDescriptor\n"
+            b"/Subtype /Image\nBT /F1 12 Tf (Digital notice with logo) Tj ET\n%%EOF"
+        )
+
+        def converted(tasks, **_kwargs):
+            return {
+                task["src_rel"]: {
+                    "success": True,
+                    "markdown_body": task["preflight_raw_text"],
+                    "ocr_applied": False,
+                    "derivative_path": None,
+                    "derivative_sha256": None,
+                    "conversion_method": "markitdown-direct",
+                    "potential_quality_loss": None,
+                    "ocr_policy": "local_derivative",
+                    "new_src_sha256": None,
+                    "new_src_size": None,
+                    "new_src_mtime": None,
+                }
+                for task in tasks
+            }
+
+        extracted = "This is enough extracted digital text to avoid OCR for the notice."
+        requirement = MODULE.ConversionRequiredError("tesseract_hocr", "hOCR deliberately unavailable")
+        with mock.patch.object(MODULE, "convert_to_markdown_raw", return_value=extracted) as extract, \
+             mock.patch.object(MODULE, "ocr_runtime_preflight", side_effect=requirement) as preflight, \
+             mock.patch.object(MODULE, "run_conversion_tasks", side_effect=converted):
+            exit_code, stdout, _ = self.run_main(
+                "--project-id", "example", "--workspace-root", str(self.root), "--json"
+            )
+
+        result = self.json_result(stdout)
+        self.assertEqual(0, exit_code)
+        self.assertTrue(result["success"])
+        self.assertEqual(1, result["data"]["storages"][0]["counts"]["converted"])
+        extract.assert_called_once_with(str(source))
+        preflight.assert_not_called()
 
     def test_ghostscript_prerequisite_is_typed_deterministically(self):
         self.assertEqual(
