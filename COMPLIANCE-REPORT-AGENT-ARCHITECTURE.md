@@ -439,9 +439,10 @@ Regenerationen und ihre Abnahmegrenzen sind nachstehend separat belegt.
 
 Die folgenden Ergebnisse betreffen ausschließlich die jeweils benannte
 `cloud_sync`-Storage-Konfiguration im BOKU-Workspace. Die Läufe vom 10.09.2026
-verwendeten `--no-ocr` (`enrich_source: false`). Die beiden ATAEL-Archivläufe vom
-11.09.2026 verwendeten die reguläre `enrich_source`-Policy; ein OCR-Fallback oder
-eine Mutation der bereits textfähigen PDFs wurde dabei nicht beobachtet. Lokale
+verwendeten `--no-ocr` (`enrich_source: false`). Die produktiven BOKUdrive-Läufe
+vom 11.09.2026 verwendeten die reguläre `enrich_source`-Policy. Nur im großen
+Lifelong-Learning-Storage war eine selektive Quellenanreicherung nötig; die
+übrigen abgenommenen BOKUdrive- und ATAEL-Archivläufe benötigten kein OCR. Lokale
 Mirrors und Filemaps unter `memory/cloud/` sind abgeleiteter, ignorierter Zustand.
 Diese Storage-Ergebnisse erweitern weder den Architektur- noch den Conformance-
 Scope dieses Shared-Skill-Berichts.
@@ -456,6 +457,7 @@ Scope dieses Shared-Skill-Berichts.
 | `li4lam.bokudrive-lll-internal` | **accepted**: Eine DOCX-Quelle wurde vollständig konvertiert und kartografiert; keine Medien, keine Fehler und keine Quellmutation. | Commit `5eceee7`; Receipt `boku-user/runs/20260911-124507-cloud-filemap-regeneration-li4lam-bokudrive/receipt.json` |
 | `drittmittel-projektadmin-fis-support.bokudrive-frameworks` | **accepted as distinct topic storage**: Sieben Quellen wurden inventarisiert, alle fünf PDFs konvertiert; keine OCR- oder Quellmutation. Der Storage bleibt eigenständig und wird nicht durch die ATAEL-OneDrive-Archive ersetzt. | Commit `e7d5b18`; Receipt `boku-user/runs/20260911-124658-cloud-filemap-regeneration-frameworks-bokudrive/receipt.json` |
 | `week.bokudrive` | **accepted**: 20 Quellen mit 20 vorhandenen Mirrors; 18 neu konvertiert und zwei aktuell übersprungen. Keine Fehler, kein `conversion_required`, keine OCR- oder Quellmutation. Nicht fatale XLSX-Metadaten-/Formatwarnungen beeinträchtigten die erzeugten Mirrors nicht. | Commit `c61ce1a`; Receipt `boku-user/runs/20260911-124931-cloud-filemap-regeneration-week-bokudrive/receipt.json` |
+| `lifelong-learning.bokudrive-lll-allgemein` | **accepted after controlled recovery**: 2.092 Quellen, davon 2.089 katalogisierte Nutzdateien und 1.461/1.461 gültige Markdown-Mirrors. 76 bildbasierte PDFs wurden unter der expliziten `enrich_source`-Policy in place angereichert. Nach einem fail-closed abgebrochenen Tesseract-Konfigurationsversuch löste ein isolierter OCR-Lauf 76 Scans; 41 OCR-inkompatible PDFs wurden im No-OCR-Nachlauf gespiegelt und zwei Legacy-DOC-Dateien auf überlangen Pfaden über einen kurzen LibreOffice-Pfad konvertiert. Der abschließende reguläre Lauf endete `Completed` mit null `conversion_required` und null Fehlern. 469 Medien wurden inventarisiert, aber nicht konvertiert; sechs historische Nullbyte-Medien bleiben nicht blockierend. | Commit `ce34471`; Receipt `boku-user/runs/20260911-140746-cloud-filemap-regeneration-lifelong-learning-bokudrive/receipt.json` |
 
 ### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
 
@@ -466,13 +468,11 @@ Mehrere benannte Storages dürfen projektbezogen nebeneinander bestehen; ihre
 Filemaps bleiben getrennt.
 
 Der operative BOKUdrive-Blocker ist seit 11.09.2026 behoben: Die Junction zeigt
-wieder auf materialisierte Klartextverzeichnisse, und alle fünf katalogisierten
-BOKUdrive-Pfade sind lesbar. Die vier fokussierten Storages für EVOLVE, Li4LaM,
-Frameworks und WEEK sind bereits abgenommen. Noch zu validieren ist ausschließlich
-`lifelong-learning.bokudrive-lll-allgemein`; der Storage ist nicht mehr durch
-fehlenden Zugriff blockiert, aber noch nicht produktiv abgenommen. Der große
-Lifelong-Learning-Scope enthält 2.092 Dateien und wird als separates Paket
-behandelt; sechs leere historische Media-Dateien im LATEST-Archiv sind dabei
+wieder auf materialisierte Klartextverzeichnisse, alle fünf katalogisierten
+BOKUdrive-Pfade sind lesbar und produktiv abgenommen. Damit ist derzeit kein
+katalogisierter BOKUdrive-Storage offen. Der große Lifelong-Learning-Scope wurde
+als eigenes Paket mit kontrollierter OCR-Anreicherung und abschließendem
+Idempotenzlauf validiert. Seine sechs leeren historischen Media-Dateien sind
 kein Konvertierungsziel und kein Blocker.
 
 Die beiden identischen OneDrive-Bestände bleiben davon getrennte ATAEL-
