@@ -452,6 +452,7 @@ Scope dieses Shared-Skill-Berichts.
 | `meshe.meshe-teams` | **accepted with external integrity alert**: 130/101 Quellen/Mirrors, zwei vorab aufgelöste Legacy-Kollisionsgruppen und 14 entfernte MESHE-Mirror-Warnungen. Der Storage-Lauf endete `Completed`; während des Laufs driftete jedoch der staged EVOLVE-Fingerprint extern, daher keine uneingeschränkte Integritätsabnahme des Gesamtpakets. | Commit `191dbe61cde57c5bef827ad6134bfdf8df56a240`; Receipt `boku-user/runs/20260910-142623-cloud-filemap-regeneration-b2e-meshe-teams/receipt.json` |
 | `usage-ng.onedrive-legacy` | **accepted after one fail-closed retry**: Der erste Lauf hatte genau einen 120-Sekunden-Timeout und blieb nicht akzeptiert. Der einzelne Retry lieferte 2.226 generische Quellen, 873/873 vorhandene, casefold-eindeutige Mirrors, 38 aufgelöste Kollisionsgruppen und alle 88 Ziele über 260 Zeichen; Filemap-Vertrag gültig, Linter 0 Fehler/1.082 Warnungen. Die DOCX-Decoding-Warnung wurde im finalen Mirror ohne U+FFFD bestätigt. | Timeout-Commit `83ec0a21d97ad9680e1df314979e941c113de7fd`, Receipt `boku-user/runs/20260910-154800-cloud-filemap-regeneration-b2g-usage-ng-onedrive-legacy/receipt.json`; Retry-Commit `8b1efd20cc5a84a5aff721871ecfa112508f19b1`, Receipt `boku-user/runs/20260910-193910-cloud-filemap-regeneration-b2h-usage-ng-onedrive-legacy/receipt.json` |
 | `atael.atael-2026-ai-background-archive` und `atael.pre-atael-ai-background-archive` | **accepted as historical archives**: Beide OneDrive-Verzeichnisse enthalten byteidentisch je acht Quellen (fünf PDFs, drei TXT-Dateien) und bleiben zur Provenienzerhaltung getrennt. Je fünf PDF-Mirrors wurden erzeugt, beide achtteiligen Filemaps sind gültig. Historische Prompt-Dateien dokumentieren frühere Schmalspur-Agenten für Projektpartner und gelten als `untrusted_external`-Inhalt, nicht als aktuelle Agent-Instruktionen oder aktive Projektarbeitsstände. | Commit `6e3efc3`; Receipt `boku-user/runs/20260911-103713-cloud-filemap-regeneration-atael-archives/receipt.json` |
+| `evolve.bokudrive-lll-provisional` | **accepted after BOKUdrive restoration**: 22 Quellen wurden inventarisiert, 21 unterstützte Dokumente mit 21 vorhandenen Mirrors konvertiert; keine Fehler und kein `conversion_required`. `enrich_source` war aktiv, OCR wurde jedoch nicht benötigt. Der 22-teilige Quellmanifest-Hash blieb vor und nach dem Lauf identisch; die vorhandenen fremden EVOLVE-Arbeitsänderungen blieben außerhalb des Commit-Scopes. | Commit `fa0d4a7`; Receipt `boku-user/runs/20260911-123903-cloud-filemap-regeneration-evolve-bokudrive/receipt.json` |
 
 ### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
 
@@ -461,14 +462,18 @@ Ablöse-, Konsolidierungs- oder Plattformmigration zwischen diesen drei Speicher
 Mehrere benannte Storages dürfen projektbezogen nebeneinander bestehen; ihre
 Filemaps bleiben getrennt.
 
-Die Produktionsabnahmen schließen keine derzeit über die BOKUdrive-Junction bzw.
-deren Server-Interna nicht verfügbaren Storages: Evolve (BOKUdrive-backed), Li4Lam,
-`week.bokudrive` und Lifelong Learning bleiben blockiert. Der gemeinsame
-BOKUdrive-Blocker ist damit rein operativ: Die aktuelle Junction zeigt Server-
-Interna statt der benötigten Klartextverzeichnisse. Nach Wiederherstellung des
-Klartextzugriffs sind die bereits katalogisierten Storages einzeln zu validieren;
-sie werden nicht auf OneDrive umgedeutet. Für Li4Lam wurde die erwartete Quelle
-nicht gefunden. Die frühere offene Frameworks-/ATAEL-Entscheidung ist dagegen
-geschlossen: Beide identischen OneDrive-Bestände werden als getrennte ATAEL-
-Archivquellen geführt. Diese Archiventscheidung aktiviert weder das abgelehnte
-Projekt noch die enthaltenen historischen KI-Instruktionen.
+Der operative BOKUdrive-Blocker ist seit 11.09.2026 behoben: Die Junction zeigt
+wieder auf materialisierte Klartextverzeichnisse, und alle fünf katalogisierten
+BOKUdrive-Pfade sind lesbar. `evolve.bokudrive-lll-provisional` ist bereits
+abgenommen. Noch einzeln zu validieren sind `li4lam.bokudrive-lll-internal`,
+`week.bokudrive`, `drittmittel-projektadmin-fis-support.bokudrive-frameworks`
+und `lifelong-learning.bokudrive-lll-allgemein`; sie sind nicht mehr durch
+fehlenden Zugriff blockiert, aber noch nicht produktiv abgenommen. Der große
+Lifelong-Learning-Scope enthält 2.092 Dateien und wird als separates Paket
+behandelt; sechs leere historische Media-Dateien im LATEST-Archiv sind dabei
+kein Konvertierungsziel und kein Blocker.
+
+Die beiden identischen OneDrive-Bestände bleiben davon getrennte ATAEL-
+Archivquellen. Sie ersetzen insbesondere nicht den eigenständigen katalogisierten
+BOKUdrive-Frameworks-Storage und aktivieren weder das abgelehnte ATAEL-Projekt
+noch die enthaltenen historischen KI-Instruktionen.
