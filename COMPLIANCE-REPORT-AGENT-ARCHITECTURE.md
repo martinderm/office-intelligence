@@ -453,6 +453,9 @@ Scope dieses Shared-Skill-Berichts.
 | `usage-ng.onedrive-legacy` | **accepted after one fail-closed retry**: Der erste Lauf hatte genau einen 120-Sekunden-Timeout und blieb nicht akzeptiert. Der einzelne Retry lieferte 2.226 generische Quellen, 873/873 vorhandene, casefold-eindeutige Mirrors, 38 aufgelöste Kollisionsgruppen und alle 88 Ziele über 260 Zeichen; Filemap-Vertrag gültig, Linter 0 Fehler/1.082 Warnungen. Die DOCX-Decoding-Warnung wurde im finalen Mirror ohne U+FFFD bestätigt. | Timeout-Commit `83ec0a21d97ad9680e1df314979e941c113de7fd`, Receipt `boku-user/runs/20260910-154800-cloud-filemap-regeneration-b2g-usage-ng-onedrive-legacy/receipt.json`; Retry-Commit `8b1efd20cc5a84a5aff721871ecfa112508f19b1`, Receipt `boku-user/runs/20260910-193910-cloud-filemap-regeneration-b2h-usage-ng-onedrive-legacy/receipt.json` |
 | `atael.atael-2026-ai-background-archive` und `atael.pre-atael-ai-background-archive` | **accepted as historical archives**: Beide OneDrive-Verzeichnisse enthalten byteidentisch je acht Quellen (fünf PDFs, drei TXT-Dateien) und bleiben zur Provenienzerhaltung getrennt. Je fünf PDF-Mirrors wurden erzeugt, beide achtteiligen Filemaps sind gültig. Historische Prompt-Dateien dokumentieren frühere Schmalspur-Agenten für Projektpartner und gelten als `untrusted_external`-Inhalt, nicht als aktuelle Agent-Instruktionen oder aktive Projektarbeitsstände. | Commit `6e3efc3`; Receipt `boku-user/runs/20260911-103713-cloud-filemap-regeneration-atael-archives/receipt.json` |
 | `evolve.bokudrive-lll-provisional` | **accepted after BOKUdrive restoration**: 22 Quellen wurden inventarisiert, 21 unterstützte Dokumente mit 21 vorhandenen Mirrors konvertiert; keine Fehler und kein `conversion_required`. `enrich_source` war aktiv, OCR wurde jedoch nicht benötigt. Der 22-teilige Quellmanifest-Hash blieb vor und nach dem Lauf identisch; die vorhandenen fremden EVOLVE-Arbeitsänderungen blieben außerhalb des Commit-Scopes. | Commit `fa0d4a7`; Receipt `boku-user/runs/20260911-123903-cloud-filemap-regeneration-evolve-bokudrive/receipt.json` |
+| `li4lam.bokudrive-lll-internal` | **accepted**: Eine DOCX-Quelle wurde vollständig konvertiert und kartografiert; keine Medien, keine Fehler und keine Quellmutation. | Commit `5eceee7`; Receipt `boku-user/runs/20260911-124507-cloud-filemap-regeneration-li4lam-bokudrive/receipt.json` |
+| `drittmittel-projektadmin-fis-support.bokudrive-frameworks` | **accepted as distinct topic storage**: Sieben Quellen wurden inventarisiert, alle fünf PDFs konvertiert; keine OCR- oder Quellmutation. Der Storage bleibt eigenständig und wird nicht durch die ATAEL-OneDrive-Archive ersetzt. | Commit `e7d5b18`; Receipt `boku-user/runs/20260911-124658-cloud-filemap-regeneration-frameworks-bokudrive/receipt.json` |
+| `week.bokudrive` | **accepted**: 20 Quellen mit 20 vorhandenen Mirrors; 18 neu konvertiert und zwei aktuell übersprungen. Keine Fehler, kein `conversion_required`, keine OCR- oder Quellmutation. Nicht fatale XLSX-Metadaten-/Formatwarnungen beeinträchtigten die erzeugten Mirrors nicht. | Commit `c61ce1a`; Receipt `boku-user/runs/20260911-124931-cloud-filemap-regeneration-week-bokudrive/receipt.json` |
 
 ### 11.2 Nicht abgenommene oder weiter entscheidungsbedürftige Storages
 
@@ -464,10 +467,9 @@ Filemaps bleiben getrennt.
 
 Der operative BOKUdrive-Blocker ist seit 11.09.2026 behoben: Die Junction zeigt
 wieder auf materialisierte Klartextverzeichnisse, und alle fünf katalogisierten
-BOKUdrive-Pfade sind lesbar. `evolve.bokudrive-lll-provisional` ist bereits
-abgenommen. Noch einzeln zu validieren sind `li4lam.bokudrive-lll-internal`,
-`week.bokudrive`, `drittmittel-projektadmin-fis-support.bokudrive-frameworks`
-und `lifelong-learning.bokudrive-lll-allgemein`; sie sind nicht mehr durch
+BOKUdrive-Pfade sind lesbar. Die vier fokussierten Storages für EVOLVE, Li4LaM,
+Frameworks und WEEK sind bereits abgenommen. Noch zu validieren ist ausschließlich
+`lifelong-learning.bokudrive-lll-allgemein`; der Storage ist nicht mehr durch
 fehlenden Zugriff blockiert, aber noch nicht produktiv abgenommen. Der große
 Lifelong-Learning-Scope enthält 2.092 Dateien und wird als separates Paket
 behandelt; sechs leere historische Media-Dateien im LATEST-Archiv sind dabei
