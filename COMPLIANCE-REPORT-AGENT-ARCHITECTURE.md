@@ -345,7 +345,7 @@ Die Stränge sind logisch teilweise unabhängig, sollen im selben physischen Wor
 | CLI-Envelopes | konform | kanonische Contract-Tests für Cloud- und Mail-Desk-Einstiegspunkte; Legacy nur über Opt-in-Adapter |
 | Dual Evidence | konform | Beleganker und normative/empirische Trennung regressionsfrei |
 | Router/Katalog | konform | sieben Sub-Skills in Root, README und zentralem Katalog konsistent |
-| Token-Footprint | konform | Mail-Desk-Router aktuell 146 Zeilen einschließlich Guard-Vertrag; Details progressiv in Referenzen |
+| Token-Footprint | konform, beobachten | Der Mail-Desk-Router umfasst nach den post-audit ergänzten FR-03/04/06-Verträgen aktuell 285 physische Zeilen; Backend-, Manifest- und Detailverträge bleiben progressiv in Referenzen. Bei weiteren Fachflüssen ist erneut auszulagern. |
 | Abhängigkeiten | konform | Cloud-Extras isoliert; fehlende Konverter liefern `ConversionRequired` |
 | Paketkonventionen | konform | `LICENSE.txt`, valide Frontmatter und portable Pfade |
 | Auditierbarkeit | konform | Ausgangs- und Implementierungscommit, Dirty State, Befehle und Evidence-Matrix dokumentiert |
@@ -480,3 +480,40 @@ Die beiden identischen OneDrive-Bestände bleiben davon getrennte ATAEL-
 Archivquellen. Sie ersetzen insbesondere nicht den eigenständigen katalogisierten
 BOKUdrive-Frameworks-Storage und aktivieren weder das abgelehnte ATAEL-Projekt
 noch die enthaltenen historischen KI-Instruktionen.
+
+### 11.3 Mail-Desk-Recovery und Interruption-Härtung (11.–12.09.2026)
+
+Ein mit einem kleinen Modell gestarteter Zehn-Mail-Lauf im BOKU-Workspace wurde
+nach vier vollständig persistierten Items unterbrochen. Die fünfte Mail war zu
+diesem Zeitpunkt bereits physisch verschoben, aber noch nicht lokal protokolliert;
+das sechste ausführbare Item war noch nicht begonnen. Der Recovery-Lauf führte
+keine erneuten Mailbox-Mutationen aus, sondern reconciliierte fünf bereits
+verschobene Nachrichten per normalisierter Message-ID gegen ihre realen Ziele:
+`Projekte/MESHE` mit den Envelope-IDs `61`, `62` und `63`,
+`Themen/Netzwerke` mit Envelope-ID `26` sowie `Themen/AIxLLL` mit Envelope-ID
+`58`. Der Final-Location-Index wurde über seinen kanonischen Script-Writer
+atomar ergänzt, der unterbrochene Fortschritt als `failed` abgeschlossen und ein
+falsch positiver Reply-Fall als `dismissed` archiviert. Projekt-/Topic-Evidenz
+wurde quellengebunden nachgezogen; aus historischen Fristen entstanden keine
+neuen, möglicherweise überholten Todos. BOKU-Nachweis: Commit `fa116af`.
+
+Das daraus abgeleitete Paket `MD-H1` schließt sechs technische Fehlerklassen:
+
+- `skip_known` wird in `draft` und `pipeline` einschließlich
+  `--no-skip-known` nicht mehr durch einen internen Default überschrieben.
+- Eine konfigurierte, fehlgeschlagene Sent-Synchronisation stoppt die Pipeline
+  vor Klassifikation und Mailbox-Mutation mit sichtbarer Fehlerphase.
+- Der Delete-Zweig ist wieder erreichbar; ein fehlgeschlagenes Löschen wird
+  weder als Routing-Erfolg protokolliert noch indiziert.
+- Teilweise fehlgeschlagene Execute-Läufe schreiben den Fortschrittsstatus
+  `failed` statt `completed`.
+- Nullable Himalaya-Absendernamen und -Betreffe brechen die Suche nicht mehr ab.
+- Reads ohne geparste Message-Header werden als Fehler gemeldet und nicht als
+  erfolgreich gelesene leere Mail weitergereicht.
+
+Implementierungsnachweis: Commit `bc00898`; 192/192 Mail-Desk-Tests,
+`compileall`, Mail-Desk-`quick_validate` und `git diff --check` grün. Für kleine
+Modelle bleibt die empfohlene Betriebsform ein begrenzter `draft`-Lauf mit
+anschließender Review und separatem `execute`, vorzugsweise in kleinen Paketen
+von drei bis fünf Mails. Eine autonome Zehn-Mail-Pipeline ist trotz der neuen
+Fail-Closed-Grenzen kein geeigneter Erstauftrag für Luna.
