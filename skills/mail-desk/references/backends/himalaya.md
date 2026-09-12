@@ -4,7 +4,9 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 
 ## Preconditions and minimal reading
 
-- Read the local `HIMALAYA.md`, if present, before concrete commands; it owns account selection, command syntax, and installation-specific constraints.
+- Read the local `HIMALAYA.md`, if present, before concrete commands; it owns command syntax and installation-specific constraints. The machine-enforced account binding for batch operations is instead the credentials-free workspace file `.agents/mail-desk-backend.json`; it contains exactly `{"schema_version": 1, "backend": "himalaya", "account": "<configured-name-or-null>"}`. `null` explicitly selects the local Himalaya default account. It contains no credentials.
+- The batch runner never derives its backend from available apps/connectors and does not accept `--account` as an override for mailbox modes. A manifest account may be review evidence (MD-H2/FR-04), but must exactly equal the workspace-bound account.
+- Before `execute` and explicit autonomous `pipeline`, the runner performs one bounded, read-only `envelope list -s 1` on the configured source folder (10 seconds). A timeout, unavailable adapter, account mismatch, malformed configuration, or non-list JSON response is a canonical `mailbox_readiness` failure and occurs before any local or mailbox mutation.
 - Use the mailbox-specific skill for listing, reading, copying, and verifying messages.
 - Begin with the smallest suitable folder listing or preview, then read only the message material required by the core flow.
 - Run `python3 scripts/mailbox_preflight.py` before routing when the catalog changed; use `--always` or `--force` when required. It validates catalog target folders.

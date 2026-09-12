@@ -62,6 +62,11 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.readiness import (
+    bind_workspace_account,
+    binding_failure_envelope,
+    mailbox_readiness_preflight,
+)
 from core.modes import (
     run_draft_mode as _run_draft_mode,
     run_dossier_apply_mode as _run_dossier_apply_mode,
@@ -72,7 +77,7 @@ from core.modes import (
     run_inspect_mode as _run_inspect_mode,
     run_pipeline_mode as _run_pipeline_mode,
     run_resolve_mode,
-    run_search_mode,
+    run_search_mode as _run_search_mode,
     run_sync_sent_mode as _run_sync_sent_mode,
     run_verify_mode as _run_verify_mode,
 )
@@ -373,6 +378,25 @@ def get_unprocessed_emails(
 # Inspect Mode
 # ==============================================================================
 
+def _bind_mailbox_mode(
+    mode: str,
+    account: str | None,
+    data_dir: Path | None,
+) -> tuple[Path, dict[str, Any] | None, dict[str, Any] | None]:
+    """Bind every mailbox-facing facade to the sole workspace account source."""
+    dd = data_dir or resolve_data_dir()
+    binding = bind_workspace_account(dd, requested_account=account)
+    if binding["ok"]:
+        return dd, binding, None
+    return dd, None, {
+        "ok": False,
+        "mode": mode,
+        "message": "Workspace backend binding failed before mailbox access.",
+        "results": [],
+        "backend_binding": binding_failure_envelope(binding),
+    }
+
+
 def run_inspect_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -383,10 +407,13 @@ def run_inspect_mode(
     Dependencies are resolved at call time so existing runner-level patches stay
     effective during the incremental modularization.
     """
+    dd, binding, failure = _bind_mailbox_mode("inspect", account, data_dir)
+    if failure is not None:
+        return failure
     return _run_inspect_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         dependencies={
             "atomic_write_json": atomic_write_json,
             "draft_manifest": draft_manifest,
@@ -412,10 +439,13 @@ def run_draft_mode(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted draft-mode handler."""
+    dd, binding, failure = _bind_mailbox_mode("draft", account, data_dir)
+    if failure is not None:
+        return failure
     return _run_draft_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         dependencies={
             "BatchProgressTracker": BatchProgressTracker,
             "atomic_write_json": atomic_write_json,
@@ -515,10 +545,13 @@ def run_sync_sent_mode(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted sent-items synchronization handler."""
+    dd, binding, failure = _bind_mailbox_mode("sync_sent", account, data_dir)
+    if failure is not None:
+        return failure
     return _run_sync_sent_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         dependencies={
             "resolve_data_dir": resolve_data_dir,
             "sync_sent_items": sync_sent_items,
@@ -537,10 +570,30 @@ def run_execute_mode(
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted coupled execute-mode handler."""
-    return _run_execute_mode(
+    dd, binding, failure = _bind_mailbox_mode("execute", account, data_dir)
+    if failure is not None:
+        return _readiness_stop("execute", failure["backend_binding"])
+    source_folder = _execute_source_folder(config)
+    if source_folder is None:
+        return _readiness_stop(
+            "execute",
+            build_error(
+                "mailbox_readiness",
+                "Execute readiness requires one reviewed source folder.",
+                {},
+                error_type="InvalidFolder",
+                error_details={"reason_code": "invalid_source_folder"},
+            ),
+        )
+    readiness = mailbox_readiness_preflight(
+        binding, folder=source_folder, run_himalaya_fn=run_himalaya,
+    )
+    if not readiness["success"]:
+        return _readiness_stop("execute", readiness)
+    result = _run_execute_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         index_path=index_path,
         dependencies={
             "BatchProgressTracker": BatchProgressTracker,
@@ -559,6 +612,8 @@ def run_execute_mode(
             "verify_in_target_folder": verify_in_target_folder,
         },
     )
+    result["readiness_preflight"] = readiness
+    return result
 
 
 # ==============================================================================
@@ -572,10 +627,13 @@ def run_verify_mode(
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted consistency-verification handler."""
+    dd, binding, failure = _bind_mailbox_mode("verify", account, data_dir)
+    if failure is not None:
+        return failure
     return _run_verify_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         index_path=index_path,
         dependencies={
             "atomic_write_json": atomic_write_json,
@@ -599,10 +657,17 @@ def run_pipeline_mode(
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted autonomous pipeline handler."""
-    return _run_pipeline_mode(
+    dd, binding, failure = _bind_mailbox_mode("pipeline", account, data_dir)
+    if failure is not None:
+        return _readiness_stop("pipeline", failure["backend_binding"])
+    folder = config.get("folder", "INBOX")
+    readiness = mailbox_readiness_preflight(binding, folder=folder, run_himalaya_fn=run_himalaya)
+    if not readiness["success"]:
+        return _readiness_stop("pipeline", readiness)
+    result = _run_pipeline_mode(
         config,
-        account=account,
-        data_dir=data_dir,
+        account=binding["account"],
+        data_dir=dd,
         index_path=index_path,
         dependencies={
             "draft_manifest": draft_manifest,
@@ -615,6 +680,37 @@ def run_pipeline_mode(
             "sync_sent_items": sync_sent_items,
         },
     )
+    result["readiness_preflight"] = readiness
+    return result
+
+
+def run_search_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Workspace-bound facade for the otherwise read-only mailbox search."""
+    dd, binding, failure = _bind_mailbox_mode("search", account, data_dir)
+    if failure is not None:
+        return failure
+    return _run_search_mode(config, account=binding["account"], data_dir=dd)
+
+
+def _execute_source_folder(config: dict[str, Any]) -> str | None:
+    """Return the one source folder whose minimal read protects an execute run."""
+    declared = config.get("source_folder")
+    if isinstance(declared, str) and declared.strip():
+        return declared
+    items = config.get("items")
+    if not isinstance(items, list):
+        return None
+    folders = {
+        item.get("source_folder", "INBOX")
+        for item in items
+        if isinstance(item, dict) and isinstance(item.get("source_folder", "INBOX"), str)
+        and item.get("source_folder", "INBOX").strip()
+    }
+    return next(iter(folders)) if len(folders) == 1 else None
 
 
 # ==============================================================================
@@ -647,8 +743,6 @@ MODE_ALIASES = {
     "resolve": "resolve",
     "archive": "resolve",
 }
-
-
 class ArgumentParseError(ValueError):
     """An argparse failure that can be reported through the JSON contract."""
 
@@ -700,6 +794,21 @@ def _is_partial_failure(result: dict[str, Any]) -> bool:
         isinstance(summary, dict) and _is_partial_failure(summary)
         for summary in (execute_summary, verify_summary)
     )
+
+
+def _readiness_stop(mode: str, readiness: dict[str, Any]) -> dict[str, Any]:
+    """Return a no-side-effect mode result after a failed H3 readiness gate."""
+    return {
+        "ok": False,
+        "mode": mode,
+        "message": "Mailbox readiness failed before any batch mutation.",
+        "all_succeeded": False,
+        "total_processed": 0,
+        "executed_count": 0,
+        "verified_count": 0,
+        "results": [],
+        "readiness_preflight": readiness,
+    }
 
 
 def _result_envelope(result: dict[str, Any], operation: str) -> dict[str, Any]:

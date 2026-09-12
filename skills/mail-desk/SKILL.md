@@ -70,6 +70,20 @@ Vor dem Fach-Skript prüft der ausführende Harness seine Ownership über
 der eigenen Lease- oder Conversation-ID. Der gemeinsame Guard wird nicht in den
 Mail-Desk kopiert.
 
+Jede mailbox-zugreifende Batch-Runner-Fassade (`inspect`, `draft`, `search`,
+`sync_sent`, `verify`, `execute`, `pipeline`) bindet Backend und Account
+ausschließlich aus der credentials-freien Workspace-Control-Plane
+`.agents/mail-desk-backend.json` (Schema 1, exakt
+`schema_version`, `backend: "himalaya"` und `account`: Name oder `null` für den
+lokalen Standardaccount). Verfügbare Apps, Connectoren, Umgebungslisten und
+`--account` sind kein Backend-Signal und dürfen diese Bindung nicht übersteuern.
+Vor `execute` und jeder ausdrücklich autonomen `pipeline` läuft zusätzlich ein einzelner,
+maximal zehn Sekunden langer, read-only Envelope-List-Preflight (`-s 1`) für den
+gebundenen Account und Quellordner. Fehlende oder ungültige Workspace-Konfiguration,
+falscher Account, fehlender Adapter, Timeout und unparsebare Minimalantwort stoppen
+vor Progress-, Index-, Log-, Evidence- oder Mailbox-Mutation; ihr Ergebnis ist ein
+kanonisches `mailbox_readiness`-Envelope.
+
 Wähle **genau einen** Adapter und lies nur diesen vollständig:
 
 - Gmail: [`references/backends/gmail.md`](references/backends/gmail.md)

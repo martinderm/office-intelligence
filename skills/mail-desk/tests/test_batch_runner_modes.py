@@ -596,7 +596,7 @@ class VerifyModeTests(unittest.TestCase):
 
 class DispatcherCompatibilityTests(unittest.TestCase):
     def test_runner_exports_and_dispatches_extracted_handlers(self) -> None:
-        self.assertIs(runner.run_search_mode, search_mode.run_search_mode)
+        self.assertIs(runner._run_search_mode, search_mode.run_search_mode)
         self.assertIs(runner.run_resolve_mode, resolve_mode.run_resolve_mode)
 
         with tempfile.TemporaryDirectory() as temporary, patch.object(
@@ -619,8 +619,13 @@ class DispatcherCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.object(
             runner, "get_unprocessed_emails", return_value=([], 0)
         ) as fetch, patch.object(runner, "draft_manifest", return_value={"items": []}):
-            data_dir = Path(temporary) / "data" / "mail-desk"
+            workspace_root = Path(temporary)
+            data_dir = workspace_root / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
+            (workspace_root / ".agents").mkdir()
+            (workspace_root / ".agents" / "mail-desk-backend.json").write_text(
+                '{"schema_version": 1, "backend": "himalaya", "account": null}', encoding="utf-8",
+            )
             runner.run_inspect_mode({"query": "subject pilot"}, data_dir=data_dir)
             runner.run_draft_mode({"date": "2026-05-18"}, data_dir=data_dir)
 
@@ -639,8 +644,13 @@ class DispatcherCompatibilityTests(unittest.TestCase):
 
     def test_runner_facades_keep_sync_and_verify_patch_surfaces(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            data_dir = Path(temporary) / "data" / "mail-desk"
+            workspace_root = Path(temporary)
+            data_dir = workspace_root / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
+            (workspace_root / ".agents").mkdir()
+            (workspace_root / ".agents" / "mail-desk-backend.json").write_text(
+                '{"schema_version": 1, "backend": "himalaya", "account": "primary"}', encoding="utf-8",
+            )
             with patch.object(runner, "sync_sent_items", return_value=(3, 1)) as sync_items:
                 sync_result = runner.run_sync_sent_mode({"count": 3}, account="primary", data_dir=data_dir)
             with patch.object(runner, "load_final_index", return_value={"items": {}}) as load_index:
@@ -653,9 +663,14 @@ class DispatcherCompatibilityTests(unittest.TestCase):
 
     def test_runner_facades_keep_execute_and_pipeline_patch_surfaces(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            data_dir = Path(temporary) / "data" / "mail-desk"
+            workspace_root = Path(temporary)
+            data_dir = workspace_root / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
-            with patch.object(runner, "run_himalaya") as run_mail, patch.object(
+            (workspace_root / ".agents").mkdir()
+            (workspace_root / ".agents" / "mail-desk-backend.json").write_text(
+                '{"schema_version": 1, "backend": "himalaya", "account": null}', encoding="utf-8",
+            )
+            with patch.object(runner, "run_himalaya", return_value="[]") as run_mail, patch.object(
                 runner, "verify_in_target_folder", return_value="22"
             ) as verify:
                 execute_result = runner.run_execute_mode(
@@ -666,6 +681,8 @@ class DispatcherCompatibilityTests(unittest.TestCase):
                 runner, "sync_sent_items", return_value=(1, 1)
             ), patch.object(runner, "load_sent_index", return_value={}), patch.object(
                 runner, "draft_manifest", return_value={"items": []}
+            ), patch.object(
+                runner, "run_himalaya", return_value="[]"
             ):
                 pipeline_result = runner.run_pipeline_mode({"query": "pilot"}, data_dir=data_dir)
 

@@ -39,13 +39,16 @@ def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35,
                 # Check for transient connection errors
                 if "10054" in err_msg or "TLS stream" in err_msg or "cannot connect" in err_msg or "broken pipe" in err_msg.lower():
                     last_err = RuntimeError(f"Himalaya transient error: {err_msg}")
-                    time.sleep(2.0 * (attempt + 1))
-                    continue
+                    if attempt < max_retries - 1:
+                        time.sleep(2.0 * (attempt + 1))
+                        continue
+                    break
                 raise RuntimeError(f"Himalaya failed: {' '.join(cmd)}\nStderr: {err_msg}")
             return res.stdout
         except subprocess.TimeoutExpired as te:
             last_err = te
-            time.sleep(2.0 * (attempt + 1))
+            if attempt < max_retries - 1:
+                time.sleep(2.0 * (attempt + 1))
         except Exception as e:
             last_err = e
             if attempt < max_retries - 1:

@@ -19,6 +19,32 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `dossier_synthesis.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
 
+### MD-H3: Workspace-Bindung und Transport-Readiness
+
+Jeder Workspace, der einen Mailbox-Modus nutzt, deklariert genau eine
+credentials-freie Bindung unter `.agents/mail-desk-backend.json`:
+
+```json
+{"schema_version": 1, "backend": "himalaya", "account": "primary"}
+```
+
+`account: null` bedeutet ausdrücklich den lokalen Himalaya-Standardaccount.
+Die Datei enthält keine Zugangsdaten und ist die alleinige Quelle für Backend und
+Account; verfügbare Apps/Connectoren, ein Manifest oder `--account` dürfen keine
+abweichende Auswahl treffen. Ein gleichlautender `--account`-Wert ist lediglich
+eine überprüfte Anfrage, nie eine Auswahl; ein abweichender Wert stoppt. Ein im MD-H2- oder FR-04-Manifest enthaltener Account
+bleibt Teil seiner Reviewbindung, muss aber exakt mit diesem Workspace-Wert
+übereinstimmen.
+
+Vor `execute` sowie vor einer ausdrücklich autonomen `pipeline` führt der Runner
+mit exakt diesem Account und Quellordner ein einzelnes read-only
+`himalaya -o json envelope list -f <folder> -s 1` mit zehn Sekunden Timeout und
+ohne Retry aus. Nur eine parsebare JSON-Liste (auch eine leere) ist gültig. Der
+Preflight liefert ein kanonisches `mailbox_readiness`-Envelope und stoppt bei
+fehlender/ungültiger Konfiguration, falschem Account, fehlendem Adapter, Timeout,
+Connectivity-Fehler oder ungültiger Minimalantwort vor jeder Progress-, Index-,
+Log-, Evidence- oder Mailbox-Mutation.
+
 ---
 
 ## Einheitliche Standard-Dateinamen
@@ -93,7 +119,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--date <YYYY-MM-DD>` | | Exakter Himalaya-Datumsfilter für `inspect`, `draft` und `pipeline`; wird bis zum Envelope-Abruf weitergereicht. Nicht zusammen mit `--query` verwenden. |
 | `--min-confidence <high\|medium\|low>` | | Minimale Konfidenz für automatische Ausführung im Pipeline-Modus (Standard: `high`). |
 | `--stdin` | | Liest das JSON-Manifest direkt aus der Standardeingabe. |
-| `--account <NAME>` | `-a` | Optionaler Backend-/Himalaya-Account-Override. |
+| `--account <NAME>` | `-a` | Kann den Account nicht wählen oder übersteuern: Er muss, falls gesetzt, exakt `.agents/mail-desk-backend.json` entsprechen. |
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabe-Files bei Erfolg. |

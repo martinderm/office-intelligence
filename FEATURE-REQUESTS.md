@@ -12,7 +12,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-04` | ✅ abgeschlossen — FR-04a–d | Ja: kataloggestützter Dossier-Manifest-, Review/Apply-, Synthese- und Fach-Handoff-Pfad | `batch-dossier.json` bereitet einen begrenzten Inspect-Auftrag plus Cloud-Atlas-Preflight vor; `dossier_apply` führt nur einen separat geprüften, hashgebundenen Routingauftrag über Execute→Verify aus; `dossier_synthesis` und `dossier_handoff` erzeugen daraus ausschließlich quellengebundene, reviewbare Synthese-, Cloud-Atlas- und Task-Desk-Handoffs. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
-| `FR-07` | 🟡 teilweise umgesetzt | H0-Recovery sowie H1–H2 abgeschlossen; H3–H5 mit belastbaren Teilgrundlagen | Der unterbrochene BOKU-Lauf ist reconciliiert; unmittelbare Runnerfehler und der kontrollierte Standard-Batch-Einstieg sind behoben. Readiness-Preflight, first-class Reconcile und Completion-Gate bleiben eigene Pakete. |
+| `FR-07` | 🟡 teilweise umgesetzt | H0-Recovery sowie H1–H3 abgeschlossen; H4–H5 mit belastbaren Teilgrundlagen | Der unterbrochene BOKU-Lauf ist reconciliiert; unmittelbare Runnerfehler, der kontrollierte Standard-Batch-Einstieg und die Workspace-gebundene Transport-Readiness sind behoben. First-class Reconcile und Completion-Gate bleiben eigene Pakete. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -449,7 +449,7 @@ eines der fünf Entwicklungspakete H1–H5.
 | :--- | :--- | :--- | :--- | :--- |
 | `MD-H1` | ✅ abgeschlossen | Unmittelbare Runner-Korrektheit und sichtbare Fehler | `skip_known` gilt in Draft und Pipeline; Sent-Sync scheitert vor Klassifikation/Mutation; Delete ist erreichbar und fail-closed; Teilfehler setzen Progress auf `failed`; nullable Himalaya-Felder sind suchbar; headerlose Reads sind Fehler. Commit `bc00898`. | 192/192 Mail-Desk-Tests, `compileall`, `quick_validate`, `git diff --check` grün. |
 | `MD-H2` | ✅ abgeschlossen | Kontrollierter Standardfluss für „verarbeite N Mails“ | `draft → sichtbare Manifest-Review → execute → verify` ist im Skill verbindlich; Pipeline bleibt eine ausdrückliche Ausnahme. Drafts binden `expected_count`, `candidate_count`, `allow_fewer`, Quellordner, Account und `skip_known` hash-gebunden an die Review. Execute stoppt vor jeder Execute-Seitenwirkung bei ungültiger Receipt, Account-/Ordnerdrift, zu wenigen Kandidaten ohne explizites `allow_fewer` oder jedem Mehrbestand. | Regressionen für Exact Match, Default-Stop bei weniger, explizites `allow_fewer`, Stop bei mehr sowie keine Mutation bei Gate-Fehlern. |
-| `MD-H3` | 🟡 teilweise | Backend-Bindung und schneller Readiness-Preflight | Bereits vorhanden: genau ein Adapter, lokale `HIMALAYA.md`-Regel, Lock und Zielordner-Preflight. Offen: Backend/Account ausschließlich aus Workspace-Konfiguration binden und vor Execute/Pipeline einen begrenzten read-only Connectivity-/Minimal-Read-Preflight mit kanonischem Envelope erzwingen. Verfügbare Apps oder Connectoren dürfen nie Backend-Signal sein. | Timeout, falscher Account, fehlender Adapter und ungültige Minimalantwort stoppen nachweislich vor jeder Mailbox-/Workspace-Mutation. |
+| `MD-H3` | ✅ abgeschlossen | Backend-Bindung und schneller Readiness-Preflight | `.agents/mail-desk-backend.json` ist die alleinige credentials-freie Quelle für `backend: "himalaya"` und Account (Name oder explizites `null` für den lokalen Default) in allen mailbox-zugreifenden Fassaden. Ein `--account`-Wert kann diese Auswahl nicht übersteuern und stoppt bei Abweichung; H2-/FR-04-Accounts müssen exakt passen. Execute und explizite Pipeline lesen vor ihrem Handler einmal maximal eine Envelope (10 Sekunden, ein Versuch) und geben das kanonische `mailbox_readiness`-Envelope weiter. | Regressionen für fehlende Konfiguration, falschen Account, Timeout, fehlenden Adapter, ungültige Minimalantwort, keine Handler-/Mutation bei Gate-Fehlern, gebundenes Read-only-Verhalten und kanonisches Envelope; vollständige Mail-Desk-Suite, `compileall`, `quick_validate`, `git diff --check`. |
 | `MD-H4` | 🟡 teilweise | Unterbrechungsjournal und first-class Reconcile | H1 markiert regulär zurückkehrende Teilfehler korrekt; H0 belegt den manuellen Reconcile. Offen: `SIGINT`/Timeout als `aborted`, per-Item-Phasenjournal, betroffene Message-IDs, sichere Tempbereinigung und ein idempotenter, standardmäßig read-only `reconcile`-Modus. Gemeinsame Logs/Index/Evidence erst nach verifizierter finaler Location oder mit explizitem `partial`-Status. | Fault-Injection nach Copy, Verify, Delete, Index und Log; erneuter Reconcile erzeugt weder Doppel-Move noch Doppel-Evidenz und liefert einen vollständigen Recovery-Report. |
 | `MD-H5` | 🟡 teilweise | Verbindliches Completion-/Synthese-Gate und kleines Modellprofil | FR-06-Telemetrie, Targets und Handoff sind vorhanden; H1 verhindert mehrere falsche Erfolge. Offen: Synthese nur nach vollständig verifiziertem Batch oder abgeschlossenem Reconcile freigeben; Abbruch liefert `recovery_required` statt Abschlussbehauptung. Betriebsprofil dokumentieren und als Acceptance-Szenario testen. | Kein `synthesis_handoff.status=completed` bei Partial/Abort; erfolgreicher Verify/Reconcile erzeugt genau einen quellengebundenen Handoff und einen Abschlussbericht. |
 
@@ -482,10 +482,26 @@ vollständige Mail-Desk-Suite, `compileall`, `quick_validate` und `git diff --ch
 #### MD-H3 — Backend und Readiness
 
 H3 ergänzt den bestehenden Folder-Preflight um Transport-Readiness. Die Auswahl
-kommt aus dem Ziel-Workspace (`CONTEXT.md`, `HIMALAYA.md` oder explizite
-Adapterkonfiguration), nicht aus der Liste verfügbarer Connectors. Der Preflight
-muss klein, read-only und zeitlich begrenzt bleiben; er prüft keine breite Mailbox,
-sondern lediglich Adapter/Account, Erreichbarkeit und eine parsebare Minimalantwort.
+kommt ausschließlich aus der credentials-freien, maschinenlesbaren
+Workspace-Control-Plane `.agents/mail-desk-backend.json`, nicht aus der Liste
+verfügbarer Connectors, aus Umgebungslisten, Manifesten oder einem CLI-Override.
+Sie enthält exakt Schema-Version, `backend: "himalaya"` und Account; `null`
+bindet ausdrücklich den lokal konfigurierten Standardaccount, ohne dessen
+Credentials zu kopieren.
+
+**Umgesetzt (12.09.2026):** Der Runner übernimmt diesen Account in jeder
+mailbox-zugreifenden Fassade aus der Workspace-Konfiguration und behandelt
+einen optionalen `--account`-Wert nur als Gleichheitsprüfung. H2-/FR-04-
+Manifestaccounts müssen weiter exakt entsprechen. Vor `execute`
+und ausdrücklich autonomer `pipeline` erfolgt mit genau dieser Bindung eine
+einzige read-only Envelope-Liste der Größe eins (10 Sekunden, ein Versuch ohne
+Backoff). Nur
+eine JSON-Liste, auch leer, ist eine gültige Minimalantwort. Konfigurations- oder
+Accountdrift, Timeout, fehlender Adapter, Connectivity-Fehler und unparsebare
+Antworten liefern ein kanonisches `mailbox_readiness`-Envelope und starten weder
+Handler noch lokale oder Mailbox-Mutationen. Nachweis:
+`test_maildesk_h3_readiness.py` sowie vollständige Mail-Desk-Suite, `compileall`,
+`quick_validate` und `git diff --check`.
 
 #### MD-H4 — Abort und Reconcile
 
@@ -509,10 +525,10 @@ oder Coding-Paketen sinnvoll, nicht mitten in einer laufenden Mailbox-Transaktio
 ### Empfohlene Reihenfolge und Modellwahl
 
 ```text
-MD-H1 ✅ → MD-H2 ✅ → MD-H3 → MD-H4 → MD-H5
+MD-H1 ✅ → MD-H2 ✅ → MD-H3 ✅ → MD-H4 → MD-H5
 ```
 
-H2 und H3 sind kleine, gut isolierbare Pakete und nach klarer Paketkarte für
+H2 und H3 waren kleine, gut isolierbare Pakete und nach klarer Paketkarte für
 Terra-medium geeignet. H4 benötigt wegen Signalbehandlung, Idempotenz und
 Cross-Store-Konsistenz Terra-high plus unabhängiges Parent-Review. H5 ist vor allem
 Vertrags-, Integrations- und Acceptance-Arbeit; Terra-high ist sinnvoll, während

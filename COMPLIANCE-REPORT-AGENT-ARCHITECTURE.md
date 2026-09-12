@@ -536,3 +536,24 @@ Stop bei weniger, explizites `allow_fewer`, Stop bei mehr und die vollständige
 Mutationsfreiheit von Gate-Fehlern ab; die vollständige Mail-Desk-Suite,
 `compileall`, `quick_validate` und `git diff --check` sind Bestandteil der
 Abnahme dieses Pakets.
+
+`MD-H3` bindet den Transport jetzt in jeder mailbox-zugreifenden Runner-Fassade
+(`inspect`, `draft`, `search`, `sync_sent`, `verify`, `execute`, `pipeline`) an die
+credentials-freie Workspace-Control-Plane `.agents/mail-desk-backend.json`.
+Die Datei enthält exakt Schema-Version, den unterstützten Adapter `himalaya` und
+den Account (Name oder explizites `null` für den lokalen Standardaccount); sie
+enthält keine Credentials. Apps, Connectorlisten und Manifeste dürfen diese
+Bindung nicht wählen oder übersteuern; ein optionaler `--account`-Wert ist nur
+zulässig, wenn er ihr exakt entspricht. Ein MD-H2- oder FR-04-Account
+bleibt lediglich Review-Evidenz und muss exakt mit dem Workspacewert
+übereinstimmen.
+
+Vor jedem `execute` und jeder ausdrücklich autonomen `pipeline` läuft zusätzlich
+ein bounded, read-only `envelope list -s 1` mit zehn Sekunden Timeout und genau
+einem Versuch ohne nachgelagerten Backoff.
+Der resultierende `mailbox_readiness`-Envelope ist kanonisch. Fehlende oder
+ungültige Konfiguration, Accountdrift, fehlender Adapter, Timeout, Connectivity-
+Fehler oder eine nicht als JSON-Liste parsebare Minimalantwort stoppen vor
+Progress-, Index-, Log-, Evidence-, Handler- und Mailbox-Mutation. Die H3-
+Regressionen prüfen jeden dieser Stops einschließlich der Mutationsfreiheit und
+des Envelope-Shapes; sie laufen zusätzlich zur vollständigen Mail-Desk-Suite.

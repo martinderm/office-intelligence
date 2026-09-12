@@ -21,8 +21,13 @@ import mail_desk_batch_runner as runner  # noqa: E402
 class BatchRunnerPilotHardeningTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
-        self.data_dir = Path(self.temporary.name) / "data" / "mail-desk"
+        self.workspace_root = Path(self.temporary.name)
+        self.data_dir = self.workspace_root / "data" / "mail-desk"
         self.data_dir.mkdir(parents=True)
+        (self.workspace_root / ".agents").mkdir()
+        (self.workspace_root / ".agents" / "mail-desk-backend.json").write_text(
+            '{"schema_version": 1, "backend": "himalaya", "account": null}', encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -57,7 +62,9 @@ class BatchRunnerPilotHardeningTests(unittest.TestCase):
             )
             self.assertEqual("2026-05-18", fetch.call_args.kwargs["date"])
 
-        with patch.object(runner, "get_unprocessed_emails", return_value=([], 0)) as fetch:
+        with patch.object(runner, "get_unprocessed_emails", return_value=([], 0)) as fetch, patch.object(
+            runner, "run_himalaya", return_value="[]",
+        ):
             runner.run_pipeline_mode(
                 {"count": 2, "query": "subject pilot"}, data_dir=self.data_dir,
             )
