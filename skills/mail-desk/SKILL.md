@@ -83,6 +83,15 @@ gebundenen Account und Quellordner. Fehlende oder ungültige Workspace-Konfigura
 falscher Account, fehlender Adapter, Timeout und unparsebare Minimalantwort stoppen
 vor Progress-, Index-, Log-, Evidence- oder Mailbox-Mutation; ihr Ergebnis ist ein
 kanonisches `mailbox_readiness`-Envelope.
+Jeder Execute-Lauf führt außerdem ein atomisches, per Message-ID geführtes
+`batch-recovery-journal.json`. Nach `copy`, Zielverifikation, Source-Delete,
+Index, Log und Evidence wird die erreichte Phase gesichert. `SIGINT` und
+Timeouts enden sichtbar als `aborted`, nie als Erfolg oder dauerhaftes `running`.
+Der first-class-Modus `reconcile` ist standardmäßig read-only: Er prüft Journal,
+Index, Log, Evidence und – wenn gebunden – das reale Ziel. Lokale Nachträge
+benötigen ausdrücklich `apply_local_repairs: true` sowie eine freigegebene
+Recovery-Receipt; er kopiert oder löscht niemals Mailboxdaten. Details stehen in
+[`references/batch-runner.md`](references/batch-runner.md).
 
 Wähle **genau einen** Adapter und lies nur diesen vollständig:
 
@@ -145,7 +154,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     Fälle gehen in Review statt in eine autonome Mailbox-Aktion.
 11. Routing mit dem gewählten Adapter ausführen und finale Backend-Location
     verifizieren, **bevor** gemeinsame Daten gepflegt werden. Nur diese verifizierte
-    finale Location darf in den Index.
+    finale Location darf in den Index. Bei Unterbrechung `reconcile` zuerst
+    read-only ausführen; ein erneut angestoßener Execute nutzt das Journal zur
+    Verifikation des vorhandenen Ziels und erzeugt keinen zweiten Copy-Schritt.
 12. Routing und Wissenspflege sind zwei verpflichtende Säulen: Bei belastbaren neuen
     Erkenntnissen zuständige Projekt-/Topic-Referenzen und die geforderte Evidence
     quellengebunden aktualisieren; Logs ersetzen das nicht. Jede Erkenntnis trägt

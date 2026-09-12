@@ -557,3 +557,25 @@ Fehler oder eine nicht als JSON-Liste parsebare Minimalantwort stoppen vor
 Progress-, Index-, Log-, Evidence-, Handler- und Mailbox-Mutation. Die H3-
 Regressionen prüfen jeden dieser Stops einschließlich der Mutationsfreiheit und
 des Envelope-Shapes; sie laufen zusätzlich zur vollständigen Mail-Desk-Suite.
+
+`MD-H4` macht den damaligen manuellen Recovery-Fall zum regulären, überprüfbaren
+Runner-Vertrag. `batch-recovery-journal.json` führt pro deterministischem Batch
+und normalisierter Message-ID die Phasen von Auswahl über Copy, Zielverifikation
+und Source-Delete bis Index, Log und Evidence. Jede Phasenänderung ist atomar
+gesichert, bevor die nächste externe oder lokale Seitewirkung beginnt. SIGINT und
+Timeout führen in Journal und `runner-progress.json` zu `aborted`; sie erzeugen
+weder einen Abschluss noch einen dauerhaft `running` verbleibenden Lauf.
+
+Der neue first-class-Modus `reconcile` ist standardmäßig read-only. Er berichtet
+für jede betroffene Message-ID Journalphase, erneute Zielverifikation,
+Index-/Log-/Evidence-Stand und den notwendigen Recovery-Schritt. Eine lokale
+Nachreparatur erfordert eine explizite freigegebene Receipt und eine frische
+Zielverifikation; sie ergänzt ausschließlich fehlende lokale Index-, Log- oder
+Evidence-Daten und führt niemals einen Mailbox-Copy oder -Delete aus. Ein
+Execute-Wiederanlauf verifiziert ein bereits journalisiertes Ziel vor jeder
+Copy-Entscheidung und kann deshalb keinen Doppel-Move erzeugen. Die
+Fault-Injection-Regressionen decken Unterbrechungen nach Copy, Verify, Delete,
+Index, Log und Reply-Append ab. Der jeweilige Execute-Resume darf keinen zweiten
+Copy oder Delete und keine doppelte Log-, Reply- oder Evidence-Zeile erzeugen.
+Der Nachweis liegt in `test_maildesk_h4_recovery.py`; vollständige Suite,
+`compileall`, `quick_validate` und `git diff --check` sind Teil der Abnahme.

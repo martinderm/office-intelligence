@@ -9,7 +9,15 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 2. **Rechte-/Freigabeprozesse im Agent-Harness zu optimieren:** Der Nutzer muss für einen gesamten Batchlauf genau **einen** Shell-Befehl freigeben.
 3. **Idempotenz und atomare Konsistenz sicherzustellen:** Gekoppeltes Routing, Verifikation im Zielordner, atomarer Index-Upsert (`final-location-index.json`), Protokollierung (`action-log.jsonl`) und Evidence-Pflege (`evidence/YYYY-MM.md`) in einer geschlossenen Transaktionskette.
 4. **Automatische Aufräumlogik:** Das als Eingabe dienende temporäre JSON-Manifest unter `data/mail-desk/` wird nach bestätigter, fehlerfreier Ausführung automatisch gelöscht (`delete_input_on_success: true`).
-5. **Kontrollierter Einstieg:** Ein gewöhnlicher Auftrag zur Verarbeitung von N
+5. **H4-Recovery:** `batch-recovery-journal.json` hält pro Batch und normalisierter
+   Message-ID die Phasen `selected`, `copy_started`, `copied`, `verified`,
+   `delete_started`, `source_deleted`, `indexed`, `logged`, `evidenced` und
+   `complete` fest. `aborted` und `partial` sind explizite Endzustände. Nur
+   journal-eigene atomare Temp-Siblings werden aufgeräumt; Eingabemanifeste und
+   fremde Dateien bleiben Recovery-Evidenz. Der zuletzt sichtbare Endzustand
+   überschreibt keine frühere erreichte Phase: Ein Resume liest die gesamte
+   Phasenhistorie und beginnt exakt mit dem ersten noch fehlenden Schritt.
+6. **Kontrollierter Einstieg:** Ein gewöhnlicher Auftrag zur Verarbeitung von N
    Mails erzeugt zuerst einen regelbasierten, hash-gebundenen Manifest-Entwurf
    (`draft`). Erst nach sichtbarer Review führt `execute` aus und `verify` prüft.
    Die autonome End-to-End-`pipeline` bleibt für einen ausdrücklich so benannten
@@ -17,7 +25,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 
 ### Implementierungsstruktur
 
-Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `dossier_synthesis.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
+Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und dem kanonischen Ergebnis-Envelope. Die Handler liegen unter `scripts/core/modes/`: `search.py`, `resolve.py`, `reconcile.py`, `inspect.py`, `draft.py`, `dossier.py`, `dossier_apply.py`, `dossier_synthesis.py`, `sync_sent.py`, `execute.py`, `verify.py` und `pipeline.py`. `search` und `resolve` werden direkt importiert und re-exportiert. Für die übrigen Handler behält der Runner schlanke gleichnamige Kompatibilitäts-Fassaden, die seine bisherigen patchbaren Abhängigkeiten zur Laufzeit einspeisen. Damit bleiben bestehende Imports, Patches, Modus-Aliase sowie Cleanup-, Manifest-, Sent-Index-, Mutations- und Konsistenzprüf-Semantik stabil, ohne einen Importzyklus zu erzeugen.
 
 ### MD-H3: Workspace-Bindung und Transport-Readiness
 
@@ -62,6 +70,7 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 | **Verifikations-Anforderung (Input)** | `data/mail-desk/batch-verify.json` | `verify` | Temporäre Liste von Message-IDs / Batch-Files zur Konsistenzprüfung (Index, Log, Evidenz, Ordner). |
 | **Such-Anforderung (Input)** | `data/mail-desk/batch-search.json` | `search` | Suchauftrag nach Text oder Message-IDs über mehrere Mailbox-Ordner hinweg. |
 | **Falllösungs-Anforderung (Input)** | `data/mail-desk/batch-resolve.json` | `resolve` | Schließt und archiviert offene Fälle aus `replies-needed.jsonl` / `pending-review.jsonl`. |
+| **Recovery-Anforderung (Input)** | `data/mail-desk/batch-reconcile.json` | `reconcile` | First-class Wiederanlauf-Bericht; standardmäßig read-only. |
 | **Dossier-Anforderung (Input)** | `data/mail-desk/batch-dossier-request.json` | `dossier` | Mailbox-read-only Auswahl eines routingfähigen Projekts; Eingabe bleibt zur Review erhalten. |
 | **Dossier-Ergebnis (Output)** | `data/mail-desk/batch-dossier.json` | `dossier` | Lokale, reviewbare Ausgabe eines katalogbasierten `inspect`-Folgeauftrags; führt keine Mailbox-Aktion aus. |
 | **Dossier-Apply-Anforderung (Input)** | `data/mail-desk/batch-dossier-apply.json` | `dossier_apply` | Menschlich freigegebener, hash-gebundener Execute-Request für genau ein Projekt; bleibt als Approval-Receipt erhalten. |
@@ -96,6 +105,9 @@ python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
 # Einen ausdrücklich autonomen gefilterten Pipeline-Lauf starten
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@example.org'
 
+# Neuesten Unterbrechungsjournal-Lauf ausschließlich prüfen
+python3 scripts/mail_desk_batch_runner.py --reconcile
+
 # Mailbox-read-only Dossier-Folgeauftrag für ein exakt katalogisiertes Projekt
 python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 ```
@@ -123,6 +135,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabe-Files bei Erfolg. |
+| `--reconcile` | | Erstellt einen read-only Recovery-Report für den neuesten Journal-Lauf. |
 
 ---
 

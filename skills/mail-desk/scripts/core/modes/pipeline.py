@@ -143,6 +143,28 @@ def run_pipeline_mode(
             index_path=index_path,
         )
 
+    # An interrupted execute is explicitly a recovery boundary.  Do not run a
+    # follow-up verify or emit a completion-shaped synthesis handoff for it.
+    if exec_result.get("status") == "aborted" or exec_result.get("recovery_required"):
+        return {
+            "ok": False,
+            "mode": "pipeline",
+            "status": "aborted" if exec_result.get("status") == "aborted" else "recovery_required",
+            "recovery_required": True,
+            "folder": folder,
+            "order": order,
+            "total_inspected": len(emails),
+            "executed_count": len(executable_items),
+            "verified_count": 0,
+            "review_needed_count": len(review_items),
+            "review_needed_items": review_items,
+            "all_succeeded": False,
+            "execute_summary": exec_result,
+            "verify_summary": None,
+            "telemetry": empty_telemetry(),
+            "synthesis_handoff": empty_synthesis_handoff(),
+        }
+
     telemetry = canonicalize_telemetry(exec_result.get("telemetry"))
     synthesis_handoff = canonicalize_synthesis_handoff(
         exec_result.get("synthesis_handoff")

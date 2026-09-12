@@ -56,6 +56,7 @@ class ReviewedCandidateContractTests(unittest.TestCase):
             "BatchProgressTracker": Mock(),
             "load_final_index": Mock(return_value={"items": {}}),
             "run_himalaya": Mock(),
+            "verify_in_target_folder": Mock(return_value="verified"),
             "append_action_log_entry": Mock(),
             "append_replies_needed_entry": Mock(),
             "flush_batch_evidence": Mock(),

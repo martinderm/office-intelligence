@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Unified batch runner for mail-desk operations.
 
-Supports 12 modes:
+Supports 13 modes:
 1. inspect: Parallel/sequential header & preview fetching with deduplication check
 2. draft:    Inspect unprocessed emails and draft a ready-to-review batch-manifest.json
 3. sync_sent: Index recent Sent Items for reply-status reconciliation
@@ -14,6 +14,7 @@ Supports 12 modes:
 10. dossier_apply: Human-approved, project-bound execute -> verify delegation
 11. dossier_synthesis: Source-bound, non-executing project synthesis work-order
 12. dossier_handoff: Review-only Cloud-Atlas and Task-Desk project handoffs
+13. reconcile: Read-first recovery assessment for interrupted execute runs
 """
 
 from __future__ import annotations
@@ -76,6 +77,7 @@ from core.modes import (
     run_execute_mode as _run_execute_mode,
     run_inspect_mode as _run_inspect_mode,
     run_pipeline_mode as _run_pipeline_mode,
+    run_reconcile_mode as _run_reconcile_mode,
     run_resolve_mode,
     run_search_mode as _run_search_mode,
     run_sync_sent_mode as _run_sync_sent_mode,
@@ -696,6 +698,28 @@ def run_search_mode(
     return _run_search_mode(config, account=binding["account"], data_dir=dd)
 
 
+def run_reconcile_mode(
+    config: dict[str, Any],
+    account: str | None = None,
+    data_dir: Path | None = None,
+    index_path: Path | None = None,
+) -> dict[str, Any]:
+    """First-class, default read-only interruption recovery report."""
+    dd = data_dir or resolve_data_dir()
+    # A purely local report is intentionally possible without a mailbox binding.
+    if not bool(config.get("check_folders", True)):
+        return _run_reconcile_mode(config, account=None, data_dir=dd, index_path=index_path)
+    dd, binding, failure = _bind_mailbox_mode("reconcile", account, dd)
+    if failure is not None:
+        return _readiness_stop("reconcile", failure["backend_binding"])
+    readiness = mailbox_readiness_preflight(binding, folder=str(config.get("folder", "INBOX")), run_himalaya_fn=run_himalaya)
+    if not readiness["success"]:
+        return _readiness_stop("reconcile", readiness)
+    result = _run_reconcile_mode(config, account=binding["account"], data_dir=dd, index_path=index_path)
+    result["readiness_preflight"] = readiness
+    return result
+
+
 def _execute_source_folder(config: dict[str, Any]) -> str | None:
     """Return the one source folder whose minimal read protects an execute run."""
     declared = config.get("source_folder")
@@ -742,6 +766,8 @@ MODE_ALIASES = {
     "find": "search",
     "resolve": "resolve",
     "archive": "resolve",
+    "reconcile": "reconcile",
+    "recover": "reconcile",
 }
 class ArgumentParseError(ValueError):
     """An argparse failure that can be reported through the JSON contract."""
@@ -916,6 +942,7 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--max-count", type=int, help="Maximum dossier matches (1-50; default: 50)")
     parser.add_argument("--sync-sent", nargs="?", const=150, type=int, help="Fetch and index N recent Sent Items")
     parser.add_argument("--resolve", "-r", action="store_true", help="Auto-audit and resolve replies-needed cases against Sent Items")
+    parser.add_argument("--reconcile", action="store_true", help="Read-only recovery report for the latest interrupted execute run")
     parser.add_argument("--order", choices=["oldest", "newest"], default="oldest", help="Processing order (default: oldest)")
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
@@ -932,10 +959,12 @@ def _build_parser() -> EnvelopeArgumentParser:
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
         raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
+    if args.reconcile and any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.dossier is not None, args.sync_sent is not None, args.resolve)):
+        raise ArgumentParseError("--reconcile cannot be combined with another direct mode")
     if args.dossier is not None:
         if args.query or args.date:
             raise ArgumentParseError("--dossier derives its query from the project catalog; --query/--date are not allowed")
-        if any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.sync_sent is not None, args.resolve)):
+        if any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.sync_sent is not None, args.resolve, args.reconcile)):
             raise ArgumentParseError("--dossier cannot be combined with another direct mode")
         return {
             "mode": "dossier",
@@ -966,6 +995,8 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
         return {"mode": "sync_sent", "count": args.sync_sent, "folder": "Sent Items"}
     if args.resolve:
         return {"mode": "resolve", "auto_from_sent": True}
+    if args.reconcile:
+        return {"mode": "reconcile", "check_folders": True, "apply_local_repairs": False}
     if args.draft is not None:
         expected_count = args.expected_count if args.expected_count is not None else args.draft
         if expected_count < 1:
@@ -1046,6 +1077,7 @@ def _load_configuration(args: argparse.Namespace, data_dir: Path) -> tuple[dict[
         data_dir / "batch-verify.json",
         data_dir / "batch-search.json",
         data_dir / "batch-resolve.json",
+        data_dir / "batch-reconcile.json",
         data_dir / "batch-sync-sent.json",
     ]
     for candidate in candidates:
@@ -1104,6 +1136,8 @@ def _dispatch(
             return run_verify_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
         if operation == "search":
             return run_search_mode(config, account=account, data_dir=data_dir), operation
+        if operation == "reconcile":
+            return run_reconcile_mode(config, account=account, data_dir=data_dir, index_path=index_path), operation
         return run_resolve_mode(config, data_dir=data_dir), operation
 
 

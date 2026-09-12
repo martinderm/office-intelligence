@@ -174,3 +174,12 @@ class BatchProgressTracker:
         if self.console_log:
             sys.stderr.write(f"\n[ERROR] Batch failed: {error_message}\n")
             sys.stderr.flush()
+
+    def abort(self, reason: str = "Batch interrupted.") -> None:
+        """Persist an interruption distinctly from an ordinary item failure."""
+        self.status = "aborted"
+        self.current_step = "aborted"
+        self._write_state(error=reason)
+        if self.console_log:
+            sys.stderr.write(f"\n[ABORTED] Batch interrupted: {reason}\n")
+            sys.stderr.flush()

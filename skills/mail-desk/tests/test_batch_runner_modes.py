@@ -287,12 +287,17 @@ class ExecuteModeTests(unittest.TestCase):
             def complete(self, *_args, **_kwargs):
                 events.append("tracker:complete")
 
+            def fail(self, *_args, **_kwargs):
+                events.append("tracker:fail")
+
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             calls = Mock(side_effect=lambda command, **_kwargs: events.append(f"mail:{command[1]}"))
             verify = Mock(return_value="copied-42")
-            flush = Mock(side_effect=lambda *_args, **_kwargs: events.append("flush"))
+            def flush(*_args, **_kwargs):
+                events.append("flush")
+                return {"memory/evidence.md": True}
             save = Mock(side_effect=lambda *_args, **_kwargs: events.append("save"))
             action = Mock(side_effect=lambda *_args, **_kwargs: events.append("action"))
             reply = Mock(side_effect=lambda *_args, **_kwargs: events.append("reply"))
@@ -318,7 +323,7 @@ class ExecuteModeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual("copied-42", result["results"][0]["new_envelope_id"])
         self.assertEqual(["mail:copy", "mail:delete"], [event for event in events if event.startswith("mail:")])
-        self.assertLess(events.index("flush"), events.index("save"))
+        self.assertLess(events.index("save"), events.index("flush"))
         self.assertLess(events.index("save"), events.index("resolve"))
         self.assertEqual(1, action.call_count)
         self.assertEqual(1, reply.call_count)
@@ -337,7 +342,7 @@ class ExecuteModeTests(unittest.TestCase):
                 }
             }
             run_mail = Mock()
-            verify = Mock()
+            verify = Mock(return_value="revalidated-22")
             append_action = Mock()
             save_index = Mock()
             result = execute_mode.run_execute_mode(
@@ -370,11 +375,12 @@ class ExecuteModeTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual("existing-22", result["results"][0]["new_envelope_id"])
+        self.assertEqual("revalidated-22", result["results"][0]["new_envelope_id"])
         self.assertEqual("ok", result["results"][0]["routing"])
-        self.assertEqual("existing-22", index_data["items"]["case@example.test"]["envelope_id"])
-        run_mail.assert_not_called()
-        verify.assert_not_called()
+        self.assertEqual("revalidated-22", index_data["items"]["case@example.test"]["envelope_id"])
+        self.assertEqual(1, sum(1 for call in run_mail.call_args_list if "copy" in call.args[0]))
+        self.assertEqual(1, sum(1 for call in run_mail.call_args_list if "delete" in call.args[0]))
+        verify.assert_called_once()
         append_action.assert_called_once()
         save_index.assert_called_once()
 
