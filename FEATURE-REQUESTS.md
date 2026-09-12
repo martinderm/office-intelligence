@@ -1,6 +1,6 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 08.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zum Abschluss von FR-01 sowie FR-06 fortgeschrieben.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 12.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zur Mail-Desk-Härtung FR-07 fortgeschrieben.
 
 ## Statusabgleich zur Session
 
@@ -10,8 +10,9 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-02` | ✅ abgeschlossen | FR-02a: hierarchisches v3-Artefakt-Matching; FR-02b: Zweitpass-Volltext; FR-02c: strukturierte Evidence | Artefakt-Treffer, Review-Kandidaten, sichere Volltext-Reklassifikation und neutrale, kataloggestützte Project-Evidence sind vollständig verfügbar. |
 | `FR-03` | ✅ abgeschlossen — FR-03a, FR-03b1 und FR-03b2a–c | Ja: Signalvertrag, Subtopic-Matching, Cagliari-Anreicherung, Subtopic-Cloud-Sync sowie Operations- und Event-Vertrag | Events benötigen keinen eigenen Cloud-Speicher; ein optionaler Selektor kann bei Cloud-Bezug einen geerbten Parent-/Subtopic-Speicher wählen. Keine automatische produktive Event-Migration. |
 | `FR-04` | ✅ abgeschlossen — FR-04a–d | Ja: kataloggestützter Dossier-Manifest-, Review/Apply-, Synthese- und Fach-Handoff-Pfad | `batch-dossier.json` bereitet einen begrenzten Inspect-Auftrag plus Cloud-Atlas-Preflight vor; `dossier_apply` führt nur einen separat geprüften, hashgebundenen Routingauftrag über Execute→Verify aus; `dossier_synthesis` und `dossier_handoff` erzeugen daraus ausschließlich quellengebundene, reviewbare Synthese-, Cloud-Atlas- und Task-Desk-Handoffs. |
-| `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der Runner umfasst aktuell 954 physische Zeilen und behält nur CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
+| `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
+| `FR-07` | 🟡 teilweise umgesetzt | H0-Recovery und H1 abgeschlossen; H2 offen; H3–H5 mit belastbaren Teilgrundlagen | Der unterbrochene BOKU-Lauf ist reconciliiert und sechs unmittelbare Runnerfehler sind behoben. Kontrollierter Batch-Einstieg, verbindlicher Readiness-Preflight, first-class Reconcile und Completion-Gate bleiben eigene Pakete. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -25,6 +26,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 4. [FR-04: Thematischer Dossier-Modus / Projekt-Fokus-Workflow (`batch-dossier.json`)](#fr-04-thematischer-dossier-modus--projekt-fokus-workflow-batch-dossierjson)
 5. [FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)](#fr-05-modulare-reorganisation-des-batch-runners-scriptscoremodes)
 6. [FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation](#fr-06-post-batch-llm-projekt-synthese--knowledge-layer-synchronisation)
+7. [FR-07: Kontrollierte Mail-Desk-Batches und Recovery-Härtung](#fr-07-kontrollierte-mail-desk-batches-und-recovery-härtung)
 
 ---
 
@@ -279,7 +281,7 @@ Die Reihenfolge ist derzeit widersprüchlich: Die Problemstellung verlangt eine 
 
 ## FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)
 
-**Status:** ✅ Abgeschlossen. Alle acht Handler (`run_search_mode`, `run_resolve_mode`, `run_inspect_mode`, `run_draft_mode`, `run_sync_sent_mode`, `run_execute_mode`, `run_verify_mode` und `run_pipeline_mode`) liegen in `scripts/core/modes/`. `mail_desk_batch_runner.py` umfasst 952 physische Zeilen; er behält den kanonischen CLI-Rand, Dispatch, Kompatibilitätsfassaden und die gemeinsamen Envelope-/Fetch-Helper.
+**Status:** ✅ Abgeschlossen. Alle acht Handler (`run_search_mode`, `run_resolve_mode`, `run_inspect_mode`, `run_draft_mode`, `run_sync_sent_mode`, `run_execute_mode`, `run_verify_mode` und `run_pipeline_mode`) liegen in `scripts/core/modes/`. `mail_desk_batch_runner.py` umfasst nach den später ergänzten Dossier-Modi aktuell 1.077 physische Zeilen; er behält den kanonischen CLI-Rand, Dispatch, Kompatibilitätsfassaden und die gemeinsamen Envelope-/Fetch-Helper.
 
 ### Problemstellung
 Vor dem ersten Modulschnitt lag [`mail_desk_batch_runner.py`](skills/mail-desk/scripts/mail_desk_batch_runner.py) bereits über der 1.500-Zeilen-Schwelle. Basis-Hilfsfunktionen sowie alle acht Modi sind inzwischen in `scripts/core/` ausgelagert. Im Hauptskript verbleiben bewusst nur der CLI-Entrypoint, Konfigurations- und Envelope-Grenzen, Dispatch, Laufzeit-DI-Fassaden und die gemeinsamen Mail-Fetch-Helper.
@@ -414,3 +416,98 @@ flowchart TD
      Python-Runner automatisiert keine Wissensdatei-Änderung und behauptet keinen
      Abschluss. Diese konkrete Inhaltsarbeit bleibt absichtlich eine Laufzeitpflicht
      des LLM unter fortgeltenden Lock- und Approval-Grenzen.
+
+---
+
+## FR-07: Kontrollierte Mail-Desk-Batches und Recovery-Härtung
+
+**Status:** 🟡 Teilweise umgesetzt. Die produktive Incident-Recovery `H0` und das
+unmittelbare Codepaket `H1` sind abgeschlossen. `H2` ist offen; `H3` bis `H5`
+besitzen belastbare Grundlagen, erfüllen ihre vollständigen Abnahmekriterien aber
+noch nicht. Diese Abgrenzung ersetzt keine der abgeschlossenen FR-01–FR-06,
+sondern schärft den operativen Batch-Vertrag nach dem abgebrochenen Luna-Lauf.
+
+### Ausgangslage und H0-Recovery
+
+Ein Auftrag zur Verarbeitung von zehn Mails wurde fälschlich direkt als
+`--pipeline 10 --order oldest --skip-known` gestartet. Der Runner selektierte nur
+sechs Items und mutierte die Mailbox, bevor der fehlende Kontrollpunkt auffiel.
+Nach vier vollständig persistierten Items wurde der Lauf unterbrochen; ein fünftes
+Item war bereits physisch verschoben. `runner-progress.json` blieb auf `running`,
+der Final-Location-Index war nicht fortgeschrieben und eine Tempdatei blieb liegen.
+
+`H0` war die kontrollierte, nicht wiederholende Recovery: fünf Zielpositionen wurden
+per Message-ID read-only verifiziert, atomar in den Final-Location-Index übernommen,
+der falsche Reply-Fall geschlossen, Evidenz nachgezogen und der alte Run als
+`failed` markiert. Aus historischen Fristen wurden keine neuen Todos erfunden.
+BOKU-Nachweis: Commit `fa116af`. `H0` ist Incident-Recovery und zählt nicht als
+eines der fünf Entwicklungspakete H1–H5.
+
+### Paketübersicht H1–H5
+
+| Paket | Status | Zweck | Umsetzung / Restumfang | Abnahme |
+| :--- | :--- | :--- | :--- | :--- |
+| `MD-H1` | ✅ abgeschlossen | Unmittelbare Runner-Korrektheit und sichtbare Fehler | `skip_known` gilt in Draft und Pipeline; Sent-Sync scheitert vor Klassifikation/Mutation; Delete ist erreichbar und fail-closed; Teilfehler setzen Progress auf `failed`; nullable Himalaya-Felder sind suchbar; headerlose Reads sind Fehler. Commit `bc00898`. | 192/192 Mail-Desk-Tests, `compileall`, `quick_validate`, `git diff --check` grün. |
+| `MD-H2` | ⬜ offen | Kontrollierter Standardfluss für „verarbeite N Mails“ | Natural-Language-Standard verbindlich auf `draft → Manifest-Review → execute → verify` routen; autonome Pipeline nur bei ausdrücklichem Auftrag. `expected_count`/`allow_fewer` ergänzen und vor jeder Mutation stoppen, wenn die sichtbare Kandidatenzahl nicht dem Auftrag entspricht. | Tests belegen: kein Execute bei `selected != expected`; `allow_fewer` nur explizit; Review-Manifest/Hash wird vor Execute ausgewiesen. |
+| `MD-H3` | 🟡 teilweise | Backend-Bindung und schneller Readiness-Preflight | Bereits vorhanden: genau ein Adapter, lokale `HIMALAYA.md`-Regel, Lock und Zielordner-Preflight. Offen: Backend/Account ausschließlich aus Workspace-Konfiguration binden und vor Execute/Pipeline einen begrenzten read-only Connectivity-/Minimal-Read-Preflight mit kanonischem Envelope erzwingen. Verfügbare Apps oder Connectoren dürfen nie Backend-Signal sein. | Timeout, falscher Account, fehlender Adapter und ungültige Minimalantwort stoppen nachweislich vor jeder Mailbox-/Workspace-Mutation. |
+| `MD-H4` | 🟡 teilweise | Unterbrechungsjournal und first-class Reconcile | H1 markiert regulär zurückkehrende Teilfehler korrekt; H0 belegt den manuellen Reconcile. Offen: `SIGINT`/Timeout als `aborted`, per-Item-Phasenjournal, betroffene Message-IDs, sichere Tempbereinigung und ein idempotenter, standardmäßig read-only `reconcile`-Modus. Gemeinsame Logs/Index/Evidence erst nach verifizierter finaler Location oder mit explizitem `partial`-Status. | Fault-Injection nach Copy, Verify, Delete, Index und Log; erneuter Reconcile erzeugt weder Doppel-Move noch Doppel-Evidenz und liefert einen vollständigen Recovery-Report. |
+| `MD-H5` | 🟡 teilweise | Verbindliches Completion-/Synthese-Gate und kleines Modellprofil | FR-06-Telemetrie, Targets und Handoff sind vorhanden; H1 verhindert mehrere falsche Erfolge. Offen: Synthese nur nach vollständig verifiziertem Batch oder abgeschlossenem Reconcile freigeben; Abbruch liefert `recovery_required` statt Abschlussbehauptung. Betriebsprofil dokumentieren und als Acceptance-Szenario testen. | Kein `synthesis_handoff.status=completed` bei Partial/Abort; erfolgreicher Verify/Reconcile erzeugt genau einen quellengebundenen Handoff und einen Abschlussbericht. |
+
+### Paketkarten
+
+#### MD-H1 — Runner-Korrektheit
+
+H1 ist vollständig umgesetzt und im Compliance-Report unter Abschnitt 11.3
+nachgewiesen. Das Paket war bewusst klein und lokal: sechs reproduzierte
+Fehlerklassen, ein fokussiertes neues Regressionstestmodul und keine Änderung des
+fachlichen Klassifikationsmodells.
+
+#### MD-H2 — Kontrollierter Batch-Einstieg
+
+H2 ändert nicht die Existenz des expliziten `pipeline`-Modus. Es trennt vielmehr
+Nutzerintention und technische Abkürzung: Ohne die ausdrückliche Formulierung
+„autonomer Pipeline-Lauf“ darf ein Agent aus „verarbeite N Mails“ nur einen Draft
+erzeugen. Vor Execute müssen Kandidatenzahl, `skip_known`, Quellordner, Account und
+Manifest sichtbar sein. Bei weniger als N Kandidaten ist Stop/Review der Default;
+ein stilles Herunterfallen, etwa von zehn auf sechs, ist unzulässig.
+
+#### MD-H3 — Backend und Readiness
+
+H3 ergänzt den bestehenden Folder-Preflight um Transport-Readiness. Die Auswahl
+kommt aus dem Ziel-Workspace (`CONTEXT.md`, `HIMALAYA.md` oder explizite
+Adapterkonfiguration), nicht aus der Liste verfügbarer Connectors. Der Preflight
+muss klein, read-only und zeitlich begrenzt bleiben; er prüft keine breite Mailbox,
+sondern lediglich Adapter/Account, Erreichbarkeit und eine parsebare Minimalantwort.
+
+#### MD-H4 — Abort und Reconcile
+
+H4 ist das risikoreichste Restpaket und sollte nicht mit H2/H3 vermischt werden.
+Ein Journal hält pro Message-ID die Phasen `selected`, `copied`, `verified`,
+`source_deleted`, `indexed`, `logged` und `evidence_written`. Ein Reconcile liest
+dieses Journal und den realen Backendzustand, schlägt Reparaturen vor und mutiert
+nur nach derselben Approval-/Lock-Grenze wie Execute. Harte Unterbrechungen dürfen
+keine Erfolgsmeldung und keinen dauerhaft `running` bleibenden Status erzeugen.
+
+#### MD-H5 — Abschluss und Modellprofil
+
+H5 schließt die operative Kette zu FR-06. Ein Batch ist erst fachlich abgeschlossen,
+wenn Execute und Verify beziehungsweise ein notwendiger Reconcile belastbar beendet
+sind und die quellengebundene Synthese geprüft wurde. Für kleinere Modelle gilt als
+Default: drei bis fünf Mails draften, Manifest durch Mensch oder starkes Modell
+reviewen und anschließend Execute → Verify → Synthese linear in derselben
+ausführenden Session halten. Frische Sessions sind zwischen unabhängigen Batches
+oder Coding-Paketen sinnvoll, nicht mitten in einer laufenden Mailbox-Transaktion.
+
+### Empfohlene Reihenfolge und Modellwahl
+
+```text
+MD-H1 ✅ → MD-H2 → MD-H3 → MD-H4 → MD-H5
+```
+
+H2 und H3 sind kleine, gut isolierbare Pakete und nach klarer Paketkarte für
+Terra-medium geeignet. H4 benötigt wegen Signalbehandlung, Idempotenz und
+Cross-Store-Konsistenz Terra-high plus unabhängiges Parent-Review. H5 ist vor allem
+Vertrags-, Integrations- und Acceptance-Arbeit; Terra-high ist sinnvoll, während
+die endgültige Betriebsfreigabe im kontexttragenden Parent erfolgen sollte. Luna
+ist für einzelne mechanische Tests oder Dokuänderungen geeignet, nicht für einen
+autonomen produktiven Zehn-Mail-Lauf.
