@@ -16,7 +16,7 @@ from ..index import load_final_index, save_final_index_atomic
 from ..progress import BatchProgressTracker
 from ..recovery import BatchRecoveryJournal, cleanup_recovery_temp_files, has_completed_step, stable_batch_id
 from ..sent_indexer import auto_resolve_replies_from_sent
-from ..synthesis_handoff import collect_synthesis_handoff
+from ..synthesis_handoff import collect_synthesis_handoff, empty_synthesis_handoff
 from ..synthesis_targets import validate_execute_synthesis_targets
 from ..telemetry import collect_telemetry
 
@@ -581,4 +581,8 @@ def _execute_with_journal(
     else:
         journal.set_run_status("partial")
         tracker.fail(f"Executed batch: {sum(1 for result in results if result['success'])}/{len(results)} succeeded.")
-    return {"ok": all_succeeded and not aborted, "mode": "execute", "status": "aborted" if aborted else ("completed" if all_succeeded else "partial"), "recovery_required": aborted or not all_succeeded, "recovery_journal": {"path": str(journal.path), "run_id": run_id, "status": journal.run.get("status"), "removed_temp_files": removed_temp_files}, "total_processed": len(results), "all_succeeded": all_succeeded and not aborted, "results": results, "telemetry": collect_telemetry(items, results), "synthesis_handoff": collect_synthesis_handoff(items, results), "contract_gate": contract}
+    # Execute is deliberately not a completion boundary.  Keep the source-bound
+    # candidate for the following verify/reconcile step, but never release a
+    # synthesis handoff from a merely routed batch.
+    candidate = collect_synthesis_handoff(items, results)
+    return {"ok": all_succeeded and not aborted, "mode": "execute", "status": "aborted" if aborted else ("completed" if all_succeeded else "partial"), "recovery_required": aborted or not all_succeeded, "recovery_journal": {"path": str(journal.path), "run_id": run_id, "status": journal.run.get("status"), "removed_temp_files": removed_temp_files}, "total_processed": len(results), "all_succeeded": all_succeeded and not aborted, "results": results, "telemetry": collect_telemetry(items, results), "synthesis_candidate": candidate, "synthesis_handoff": empty_synthesis_handoff(), "contract_gate": contract}

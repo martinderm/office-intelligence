@@ -16,6 +16,8 @@ from typing import Any, Callable, Mapping
 
 from ..classifier import load_catalogs
 from ..common import normalize_message_id, resolve_data_dir
+from ..completion import completion_report, release_synthesis_handoff
+from ..synthesis_handoff import empty_synthesis_handoff
 from .dossier import _require_project
 from .execute import run_execute_mode
 from .verify import run_verify_mode
@@ -141,7 +143,8 @@ def _failed_result(
     }
     if execute_result:
         result["telemetry"] = execute_result.get("telemetry")
-        result["synthesis_handoff"] = execute_result.get("synthesis_handoff")
+        result["synthesis_candidate"] = execute_result.get("synthesis_candidate")
+        result["synthesis_handoff"] = empty_synthesis_handoff()
     if error is not None:
         result["error"] = {"stage": stage, "exception_type": type(error).__name__}
     return result
@@ -266,5 +269,17 @@ def run_dossier_apply_mode(
         "execute_summary": execute_result,
         "verify_summary": verify_result,
         "telemetry": execute_result.get("telemetry"),
-        "synthesis_handoff": execute_result.get("synthesis_handoff"),
+        "synthesis_handoff": release_synthesis_handoff(
+            execute_result.get("synthesis_candidate", execute_result.get("synthesis_handoff")),
+            verify_result,
+        ),
+        "completion_report": completion_report(
+            source="dossier_apply",
+            status="completed",
+            verified_message_ids=message_ids,
+            handoff=release_synthesis_handoff(
+                execute_result.get("synthesis_candidate", execute_result.get("synthesis_handoff")),
+                verify_result,
+            ),
+        ),
     }

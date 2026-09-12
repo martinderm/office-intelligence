@@ -9,6 +9,7 @@ from ..classifier import draft_manifest
 from ..common import resolve_data_dir
 from ..himalaya import get_single_email_details
 from ..sent_indexer import load_sent_index, sync_sent_items
+from ..completion import completion_report, release_synthesis_handoff
 from ..synthesis_handoff import canonicalize_synthesis_handoff, empty_synthesis_handoff
 from ..telemetry import canonicalize_telemetry, empty_telemetry
 from .execute import run_execute_mode
@@ -143,9 +144,9 @@ def run_pipeline_mode(
             index_path=index_path,
         )
 
-    # An interrupted execute is explicitly a recovery boundary.  Do not run a
-    # follow-up verify or emit a completion-shaped synthesis handoff for it.
-    if exec_result.get("status") == "aborted" or exec_result.get("recovery_required"):
+    # Any incomplete execute is explicitly a recovery boundary.  Do not run a
+    # follow-up verify or release a synthesis handoff for it.
+    if exec_result.get("status") == "aborted" or exec_result.get("recovery_required") or not exec_result.get("ok", False):
         return {
             "ok": False,
             "mode": "pipeline",
@@ -163,11 +164,14 @@ def run_pipeline_mode(
             "verify_summary": None,
             "telemetry": empty_telemetry(),
             "synthesis_handoff": empty_synthesis_handoff(),
+            "completion_report": completion_report(source="pipeline", status="recovery_required", recovery_required=True),
         }
 
     telemetry = canonicalize_telemetry(exec_result.get("telemetry"))
-    synthesis_handoff = canonicalize_synthesis_handoff(
-        exec_result.get("synthesis_handoff")
+    # New execute handlers provide an unreleased candidate.  The legacy fallback
+    # preserves compatibility with older adapters, but is still gated below.
+    synthesis_candidate = canonicalize_synthesis_handoff(
+        exec_result.get("synthesis_candidate", exec_result.get("synthesis_handoff"))
     )
 
     verify_result: dict[str, Any] | None = None
@@ -179,9 +183,11 @@ def run_pipeline_mode(
             index_path=index_path,
         )
 
-    pipeline_ok = bool(exec_result.get("ok", True))
-    if verify_result and not verify_result.get("ok", True):
-        pipeline_ok = False
+    pipeline_ok = bool(exec_result.get("ok", True)) and do_verify and bool(verify_result and verify_result.get("ok") is True)
+    synthesis_handoff = release_synthesis_handoff(synthesis_candidate, verify_result)
+    verified_ids = [row.get("message_id", "") for row in verify_result.get("results", [])] if isinstance(verify_result, dict) else []
+    recovery_required = do_verify and not pipeline_ok
+    completion_status = "completed" if pipeline_ok else ("recovery_required" if recovery_required else "verification_required")
 
     return {
         "ok": pipeline_ok,
@@ -194,8 +200,11 @@ def run_pipeline_mode(
         "review_needed_count": len(review_items),
         "review_needed_items": review_items,
         "all_succeeded": pipeline_ok,
+        "status": completion_status,
+        "recovery_required": recovery_required,
         "execute_summary": exec_result,
         "verify_summary": verify_result,
         "telemetry": telemetry,
         "synthesis_handoff": synthesis_handoff,
+        "completion_report": completion_report(source="pipeline", status=completion_status, verified_message_ids=verified_ids, recovery_required=recovery_required, handoff=synthesis_handoff),
     }

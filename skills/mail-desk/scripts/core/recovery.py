@@ -117,6 +117,7 @@ class BatchRecoveryJournal:
                 "decision": item.get("decision") if isinstance(item.get("decision"), dict) else {},
                 "notes": str(item.get("notes", "")),
                 "evidence": item.get("evidence") if isinstance(item.get("evidence"), dict) else None,
+                "synthesis_targets": item.get("synthesis_targets") if isinstance(item.get("synthesis_targets"), list) else [],
                 "phase": "selected",
                 "phases": [{"phase": "selected", "at": utc_now_iso()}],
             },

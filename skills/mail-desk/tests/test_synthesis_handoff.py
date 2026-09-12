@@ -115,7 +115,7 @@ class SynthesisHandoffModeTests(unittest.TestCase):
         dependencies.update(overrides)
         return dependencies
 
-    def test_execute_partial_failure_keeps_successful_handoff_item(self) -> None:
+    def test_execute_partial_failure_keeps_candidate_but_never_releases_handoff(self) -> None:
         good = item("good", targets=[])
         failed = item("failed", action={"type": "copy_as_move", "target_folder": "Projects/Other"}, targets=[])
         with tempfile.TemporaryDirectory() as temporary:
@@ -129,8 +129,9 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ok"])
-        self.assertEqual("pending", result["synthesis_handoff"]["status"])
-        self.assertEqual(["good@example.test"], [row["message_id"] for row in result["synthesis_handoff"]["items"]])
+        self.assertEqual(empty_synthesis_handoff(), result["synthesis_handoff"])
+        self.assertEqual("pending", result["synthesis_candidate"]["status"])
+        self.assertEqual(["good@example.test"], [row["message_id"] for row in result["synthesis_candidate"]["items"]])
 
     @staticmethod
     def pipeline_dependencies(execute_result: dict, *, emails: list[dict] | None = None, verify_result: dict | None = None) -> dict:
@@ -145,7 +146,7 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             "run_verify_mode": Mock(return_value=verify_result or {"ok": True, "results": []}),
         }
 
-    def test_pipeline_propagates_valid_handoff_and_retains_it_on_verify_failure(self) -> None:
+    def test_pipeline_verify_failure_requires_recovery_and_releases_nothing(self) -> None:
         handoff = collect_synthesis_handoff(
             [item("pipeline", targets=[])],
             [{"success": True, "message_id": "pipeline@example.test", "subject": "Pipeline", "synthesis_targets": []}],
@@ -163,7 +164,30 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             )
 
         self.assertFalse(result["ok"])
+        self.assertTrue(result["recovery_required"])
+        self.assertEqual(empty_synthesis_handoff(), result["synthesis_handoff"])
+        self.assertEqual("recovery_required", result["completion_report"]["status"])
+
+    def test_pipeline_releases_one_source_bound_handoff_only_after_full_verify(self) -> None:
+        handoff = collect_synthesis_handoff(
+            [item("pipeline", targets=[])],
+            [{"success": True, "message_id": "pipeline@example.test", "subject": "Pipeline", "synthesis_targets": []}],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            result = pipeline_mode.run_pipeline_mode(
+                {"verify": True, "sync_sent": False},
+                data_dir=data_dir,
+                dependencies=self.pipeline_dependencies(
+                    {"ok": True, "results": [], "synthesis_candidate": handoff},
+                    verify_result={"ok": True, "results": [{"message_id": "pipeline@example.test", "consistent": True}]},
+                ),
+            )
+
+        self.assertTrue(result["ok"])
         self.assertEqual(handoff, result["synthesis_handoff"])
+        self.assertEqual("completed", result["completion_report"]["status"])
 
     def test_pipeline_uses_empty_handoff_for_no_mail_no_execute_legacy_and_malformed_execute(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

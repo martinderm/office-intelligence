@@ -12,6 +12,8 @@ from ..evidence import flush_batch_evidence
 from ..himalaya import verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
 from ..recovery import BatchRecoveryJournal
+from ..completion import completion_report
+from ..synthesis_handoff import collect_synthesis_handoff, empty_synthesis_handoff
 
 
 def _dep(dependencies: Mapping[str, Callable[..., Any]] | None, name: str, default: Callable[..., Any]) -> Callable[..., Any]:
@@ -151,4 +153,15 @@ def run_reconcile_mode(
         journal.set_run_status("completed")
     elif journal:
         journal.set_run_status("partial")
-    return {"ok": not needs_review, "mode": "reconcile", "status": "completed" if not needs_review else "recovery_required", "read_only": not apply_local, "recovery_journal": str(journal_path), "run_id": run_id, "total_checked": len(results), "repaired_count": repaired_count, "results": results, "message": "Recovery report is read-only." if not apply_local else "Approved local recovery repairs applied; mailbox was not mutated."}
+    recovered_items = [
+        {"message_id": record.get("message_id", message_id), "subject": record.get("subject", ""), "decision": record.get("decision", {}), "synthesis_targets": record.get("synthesis_targets", [])}
+        for message_id, record in run.get("items", {}).items()
+        if isinstance(record, dict)
+    ]
+    recovered_results = [
+        {"message_id": row.get("message_id", ""), "subject": "", "success": row.get("recovery_state") == "complete", "synthesis_targets": next((item.get("synthesis_targets", []) for item in recovered_items if normalize_message_id(str(item.get("message_id", ""))) == row.get("message_id")), [])}
+        for row in results
+    ]
+    handoff = collect_synthesis_handoff(recovered_items, recovered_results) if not needs_review else empty_synthesis_handoff()
+    status = "completed" if not needs_review else "recovery_required"
+    return {"ok": not needs_review, "mode": "reconcile", "status": status, "recovery_required": needs_review, "read_only": not apply_local, "recovery_journal": str(journal_path), "run_id": run_id, "total_checked": len(results), "repaired_count": repaired_count, "results": results, "synthesis_handoff": handoff, "completion_report": completion_report(source="reconcile", status=status, verified_message_ids=[row.get("message_id", "") for row in results if row.get("recovery_state") == "complete"], recovery_required=needs_review, handoff=handoff), "message": "Recovery report is read-only." if not apply_local else "Approved local recovery repairs applied; mailbox was not mutated."}

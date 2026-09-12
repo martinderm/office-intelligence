@@ -183,8 +183,14 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     passenden `memory/references/`-Root und ein stabiles `type`-Label. Der
     Execute-Preflight prüft alle Targets vor jeder Mutation. Nur erfolgreiche
     Execute-Resultate führen validierte Targets; sie starten keine Synthese und
-    verändern keine Wissensdateien. Zusätzlich emittieren `execute` und `pipeline`
-    den versionierten FR-06c-`synthesis_handoff`. Bei `status: "pending"` führt
+    verändern keine Wissensdateien. `execute` hält nur einen quellengebundenen,
+    noch nicht freigegebenen `synthesis_candidate`. Ausschließlich ein vollständig
+    erfolgreicher, quellengebundener `verify`-Schritt (direkt oder in `pipeline`)
+    oder ein abgeschlossener
+    `reconcile` setzt den versionierten FR-06c-`synthesis_handoff` auf `pending`
+    und liefert den maschinenlesbaren `completion_report`. Partial-, Abort- und
+    Verify-Fehler liefern `recovery_required` und den kanonisch leeren Handoff.
+    Bei `status: "pending"` führt
     das LLM nach dem Batch jedes Item quellengebunden in die Synthese über. Bei
     `target_selection_required: true` werden zuerst anhand von Katalog und
     geladenem Kontext passende, bereits vorhandene Steuerungsdateien ausgewählt;
@@ -302,7 +308,17 @@ neuem Katalogbedarf oder riskanten Ausnahmen. Es gehört in `pending-review.json
 
 „Erledigt“ heißt: Routing oder begründete Unterlassung, Metadaten, verifizierte finale
 Location, Quellen-/Evidence-Pflege und der verpflichtende Compliance-Block passen
-zusammen und sind geprüft. Final-Index-Zugriff ist **ausschließlich script-basiert,
+zusammen und sind geprüft. Ein Batch ist erst abgeschlossen, wenn `completion_report`
+`status: "completed"` meldet; dann existiert genau ein quellengebundener Handoff oder
+der kanonisch leere `not_required`-Handoff. Bei `recovery_required` erst `reconcile`,
+nie Synthese oder Abschluss behaupten. Für Luna gilt: drei bis fünf Mails, frische
+Session nur zwischen unabhängigen Batches; innerhalb eines Batches Draft → menschliche
+oder starke Modell-Review → Execute → Verify → Synthese linear halten. Keine autonome
+Pipeline als Erstauftrag; bei Count-/Receipt-/Readiness-/Review-/Verify-Fehler stoppen.
+Ein separater Verify übernimmt einen Synthese-Candidate ausschließlich aus einem
+vollständigen erfolgreichen Execute-Ergebnis mit exakt passenden Message-IDs, nie
+aus neu eingegebenen Items oder freien Top-Level-Feldern.
+Final-Index-Zugriff ist **ausschließlich script-basiert,
 nie manuell**; die kanonischen CLI-, Compliance- und Pfadregeln stehen in
 [`references/cli-operations.md`](references/cli-operations.md). Der befristete
 Übergangsadapter ist nur bei nachgewiesenem historischen Konsumenten relevant:

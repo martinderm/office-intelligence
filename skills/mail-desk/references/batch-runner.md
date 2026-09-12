@@ -273,8 +273,9 @@ den bestehenden `execute`-Handler und übergibt bei dessen vollständigem Erfolg
 die betroffenen normalisierten Message-IDs an den bestehenden `verify`-Handler.
 Er implementiert weder eine zweite Routing-, Index-, Evidence- noch
 Verify-Logik. Execute- oder Verify-Fehler sind fail-closed, starten keinen
-weiteren Schritt und geben den Execute-Summary einschließlich FR-06-Telemetrie
-und `synthesis_handoff` mit einem erneuten Review-Status zurück.
+weiteren Schritt und geben höchstens einen unreleased `synthesis_candidate` mit
+einem erneuten Review-Status zurück; der freigegebene `synthesis_handoff` bleibt
+kanonisch leer.
 
 ```json
 {
@@ -867,9 +868,13 @@ keine Wissensdateien.
 
 ### FR-06c-Synthese-Handoff
 
-Jeder `execute`- und `pipeline`-Handler liefert zusätzlich exakt ein Top-Level-
-Feld `synthesis_handoff`; im CLI-Envelope liegt es daher ausschließlich unter
-`data.synthesis_handoff`. Sein Shape ist strikt versioniert:
+`execute` liefert zusätzlich einen strikt quellengebundenen, aber unreleased
+`synthesis_candidate`; sein `data.synthesis_handoff` ist bis zur vollständigen
+Verifikation kanonisch leer. Nur ein erfolgreicher, quellengebundener `verify`
+(direkt oder in `pipeline`) oder ein abgeschlossener `reconcile` liefert genau
+einen freigegebenen Top-Level-
+`synthesis_handoff` unter `data.synthesis_handoff` und einen `completion_report`.
+Der Handoff-Shape ist strikt versioniert:
 
 ```json
 {
@@ -900,11 +905,39 @@ fehlgeschlagene und sonstige Items werden ausgeschlossen. Das Item transportiert
 die bereits FR-06b-validierte Target-Liste des erfolgreichen Execute-Resultats;
 `target_selection_required` entspricht exakt `not bool(synthesis_targets)`.
 
-`pipeline` propagiert nur einen strikt validen Execute-Handoff. Ohne Execute,
-bei keiner Mail sowie bei Legacy- oder malformed Execute-Resultaten verwendet sie
-den kanonisch leeren Handoff. Ein danach fehlgeschlagenes Verify löscht keinen
-gültigen pending Handoff. Der Runner erstellt, ändert oder behauptet mit diesem
-Objekt keinerlei Wissensdatei-Abschluss.
+`pipeline` gibt den Candidate erst nach einem vollständig erfolgreichen Verify frei.
+Ein separater H2-`verify`-Lauf kann dasselbe nur mit dem unveränderten
+`synthesis_candidate` aus seinem Execute-Ergebnis tun; reine Message-ID-Listen
+oder neu eingegebene Items ohne diesen Quellenkontext geben keinen pending Handoff
+und keinen `completion_report` frei.
+Der Candidate wird nur aus einem strukturell vollständigen Execute-Result-Container
+übernommen (`mode: execute`, `ok: true`, `status: completed`,
+`recovery_required: false`). Dessen ausschließlich erfolgreiche Result-IDs müssen
+exakt dem Verify-Scope und dem pending-Candidate entsprechen. Ein frei gesetztes
+Top-Level-`synthesis_candidate`, eine partielle/abgebrochene Summary oder ein
+beliebiger Envelope unter `data` ist keine Provenienz und bleibt fail-closed.
+Ohne Execute, bei keiner Mail, ohne Verify, bei Legacy-/malformed Execute-Resultaten
+oder bei einem fehlgeschlagenen Verify verwendet sie den kanonisch leeren Handoff.
+Partial und Abort setzen `recovery_required: true`; erst ein abgeschlossener
+`reconcile` kann einen neuen quellengebundenen Handoff freigeben. Der Runner
+erstellt, ändert oder behauptet mit diesem Objekt keinerlei Wissensdatei-Abschluss.
+
+### MD-H5 Completion-Gate und Luna-Betriebsprofil
+
+`completion_report` ist das einzige technische Abschluss-Signal. Er enthält
+`schema_version: 1`, `status` (`completed`, `verification_required` oder
+`recovery_required`), die Quelle (`pipeline`, `dossier_apply` oder `reconcile`),
+die normalisierten verifizierten Message-IDs und ob ein Handoff freigegeben wurde.
+`completed` entsteht nur nach vollständig erfolgreichem Verify/Reconcile; bei
+Partial oder Abort ist ausschließlich `recovery_required` zulässig.
+
+Für ChatGPT Luna ist ein Batch bewusst klein: drei bis fünf Mails. Der erste Auftrag
+ist immer `draft`, danach eine sichtbare Review durch Mensch oder stärkeres Modell,
+erst dann `execute` und `verify`. Diese Transaktion bleibt linear in derselben
+Session; eine frische Session ist nur zwischen unabhängigen, bereits abgeschlossenen
+Batches sinnvoll. Keine autonome Pipeline als Erstauftrag. Count-, Receipt-,
+Readiness-, Review-, Verify- oder Reconcile-Fehler sind Stopbedingungen und werden
+nicht durch Wiederholung, größere Batches oder geratenes Recovery umgangen.
 
 Bei `status: "pending"` ist die nachgelagerte LLM-Synthese Pflicht: Jedes Item
 wird quellengebunden ausgewertet. Falls `target_selection_required: true`, wählt

@@ -12,7 +12,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-04` | ✅ abgeschlossen — FR-04a–d | Ja: kataloggestützter Dossier-Manifest-, Review/Apply-, Synthese- und Fach-Handoff-Pfad | `batch-dossier.json` bereitet einen begrenzten Inspect-Auftrag plus Cloud-Atlas-Preflight vor; `dossier_apply` führt nur einen separat geprüften, hashgebundenen Routingauftrag über Execute→Verify aus; `dossier_synthesis` und `dossier_handoff` erzeugen daraus ausschließlich quellengebundene, reviewbare Synthese-, Cloud-Atlas- und Task-Desk-Handoffs. |
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
-| `FR-07` | 🟡 teilweise umgesetzt | H0-Recovery sowie H1–H4 abgeschlossen; H5 mit belastbaren Teilgrundlagen | Der unterbrochene BOKU-Lauf ist reconciliert; unmittelbare Runnerfehler, der kontrollierte Standard-Batch-Einstieg, die Workspace-gebundene Transport-Readiness und das first-class Recovery sind behoben. Das Completion-/Synthese-Gate bleibt als letztes Paket. |
+| `FR-07` | ✅ abgeschlossen | H0-Recovery sowie H1–H5 abgeschlossen | Der unterbrochene BOKU-Lauf ist reconciliert; Standard-Batch-Einstieg, Workspace-gebundene Transport-Readiness, first-class Recovery und das fail-closed Completion-/Synthese-Gate sind umgesetzt. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -382,12 +382,14 @@ flowchart TD
    - **`contacts.md`:** Sind neue Schlüsselpersonen aufgetaucht?
    - **`workpackages/wp*.md`:** Gibt es neue Deliverable-Entwürfe oder Teilaufgabenabschlüsse?
    - **`events/*.md`:** Wurden Konferenzrechnungen, Anmeldungen oder Tagungsdetails übermittelt?
-4. **FR-06c — Abschlussbericht / Session-Handoff (abgeschlossen):**
-   - `execute` und `pipeline` geben einen strikt versionierten, fail-closed
-     `synthesis_handoff` aus. Er enthält nur erfolgreiche, gepaarte Project-/Topic-
-     Items in stabiler Reihenfolge und bewahrt jede Mail als eigene Evidenzquelle.
-     Fehlende Targets setzen `target_selection_required: true`; die Pipeline behält
-     einen validen pending Handoff auch bei einem nachfolgenden Verify-Fehler.
+4. **FR-06c — Abschlussbericht / Session-Handoff (abgeschlossen, durch H5 geschärft):**
+   - `execute` erstellt nur einen strikt versionierten, unreleased
+     `synthesis_candidate`. Erst `pipeline` nach vollständigem Verify oder ein
+     abgeschlossener Reconcile gibt den quellengebundenen `synthesis_handoff` frei.
+     Er enthält nur erfolgreiche, gepaarte Project-/Topic-Items in stabiler
+     Reihenfolge und bewahrt jede Mail als eigene Evidenzquelle. Fehlende Targets
+     setzen `target_selection_required: true`; Verify-Fehler liefern
+     `recovery_required` und keinen freigegebenen Handoff.
    - Bei pending Handoff führt das LLM die quellengebundene Synthese aus und gibt
      danach den kompakten **Projekt-Wissensbericht** aus:
      - *„MESHE: Statusampel für WP2 und Eventdossier aktualisiert (Fokusgruppe BOKU auf verschoben gesetzt).“*
@@ -421,10 +423,8 @@ flowchart TD
 
 ## FR-07: Kontrollierte Mail-Desk-Batches und Recovery-Härtung
 
-**Status:** 🟡 Teilweise umgesetzt. Die produktive Incident-Recovery `H0` und das
-unmittelbaren Codepakete `H1` und `H2` sind abgeschlossen. `H3` bis `H5`
-besitzen belastbare Grundlagen, erfüllen ihre vollständigen Abnahmekriterien aber
-noch nicht. Diese Abgrenzung ersetzt keine der abgeschlossenen FR-01–FR-06,
+**Status:** ✅ Abgeschlossen. Die produktive Incident-Recovery `H0` und die
+Codepakete `H1` bis `H5` sind abgeschlossen. Diese Abgrenzung ersetzt keine der abgeschlossenen FR-01–FR-06,
 sondern schärft den operativen Batch-Vertrag nach dem abgebrochenen Luna-Lauf.
 
 ### Ausgangslage und H0-Recovery
@@ -451,7 +451,7 @@ eines der fünf Entwicklungspakete H1–H5.
 | `MD-H2` | ✅ abgeschlossen | Kontrollierter Standardfluss für „verarbeite N Mails“ | `draft → sichtbare Manifest-Review → execute → verify` ist im Skill verbindlich; Pipeline bleibt eine ausdrückliche Ausnahme. Drafts binden `expected_count`, `candidate_count`, `allow_fewer`, Quellordner, Account und `skip_known` hash-gebunden an die Review. Execute stoppt vor jeder Execute-Seitenwirkung bei ungültiger Receipt, Account-/Ordnerdrift, zu wenigen Kandidaten ohne explizites `allow_fewer` oder jedem Mehrbestand. | Regressionen für Exact Match, Default-Stop bei weniger, explizites `allow_fewer`, Stop bei mehr sowie keine Mutation bei Gate-Fehlern. |
 | `MD-H3` | ✅ abgeschlossen | Backend-Bindung und schneller Readiness-Preflight | `.agents/mail-desk-backend.json` ist die alleinige credentials-freie Quelle für `backend: "himalaya"` und Account (Name oder explizites `null` für den lokalen Default) in allen mailbox-zugreifenden Fassaden. Ein `--account`-Wert kann diese Auswahl nicht übersteuern und stoppt bei Abweichung; H2-/FR-04-Accounts müssen exakt passen. Execute und explizite Pipeline lesen vor ihrem Handler einmal maximal eine Envelope (10 Sekunden, ein Versuch) und geben das kanonische `mailbox_readiness`-Envelope weiter. | Regressionen für fehlende Konfiguration, falschen Account, Timeout, fehlenden Adapter, ungültige Minimalantwort, keine Handler-/Mutation bei Gate-Fehlern, gebundenes Read-only-Verhalten und kanonisches Envelope; vollständige Mail-Desk-Suite, `compileall`, `quick_validate`, `git diff --check`. |
 | `MD-H4` | ✅ abgeschlossen | Unterbrechungsjournal und first-class Reconcile | `SIGINT` und Timeouts enden im Journal und Progress sichtbar als `aborted`. Das atomische Journal führt jede normalisierte Message-ID durch `selected` → Copy/Verify/Delete → Index/Log/Evidence. `reconcile` ist first-class und standardmäßig read-only; eine explizit freigegebene Reparatur ergänzt ausschließlich fehlende lokale Daten nach erneuter Zielverifikation. Gemeinsame Writer folgen nur auf eine verifizierte finale Location. | Fault-Injection nach Copy, Verify, Delete, Index, Log und Reply; Resume erzeugt weder Doppel-Copy/-Delete noch Doppel-Log/-Reply/-Evidence. |
-| `MD-H5` | 🟡 teilweise | Verbindliches Completion-/Synthese-Gate und kleines Modellprofil | FR-06-Telemetrie, Targets und Handoff sind vorhanden; H1 verhindert mehrere falsche Erfolge. Offen: Synthese nur nach vollständig verifiziertem Batch oder abgeschlossenem Reconcile freigeben; Abbruch liefert `recovery_required` statt Abschlussbehauptung. Betriebsprofil dokumentieren und als Acceptance-Szenario testen. | Kein `synthesis_handoff.status=completed` bei Partial/Abort; erfolgreicher Verify/Reconcile erzeugt genau einen quellengebundenen Handoff und einen Abschlussbericht. |
+| `MD-H5` | ✅ abgeschlossen | Verbindliches Completion-/Synthese-Gate und kleines Modellprofil | Execute erzeugt nur einen unreleased, quellengebundenen Candidate. Ausschließlich vollständiger quellengebundener Verify (direkt oder Pipeline) oder abgeschlossener Reconcile gibt den Handoff plus `completion_report` frei; Partial/Abort/Verify-Fehler liefern `recovery_required` und den leeren Handoff. Das Luna-Profil ist begrenzt und linear dokumentiert. | Regressionen für Partial/Abort, Verify-Failure, vollständige Verify-Freigabe sowie erfolgreichen/unvollständigen Reconcile; vollständige Suite, `compileall`, `quick_validate`, `git diff --check`. |
 
 ### Paketkarten
 
@@ -534,10 +534,25 @@ reviewen und anschließend Execute → Verify → Synthese linear in derselben
 ausführenden Session halten. Frische Sessions sind zwischen unabhängigen Batches
 oder Coding-Paketen sinnvoll, nicht mitten in einer laufenden Mailbox-Transaktion.
 
+**Umgesetzt (12.09.2026):** `execute` hält den quellengebundenen
+`synthesis_candidate` zurück. Erst ein vollständig erfolgreicher Verify innerhalb
+der Pipeline oder ein abgeschlossener Reconcile gibt exakt einen
+`synthesis_handoff` frei und liefert `completion_report` mit verifizierten
+Message-IDs. Partial-, Abort- und Verify-Fehler liefern `recovery_required` und
+niemals einen Handoff oder Abschluss. Die deterministische H5-Acceptance deckt
+beide Reconcile-Endzustände sowie die Pipeline-Freigabe ab. Luna erhält als
+explizites Betriebsprofil drei bis fünf Mails, Draft → sichtbare starke/humane
+Review → Execute → Verify → Synthese in einer linearen Session; frische Sessions
+sind nur zwischen abgeschlossenen, unabhängigen Batches sinnvoll.
+Ein separater Verify akzeptiert den Candidate nur aus einem vollständigen,
+erfolgreichen Execute-Summary mit exakt passenden Result-/Verify-/Candidate-IDs;
+freie Candidates, partielle/abgebrochene Summaries und beliebige Envelope-Daten
+bleiben fail-closed.
+
 ### Empfohlene Reihenfolge und Modellwahl
 
 ```text
-MD-H1 ✅ → MD-H2 ✅ → MD-H3 ✅ → MD-H4 ✅ → MD-H5
+MD-H1 ✅ → MD-H2 ✅ → MD-H3 ✅ → MD-H4 ✅ → MD-H5 ✅
 ```
 
 H2 und H3 waren kleine, gut isolierbare Pakete und nach klarer Paketkarte für

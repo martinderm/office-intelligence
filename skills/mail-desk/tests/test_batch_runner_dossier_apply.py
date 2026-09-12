@@ -79,9 +79,20 @@ class DossierApplyModeTests(unittest.TestCase):
             "ok": True,
             "results": [{"success": True, "message_id": row["message_id"]} for row in config["execute_request"]["items"]],
             "telemetry": {"affected_projects": ["meshe"]},
-            "synthesis_handoff": {"status": "pending"},
+            "synthesis_candidate": {
+                "schema_version": 1,
+                "status": "pending",
+                "items": [{
+                    "message_id": row["message_id"],
+                    "subject": row.get("subject", ""),
+                    "kind": "project",
+                    "id": "meshe",
+                    "synthesis_targets": [],
+                    "target_selection_required": True,
+                } for row in config["execute_request"]["items"]],
+            },
         })
-        verify = verify or Mock(return_value={"ok": True, "results": [{"consistent": True}]})
+        verify = verify or Mock(return_value={"ok": True, "results": [{"message_id": row["message_id"], "consistent": True} for row in config["execute_request"]["items"]]})
         result = run_dossier_apply_mode(
             config,
             account=account,
@@ -198,7 +209,7 @@ class DossierApplyModeTests(unittest.TestCase):
         self.assertIsNotNone(result["execute_summary"])
         verify.assert_not_called()
 
-    def test_verify_failure_preserves_execute_handoff_for_review(self) -> None:
+    def test_verify_failure_withholds_execute_candidate_for_recovery(self) -> None:
         request = execute_request(item())
         execute = Mock(return_value={
             "ok": True,
@@ -211,7 +222,7 @@ class DossierApplyModeTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual("verify_review_required", result["review"]["state"])
-        self.assertEqual("pending", result["synthesis_handoff"]["status"])
+        self.assertEqual("not_required", result["synthesis_handoff"]["status"])
         self.assertEqual(False, result["verify_summary"]["ok"])
 
     def test_malformed_successful_execute_result_is_not_verified(self) -> None:

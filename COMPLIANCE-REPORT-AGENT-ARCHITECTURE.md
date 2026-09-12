@@ -579,3 +579,26 @@ Index, Log und Reply-Append ab. Der jeweilige Execute-Resume darf keinen zweiten
 Copy oder Delete und keine doppelte Log-, Reply- oder Evidence-Zeile erzeugen.
 Der Nachweis liegt in `test_maildesk_h4_recovery.py`; vollständige Suite,
 `compileall`, `quick_validate` und `git diff --check` sind Teil der Abnahme.
+
+`MD-H5` schließt die technische Abschlussgrenze: `execute` erzeugt lediglich
+einen quellengebundenen, unreleased `synthesis_candidate`. Ein
+`synthesis_handoff` wird nur nach vollständig erfolgreichem quellengebundenem
+Verify (direkt oder in der Pipeline) oder nach abgeschlossenem Reconcile
+freigegeben. Beide Pfade liefern zusätzlich einen
+versionierten `completion_report` mit den verifizierten Message-IDs. Partial,
+Abort und fehlgeschlagener Verify führen sichtbar zu `recovery_required` und dem
+kanonisch leeren Handoff; es gibt damit keine vorzeitige Synthese- oder
+Abschlussbehauptung. `test_synthesis_handoff.py` und
+`test_maildesk_h5_completion.py` decken die Fehl- und Erfolgsgrenzen ab.
+Der Standalone-Verify übernimmt einen Candidate ausschließlich aus einem
+strukturell vollständigen erfolgreichen Execute-Summary mit exakt passenden
+Result-, Verify- und Candidate-Message-IDs. Freie Top-Level-Candidates,
+partielle/abgebrochene Summaries und beliebige Envelope-`data` werden nicht als
+Provenienz akzeptiert.
+
+Das dokumentierte Luna-Betriebsprofil begrenzt neue Aufträge auf drei bis fünf
+Mails und verlangt Draft → sichtbare Human-/starke-Modell-Review → Execute →
+Verify → Synthese in einer linearen Session. Frische Sessions sind zwischen
+vollständig abgeschlossenen, unabhängigen Batches sinnvoll, nicht innerhalb einer
+Mailbox-Transaktion. Eine autonome Pipeline ist kein Luna-Erstauftrag; Count-,
+Receipt-, Readiness-, Review-, Verify- und Reconcile-Fehler sind Stopbedingungen.
