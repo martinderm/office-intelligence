@@ -144,7 +144,7 @@ def main() -> int:
                 return 2
 
         phase = "copy"
-        run_himalaya(["message", "copy", "-f", source_folder, "-t", args.target_folder, str(old_env_id)], account=args.account)
+        run_himalaya(["message", "copy", args.target_folder, str(old_env_id), "-f", source_folder], account=args.account)
         copy_completed = True
 
         phase = "verify"

@@ -1107,6 +1107,12 @@ def classify_email(
     ym, ymd = parse_date_to_year_month(date_str)
     full_text = f"{subject}\n{from_str}\n{to_str}\n{cc_str}\n{preview}"
     full_text_lower = full_text.lower()
+    forwarded_senders = re.findall(
+        r"(?:>>>|Von:|From:)\s*[^<>\n]*<([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>",
+        preview,
+        re.IGNORECASE,
+    )
+    parties = f"{from_str} {to_str} {cc_str} {' '.join(forwarded_senders)}".lower()
 
     # Default fallback
     target_folder = "INBOX"
@@ -1290,12 +1296,46 @@ def classify_email(
             ]
             mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
 
+            # Check do_not_route_if conditions from catalog
+            do_not_route = False
+            for dnr in proj.get("do_not_route_if", []) if isinstance(proj.get("do_not_route_if"), list) else []:
+                dnr_clean = str(dnr).strip().lower()
+                if not dnr_clean:
+                    continue
+                if dnr_clean == "newsletter" and ("newsletter" in full_text_lower or "verteilerliste" in full_text_lower or "mailing list" in full_text_lower or "list." in from_str.lower() or "list." in to_str.lower()):
+                    do_not_route = True
+                    break
+                if dnr_clean == "mailing list" and ("verteilerliste" in full_text_lower or "mailing list" in full_text_lower or "list." in from_str.lower() or "list." in to_str.lower()):
+                    do_not_route = True
+                    break
+                if dnr_clean == "no-reply" and ("no-reply" in from_str.lower() or "do_not_reply" in from_str.lower() or "quarantine" in from_str.lower() or "mailer-daemon" in from_str.lower()):
+                    do_not_route = True
+                    break
+                if dnr_clean in ("automatic reply", "out of office") and any(ph in full_text_lower for ph in ("abwesenheitsnotiz", "out of office", "automatische antwort")):
+                    do_not_route = True
+                    break
+            if do_not_route:
+                continue
+
             # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
             names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
             subj_norm = re.sub(r"[-_]+", " ", subject)
+            _COMMON_WORD_ACRONYMS = {"WEEK", "LATEST", "USAGE", "PILOT", "START"}
             for name in names:
                 name_norm = re.sub(r"[-_]+", " ", name)
-                if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+                is_short_acronym = len(name) <= 4 or name.upper() in _COMMON_WORD_ACRONYMS or (name.isupper() and len(name) <= 6)
+                matched_name = False
+                if is_short_acronym:
+                    name_upper = name.upper()
+                    if re.search(r"\b" + re.escape(name_upper) + r"\b", subject) or re.search(r"\b" + re.escape(name_norm.upper()) + r"\b", subj_norm):
+                        matched_name = True
+                    elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(name) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
+                        matched_name = True
+                else:
+                    if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
+                        matched_name = True
+
+                if matched_name:
                     matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                     matched_project_obj = proj
                     matched_proj_confidence = "high"
@@ -1306,7 +1346,19 @@ def classify_email(
             # 1b. Typical Subject Patterns in Subject
             for pat in typical_patterns:
                 pat_norm = re.sub(r"[-_]+", " ", pat)
-                if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                is_short_pat = len(pat) <= 4 or pat.upper() in _COMMON_WORD_ACRONYMS or (pat.isupper() and len(pat) <= 6)
+                matched_pat = False
+                if is_short_pat:
+                    pat_upper = pat.upper()
+                    if re.search(r"\b" + re.escape(pat_upper) + r"\b", subject) or re.search(r"\b" + re.escape(pat_norm.upper()) + r"\b", subj_norm):
+                        matched_pat = True
+                    elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(pat) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
+                        matched_pat = True
+                else:
+                    if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                        matched_pat = True
+
+                if matched_pat:
                     matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                     matched_project_obj = proj
                     matched_proj_confidence = "high"
@@ -1315,10 +1367,13 @@ def classify_email(
                 break
 
             # 1c. Name in body with matching domain/contact or project keyword
-            parties = f"{from_str} {to_str} {cc_str}".lower()
             external_contacts = [c for c in contacts if c and not c.endswith("@boku.ac.at")]
             external_domains = [d for d in domains if d and d != "boku.ac.at"]
-            has_name_in_body = any(re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE) for n in names)
+            has_name_in_body = any(
+                (re.search(r"\b" + re.escape(n.upper()) + r"\b", full_text) if (len(n) <= 4 or n.upper() in _COMMON_WORD_ACRONYMS or (n.isupper() and len(n) <= 6))
+                 else re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE))
+                for n in names
+            )
             has_contact_match = any(c in parties for c in external_contacts if c)
             has_domain_match = any(d in parties for d in external_domains if d)
             has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
@@ -1424,8 +1479,10 @@ def classify_email(
                 for kw in keywords if len(kw) >= 3
             )
             has_kw_body = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
-            has_contact = any(c in from_str.lower() for c in contacts if c)
-            has_domain = any(d in from_str.lower() for d in domains if d)
+            has_contact = any(c in parties for c in contacts if c)
+            has_domain = any(d in from_str.lower() for d in domains if d) or any(
+                d in parties for d in domains if d and d not in ("boku.ac.at", "gmail.com", "outlook.com", "yahoo.com")
+            )
 
             if has_kw_subj:
                 matched_topic = {"id": t_id, "folder": mb_folder, "title": title or t_id}
@@ -1484,7 +1541,7 @@ def classify_email(
             can_override_generic_root = (
                 matched_topic_source in {"root_pattern", "root_keyword", "root_context"}
                 and fallback_strength > matched_topic_strength
-                and fallback_strength == 500
+                and fallback_strength >= 400
             )
             if can_select_fallback or can_override_generic_root:
                 preselected_subtopic_resolution = fallback_resolution
@@ -1511,6 +1568,48 @@ def classify_email(
                 ),
                 None,
             )
+
+    # --------------------------------------------------------------------------
+    # 2-sys. Automated System Notifications & Junk Filtering
+    # --------------------------------------------------------------------------
+    if not thread_matched and not matched_project and not matched_topic:
+        if (
+            re.search(r"ist dem Meeting beigetreten|has joined the meeting", subject, re.IGNORECASE)
+            and ("zoom.us" in from_str.lower() or "zoom" in full_text_lower)
+        ):
+            target_folder = "Trash"
+            decision = {
+                "kind": "notification",
+                "id": "zoom-join-ping",
+                "confidence": "high",
+                "needs_reply": False,
+            }
+            notes = f"Automatisierte Zoom-Beitrittsbenachrichtigung (ephemer): {subject}"
+        elif (
+            re.search(r"Meeting-Objekte für .* sind bereit|Cloud-Aufzeichnung.*verfügbar|recording.*is now available", subject, re.IGNORECASE)
+            and ("zoom.us" in from_str.lower() or "zoom" in full_text_lower)
+        ):
+            target_folder = "Themen/BOKU-Organisation"
+            decision = {
+                "kind": "topic",
+                "id": "boku-organisation",
+                "confidence": "medium",
+                "needs_reply": False,
+            }
+            notes = f"Zoom-Aufzeichnungsbenachrichtigung zu BOKU-Organisation: {subject}"
+        elif (
+            re.search(r"\burgent inquiry\b|\bkindly clarify\b|\bconfidential proposal\b|\bfinancial assistance\b|\bbeneficiary\b", subject, re.IGNORECASE)
+            and any(freemail in from_str.lower() for freemail in ["@yahoo.", "@hotmail.", "@live.", "@aol.", "@mail.ru"])
+            and not any(boku_kw in full_text_lower for boku_kw in ["weiterbildung", "lebenslanges lernen", "focus group", "lehrgang"])
+        ):
+            target_folder = "Junk"
+            decision = {
+                "kind": "spam",
+                "id": "junk-freemailer",
+                "confidence": "high",
+                "needs_reply": False,
+            }
+            notes = f"Spam/Phishing-Klassifikation: {subject}"
 
     # --------------------------------------------------------------------------
     # 2a. Project artifact matching (FR-02a)

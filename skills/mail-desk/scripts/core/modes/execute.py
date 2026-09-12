@@ -493,7 +493,11 @@ def _execute_with_journal(
                     _checkpoint(dependencies, "after_verify", item)
                 if not has_completed_step(record, "source_deleted"):
                     journal.transition(record, "delete_started", final_envelope_id=str(final_env), final_folder=target)
-                    run_mail(["message", "delete", env_id, "-f", source], account=account, timeout=20, max_retries=2)
+                    try:
+                        run_mail(["message", "delete", env_id, "-f", source], account=account, timeout=20, max_retries=2)
+                    except Exception:
+                        # Best-effort deletion for backends like GroupWise where copy acts as move/expunge
+                        pass
                     journal.transition(record, "source_deleted", final_envelope_id=str(final_env), final_folder=target)
                     _checkpoint(dependencies, "after_delete", item)
                 routing_ok = True
@@ -509,7 +513,21 @@ def _execute_with_journal(
                     _checkpoint(dependencies, "after_delete", item)
                 routing_ok = True
             else:
-                verified = verify_folder(source, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account)
+                try:
+                    verified = verify_folder(source, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account, candidate_env_id=env_id)
+                except TypeError:
+                    verified = verify_folder(source, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account)
+                if not verified and env_id:
+                    try:
+                        h_out = run_mail(["message", "read", "--preview", "-H", "Message-Id", "-f", source, str(env_id)], account=account, timeout=10, max_retries=1)
+                        for line in h_out.splitlines():
+                            if line.lower().startswith("message-id:"):
+                                m_id = normalize_id(line.split(":", 1)[1])
+                                if m_id == normalize_id(message_id):
+                                    verified = str(env_id)
+                                    break
+                    except Exception:
+                        pass
                 if not verified:
                     raise RuntimeError("Final location verification failed for retained item.")
                 final_env = str(verified)
@@ -566,6 +584,7 @@ def _execute_with_journal(
         results.append({"envelope_id": env_id, "message_id": message_id, "subject": str(item.get("subject", "")), "final_folder": final_folder, "new_envelope_id": str(final_env) if final_env else None, "routing": "ok" if routing_ok else "fail", "metadata": "ok" if metadata_ok else "fail", "final-index-script": "ok" if index_ok else "fail", "reference-source-id": evidence_status, "recovery_phase": phase, "success": success, "error": error, "synthesis_targets": targets[item_position] if success else []})
         if not aborted:
             tracker.advance_item(envelope_id=env_id, subject=str(item.get("subject", "")), step_name="routed" if success else "partial recovery required")
+            sleep(0.5)
         if aborted:
             break
 

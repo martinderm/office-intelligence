@@ -12,14 +12,37 @@ from typing import Any
 from .common import normalize_message_id
 
 
+def _insert_account_arg(args: list[str], account: str | None) -> list[str]:
+    """Insert -a <account> into args at the correct position for Himalaya CLI v1.x."""
+    if not account or "-a" in args or "--account" in args:
+        return list(args)
+
+    cmd_tokens = list(args)
+    flags_with_val = {"-c", "--config", "-o", "--output"}
+    boolean_flags = {"--quiet", "--debug", "--trace", "-h", "--help", "-V", "--version"}
+
+    i = 0
+    while i < len(cmd_tokens):
+        token = cmd_tokens[i]
+        if token in flags_with_val:
+            i += 2
+            continue
+        if token in boolean_flags or token.startswith("-"):
+            i += 1
+            continue
+        if i + 1 < len(cmd_tokens) and not cmd_tokens[i + 1].startswith("-"):
+            return cmd_tokens[: i + 2] + ["-a", account] + cmd_tokens[i + 2 :]
+        else:
+            return cmd_tokens[: i + 1] + ["-a", account] + cmd_tokens[i + 1 :]
+
+    return cmd_tokens + ["-a", account]
+
+
 def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35, max_retries: int = 5) -> str:
     """Execute himalaya CLI command safely with UTF-8 replacement and retry on transient TLS errors."""
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
-    cmd = ["himalaya"]
-    if account:
-        cmd.extend(["-a", account])
-    cmd.extend(args)
+    cmd = ["himalaya"] + _insert_account_arg(args, account)
 
     last_err = None
     for attempt in range(max_retries):
@@ -76,8 +99,9 @@ def get_single_email_details(
         args.insert(2, "--preview")
     stdout = None
     last_err = None
+    read_timeout = 30 if full_body else 12
     try:
-        stdout = run_himalaya(args, account=account, timeout=12, max_retries=2)
+        stdout = run_himalaya(args, account=account, timeout=read_timeout, max_retries=2)
     except Exception as e:
         last_err = e
 
@@ -205,8 +229,23 @@ def verify_in_target_folder(
     from_addr: str = "",
     date_str: str = "",
     account: str | None = None,
+    candidate_env_id: str | None = None,
 ) -> str | None:
     """Verify presence of a message in target folder and return its new envelope_id."""
+    norm_target = normalize_message_id(target_msg_id)
+
+    # Fast-path: if a specific candidate envelope is known (e.g. retained in-place), test it directly
+    if candidate_env_id:
+        try:
+            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, str(candidate_env_id)], account=account, timeout=10, max_retries=1)
+            for line in h_out.splitlines():
+                if line.lower().startswith("message-id:"):
+                    m_id = normalize_message_id(line.split(":", 1)[1])
+                    if m_id == norm_target:
+                        return str(candidate_env_id)
+        except Exception:
+            pass
+
     try:
         out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "150"], account=account, timeout=30, max_retries=2)
         if "[" in out:
@@ -215,24 +254,28 @@ def verify_in_target_folder(
     except Exception:
         return None
 
-    norm_target = normalize_message_id(target_msg_id)
     candidates: list[str] = []
 
-    # 1. Filter candidates by matching subject (exact or prefix)
+    # 1. Filter candidates by matching subject (exact or prefix, or both empty)
     for env in envelopes:
         env_subj = env.get("subject", "").strip()
-        if subject and (env_subj.lower() == subject.strip().lower() or (len(subject.strip()) > 15 and env_subj.startswith(subject.strip()[:30]))):
+        if subject:
+            if env_subj.lower() == subject.strip().lower() or (len(subject.strip()) > 15 and env_subj.startswith(subject.strip()[:30])):
+                candidates.append(str(env["id"]))
+        elif not subject and not env_subj:
             candidates.append(str(env["id"]))
 
     # 1b. Fallback to date only if no subject candidate found
     if not candidates and date_str:
+        from .classifier import parse_date_to_year_month
+        _, ymd = parse_date_to_year_month(date_str)
         for env in envelopes:
             env_date = env.get("date", "").strip()
-            if date_str[:10] in env_date:
+            if ymd in env_date or date_str[:10] in env_date:
                 candidates.append(str(env["id"]))
 
-    # 2. Check candidate headers (newest first, limit to top 3)
-    for cid in list(reversed(candidates))[:3]:
+    # 2. Check candidate headers (newest first, limit to top 5)
+    for cid in list(reversed(candidates))[:5]:
         try:
             h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)
             for line in h_out.splitlines():
@@ -243,9 +286,9 @@ def verify_in_target_folder(
         except Exception:
             pass
 
-    # 3. Quick fallback: check top 2 newest envelopes if no candidates were found
+    # 3. Quick fallback: check top 5 newest envelopes if no candidates were found
     if not candidates:
-        for env in list(reversed(envelopes))[:2]:
+        for env in list(reversed(envelopes))[:5]:
             cid = str(env["id"])
             try:
                 h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)

@@ -29,8 +29,8 @@ def load_json(path: Path):
         return json.load(f)
 
 
-def list_imap_folders() -> set[str]:
-    raw = run_himalaya(["-o", "json", "folder", "list"])
+def list_imap_folders(account: str | None = None) -> set[str]:
+    raw = run_himalaya(["-o", "json", "folder", "list"], account=account)
     if "[" in raw:
         raw = raw[raw.find("["):]
     folders = json.loads(raw)
@@ -119,6 +119,11 @@ def main() -> int:
         action="store_true",
         help="Force run even when --if-catalog-changed is set and no change detected.",
     )
+    parser.add_argument(
+        "--account",
+        default=None,
+        help="Override or specify himalaya account name.",
+    )
     try:
         args = parser.parse_args()
     except SystemExit as exc:
@@ -158,7 +163,16 @@ def main() -> int:
 
         projects = load_json(projects_path)
         topics = load_json(topics_path)
-        folders = list_imap_folders()
+        account = args.account
+        if not account:
+            backend_cfg = state_path.resolve().parent.parent.parent / ".agents" / "mail-desk-backend.json"
+            if backend_cfg.is_file():
+                try:
+                    cfg = json.loads(backend_cfg.read_text(encoding="utf-8"))
+                    account = cfg.get("account")
+                except Exception:
+                    pass
+        folders = list_imap_folders(account=account)
 
         targets = collect_targets(projects, "project") + collect_targets(topics, "topic")
 

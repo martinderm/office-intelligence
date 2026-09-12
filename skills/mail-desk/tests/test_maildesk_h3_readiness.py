@@ -162,6 +162,26 @@ class MailDeskReadinessTests(unittest.TestCase):
         self.assertEqual({"action", "success", "state", "message", "data", "error"}, set(result))
         self.assertTrue(result["success"])
 
+    def test_himalaya_account_flag_placement(self) -> None:
+        cases = [
+            (["-o", "json", "folder", "list"], ["-o", "json", "folder", "list", "-a", "BOKU-MARTIN"]),
+            (["folder", "list", "-o", "json"], ["folder", "list", "-a", "BOKU-MARTIN", "-o", "json"]),
+            (["message", "read", "--preview", "-f", "INBOX", "9072"], ["message", "read", "-a", "BOKU-MARTIN", "--preview", "-f", "INBOX", "9072"]),
+            (["folder", "create", "Projekte/AG-SMART"], ["folder", "create", "-a", "BOKU-MARTIN", "Projekte/AG-SMART"]),
+            (["envelope", "list", "-f", "INBOX", "-s", "1"], ["envelope", "list", "-a", "BOKU-MARTIN", "-f", "INBOX", "-s", "1"]),
+            (["envelope", "list", "-a", "EXISTING"], ["envelope", "list", "-a", "EXISTING"]),
+        ]
+        for input_args, expected_args in cases:
+            with self.subTest(input_args=input_args):
+                self.assertEqual(expected_args, himalaya._insert_account_arg(input_args, "BOKU-MARTIN"))
+
+        # Verify run_himalaya passes the correctly placed args to subprocess.run
+        with patch.object(himalaya.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as mock_run:
+            himalaya.run_himalaya(["-o", "json", "folder", "list"], account="BOKU-MARTIN", max_retries=1)
+            mock_run.assert_called_once()
+            called_cmd = mock_run.call_args[0][0]
+            self.assertEqual(["himalaya", "-o", "json", "folder", "list", "-a", "BOKU-MARTIN"], called_cmd)
+
 
 if __name__ == "__main__":
     unittest.main()
