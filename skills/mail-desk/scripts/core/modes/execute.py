@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..action_log import append_action_log_entry, append_replies_needed_entry
+from ..batch_contract import validate_execute_contract
 from ..common import normalize_message_id, resolve_data_dir, resolve_final_index_path, utc_now_iso
 from ..evidence import flush_batch_evidence
 from ..himalaya import run_himalaya, verify_in_target_folder
@@ -37,6 +38,19 @@ def run_execute_mode(
     dependencies: Mapping[str, Callable[..., Any]] | None = None,
 ) -> dict[str, Any]:
     """Route each item, then serially persist its verified operational record."""
+    contract = validate_execute_contract(config, effective_account=account)
+    if not contract["ok"]:
+        return {
+            "ok": False,
+            "mode": "execute",
+            "message": contract["message"],
+            "total_processed": 0,
+            "all_succeeded": False,
+            "results": [],
+            "telemetry": collect_telemetry([], []),
+            "synthesis_handoff": collect_synthesis_handoff([], []),
+            "contract_gate": contract,
+        }
     resolve_data = _dependency(dependencies, "resolve_data_dir", resolve_data_dir)
     resolve_index_path = _dependency(
         dependencies,
@@ -308,4 +322,5 @@ def run_execute_mode(
         "results": results,
         "telemetry": collect_telemetry(items, results),
         "synthesis_handoff": collect_synthesis_handoff(items, results),
+        "contract_gate": contract,
     }

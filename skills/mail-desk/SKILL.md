@@ -17,6 +17,13 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
 - Bearbeite einzeln; kleine, ausdrücklich beauftragte Batches folgen pro Mail dem
   vollständigen Flow. Details zu Batch-Modi und Manifesten stehen in
   [`references/batch-runner.md`](references/batch-runner.md).
+- Ein Auftrag wie „verarbeite N Mails“ bedeutet verbindlich `draft` → sichtbare
+  Manifest-Review → `execute` → `verify`. Nur ein ausdrücklich als autonomer
+  Pipeline-Lauf bezeichneter Auftrag darf `pipeline` verwenden. Der Draft bindet
+  `expected_count`, `allow_fewer`, Quellordner, Account und `skip_known` in einen
+  Review-Hash; ohne passende explizite Review-Receipt führt `execute` keine
+  Mailbox- oder lokalen Batch-Mutationen aus. `allow_fewer` ist nie eine Erlaubnis
+  für mehr Kandidaten als `expected_count`.
 - Ein FR-04b-`dossier_apply` ist kein autonomer Batch: Er benötigt eine separat
   erteilte Human Review als hash-gebundenen Receipt für den exakten kanonischen
   Execute-Request einschließlich eines optionalen `execute_request.account`.
@@ -74,8 +81,10 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
 
 ## Verbindlicher Kernfluss
 
-1. Scope und Autorisierung klären: kein Batch ohne Auftrag; vor jeder Mutation Lock,
-   Freigabe und den gewählten Adapter bestätigen.
+1. Scope und Autorisierung klären: kein Batch ohne Auftrag; „verarbeite N“ zuerst
+   als begrenzten Draft, nicht als Pipeline, behandeln. Vor jeder Mutation Lock,
+   Freigabe und den gewählten Adapter bestätigen; nur ein ausdrücklicher autonomer
+   Pipeline-Auftrag erlaubt diesen gesonderten Modus.
 2. Mit dem Adapter Minimalzugriff lesen (Header, Betreff, Absender, Datum, Preview,
    sichtbare Link-/Anhang-/Thread-Hinweise) und **vor** Body-Auswertung den Lesegrad
    festlegen: `structural`, `selective` oder `full`.

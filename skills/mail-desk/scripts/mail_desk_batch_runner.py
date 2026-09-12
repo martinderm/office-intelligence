@@ -815,10 +815,14 @@ def _build_parser() -> EnvelopeArgumentParser:
     filters.add_argument("--query", "-q", help="Search query filter for envelopes (e.g. 'after 2026-05-01')")
     filters.add_argument("--date", help="Exact date filter for envelopes (YYYY-MM-DD)")
     parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Minimum confidence threshold for pipeline auto-execution")
+    parser.add_argument("--expected-count", type=int, help="Required selected count for --draft review manifest (defaults to N)")
+    parser.add_argument("--allow-fewer", action="store_true", help="Permit fewer reviewed candidates than --expected-count for --draft")
     return parser
 
 
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
+    if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
+        raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
     if args.dossier is not None:
         if args.query or args.date:
             raise ArgumentParseError("--dossier derives its query from the project catalog; --query/--date are not allowed")
@@ -854,12 +858,19 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
     if args.resolve:
         return {"mode": "resolve", "auto_from_sent": True}
     if args.draft is not None:
+        expected_count = args.expected_count if args.expected_count is not None else args.draft
+        if expected_count < 1:
+            raise ArgumentParseError("--expected-count must be a positive integer")
+        if expected_count != args.draft:
+            raise ArgumentParseError("--expected-count must equal the requested --draft count")
         cfg = {
             "mode": "draft",
             "count": args.draft,
             "order": args.order,
             "folder": args.folder,
             "skip_known": args.skip_known,
+            "expected_count": expected_count,
+            "allow_fewer": args.allow_fewer,
             "output_file": str(data_dir / "batch-manifest.json"),
         }
         if args.query:

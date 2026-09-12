@@ -191,7 +191,13 @@ class DraftModeTests(unittest.TestCase):
                 account=None,
             )
             self.assertEqual(manifest, json.loads(output_path.read_text(encoding="utf-8")))
-            self.assertEqual({"ok": True, "mode": "draft", "folder": "INBOX", "order": "oldest", "total_drafted": 1, "manifest_file": str(output_path.resolve()), "draft": manifest}, result)
+            self.assertEqual({
+                "ok": True, "mode": "draft", "folder": "INBOX", "order": "oldest",
+                "total_drafted": 1, "expected_count": 1, "allow_fewer": False,
+                "candidate_count": 1, "source_folder": "INBOX", "account": None,
+                "skip_known": True, "review": manifest["review"],
+                "manifest_file": str(output_path.resolve()), "draft": manifest,
+            }, result)
 
     def test_draft_fetches_with_filters_and_preserves_progress_lifecycle(self) -> None:
         events: list[tuple[str, str]] = []

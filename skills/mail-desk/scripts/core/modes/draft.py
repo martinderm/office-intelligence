@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..classifier import draft_manifest
+from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
 from ..himalaya import get_single_email_details
 from ..progress import BatchProgressTracker
@@ -98,6 +99,20 @@ def run_draft_mode(
         full_reader=full_reader,
         account=account,
     )
+    expected_count = config.get("expected_count", count)
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 1:
+        raise ValueError("expected_count must be a positive integer")
+    allow_fewer = config.get("allow_fewer", False)
+    if not isinstance(allow_fewer, bool):
+        raise ValueError("allow_fewer must be a boolean")
+    manifest = add_draft_contract(
+        manifest,
+        expected_count=expected_count,
+        allow_fewer=allow_fewer,
+        source_folder=folder,
+        account=account,
+        skip_known=skip_known,
+    )
     output_path = Path(output_file).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_path, manifest)
@@ -108,6 +123,13 @@ def run_draft_mode(
         "folder": folder,
         "order": order,
         "total_drafted": len(manifest.get("items", [])),
+        "expected_count": expected_count,
+        "allow_fewer": manifest["allow_fewer"],
+        "candidate_count": manifest["candidate_count"],
+        "source_folder": folder,
+        "account": account,
+        "skip_known": skip_known,
+        "review": manifest["review"],
         "manifest_file": str(output_path),
         "draft": manifest,
     }

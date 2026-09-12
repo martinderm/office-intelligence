@@ -517,3 +517,22 @@ Modelle bleibt die empfohlene Betriebsform ein begrenzter `draft`-Lauf mit
 anschließender Review und separatem `execute`, vorzugsweise in kleinen Paketen
 von drei bis fünf Mails. Eine autonome Zehn-Mail-Pipeline ist trotz der neuen
 Fail-Closed-Grenzen kein geeigneter Erstauftrag für Luna.
+
+`MD-H2` ergänzt den kontrollierten Standard-Batch-Einstieg. Ein gewöhnlicher
+Auftrag „verarbeite N Mails“ ist im Skill jetzt verbindlich `draft` → sichtbare
+Manifest-Review → `execute` → `verify`; `pipeline` bleibt ausschließlich eine
+ausdrücklich beauftragte Ausnahme. Jeder Draft trägt `expected_count`, aktuelle
+`candidate_count`, `allow_fewer`, `source_folder`, Account und `skip_known` sowie
+einen Pending-SHA-256 über den kanonischen Execute-Request. Vor jeder Execute-
+Seitenwirkung verlangt der Runner eine explizite, hash-gebundene Approval-Receipt
+und prüft Account, Quellordner und Kandidatenzahl. Weniger Kandidaten stoppen
+standardmäßig; `allow_fewer: true` kann ausschließlich diesen Minderbestand nach
+Review erlauben, nie einen Mehrbestand. Gate-Fehler erzeugen weder Progress-,
+Index-, Log-, Evidence- noch Mailbox-Mutationen. Die bestehenden bewussten
+Autonomous-Pipeline- und FR-04-Dossier-Verträge bleiben getrennt kompatibel.
+
+MD-H2-Nachweis: `test_batch_runner_h2_contract.py` deckt Exact Match, Default-
+Stop bei weniger, explizites `allow_fewer`, Stop bei mehr und die vollständige
+Mutationsfreiheit von Gate-Fehlern ab; die vollständige Mail-Desk-Suite,
+`compileall`, `quick_validate` und `git diff --check` sind Bestandteil der
+Abnahme dieses Pakets.

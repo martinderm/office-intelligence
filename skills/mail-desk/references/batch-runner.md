@@ -9,7 +9,11 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem ei
 2. **Rechte-/Freigabeprozesse im Agent-Harness zu optimieren:** Der Nutzer muss für einen gesamten Batchlauf genau **einen** Shell-Befehl freigeben.
 3. **Idempotenz und atomare Konsistenz sicherzustellen:** Gekoppeltes Routing, Verifikation im Zielordner, atomarer Index-Upsert (`final-location-index.json`), Protokollierung (`action-log.jsonl`) und Evidence-Pflege (`evidence/YYYY-MM.md`) in einer geschlossenen Transaktionskette.
 4. **Automatische Aufräumlogik:** Das als Eingabe dienende temporäre JSON-Manifest unter `data/mail-desk/` wird nach bestätigter, fehlerfreier Ausführung automatisch gelöscht (`delete_input_on_success: true`).
-5. **Autonome Pipeline & Drafts:** Ermöglicht das automatisierte Nachladen unverarbeiteter E-Mails (`skip_known: true`), regelbasiertes Erstellen von Manifest-Entwürfen (`draft`) sowie autonome End-to-End-Verarbeitungsdurchläufe (`pipeline`).
+5. **Kontrollierter Einstieg:** Ein gewöhnlicher Auftrag zur Verarbeitung von N
+   Mails erzeugt zuerst einen regelbasierten, hash-gebundenen Manifest-Entwurf
+   (`draft`). Erst nach sichtbarer Review führt `execute` aus und `verify` prüft.
+   Die autonome End-to-End-`pipeline` bleibt für einen ausdrücklich so benannten
+   Auftrag verfügbar; sie ist kein stiller Default.
 
 ### Implementierungsstruktur
 
@@ -45,28 +49,28 @@ Für temporäre Ein- und Ausgabedateien gelten unter `data/mail-desk/` folgende 
 ## CLI-Aufrufe & Parameter
 
 ```bash
-# Standard 1: Batch-Ausführung mit Standard-Manifest (Input wird automatisch gefunden)
-python3 scripts/mail_desk_batch_runner.py
+# Standard 1: Kontrollierter Normalfluss: Draft für genau fünf Kandidaten
+python3 scripts/mail_desk_batch_runner.py --draft 5 --order oldest
 
-# Standard 2: Expliziter Pfad für Batch-Ausführung
+# Standard 2: Nach sichtbarer Review und Hash-Receipt den geprüften Draft ausführen
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.json
 
-# Standard 3: Batch-Inspektion (JSON-gesteuert)
+# Standard 3: Anschließend gezielt verifizieren
+python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-verify.json
+
+# Standard 4: Batch-Inspektion (JSON-gesteuert)
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-inspect.json
 
-# Standard 4: Autonome Pipeline direkt per CLI (Standard: 20 älteste Mails)
+# Ausnahme: nur bei ausdrücklich beauftragtem autonomen Pipeline-Lauf
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --order oldest
 
-# Standard 5: Manifest-Entwurf direkt per CLI
-python3 scripts/mail_desk_batch_runner.py --draft 50 --order oldest
-
-# Standard 6: Direkte Inspektion per CLI
+# Direkte Inspektion
 python3 scripts/mail_desk_batch_runner.py --inspect 50 --order oldest
 
-# Standard 7: Einen gefilterten Pipeline-Lauf starten
+# Einen ausdrücklich autonomen gefilterten Pipeline-Lauf starten
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@example.org'
 
-# Standard 8: Mailbox-read-only Dossier-Folgeauftrag für ein exakt katalogisiertes Projekt
+# Mailbox-read-only Dossier-Folgeauftrag für ein exakt katalogisiertes Projekt
 python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 ```
 
@@ -77,6 +81,8 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (Standard: `batch-manifest.json`, `batch-inspect.json`, etc.). |
 | `--pipeline [N]` | `-p` | Führt die End-to-End-Pipeline für N Mails aus (Inspect, Classify, Execute, Verify). |
 | `--draft [N]` | `-d` | Inspiziert N unverarbeitete Mails und schreibt einen `batch-manifest.json`-Entwurf. |
+| `--expected-count <N>` | | Bindet für `--draft` die erwartete Kandidatenzahl; muss dem angeforderten Draft-N entsprechen. |
+| `--allow-fewer` | | Erlaubt für `--draft` nach ausdrücklicher Review weniger als `expected_count`, nie mehr. |
 | `--inspect [N]` | | Inspiziert N Mails und schreibt `batch-inspected.json`. |
 | `--dossier <PROJECT_ID>` | | Erzeugt ausschließlich einen mailbox-read-only, katalogbasierten `inspect`-Folgeauftrag für exakt ein routingfähiges Projekt. |
 | `--max-count <1..50>` | | Strikte Obergrenze für den durch `--dossier` vorbereiteten Inspect-Auftrag (Standard: 50). |
@@ -120,6 +126,39 @@ fehlgeschlagene Execute-Läufe enden im Fortschrittsstatus `failed`, nicht
 protokolliert noch indiziert werden. Himalaya-Reads ohne geparste Header gelten als
 Fehler; nullable Absendernamen und Betreffe bleiben dagegen gültige, leere
 Suchfelder.
+
+### MD-H2: Review-gebundene Kandidatenzahl
+
+Jeder über `draft` erzeugte Standard-Manifest trägt oben sichtbar
+`expected_count`, `candidate_count`, `allow_fewer`, `source_folder`, `account`
+und `skip_known`. Zusätzlich enthält `review` im Pending-Zustand den SHA-256
+`execute_request_sha256` des kanonischen gesamten Manifests ohne den
+`review`-Block. Damit ist die fachliche Auswahl, nicht nur eine lose Mail-Liste,
+reviewbar gebunden.
+
+Vor `execute` ersetzt der Reviewer den Pending-Block durch:
+
+```json
+"review": {
+  "required": true,
+  "state": "approved",
+  "approval_receipt": {
+    "reviewed_at": "2026-09-12T09:30:00Z",
+    "reviewed_by": "human-or-strong-model-reviewer",
+    "execute_request_sha256": "<hash-aus-dem-pending-draft>"
+  }
+}
+```
+
+`execute` prüft diese Receipt, den Hash, effektiven Account, jeden
+`source_folder` sowie die Kandidatenzahl **vor** Progress-, Index-, Log-,
+Evidence- oder Mailbox-Mutationen. Gleich viele Kandidaten sind zulässig; weniger
+sind nur mit `allow_fewer: true` zulässig; mehr als `expected_count` stoppt immer.
+Wird ein Item, ein Ziel, Syntheseziel, Account oder eine andere gehashte Angabe
+nach der Review verändert, ist eine neue Draft-Hash-Review nötig. Vollständig
+ungebundene Altmanifeste bleiben nur zur Kompatibilität mit den getrennten,
+bereits autorisierten FR-04- und expliziten Pipeline-Pfaden akzeptiert; sie sind
+kein Standardweg für neue Aufträge.
 
 Temporäre Manifest-Lese- und Löschoperationen behandeln transiente Windows-
 Dateisperren mit maximal drei Versuchen und kurzem exponentiellem Backoff
@@ -458,6 +497,10 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
 5. **Antwortbedarf:** Protokollierung in `replies-needed.jsonl` (wenn `needs_reply: true`).
 6. **Wissens- & Evidenzpflege:** Automatische Aktualisierung / Anlage der Markdown-Datei (`evidence/YYYY-MM.md`) unter strikter Vermeidung von Duplikaten anhand der `message_id`.
 
+Für ein von `draft` erzeugtes Standard-Manifest erfolgt davor der MD-H2-Preflight
+aus der vorigen Sektion. Ein Gate-Fehler liefert `ok: false`, `contract_gate` und
+leere Results; er führt keine Execute-Seitenwirkung aus.
+
 ### JSON-Schema (`execute`)
 
 ```json
@@ -486,6 +529,13 @@ Führt für eine Liste von Nachrichten alle nötigen Einzelschritte aus:
       "default": true,
       "description": "Löscht das Eingabemanifest nach erfolgreicher Ausführung."
     },
+    "expected_count": {"type": "integer", "minimum": 1},
+    "candidate_count": {"type": "integer", "minimum": 0},
+    "allow_fewer": {"type": "boolean", "default": false},
+    "source_folder": {"type": "string", "minLength": 1},
+    "account": {"type": ["string", "null"]},
+    "skip_known": {"type": "boolean"},
+    "review": {"type": "object", "description": "MD-H2 Pending-Hash oder approved approval_receipt."},
     "items": {
       "type": "array",
       "items": {
