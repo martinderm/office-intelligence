@@ -111,6 +111,16 @@ Direktmodi sind ein Argumentfehler; für Manifestläufe stehen die gleichnamigen
 Manifestfelder bereit. Himalaya-Prozessfehler oder ungültiges Envelope-JSON
 sind Fehlerzustände, nie ein leeres Ergebnis.
 
+Die Direkt- und Manifestoption `skip_known` gilt identisch für `inspect`, `draft`
+und `pipeline`; `--no-skip-known` wird nicht durch einen internen Default
+überschrieben. Eine aktivierte Sent-Synchronisation ist ein Fail-Closed-Preflight:
+schlägt sie fehl, erfolgen weder Klassifikation noch Mailbox-Mutation. Teilweise
+fehlgeschlagene Execute-Läufe enden im Fortschrittsstatus `failed`, nicht
+`completed`. Eine fehlgeschlagene Delete-Operation darf weder als Routing-Erfolg
+protokolliert noch indiziert werden. Himalaya-Reads ohne geparste Header gelten als
+Fehler; nullable Absendernamen und Betreffe bleiben dagegen gültige, leere
+Suchfelder.
+
 Temporäre Manifest-Lese- und Löschoperationen behandeln transiente Windows-
 Dateisperren mit maximal drei Versuchen und kurzem exponentiellem Backoff
 (0,1 s, 0,2 s). Danach bleibt das Manifest erhalten und der Lauf meldet den

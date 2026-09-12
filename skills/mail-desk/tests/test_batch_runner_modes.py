@@ -439,7 +439,7 @@ class PipelineModeTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             fetch = Mock(return_value=([email], 0))
-            sync = Mock(side_effect=RuntimeError("sent unavailable"))
+            sync = Mock(return_value=(1, 0))
             execute = Mock(return_value={"ok": True, "results": [{"success": True}]})
             verify = Mock(return_value={"ok": False, "results": [{"consistent": False}]})
             result = pipeline_mode.run_pipeline_mode(

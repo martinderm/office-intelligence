@@ -63,6 +63,7 @@ def run_pipeline_mode(
     do_verify = bool(config.get("verify", True))
     check_folders = bool(config.get("check_folders", False))
     preview_lines = int(config.get("preview_lines", 30))
+    skip_known = bool(config.get("skip_known", True))
 
     emails, _known_count = get_unprocessed(
         folder=folder,
@@ -72,7 +73,7 @@ def run_pipeline_mode(
         query=query,
         account=account,
         data_dir=dd,
-        skip_known=True,
+        skip_known=skip_known,
         preview_lines=preview_lines,
     )
     if not emails:
@@ -90,13 +91,24 @@ def run_pipeline_mode(
     if config.get("sync_sent", True):
         try:
             sync_sent(
-                count=int(config.get("sent_count", 150)),
-                account=account,
-                data_dir=dd,
-                workspace_root=workspace_root,
+                count=int(config.get("sent_count", 150)), account=account,
+                data_dir=dd, workspace_root=workspace_root,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            return {
+                "ok": False, "mode": "pipeline", "folder": folder, "order": order,
+                "total_inspected": len(emails), "executed_count": 0,
+                "verified_count": 0, "review_needed_count": 0,
+                "review_needed_items": [], "all_succeeded": False,
+                "execute_summary": None, "verify_summary": None,
+                "telemetry": empty_telemetry(),
+                "synthesis_handoff": empty_synthesis_handoff(),
+                "error": {
+                    "type": type(exc).__name__,
+                    "message": f"Sent-items synchronization failed: {exc}",
+                    "phase": "sync_sent",
+                },
+            }
 
     sent_lookup = load_sent(dd)
     draft_result = draft(

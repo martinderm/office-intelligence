@@ -158,6 +158,9 @@ def get_single_email_details(
 
         raw_mid = headers.get("message-id", "")
         norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+        read_error = None
+        if not headers:
+            read_error = f"Envelope {env_id} in folder '{folder}' returned no message headers."
 
         return {
             "envelope_id": str(env_id),
@@ -171,7 +174,7 @@ def get_single_email_details(
             "in_reply_to": headers.get("in-reply-to", ""),
             "references": headers.get("references", ""),
             "preview": "\n".join(body_lines if full_body else body_lines[:preview_lines]),
-            "error": None,
+            "error": read_error,
             "read_level": "full_body" if full_body else "preview",
         }
     except Exception as e:
@@ -279,10 +282,14 @@ def search_mailbox(
 
     def check_env_header(fld: str, env: dict[str, Any]) -> dict[str, Any] | None:
         eid = str(env.get("id", ""))
-        subj = env.get("subject", "")
+        subj = str(env.get("subject") or "")
         from_info = env.get("from", {})
-        from_str = from_info.get("name", "") + " " + from_info.get("addr", "") if isinstance(from_info, dict) else str(from_info)
-        date_str = env.get("date", "")
+        from_str = (
+            f"{str(from_info.get('name') or '')} {str(from_info.get('addr') or '')}"
+            if isinstance(from_info, dict)
+            else str(from_info or "")
+        )
+        date_str = str(env.get("date") or "")
 
         try:
             h = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", fld, eid], account=account, timeout=15)
@@ -327,7 +334,7 @@ def search_mailbox(
         if query_str and not target_mids:
             candidates = [
                 e for e in envelopes
-                if query_str in e.get("subject", "").lower() or query_str in str(e.get("from", "")).lower()
+                if query_str in str(e.get("subject") or "").lower() or query_str in str(e.get("from") or "").lower()
             ]
         else:
             candidates = envelopes

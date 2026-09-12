@@ -55,6 +55,7 @@ def run_draft_mode(
     date = config.get("date")
     query = config.get("query")
     preview_lines = int(config.get("preview_lines", 30))
+    skip_known = bool(config.get("skip_known", True))
     output_file = config.get("output_file", str(dd / "batch-manifest.json"))
     inspected_file = config.get("inspected_file") or (dd / "batch-inspected.json")
     tracker = progress_tracker(mode="draft", total_items=count, data_dir=dd)
@@ -64,7 +65,11 @@ def run_draft_mode(
         try:
             with Path(inspected_file).open("r", encoding="utf-8") as inspected_handle:
                 inspected_data = json.load(inspected_handle)
-            unprocessed = [email for email in inspected_data.get("emails", []) if not email.get("is_known")]
+            inspected_emails = inspected_data.get("emails", [])
+            unprocessed = (
+                [email for email in inspected_emails if not email.get("is_known")]
+                if skip_known else inspected_emails
+            )
             if unprocessed:
                 emails = unprocessed[:count]
         except Exception:
@@ -80,7 +85,7 @@ def run_draft_mode(
             query=query,
             account=account,
             data_dir=dd,
-            skip_known=True,
+            skip_known=skip_known,
             preview_lines=preview_lines,
             tracker=tracker,
         )

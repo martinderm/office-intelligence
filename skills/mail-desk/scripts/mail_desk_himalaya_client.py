@@ -178,12 +178,15 @@ def op_read_message(
     preview_lines: int = 50,
     account: str | None = None,
 ) -> dict[str, Any]:
-    return get_single_email_details(
+    result = get_single_email_details(
         env_id=envelope_id,
         folder=folder,
         account=account,
         preview_lines=preview_lines,
     )
+    if result.get("error"):
+        raise RuntimeError(str(result["error"]))
+    return result
 
 
 def op_copy_message(

@@ -179,7 +179,9 @@ def run_execute_mode(
                 except Exception:
                     routing_ok = False
             sleep(0.15)
-        elif action_type == "keep_in_folder" or not target_folder or target_folder == source_folder:
+        elif action_type == "keep_in_folder" or (
+            action_type != "delete" and (not target_folder or target_folder == source_folder)
+        ):
             new_env_id = env_id
             routing_ok = True
         elif action_type == "delete":
@@ -194,9 +196,7 @@ def run_execute_mode(
                 final_folder = "Trash"
                 new_env_id = env_id
             except Exception:
-                routing_ok = True
-                final_folder = "Trash"
-                new_env_id = env_id
+                routing_ok = False
 
         if evidence_spec and norm_mid and routing_ok:
             pending_evidence.append(
@@ -298,9 +298,7 @@ def run_execute_mode(
         tracker.complete(f"Executed batch of {len(results)} items successfully.")
     else:
         succeeded_count = sum(1 for result in results if result["success"])
-        tracker.complete(
-            f"Executed batch: {succeeded_count}/{len(results)} succeeded."
-        )
+        tracker.fail(f"Executed batch: {succeeded_count}/{len(results)} succeeded.")
 
     return {
         "ok": all_succeeded,

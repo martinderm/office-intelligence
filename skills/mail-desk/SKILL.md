@@ -113,6 +113,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    sind eine gleichwertige operative Quelle für Reply-Status und Wissenspflege;
    Adapter- und Schemadetails stehen in den gewählten Backend-Referenzen bzw.
    [`references/log-schema.md`](references/log-schema.md).
+   Ist die konfigurierte Sent-Synchronisation nicht verfügbar, stoppt die Pipeline
+   vor Klassifikation und Mailbox-Mutation; ein veralteter Sent-Index darf nicht
+   still als aktuelle Reply-Evidenz verwendet werden.
 10. Fachliches Ziel entscheiden. Eine klare Zuordnung wird tatsächlich geroutet,
     nicht nur geloggt; Zielbildung und fehlende Ordner folgen ausschließlich
     [`references/folder-rules.md`](references/folder-rules.md). Unklare oder riskante

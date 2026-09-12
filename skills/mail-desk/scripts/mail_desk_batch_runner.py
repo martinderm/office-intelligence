@@ -859,6 +859,7 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             "count": args.draft,
             "order": args.order,
             "folder": args.folder,
+            "skip_known": args.skip_known,
             "output_file": str(data_dir / "batch-manifest.json"),
         }
         if args.query:
