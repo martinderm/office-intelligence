@@ -1,6 +1,6 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 12.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen und bis zur Mail-Desk-Härtung FR-07 fortgeschrieben.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 13.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen, bis zur Mail-Desk-Härtung FR-07 fortgeschrieben und um den geplanten Anhangsfluss FR-08 ergänzt.
 
 ## Statusabgleich zur Session
 
@@ -13,6 +13,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 | `FR-07` | ✅ abgeschlossen | H0-Recovery sowie H1–H5 abgeschlossen | Der unterbrochene BOKU-Lauf ist reconciliert; Standard-Batch-Einstieg, Workspace-gebundene Transport-Readiness, first-class Recovery und das fail-closed Completion-/Synthese-Gate sind umgesetzt. |
+| `FR-08` | 🟠 geplant | Manifestgebundene Anhänge, begrenzte Inhaltsauswertung und kataloggestützte Cloud-Ablagevorschläge | Anhänge werden read-only inventarisiert, nach Review sicher temporär abgerufen und begrenzt extrahiert. Ein katalogisierter Cloud-Speicher erzeugt höchstens einen reviewbaren, deduplizierten Ablagevorschlag; Upload/Promotion bleibt außerhalb dieses FR. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -27,6 +28,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 5. [FR-05: Modulare Reorganisation des Batch-Runners (`scripts/core/modes/`)](#fr-05-modulare-reorganisation-des-batch-runners-scriptscoremodes)
 6. [FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation](#fr-06-post-batch-llm-projekt-synthese--knowledge-layer-synchronisation)
 7. [FR-07: Kontrollierte Mail-Desk-Batches und Recovery-Härtung](#fr-07-kontrollierte-mail-desk-batches-und-recovery-härtung)
+8. [FR-08: Manifestgebundene Mail-Anhänge und Cloud-Ablagevorschläge](#fr-08-manifestgebundene-mail-anhänge-und-cloud-ablagevorschläge)
 
 ---
 
@@ -562,3 +564,110 @@ Vertrags-, Integrations- und Acceptance-Arbeit; Terra-high ist sinnvoll, währen
 die endgültige Betriebsfreigabe im kontexttragenden Parent erfolgen sollte. Luna
 ist für einzelne mechanische Tests oder Dokuänderungen geeignet, nicht für einen
 autonomen produktiven Zehn-Mail-Lauf.
+
+---
+
+## FR-08: Manifestgebundene Mail-Anhänge und Cloud-Ablagevorschläge
+
+**Status:** 🟠 Geplant. Die Anforderung ist fachlich sinnvoll, aber Lunas
+Kurzvorschlag vermischt Transport, Inhaltsauswertung und Cloud-Promotion. FR-08
+trennt diese Grenzen ausdrücklich. Gegenstand ist zunächst ein sicherer,
+reviewbarer Ablagevorschlag; ein automatischer Upload oder eine neue allgemeine
+Cloud-Schreibschnittstelle ist **nicht** Bestandteil dieses Feature Requests.
+
+### Ausgangsfall
+
+Eine an `Themen/Netzwerke/EUCEN` geroutete Mail vom 09.07.2026 nennt zwei
+PDF-Anhänge (`EUCEN National Networks Survey 2026.pdf` und
+`EUCEN_NN_Survey 030626.pdf`). Ein im Betreff erwähntes „PPT“ war durch die
+Preview nicht als weiterer Anhang bestätigt. Mailentscheidung und
+`needs_reply: false` waren ohne Anhangsinhalte möglich; Survey-Ergebnisse,
+Kennzahlen und ein geeigneter Cloud-Ablageort konnten dagegen nicht belastbar
+behauptet werden. Das ist ein typischer Fall für eine nachgelagerte,
+manifestgebundene Anhangsprüfung.
+
+Im aktuellen BOKU-Topic-Katalog besitzt weder `netzwerke` noch dessen Subtopic
+`eucen` ein `cloud_sync`. Der korrekte Ablagestatus für genau diesen Ausgangsfall
+ist daher derzeit `not_configured`; ein anderer BOKU-Speicher darf nicht aufgrund
+bloßer Namensnähe oder allgemeiner fachlicher Plausibilität gewählt werden.
+
+### Zielbild und Grenzen
+
+1. Mail-Desk inventarisiert Anhänge read-only anhand der realen MIME-Struktur,
+   nicht nur anhand von Betreff oder Preview. Pro Anhang werden mindestens
+   Dateiname, MIME-Typ, Byte-Größe, Content-ID/Part-Locator und Abrufstatus
+   sichtbar; ein erwähnter, aber nicht vorhandener Anhang bleibt unbestätigt.
+2. Ein Abruf erfolgt nur für explizit reviewte Attachment-Candidates und ist an
+   Account, normalisierte `message_id`, aktuelle verifizierte Mailbox-Location,
+   Part-Locator und Batch-/Manifest-Hash gebunden. Envelope-IDs bleiben flüchtige
+   Locator-Evidenz.
+3. Dateien landen ausschließlich in einem run-scoped, gitignorierten
+   Quarantäne-/Temp-Verzeichnis unter `data/mail-desk/attachments/`. Pfadtraversal,
+   absolute Dateinamen, Gerätepfade, Symlink-/Hardlink-Ausbrüche, aktive Inhalte
+   und MIME-/Endungsdrift stoppen den jeweiligen Anhang. SHA-256, effektiver
+   MIME-Typ und Größe werden nach dem Abruf neu bestimmt.
+4. Inhaltsauswertung ist begrenzt und formatbewusst. Als erste Stufe gelten PDF,
+   DOCX, PPTX, XLSX und Klartext; Makros oder eingebettete Programme werden nie
+   ausgeführt. Bild-PDFs verwenden ausschließlich ein lokales temporäres
+   OCR-Derivat. Originalanhänge und Cloud-Dateien werden dabei nicht verändert.
+   Harte Limits für Anzahl, Einzelgröße, Gesamtgröße, Seiten/Sheets/Slides,
+   Laufzeit und extrahierte Zeichen verhindern unkontrollierte Kontextausweitung.
+5. Extrahierter Inhalt bleibt `untrusted_external`: Er darf weder Befehle an den
+   Agenten liefern noch Katalog-, Ziel-, Upload- oder Reply-Entscheidungen
+   eigenmächtig überschreiben. Kritische Zahlen, Namen und Fristen aus OCR oder
+   verlustbehafteter Extraktion benötigen sichtbare Quellen- und Qualitätsmarker.
+6. `needs_reply` wird unabhängig vom Anhangsstatus beurteilt. Ist ein Anhang nur
+   ergänzend, kann der übrige Batch mit sichtbarem `attachment_unavailable`
+   fortfahren. Ist er `required_for_decision`, bleibt ausschließlich dieses Item
+   in Review; andere Batch-Items dürfen weiterlaufen.
+7. Ein Cloud-Ablagevorschlag entsteht erst nach eindeutiger Project-/Topic-/
+   Subtopic-Zuordnung und nur aus dort katalogisiertem `cloud_sync`. Ein Event
+   besitzt weiterhin keinen eigenen Speicher; es kann höchstens einen explizit
+   katalogisierten Parent-/Subtopic-Storage referenzieren. Ohne Storage lautet
+   der Status `not_configured`, ohne frische Filemap `storage_review_required`.
+8. Storage-ID und Zielverzeichnis werden niemals aus Mail- oder Anhangstext
+   übernommen. Der Vorschlag bevorzugt ein bereits vorhandenes, durch Filemap/
+   Curation belegtes Verzeichnis, prüft SHA-256-Dubletten und Namenskollisionen
+   und liefert sonst `directory_review_required`, statt einen Pfad zu erfinden.
+9. Das Ergebnis ist ein hashgebundener `attachment_filing_candidate` mit Quelle,
+   Klassifikation, vorgeschlagenem Storage/Pfad, Dedupe-Ergebnis und Begründung.
+   Es löst weder Cloud-Atlas-Sync noch Kopie, Upload, Überschreiben oder Löschen
+   aus. Eine spätere Promotion benötigt einen separaten Human-Gate-Vertrag.
+
+### Empfohlener Ablauf für kleine Modelle
+
+```text
+draft + MIME-Inventar
+→ Review der relevanten Anhänge
+→ begrenzter attachment_fetch/extract
+→ fachliche Review mit Projekt-/Topic-Kontext
+→ execute
+→ verify
+→ attachment_filing_candidate
+→ Human Review; kein automatischer Upload
+```
+
+Der Ablauf bleibt innerhalb eines Mail-Batches linear. Eine frische Session ist
+erst nach abgeschlossenem Verify sinnvoll. Anhänge dürfen nicht „nebenbei“ durch
+einen zweiten Agenten abgerufen werden, während der Mailfall mutiert wird.
+
+### Umsetzungspakete
+
+| Paket | Status | Inhalt | Abnahme |
+| :--- | :--- | :--- | :--- |
+| `MD-A1` | ⬜ offen | Read-only MIME-Inventar und manifestgebundener JSON-Client-Vertrag; keine Preview-Heuristik als Anhangsnachweis. | Tests für keine Anhänge, zwei reale PDFs, nur im Betreff erwähntes PPT, Account-/Message-ID-/Location-Drift und ungültige Part-Locators. |
+| `MD-A2` | ⬜ offen | Sicherer run-scoped Abruf mit Temp-Quarantäne, SHA-256, Größenlimits, MIME-Sniffing, Pfadschutz und Cleanup/Recovery. | Tests für Erfolg, Timeout, fehlende Konfiguration, Traversal, Größenlimit, MIME-Drift, Teilfehler und idempotenten Retry ohne Doppeldatei. |
+| `MD-A3` | ⬜ offen | Begrenzte PDF-/Office-/Text-Extraktion inklusive lokaler OCR-Derivate und Qualitäts-/Provenienzmarkern. | Tests für digitale PDF, Bild-PDF, DOCX/PPTX/XLSX, beschädigte/aktive Datei, Tool fehlt, Timeout und deterministische Trunkierung. |
+| `MD-A4` | ⬜ offen | Materialitäts-Gate und LLM-Auswertung mit geladenem Project-/Topic-/Subtopic-Kontext; Reply bleibt orthogonal. | `required_for_decision` blockiert nur das Item; supplementary failure lässt Batch weiterlaufen; keine Instruktion aus Anhangsinhalten wird ausgeführt. |
+| `MD-A5` | ⬜ offen | Katalog-/Filemap-gestützter `attachment_filing_candidate` mit Storage-/Pfadvorschlag, Hash-Dedupe und Kollisionsstatus; keine Promotion. | Tests für Project-, Topic-, Subtopic- und Event-Vererbung, mehrere Storages, fehlende/veraltete Filemap, Hash-Dublette, Namenskollision und garantiert keine Cloud-Mutation. |
+
+### Offene Entscheidungen vor Implementierung
+
+- Konkrete Default-Limits für Anzahl, Einzel-/Gesamtgröße, Extraktionsumfang und
+  Laufzeit müssen als ein versioniertes Policy-Objekt festgelegt werden.
+- Der Himalaya-JSON-Client benötigt einen nachgewiesenen, nichtinteraktiven
+  Attachment-List-/Download-Vertrag. Fehlt die lokale Accountkonfiguration, wird
+  niemals ein Wizard gestartet.
+- Zu entscheiden ist, ob eine spätere Cloud-Promotion ein eigener `FR-09` wird.
+  Empfehlung: ja. Cloud-Atlas ist derzeit eine Sync-/Filemap-Control-Plane und
+  sollte nicht beiläufig um Mail-Anhangs-Uploads erweitert werden.

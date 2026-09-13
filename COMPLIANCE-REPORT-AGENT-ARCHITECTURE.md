@@ -602,3 +602,17 @@ Verify → Synthese in einer linearen Session. Frische Sessions sind zwischen
 vollständig abgeschlossenen, unabhängigen Batches sinnvoll, nicht innerhalb einer
 Mailbox-Transaktion. Eine autonome Pipeline ist kein Luna-Erstauftrag; Count-,
 Receipt-, Readiness-, Review-, Verify- und Reconcile-Fehler sind Stopbedingungen.
+
+### 11.4 Geplanter FR-08: Anhänge und Cloud-Ablagevorschläge
+
+Der aus einem Luna-Lauf abgeleitete Anhangswunsch ist als `FR-08` geplant, aber
+nicht implementiert. Die Architektur trennt MIME-Inventar, manifestgebundenen
+Temp-Abruf, begrenzte untrusted Inhaltsauswertung und katalog-/Filemap-gestützten
+Cloud-Ablagevorschlag. Ein vorhandenes `cloud_sync` autorisiert weder Upload noch
+neue Ordner; ohne belegtes Ziel bleibt der Candidate in Review. Events besitzen
+keinen eigenen Cloud-Speicher und können nur einen explizit katalogisierten
+Parent-/Subtopic-Storage referenzieren. `needs_reply` bleibt orthogonal. Eine
+spätere Cloud-Promotion soll wegen ihrer externen Schreibwirkung als eigener,
+human-gated Feature Request behandelt werden.
+Für den dokumentierten EUCEN-Ausgangsfall ist aktuell `not_configured` korrekt,
+weil `netzwerke/eucen` im BOKU-Katalog kein `cloud_sync` besitzt.
