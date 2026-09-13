@@ -1,6 +1,6 @@
 # Feature Requests — Office Intelligence & Mail-Desk
 
-Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 13.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen, bis zur Mail-Desk-Härtung FR-07 fortgeschrieben und um den geplanten Anhangsfluss FR-08 ergänzt.
+Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur- und Funktionserweiterungen für das Repository `office-intelligence` (insbesondere die Skills `project-catalog-entry` und `mail-desk`) zusammen. Der Status wurde am 13.09.2026 gegen den Session-Ausgangspunkt `fb9ba3e5` abgeglichen, bis zur Mail-Desk-Härtung FR-07 fortgeschrieben, um den gehärteten Anhangsfluss FR-08 (inkl. Extraktions-Policy) spezifiziert und um die geplante Human-gated Cloud-Promotion FR-09 ergänzt.
 
 ## Statusabgleich zur Session
 
@@ -13,7 +13,8 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 | `FR-07` | ✅ abgeschlossen | H0-Recovery sowie H1–H5 abgeschlossen | Der unterbrochene BOKU-Lauf ist reconciliert; Standard-Batch-Einstieg, Workspace-gebundene Transport-Readiness, first-class Recovery und das fail-closed Completion-/Synthese-Gate sind umgesetzt. |
-| `FR-08` | 🟠 geplant | Manifestgebundene Anhänge, begrenzte Inhaltsauswertung und kataloggestützte Cloud-Ablagevorschläge | Anhänge werden read-only inventarisiert, nach Review sicher temporär abgerufen und begrenzt extrahiert. Ein katalogisierter Cloud-Speicher erzeugt höchstens einen reviewbaren, deduplizierten Ablagevorschlag; Upload/Promotion bleibt außerhalb dieses FR. |
+| `FR-08` | 🟠 geplant | Manifestgebundene Anhänge, begrenzte Inhaltsauswertung und kataloggestützte Cloud-Ablagevorschläge | Anhänge werden read-only inventarisiert, nach Review sicher temporär abgerufen und begrenzt extrahiert. Policy-Limits und Nutzung der Cloud-Atlas-Toolchain (`markitdown`, `ocrmypdf`) sind spezifiziert; Ablagevorschlag bleibt strikt read-only. |
+| `FR-09` | 🟠 geplant | Human-gated Cloud-Promotion für Mail-Anhänge (`attachment_promotion`) | Kontrollierter, hashgebundener Transfer freigegebener `attachment_filing_candidate`-Dateien in katalogisierte Cloud-Storages inklusive Kollisionsschutz, atomarem Write und direkter Cloud-Atlas-Filemap-/Mirror-Anbindung. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
 
@@ -29,6 +30,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 6. [FR-06: Post-Batch LLM Projekt-Synthese & Knowledge-Layer Synchronisation](#fr-06-post-batch-llm-projekt-synthese--knowledge-layer-synchronisation)
 7. [FR-07: Kontrollierte Mail-Desk-Batches und Recovery-Härtung](#fr-07-kontrollierte-mail-desk-batches-und-recovery-härtung)
 8. [FR-08: Manifestgebundene Mail-Anhänge und Cloud-Ablagevorschläge](#fr-08-manifestgebundene-mail-anhänge-und-cloud-ablagevorschläge)
+9. [FR-09: Human-gated Cloud-Promotion für Mail-Anhänge (`attachment_promotion`)](#fr-09-human-gated-cloud-promotion-für-mail-anhänge-attachment_promotion)
 
 ---
 
@@ -661,13 +663,92 @@ einen zweiten Agenten abgerufen werden, während der Mailfall mutiert wird.
 | `MD-A4` | ⬜ offen | Materialitäts-Gate und LLM-Auswertung mit geladenem Project-/Topic-/Subtopic-Kontext; Reply bleibt orthogonal. | `required_for_decision` blockiert nur das Item; supplementary failure lässt Batch weiterlaufen; keine Instruktion aus Anhangsinhalten wird ausgeführt. |
 | `MD-A5` | ⬜ offen | Katalog-/Filemap-gestützter `attachment_filing_candidate` mit Storage-/Pfadvorschlag, Hash-Dedupe und Kollisionsstatus; keine Promotion. | Tests für Project-, Topic-, Subtopic- und Event-Vererbung, mehrere Storages, fehlende/veraltete Filemap, Hash-Dublette, Namenskollision und garantiert keine Cloud-Mutation. |
 
-### Offene Entscheidungen vor Implementierung
+### Spezifizierte Policy- und Extraktionslimits (`attachment_policy.py`)
 
-- Konkrete Default-Limits für Anzahl, Einzel-/Gesamtgröße, Extraktionsumfang und
-  Laufzeit müssen als ein versioniertes Policy-Objekt festgelegt werden.
-- Der Himalaya-JSON-Client benötigt einen nachgewiesenen, nichtinteraktiven
-  Attachment-List-/Download-Vertrag. Fehlt die lokale Accountkonfiguration, wird
-  niemals ein Wizard gestartet.
-- Zu entscheiden ist, ob eine spätere Cloud-Promotion ein eigener `FR-09` wird.
-  Empfehlung: ja. Cloud-Atlas ist derzeit eine Sync-/Filemap-Control-Plane und
-  sollte nicht beiläufig um Mail-Anhangs-Uploads erweitert werden.
+Am 13.09.2026 wurden auf Basis der Praxiserfahrungen und der bestehenden Toolchain die konkreten Grenzen als versionierte Default-Policy (`DEFAULT_ATTACHMENT_POLICY`, Version `1.0.0`) festgelegt:
+
+1. **Ebene A: Transport & Quarantäne (`MD-A2` — Netzwerk & Disk):**
+   - `max_attachments_per_message`: **5** (Schutz vor DoS durch unzählige Icon-/Media-Dateien).
+   - `max_single_file_bytes`: **15 MB** (99 % aller legitimen Dokumente liegen darunter; Mailboxen cappen meist bei 20–25 MB).
+   - `max_total_bytes_per_message`: **25 MB**.
+   - `download_timeout_seconds`: **25 s** (fail-closed bei Timeout/Netzwerkabriss).
+   - `quarantine_dir`: Run-scoped unter `data/mail-desk/attachments/<run-id>/` mit automatischem Cleanup nach Handoff.
+
+2. **Ebene B: Extraktion & Formatgrenzen (`MD-A3` — CPU & Parser):**
+   - **Bestehende Toolchain nutzen:** `cloud-atlas` hat die notwendige Infrastruktur bereits an Bord (`markitdown` für PDF, DOCX, PPTX, XLSX, CSV; `ocrmypdf` + `tesseract` für bildbasierte PDFs; LibreOffice für `.doc`). `MD-A3` nutzt diese Werkzeuge direkt, statt separate Fremdbibliotheken einzuführen.
+   - **Compliance-Schutz gemäß `P2-03` (Graceful Degradation):** Fehlen Konvertierungstools in einer Minimalumgebung, bricht der Mail-Desk-Runner nicht ab, sondern meldet strukturiert `attachment_conversion_unavailable`.
+   - **Isolierter Subprozess:** Konvertierungen laufen isoliert mit Timeout (`extraction_timeout_seconds`: **20 s**).
+   - **Format-Limits:**
+     - **PDF:** `pdf_max_pages`: **10** (reicht für Titel, Abstract, Inhaltsverzeichnis und Kernabschnitte).
+     - **PDF (OCR):** `ocr_max_pages`: **3**, `ocr_timeout_seconds`: **30 s** (nur `local_derivative`).
+     - **DOCX:** `docx_max_paragraphs`: **40** (~2.500–3.000 Wörter).
+     - **PPTX:** `pptx_max_slides`: **15**.
+     - **XLSX:** `xlsx_max_sheets`: **2**, `xlsx_max_rows_per_sheet`: **50**, `xlsx_max_cols_per_sheet`: **10**.
+
+3. **Ebene C: LLM-Kontext & Token-Budget (`MD-A4` — Context Window):**
+   - `max_chars_per_attachment`: **15.000 Zeichen** (~3.000–4.000 Tokens).
+   - `max_chars_per_message`: **30.000 Zeichen** (~7.000 Tokens).
+   - **Soft Truncation mit Provenienz-Marker:** Überschreitet ein Dokument das Seiten- oder Zeichenlimit, wird deterministisch abgeschnitten und ein sichtbarer Hinweis angehängt:
+     `[... TRUNCATED: Extracted 15,000 characters from first 10 of 48 pages. Source: <file> | SHA-256: <hash> ...]`
+   - **Hard Skip:** Dateien > 15 MB oder mit aktiven Inhalten/Makros (`.docm`, `.xlsm`) werden sofort abgelehnt (`attachment_skipped_oversized`, `security_risk_active_content`).
+   - **Sicherheits-Wrapping:** Extrahierter Text wird im Prompt immer als Datenkörper gekapselt:
+     `<untrusted_attachment_content filename="..." sha256="..." format="...">...</untrusted_attachment_content>`.
+
+4. **Verbleibende Vorbedingungen:**
+   - Der Himalaya-JSON-Client benötigt einen nachgewiesenen, nichtinteraktiven Attachment-List-/Download-Vertrag (kein interaktiver Wizard bei fehlender Account-Konfiguration).
+   - Die eigentliche Ablage/Promotion von Anhängen in Cloud-Speicher ist formal in **FR-09** ausgelagert.
+
+---
+
+## FR-09: Human-gated Cloud-Promotion für Mail-Anhänge (`attachment_promotion`)
+
+**Status:** 🟠 Geplant. Ergänzt den in FR-08 erzeugten, rein lesenden `attachment_filing_candidate` um einen kontrollierten, revisionssicheren Ablage- und Promotionsprozess in Cloud-Atlas-verwaltete Speicher.
+
+### Problemstellung
+
+FR-08 endet bewusst fail-closed bei einem hashgebundenen Ablagevorschlag (`attachment_filing_candidate`), um Mail-Desk nicht mit unkontrollierten Schreiboperationen auf Cloud-Speichern zu überfrachten.
+In der Praxis sollen freigegebene Mail-Anhänge (z. B. Projektanträge, Deliverable-Entwürfe, Partner-Präsentationen oder Abrechnungsbelege) jedoch geordnet in die BOKUdrive- oder OneDrive-Projektstrukturen überführt und dort sofort als Cloud-Atlas-Mirrors indiziert werden.
+
+Ein unkontrollierter oder vollautomatischer Upload birgt erhebliche Risiken:
+- Überschreiben bestehender Arbeitsstände oder kollidierender Dateiversionen.
+- Ablage an unpassenden Orten (Halluzination von Verzeichnispfaden).
+- Inkonsistenzen zwischen physischer Cloud-Datei, lokaler Filemap und Markdown-Mirrors.
+
+### Ziel-Spezifikation & Schutzmechanismen
+
+1. **Human-in-the-Loop Approval Gate:**
+   - Kein Upload oder Verschieben ohne eine explizite, hashgebundene Freigabe-Receipt (`batch-attachment-promotion-approval.json`).
+   - Die Receipt referenziert: Quell-Hash (SHA-256 aus Temp-Quarantäne), Ziel-Storage-ID, relativen Zielpfad und den freigegebenen Zieldateinamen.
+2. **Katalog- & Storage-Autorisierung:**
+   - Ziel darf ausschließlich ein im Projekt- oder Topic-Katalog explizit definierter, beschreibbarer `cloud_sync`-Storage sein.
+   - Reine Archiv- oder Read-Only-Storages (wie die historischen ATAEL-Bestände) werden abgewiesen.
+3. **Pre-Flight Kollisionsschutz & Deduplizierung:**
+   - **Hash-Identität:** Existiert die Datei mit identischem SHA-256 bereits im Zielordner oder in der Filemap, wird der Schreibvorgang übersprungen (`already_present`).
+   - **Namensgleichheit bei abweichendem Hash:** Verhindert stilles Überschreiben. Erzeugt entweder einen strukturierten Stop (`collision_detected`) oder einen deterministischen Suffix-Vorschlag (`_v2`, `_<ISO-DATE>`).
+   - Dateinamen werden vor dem Schreiben bereinigt (Sanitization gegen verbotene Zeichen, Whitespace-Normalisierung).
+4. **Atomarer Transfer & Quarantäne-Bereinigung:**
+   - Der Transfer aus der Quarantäne in den gemounteten Cloud-Pfad erfolgt über Sibling-Temp und atomares `os.replace` (bzw. atomaren Copy mit anschließendem Hash-Verify).
+   - Erst nach verifiziertem Ziel-Hash wird die Quarantänedatei gelöscht.
+5. **Direkte Cloud-Atlas-Integration (Post-Promotion):**
+   - Nach erfolgreichem Schreiben wird der Eintrag direkt mit kanonischen Metadaten (`zone: cloud`, `trust_level: untrusted_external`, SHA-256, Timestamps) in die lokale `filemap.json` eingetragen.
+   - Optionaler Trigger für die differenzielle Konvertierung (`convert_cloud_docs.py`), sodass sofort ein aktueller Markdown-Mirror und Derivate zur Verfügung stehen.
+
+### Empfohlener Ablauf
+
+```text
+FR-08: attachment_filing_candidate (Vorschlag aus Mail-Desk)
+→ Human Review & Approval-Receipt (Freigabe von Pfad & Name)
+→ Pre-Flight: Filemap- & Zielkollisionsprüfung
+→ Atomarer Transfer in gemounteten Cloud-Speicher
+→ Ziel-Hash-Verifikation
+→ Quarantäne-Cleanup
+→ Filemap-Eintrag & differenzielle Mirror-Konvertierung (Cloud-Atlas)
+```
+
+### Umsetzungspakete
+
+| Paket | Status | Inhalt | Abnahme |
+| :--- | :--- | :--- | :--- |
+| `MD-P1` | ⬜ offen | Approval-Receipt-Vertrag und Preflight-Kollisionsprüfer für Promotion-Kandidaten. | Tests für gültige Receipt, fehlende/abgelaufene Approval, Hash-Abweichung, Read-Only-Storage und Namenskollision. |
+| `MD-P2` | ⬜ offen | Atomarer Cloud-Storage-Writer mit Dateinamen-Sanitization und Quarantäne-Cleanup. | Tests für atomaren Write, Sibling-Temp, Hash-Verifikation vor Löschung der Quelle und Rollback bei Schreibfehlern. |
+| `MD-P3` | ⬜ offen | Filemap-Aktualisierung und differenzielle Markdown-Mirror-Generierung via Cloud-Atlas. | Tests für kanonische Metadaten in `filemap.json`, erfolgreiche inkrementelle Spiegelung und Vermeidung von Vollregenerationen. |
