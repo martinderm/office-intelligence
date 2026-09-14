@@ -1208,24 +1208,41 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 
 ## FR-08 / MD-A4: Materialitäts-Gate und LLM-Handoff (`core/attachment_handoff.py`)
 
-Das Modul `scripts/core/attachment_handoff.py` stellt die deklarative Schnittstelle zwischen Anhangs-Extraktion (MD-A3) und nachgelagertem LLM- bzw. Manifest-Kontext bereit:
+Das Modul `scripts/core/attachment_handoff.py` stellt die gehärtete, deklarative Schnittstelle zwischen Anhangs-Extraktion (MD-A3) und nachgelagertem LLM- bzw. Manifest-Kontext bereit:
 
-1. **Rein deklarativer Charakter:**
-   - Kein Aufruf von LLMs, APIs oder Subprozessen; rein deterministische Standard-Bibliothek-Verarbeitung.
-2. **Materialitäts-Matrix:**
-   - `supplementary`: Fehler bei der Extraktion (z. B. Konvertierungsausfall oder Timeout) blockieren nicht. Das Item behält sein reguläres Routing und seine Aktionen; der Extraktionsfehler wird dokumentiert.
-   - `required_for_decision`: Schlägt die Extraktion eines erforderlichen Anhangs fehl, wird **nur das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`). Andere Items des Batches werden nicht beeinträchtigt (item-lokales Blocking).
-   - Ungültige Materialitätswerte lösen fail-closed eine `InvalidMaterialityError` aus.
+1. **Rein deklarativer Charakter & Subprocess/LLM-Schutz:**
+   - Kein Aufruf von LLMs, externen APIs oder Subprozessen; rein deterministische Standard-Bibliothek-Verarbeitung (`pathlib`, `hashlib`, `json`, `re`).
+2. **Kanonische MD-A3-Envelope-Validierung (`validate_mda3_extraction_envelope`):**
+   - Erzwingt kanonisches `source_sha256` (64-stelliges Hex) und prüft Konsistenz mit eventuellem `sha256`.
+   - Fehlende, erfundene, unformatierte oder abweichende Hashes werden fail-closed mit `AttachmentHandoffError` abgewiesen.
+   - Status, Quality (`high`, `medium`, `mixed`, `partial`, `low`) und Truncation-Reason (`max_pages_exceeded`, `ocr_page_limit_exceeded`, `ocr_unavailable`, `max_paragraphs_exceeded`, `grid_limit_exceeded`, `max_slides_exceeded`, `max_chars_exceeded`, `timeout_exceeded`) werden strikt gegen Whitelists validiert.
+   - Erzwingt RFC-822 Part-Locators (`^\d+(?:\.\d+)*$`), nicht-leere Dateinamen (kein `unknown_attachment`, keine Null-Bytes) und normalisierte MIME-Types.
+   - Bindet Extraktionsergebnisse 1-zu-1 an kanonische MD-A1/A2-Inventarteile (`canonical_parts`).
+   - **Strikte Trust Boundary:** `canonical_parts` muss zwingend als separat vertrauenswürdig gebundener Parameter vom Aufrufer bereitgestellt werden. `att.canonical_part` und `handoff.canonical_parts` dürfen niemals als Validierungsanker dienen.
+   - **Eingebettete Evidenz:** Eingebettete `canonical_parts` in vorgebauten Handoffs dienen rein als gehashte Evidenz und werden 1-zu-1 gegen das externe Aufrufer-Inventar verifiziert (`HandoffDriftError` bei Mismatch oder Drift).
+   - **Strikte Part-Validierung:** Jeder externe Part erfordert eindeutige Locators (`^\d+(?:\.\d+)*$`, Duplikate werden mit `AttachmentHandoffError` abgewiesen), nicht-leere Dateinamen, 64-Hex SHA-256, normalisierte MIME-Types und exakte Provenienz `rfc822_mime_inspection`.
+3. **Nutzbarkeitskriterium & Item-lokales Blocking:**
+   - Als nutzbar (`is_usable_extraction`) gilt ausschließlich `status == "extracted"`, ohne Fehler, mit nicht-leerem Text und ohne partielle Qualität (`quality != "partial"`).
+   - `supplementary`: Extraktions- oder Konvertierungsprobleme blockieren nicht; das reguläre Routing bleibt erhalten.
+   - `required_for_decision`: Schlägt die Extraktion fehl, liegt eine Teil-Extraktion vor (`quality == "partial"`) oder ist der Status nicht `extracted`, wird **ausschließlich das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`), **unabhängig von eventuellem Resttext**. Andere Items des Batches bleiben unbeeinflusst.
    - `needs_reply` wird vorab unabhängig bestimmt und bleibt durch das Handoff unter allen Bedingungen strikt unverändert.
-3. **Strenge Zeichenbudgets & Truncation:**
-   - Maximal 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`).
-   - Maximal 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`).
-   - Überschreitungen werden deterministisch gekappt, sichtbar mit Truncation-Marker versehen und mit `truncated: true` gekennzeichnet.
-4. **Prompt-Injection-Schutz & Kapselung:**
+4. **Strenge Zeichenbudgets inklusive Marker:**
+   - Maximal 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`) und 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`) — **strikt inklusive** des sichtbaren Truncation-Markers `[... Truncated at ... chars ...]`.
+   - Ist das kumulative E-Mail-Budget erschöpft, erhalten nachfolgende Anhänge `char_count = 0` und leeren Text.
+5. **Prompt-Injection-Schutz & Kapselung:**
    - Anhangsinhalte werden ausschließlich in `<untrusted_attachment_content ...>`-Blöcken gekapselt.
-   - Text wird gegen Breakout-Versuche bereinigt (z. B. Schließ-Tags wie `</untrusted_attachment_content>` werden neutralisiert, Null-Bytes entfernt).
-5. **Deterministische Hash-Bindung:**
-   - Jedes Handoff-Ergebnis bindet Mail-Identität (`account`, `message_id`, `folder`, `envelope_id`) und Anhangsdaten hashgebunden via 64-stelligem SHA-256 (`handoff_hash`).
+   - `escape_untrusted_content()` neutralisiert Breakout-Versuche (wie z. B. schließende XML-Tags `</untrusted_attachment_content>` oder gefälschte Tags) und entfernt Null-Bytes.
+6. **Deterministische Decision- & Mail-Hash-Bindung:**
+   - `compute_handoff_hash()` bindet die vollständige normalisierte Mail-Identität (`account`, `message_id`, `folder`, `envelope_id`), den normalisierten `decision_snapshot` (inklusive aller kataloggestützten Unterentscheidungen wie `workpackage`, `task`, `deliverable`, `milestone`, `subtopic`, `operation` und `event`) und alle sicherheitsrelevanten Anhangsdaten hashgebunden an einen 64-stelligen SHA-256 (`handoff_hash`).
+   - Bei nicht-leeren Anhängen sind alle 4 Mailidentitätsfelder Pflicht; fehlende oder leere Felder führen fail-closed zum Abbruch (`AttachmentHandoffError` bzw. `HandoffDriftError`). Die Driftprüfung vergleicht stets alle Felder bedingungslos, sodass ein Auslassen von Feldern im Validator eine Driftprüfung niemals umgehen kann.
+7. **Classifier-Re-Validierung & Fail-Closed Durchsetzung (`validate_attachment_handoff`, `classify_email`):**
+   - Ein im Input bereits vorliegendes `attachment_analysis_handoff` wird in `classifier.py` (`classify_email`) vor der Verwendung kanonisch re-validiert.
+   - Der gekapselte Text aus `xml_block` wird extrahiert und sein SHA-256-Hash strikt gegen `content_hash` verifiziert.
+   - `xml_block` und `prompt_content` werden kanonisch rekonstruiert und Byte für Byte mit den übergebenen Feldern verglichen.
+   - **Classifier Fail-Closed Durchsetzung:**
+     - Liegen `attachment_extractions` ohne verifizierte `bound_attachments` aus dem Mail-Inventar vor, fällt die E-Mail fail-closed in Review in INBOX (`review_reason: "untrusted_attachment_extractions_without_inventory"`), ohne Handoff-Anwendung. `needs_reply` bleibt unberührt.
+     - Liegt ein vorgebautes `attachment_analysis_handoff` mit Items ohne verifizierte `bound_attachments` vor, wird fail-closed eine Vertragsverletzung aufgeworfen (`HandoffDriftError`).
+   - Bei manipulierten Hashes, verfälschten Items, manipuliertem XML-/Prompt-Inhalt, Mail-Identity-, Decision- oder MD-A1/A2-Bestands-Drift bricht die Klassifikation fail-closed mit `HandoffDriftError` ab.
 
 ---
 

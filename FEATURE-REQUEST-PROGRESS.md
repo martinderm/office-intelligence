@@ -13,7 +13,7 @@
 | `MD-A1` — Read-only MIME-Inventar | ✅ abgeschlossen | `6f86c67` | 46 fokussierte / 276 Gesamt-Tests |
 | `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ nachgebessert | Review (ungestaged) | 37 fokussierte / 351 Gesamt-Tests |
 | `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
-| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ abgeschlossen | `a50652f` | 14 fokussierte / 315 Gesamt-Tests |
+| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ nachgebessert | Review (ungestaged) | 59 fokussierte / 421 Gesamt-Tests |
 | `MD-A5` — Ablagevorschlag | ✅ abgeschlossen | `286e238` | 13 fokussierte / 328 Gesamt-Tests |
 
 ---
@@ -272,31 +272,50 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 ---
 
-## Paket: FR-08 / `MD-A4` — Materialitäts-Gate und LLM-Handoff
+## Paket: FR-08 / `MD-A4` — Materialitäts-Gate und LLM-Handoff (Gehärtet)
 
 - **Status:** ✅ Abgeschlossen & Verifiziert
 - **Scope:** Nur Prompt- und Manifest-Vorbereitung; rein deklaratives Modul, kein LLM-Call, keine Cloud-Ablage, keine Mailbox-Mutation.
 
-### 1. Zusammenfassung der Umsetzung
+#### 1. Zusammenfassung der Umsetzung & Härtung
 
 1. **Deklaratives Handoff-Modul (`core/attachment_handoff.py`):**
    - `build_attachment_analysis_handoff()` erstellt ein hashgebundenes Übergabe-Artefakt für nachgelagerte LLM-Prompts oder Manifest-Reviews.
-   - Enforce strikte Budgets: 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`) und 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`).
+   - **Exakte Zeichenbudgets inklusive Marker:** 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`) und 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`) — **strikt inklusive** des sichtbaren Truncation-Markers `[... Truncated at ... chars ...]`. Ist das kumulative Budget erschöpft, erhalten weitere Anhänge `char_count = 0` und leeren Text.
    - Stabile deterministische Sortierung der MIME-Parts anhand des Part-Locators.
-   - Truncation wird deterministisch durchgeführt, mit klaren Markern versehen (`[... Truncated at ...]`) und mit `truncated: true` gekennzeichnet.
-2. **Prompt-Injection-Schutz & Kapselung:**
-   - Textinhalte werden in `<untrusted_attachment_content part_locator="..." filename="..." sha256="..." mime_type="..." materiality="..." status="..." truncated="...">` gekapselt.
-   - `escape_untrusted_content()` neutralisiert Breakout-Versuche (z. B. schließende XML-Tags wie `</untrusted_attachment_content>` oder gefälschte Tags) und entfernt Null-Bytes.
-3. **Materialitäts-Matrix & Item-lokales Blocking:**
-   - Zulässige Werte strikt: `supplementary` und `required_for_decision`; alle anderen Werte lösen fail-closed `InvalidMaterialityError` aus.
+   - Truncation wird deterministisch durchgeführt, mit klaren Markern versehen und mit `truncated: true` gekennzeichnet.
+
+2. **Kanonische MD-A3-Envelope-Validierung (`validate_mda3_extraction_envelope`):**
+   - **Vollständige MD-A3-Vertragskompatibilität:** Direkte Ausrichtung an den tatsächlich von MD-A3 emittierten Werten. Qualitäts-Taxonomie umfasst `{"high", "medium", "mixed", "partial", "low"}` (inkl. `medium` für lokale OCR-Derivate gescannter PDFs). Truncation-Taxonomie umfasst `{"max_pages_exceeded", "ocr_page_limit_exceeded", "ocr_unavailable", "max_paragraphs_exceeded", "grid_limit_exceeded", "max_slides_exceeded", "max_chars_exceeded", "timeout_exceeded"}`. Parallele Taxonomien wurden vollständig eliminiert.
+   - **Strikte Part-Locator-, Dateinamen- und MIME-Validierung:** Part-Locator muss zwingend ein gültiger RFC-822 Part-Locator sein (`^\d+(?:\.\d+)*$`, z. B. `1`, `2`, `1.1`). Dateinamen dürfen weder leer noch `unknown_attachment` sein und dürfen keine Null-Bytes enthalten. MIME-Types müssen zwingend syntaktisch valide und normalisiert sein.
+    - **Kanonische MD-A1/A2-Bestandsbindung & Trust Boundary (`canonical_parts`):**
+      - Für jedes nichtleere Attachment-Handoff müssen `canonical_parts` zwingend als separat vertrauenswürdig gebundener Parameter vom Aufrufer kommen. `att.canonical_part` und `handoff.canonical_parts` dürfen niemals als Validierungsanker dienen.
+      - Eingebettete `canonical_parts` in vorgebauten Handoffs dienen rein als gehashte Evidenz und werden 1-zu-1 gegen das externe Aufrufer-Inventar verifiziert (`HandoffDriftError` bei Mismatch, zusätzlichen oder fehlenden Teilen).
+      - Jeder externe Part erfordert eindeutige Locators (`^\d+(?:\.\d+)*$`, Duplikate werden fail-closed mit `AttachmentHandoffError` abgewiesen), nicht-leere Dateinamen (keine Null-Bytes), 64-Hex SHA-256, normalisierte MIME-Types und exakte Provenienz `rfc822_mime_inspection`.
+    - Erzwingt kanonisches `source_sha256` (64-stelliges Hex) und prüft Konsistenz mit eventuellem `sha256`.
+
+3. **Nutzbarkeitskriterium & Item-lokales Blocking:**
+   - Als nutzbar (`is_usable_extraction`) gilt ausschließlich `status == "extracted"`, ohne Fehler, mit nicht-leerem Text und ohne partielle Qualität (`quality != "partial"`).
    - `supplementary`: Fehler bei der Konvertierung/Extraktion blockieren das Routing nicht. Das Item behält seine Zielordner-Zuweisung und der Fehler wird rein informativ dokumentiert.
-   - `required_for_decision`: Schlägt die Extraktion eines als erforderlich markierten Anhangs fehl, wird **ausschließlich das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`). Andere Items des Batches bleiben unbeeinflusst.
+   - `required_for_decision`: Schlägt die Extraktion eines als erforderlich markierten Anhangs fehl, liegt eine Teil-Extraktion vor (`quality == "partial"`) oder ist der Status nicht `extracted`, wird **ausschließlich das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`), **unabhängig von eventuellem Resttext**. Andere Items des Batches bleiben unbeeinflusst.
    - `needs_reply` wird vorab unabhängig ermittelt und bleibt durch das Handoff unter allen Bedingungen strikt unberührt.
-4. **Deterministische Hash-Bindung:**
-   - `compute_handoff_hash()` bindet Mailidentität (`account`, `message_id`, `folder`, `envelope_id`) und Anhangsmetadaten samt Inhalts-Hashes an einen 64-stelligen SHA-256 (`handoff_hash`).
-5. **Classifier- & Batch-Runner-Integration:**
-   - [`core/classifier.py`](skills/mail-desk/scripts/core/classifier.py): Wendet Handoff-Ergebnisse via `apply_attachment_handoff_to_item()` an.
-   - [`references/batch-runner.md`](skills/mail-desk/references/batch-runner.md): Dokumentation der Materialitätsmatrix, Limits und Kapselungsregeln.
+
+4. **Prompt-Injection-Schutz & Kapselung:**
+   - Textinhalte werden in `<untrusted_attachment_content part_locator="..." filename="..." source_sha256="..." mime_type="..." materiality="..." status="..." truncated="...">` gekapselt.
+   - `escape_untrusted_content()` neutralisiert Breakout-Versuche (z. B. schließende XML-Tags wie `</untrusted_attachment_content>` oder gefälschte Tags) und entfernt Null-Bytes.
+
+5. **Deterministische Decision- & Mail-Hash-Bindung:**
+   - `compute_handoff_hash()` bindet die vollständige normalisierte Mail-Identität (`account`, `message_id`, `folder`, `envelope_id`), den normalisierten `decision_snapshot` (inklusive aller kataloggestützten Unterentscheidungen wie `workpackage`, `task`, `deliverable`, `milestone`, `subtopic`, `operation` und `event`) und alle sicherheitsrelevanten Anhangsdaten hashgebunden an einen 64-stelligen SHA-256 (`handoff_hash`), um nachträgliche Decision- oder Routing-Drifts zuverlässig zu erkennen und zu verhindern.
+   - **Vollständige Mailidentitäts-Erzwingung & Bypass-Schutz:** Bei nicht-leeren Anhängen müssen sowohl beim Builder als auch beim Validator alle 4 Identitätsfelder (`account`, `message_id`, `folder`, `envelope_id`) vollständig und nicht-leer übergeben werden. Die Driftprüfung vergleicht alle 4 Felder bedingungslos; ein Auslassen von Feldern führt fail-closed zum Abbruch (`AttachmentHandoffError` bzw. `HandoffDriftError`) und kann Drift-Prüfungen niemals umgehen.
+
+6. **Classifier-Re-Validierung & Fail-Closed Durchsetzung (`validate_attachment_handoff`, `classify_email`):**
+   - Ein im Input bereits vorliegendes `attachment_analysis_handoff` wird in `classifier.py` (`classify_email`) vor der Verwendung kanonisch re-validiert.
+   - **Kryptografischer Hash-Integritätscheck:** Der gekapselte Textpayload wird direkt aus dem `xml_block` extrahiert; sein SHA-256 wird berechnet und strikt gegen `content_hash` validiert. Zudem wird geprüft, dass `char_count` exakt der Länge des extrahierten Texts entspricht und keine unescapeten Breakout-Tags vorliegen.
+   - **Byte-für-Byte Rekonstruktion:** `xml_block` wird aus den validierten Feldern des Items kanonisch rekonstruiert und muss exakt mit dem übergebenen `xml_block` übereinstimmen. Ebenso wird `prompt_content` aus allen `xml_block`-Bestandteilen rekonstruiert und muss Byte für Byte mit `prompt_content` übereinstimmen.
+   - **Classifier Fail-Closed Durchsetzung:**
+     - Liegen `attachment_extractions` ohne verifizierte `bound_attachments` aus dem Mail-Inventar vor, fällt die E-Mail fail-closed in Review in INBOX (`review_reason: "untrusted_attachment_extractions_without_inventory"`), ohne Handoff-Anwendung. `needs_reply` bleibt unberührt.
+     - Liegt ein vorgebautes `attachment_analysis_handoff` mit Items ohne verifizierte `bound_attachments` vor, wird fail-closed eine Vertragsverletzung aufgeworfen (`HandoffDriftError`).
+   - Bei manipulierten Hashes, verfälschten Items, manipuliertem XML-/Prompt-Inhalt, Mail-Identity-, Decision- oder MD-A1/A2-Bestands-Drift bricht die Klassifikation fail-closed mit `HandoffDriftError` ab.
 
 ---
 
@@ -304,10 +323,10 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 | Datei | Status | Verantwortung |
 | --- | --- | --- |
-| `skills/mail-desk/scripts/core/attachment_handoff.py` | Neu | Materialitäts-Gate, Budgets (15k/30k), Injection-Escaping, Kapselung, Hash-Bindung |
-| `skills/mail-desk/tests/test_maildesk_attachments_mda4.py` | Neu | 14 hermetische Tests für Materialitätswerte, Budgets, Truncation, Injection, Blocking |
-| `skills/mail-desk/scripts/core/classifier.py` | Modifiziert | Handoff-Anwendung und Item-lokales Blocking im Klassifikations- und Draft-Pfad |
-| `skills/mail-desk/references/batch-runner.md` | Modifiziert | Dokumentation von MD-A4 im Batch-Runner-Referenzdokument |
+| `skills/mail-desk/scripts/core/attachment_handoff.py` | Gehärtet | Kanonische MD-A3 Envelope-Validierung (Qualitäten inkl. `medium`, reale Truncation-Reasons), strikte RFC-822 Part-Locator-, Filename- und MIME-Typ-Validierung, MD-A1/A2-Bestandsbindung (`verify_item_against_canonical_parts`), Schließen der Trust-Boundary (`canonical_parts` Pflicht bei nichtleeren Handoffs, kein Vertrauen in `att.canonical_part`/`handoff.canonical_parts`), Nutzbarkeitsgate (`is_usable_extraction`), Decision-Snapshot-Bindung, exakte Marker-Budgetierung, Prompt-Injection-Schutz, kryptografische Re-Validierung mit Byte-für-Byte `xml_block`- und `prompt_content`-Rekonstruktion |
+| `skills/mail-desk/scripts/core/classifier.py` | Gehärtet | Bindung von `bound_attachments` als `canonical_parts` in `classify_email`, Fail-Closed in Review in INBOX bei Extraktionen ohne Inventar (`untrusted_attachment_extractions_without_inventory`), Fail-Closed `HandoffDriftError` bei vorgebauten Handoffs ohne Inventar, Re-Validierung vorab gelieferter Handoff-Artefakte gegen Mail-Identität, Decision-Snapshot und kanonische Anhänge (`validate_attachment_handoff`) |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda4.py` | Erweitert | 59 hermetische TDD- und Adversarial-Tests (inkl. aller MD-A3 Qualitäten und Truncation-Gründe, repräsentativer Envelopes für PDF, DOCX, PPTX, XLSX, ungültiger Locators/Dateinamen/MIME-Types, fehlendem externem Inventar, selbst mitgebrachtem `canonical_part`, gefälschtem eingebettetem Handoff-Inventar, doppelten Locators im externen Inventar, erfolgreichem extern gebundenem Pfad, Classifier-Extraktionen ohne Inventar, Classifier-Handoff ohne Inventar, manipuliertem `content_hash`, manipuliertem `xml_block`-Text und -Attributen, strukturell defektem XML, manipuliertem `prompt_content`, `char_count`-Drift, unberührtem `needs_reply`, exakter Marker-Budgetgrenzen, Classifier-Integration, aller 7 Katalog-Unterentscheidungs-Skalare und strikter Mailidentitätsprüfung ohne Auslassungs-Bypass) |
+| `skills/mail-desk/references/batch-runner.md` | Aktualisiert | Dokumentation des gehärteten MD-A4-Vertrags, der geschlossenen Trust-Boundary, der MD-A1/A2-Bestandsbindung, der kryptografischen Integritätsprüfung, der Classifier Fail-Closed-Regeln und des Nutzbarkeitskriteriums |
 
 ---
 
@@ -315,21 +334,81 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 1. **Fokussierte Suite `MD-A4`:**
    ```powershell
-   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda4.py
+   python -m unittest -v skills/mail-desk/tests/test_maildesk_attachments_mda4.py
    ```
-   *Ergebnis:* **14 von 14 Tests OK (0.022s)**
-   *Abdeckung:* Beide Materialitätswerte, ungültige Werte (`InvalidMaterialityError`), 15k-Einzelbudget, 30k-Mailbudget (kumulativ), stabile Part-Sortierung, Prompt-Injection-Schutz, `supplementary`-Toleranz, `required_for_decision`-Blocking in INBOX, Item-lokales Blocking im Batch, unverändertes `needs_reply`, deterministische Hash-Bindung, zero LLM / Zero-Subprocess.
+   *Ergebnis:* **59 von 59 Tests OK (0.046s)**
+   *Abdeckung (alle 59 Tests grün):*
+   - `test_both_valid_materiality_values`
+   - `test_invalid_materiality_rejected`
+   - `test_budget_per_file_15k_characters`
+   - `test_exact_budget_limits_including_marker_per_file`
+   - `test_budget_cumulative_per_mail_30k_characters`
+   - `test_exact_budget_limits_including_marker_cumulative_mail`
+   - `test_exact_budget_exhausted_cumulative_mail_produces_empty_content`
+   - `test_stable_sorting_by_part_locator`
+   - `test_prompt_injection_protection`
+   - `test_missing_extraction_supplementary_does_not_block`
+   - `test_missing_extraction_required_blocks_item_in_inbox`
+   - `test_required_for_decision_blocks_on_partial_extraction_despite_residual_text`
+   - `test_required_for_decision_blocks_on_non_extracted_status_despite_residual_text`
+   - `test_item_local_blocking_in_batch`
+   - `test_unaltered_needs_reply_preservation`
+   - `test_no_llm_or_external_tool_execution`
+   - `test_mda3_envelope_accepts_all_canonical_qualities`
+   - `test_mda3_envelope_accepts_all_canonical_truncation_reasons`
+   - `test_representative_mda3_envelopes_for_all_document_types`
+   - `test_mda3_envelope_rejects_missing_and_invented_hashes`
+   - `test_mda3_envelope_detects_hash_drift`
+   - `test_mda3_envelope_rejects_arbitrary_invented_status_values`
+   - `test_mda3_envelope_rejects_invalid_quality_or_truncation_reason`
+   - `test_mda3_envelope_rejects_invalid_part_locators`
+   - `test_mda3_envelope_rejects_missing_empty_or_unknown_attachment_filenames`
+   - `test_mda3_envelope_rejects_invalid_mime_types`
+   - `test_canonical_parts_binding_success`
+   - `test_canonical_parts_binding_detects_locator_drift`
+   - `test_canonical_parts_binding_detects_filename_drift`
+   - `test_canonical_parts_binding_detects_hash_drift`
+   - `test_canonical_parts_binding_detects_mime_drift`
+   - `test_canonical_parts_binding_detects_invalid_provenance`
+   - `test_validate_handoff_rejects_manipulated_content_hash`
+   - `test_validate_handoff_rejects_tampered_text_inside_xml_block`
+   - `test_validate_handoff_rejects_tampered_xml_block_attributes`
+   - `test_validate_handoff_rejects_malformed_xml_block_structure`
+   - `test_validate_handoff_rejects_tampered_prompt_content`
+   - `test_validate_handoff_rejects_char_count_mismatch`
+   - `test_hash_binding_determinism`
+   - `test_decision_snapshot_binding_in_handoff_hash`
+   - `test_validate_attachment_handoff_detects_mail_identity_drift`
+   - `test_validate_attachment_handoff_detects_decision_drift`
+   - `test_validate_attachment_handoff_detects_hash_tampering_and_item_forgery`
+   - `test_classifier_integration_required_attachment_failure_blocks_in_inbox`
+   - `test_classifier_integration_supplementary_failure_does_not_block`
+   - `test_classifier_rejects_manipulated_presubmitted_handoff`
+   - `test_classifier_accepts_valid_matching_presubmitted_handoff`
+   - `test_classifier_rejects_presubmitted_handoff_with_tampered_xml_block`
+   - `test_classifier_enforces_canonical_parts_binding`
+   - `test_missing_external_inventory_rejected`
+   - `test_self_supplied_canonical_part_on_item_does_not_protect`
+   - `test_forged_embedded_handoff_inventory_detected`
+   - `test_duplicate_locators_in_external_inventory_rejected`
+   - `test_successful_externally_bound_path`
+   - `test_classifier_extractions_without_inventory_fails_closed_to_review`
+   - `test_classifier_prebuilt_handoff_with_items_without_inventory_raises_drift_error`
+   - `test_catalog_decision_scalars_bound_in_hash_and_drift`
+   - `test_missing_individual_mail_identity_fields_fail_closed`
+   - `test_empty_validator_input_cannot_bypass_identity_drift`
 
 2. **Gesamte Mail-Desk-Testsuite:**
    ```powershell
    python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
    ```
-   *Ergebnis:* **315 von 315 Tests OK (21.1s)** — 0 Fehler, 0 Regressionen.
+   *Ergebnis:* **421 von 421 Tests OK (48.170s)** — 0 Fehler, 0 Regressionen.
 
-3. **Linter & Formatierungsprüfung:**
+3. **Linter, Catalog-Validation & Git-Check:**
    - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
-   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `python scripts/validate-skills-catalog.py` (aus Skills-Root) ➔ **Skills catalog validation passed (Exit 0)**
    - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+   - `git status` ➔ **Ungestaged belassen (Review-Modus, kein Commit gemäß Vorgabe)**
 
 ---
 

@@ -6,9 +6,14 @@ import json
 import re
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
-from .attachment_handoff import apply_attachment_handoff_to_item, build_attachment_analysis_handoff
+from .attachment_handoff import (
+    HandoffDriftError,
+    apply_attachment_handoff_to_item,
+    build_attachment_analysis_handoff,
+    validate_attachment_handoff,
+)
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
@@ -1889,18 +1894,48 @@ def classify_email(
         item_result["attachment_error"] = final_att_err
 
     handoff = email.get("attachment_analysis_handoff")
-    if not handoff and email.get("attachment_extractions"):
-        handoff = build_attachment_analysis_handoff(
-            mail_identity={
-                "account": item_account,
-                "message_id": norm_mid or raw_mid,
-                "folder": email.get("folder", "INBOX"),
-                "envelope_id": envelope_id,
-            },
-            attachments=email["attachment_extractions"],
+    if handoff:
+        items = handoff.get("items") if isinstance(handoff, Mapping) else None
+        if items and not bound_attachments:
+            raise HandoffDriftError(
+                "attachment_analysis_handoff with items cannot be verified: missing verified bound_attachments from mail inventory"
+            )
+        norm_identity = {
+            "account": item_account,
+            "message_id": norm_mid or raw_mid,
+            "folder": email.get("folder", "INBOX"),
+            "envelope_id": envelope_id,
+        }
+        handoff = validate_attachment_handoff(
+            handoff,
+            mail_identity=norm_identity,
             decision=decision,
-            default_materiality=email.get("materiality") or email.get("attachment_materiality"),
+            canonical_parts=bound_attachments if bound_attachments else None,
         )
+    elif email.get("attachment_extractions"):
+        if not bound_attachments:
+            # Untrusted extractions without mail inventory -> fail-closed into Review in INBOX
+            item_result["action"] = {"type": "keep_in_folder", "target_folder": "INBOX"}
+            decision["review_required"] = True
+            decision["review_reason"] = "untrusted_attachment_extractions_without_inventory"
+            decision["confidence"] = "low"
+            notes_prefix = "[Review: Anhänge ohne Inventarbindung nicht vertrauenswürdig] "
+            if not item_result["notes"].startswith(notes_prefix):
+                item_result["notes"] = notes_prefix + item_result["notes"]
+            handoff = None
+        else:
+            handoff = build_attachment_analysis_handoff(
+                mail_identity={
+                    "account": item_account,
+                    "message_id": norm_mid or raw_mid,
+                    "folder": email.get("folder", "INBOX"),
+                    "envelope_id": envelope_id,
+                },
+                attachments=email["attachment_extractions"],
+                decision=decision,
+                canonical_parts=bound_attachments,
+                default_materiality=email.get("materiality") or email.get("attachment_materiality"),
+            )
 
     if handoff:
         apply_attachment_handoff_to_item(item_result, handoff)
