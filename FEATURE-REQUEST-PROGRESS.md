@@ -14,7 +14,7 @@
 | `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ abgeschlossen | `bc4d125` | 14 fokussierte / 290 Gesamt-Tests |
 | `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
 | `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ abgeschlossen | `a50652f` | 14 fokussierte / 315 Gesamt-Tests |
-| `MD-A5` — Ablagevorschlag | ⬜ nächstes Paket | — | ausstehend |
+| `MD-A5` — Ablagevorschlag | ✅ abgeschlossen | `286e238` | 13 fokussierte / 328 Gesamt-Tests |
 
 ---
 
@@ -212,10 +212,76 @@
 
 ---
 
-## Nächstes Paket: `MD-A5` — Katalog-/Filemap-gestützter Ablagevorschlag
+## Paket: FR-08 / `MD-A5` — Katalog-/Filemap-gestützter Ablagevorschlag
 
-- **Scope:** Nur read-only `attachment_filing_candidate`; kein Upload, kein Ordneranlegen, kein Filemap-Write.
-- **Dateien:** Neu `scripts/core/attachment_filing.py`, `tests/test_maildesk_attachments_mda5.py`; Batch-Runner-Doku ergänzen.
-- **Eingang:** MD-A2-Ergebnis, optionaler MD-A4-Handoff, eindeutige kataloggestützte Decision.
-- **Matrix:** Kein Storage = `not_configured`; mehrere Storages / stale Filemap = `storage_review_required`; kein belegtes Verzeichnis = `directory_review_required`; gleicher Hash = `already_present`; gleicher Name/anderer Hash = `collision_detected`; eindeutiges Ziel = `proposed`. Events erben nur explizit katalogisierte Storages.
-- **Ausgang:** Bindet Quelle, Storage, relativen Pfad, Namen, Filemap-Zeitstand, Dedupe/Kollision, Begründung und `promotion_status: pending_human_review`.
+- **Status:** ✅ Abgeschlossen & Verifiziert
+- **Scope:** Nur read-only `attachment_filing_candidate`; kein Upload, kein Ordneranlegen, kein Filemap-Write, keine Katalogmutation.
+
+### 1. Zusammenfassung der Umsetzung
+
+1. **Reine Read-Only-Architektur (`core/attachment_filing.py`):**
+   - `propose_attachment_filing()` erzeugt einen deklarativen Ablagekandidaten (`attachment_filing_candidate`) mit `promotion_status: "pending_human_review"`.
+   - Schreibt niemals auf Dateisystem, Filemaps oder externe Cloud-Storages (verifiziert durch strikte Read-Only-Trap-Tests).
+2. **Katalog- und Storage-Auflösung:**
+   - Eindeutige Auflösung von Projekten, Topics, Subtopics und Events anhand von `projects.json` und `topics.json`.
+   - **Event-Vererbungsregel:** Events erben Cloud-Storage ausschließlich von explizit katalogisierten Parent-Topics oder Subtopics. Fehlt eine solche explizite Deklaration, schlägt die Zuordnung mit `status: "not_configured"` fehl.
+   - Mehrere Storages oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`status: "storage_review_required"`).
+3. **Strikte Entscheidungs-Matrix:**
+   - `not_configured`: Kein Cloud-Storage im Katalog deklariert oder kein expliziter Parent-Storage für Events.
+   - `storage_review_required`: Mehrere Storages konfiguriert, Archiv-/Read-only-Storage deklariert, oder `filemap.json` fehlt/ist korrupt/ist stale (> 24 Stunden).
+   - `directory_review_required`: Das vorgeschlagene Zielverzeichnis ist im Filemap-Inventar nicht als belegt/etabliert nachgewiesen.
+   - `already_present`: Eine Datei mit identischem SHA-256 existiert bereits im Filemap-Inventar des Ziel-Storages (Deduplizierung).
+   - `collision_detected`: Eine Datei mit identischem Namen aber abweichendem SHA-256 existiert bereits am Zielort.
+   - `proposed`: Eindeutiger, kollisionsfreier und katalogbelegter Zielpfad ermittelt.
+4. **Path-Traversal- & Injektionsschutz:**
+   - Dateinamen und Zielverzeichnisse werden gegen Path-Traversal (`../`, `..\`, absolute Pfade, Null-Bytes) bereinigt und validiert.
+5. **Deterministische Hash-Bindung:**
+   - `compute_candidate_hash()` bindet alle Felder (Quelle, Destination, Filemap-Zeitstand, Dedupe-Status, Promotion-Status) an einen deterministischen 64-stelligen SHA-256 (`candidate_hash`).
+6. **Batch-Runner-Dokumentation:**
+   - [`references/batch-runner.md`](skills/mail-desk/references/batch-runner.md) um Abschnitt zu `core/attachment_filing.py` und der Matrix ergänzt.
+
+---
+
+### 2. Geänderte und neue Dateien
+
+| Datei | Status | Verantwortung |
+| --- | --- | --- |
+| `skills/mail-desk/scripts/core/attachment_filing.py` | Neu | Read-Only Ablagevorschlag, Storage-/Filemap-Auflösung, Matrix-Evaluation, Hash-Bindung |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda5.py` | Neu | 13 hermetische Tests für Matrix, Vererbung, Stale Filemap, Kollision, Traversal, Schreibfallen |
+| `skills/mail-desk/references/batch-runner.md` | Modifiziert | Dokumentation von MD-A5 im Batch-Runner-Referenzdokument |
+
+---
+
+### 3. Verifikationsergebnisse & Nachweise
+
+1. **Fokussierte Suite `MD-A5`:**
+   ```powershell
+   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda5.py
+   ```
+   *Ergebnis:* **13 von 13 Tests OK (0.030s)**
+   *Abdeckung:* Project, Topic, Subtopic (explizit & vererbt), Event-Vererbungseinschränkung, EUCEN-Katalogauflösung, Mehrfach-/Archiv-Storages (`storage_review_required`), fehlende/stale Filemap (`storage_review_required`), unbelegtes Verzeichnis (`directory_review_required`), Traversal-/Injektionsabwehr, Deduplizierung (`already_present`), Kollision (`collision_detected`), deterministischer `candidate_hash`, Schreibfallen für Cloud/Katalog/Filemap (Zero-Mutation).
+
+2. **Gesamte Mail-Desk-Testsuite:**
+   ```powershell
+   python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
+   ```
+   *Ergebnis:* **328 von 328 Tests OK (19.4s)** — 0 Fehler, 0 Regressionen.
+
+3. **Linter & Formatierungsprüfung:**
+   - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
+   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+
+---
+
+## Abschluss FR-08 & Vorbereitung FR-09: Human-gated Cloud-Promotion
+
+> [!IMPORTANT]
+> **FR-08 ist vollständig umgesetzt und verifiziert:**
+> - `MD-A1` (MIME-Inventar) ✅
+> - `MD-A2` (Quarantäne-Abruf) ✅
+> - `MD-A3` (Begrenzte Extraktion & OCR-Derivat) ✅
+> - `MD-A4` (Materialitäts-Gate & Handoff) ✅
+> - `MD-A5` (Katalog-/Filemap-Ablagevorschlag) ✅
+>
+> **Human Gate vor FR-09:** Gemäß Spezifikation in `FEATURE-REQUESTS.md` startet `FR-09` (`MD-P1` bis `MD-P3`) erst nach eingefrorenem `attachment_filing_candidate`-Schema und ausdrücklicher Freigabe. Jede Mutation benötigt Workspace-Lock, frische Preconditions und eine hashgebundene Human-Receipt.
