@@ -13,8 +13,8 @@
 | `MD-A1` — Read-only MIME-Inventar | ✅ abgeschlossen | `6f86c67` | 46 fokussierte / 276 Gesamt-Tests |
 | `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ abgeschlossen | `bc4d125` | 14 fokussierte / 290 Gesamt-Tests |
 | `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
-| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ⬜ nächstes Paket | — | ausstehend |
-| `MD-A5` — Ablagevorschlag | ⬜ geplant | — | ausstehend |
+| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ abgeschlossen | `a50652f` | 14 fokussierte / 315 Gesamt-Tests |
+| `MD-A5` — Ablagevorschlag | ⬜ nächstes Paket | — | ausstehend |
 
 ---
 
@@ -151,9 +151,71 @@
 
 ---
 
-## Nächstes Paket: `MD-A4` — Materialitäts-Gate und LLM-Handoff
+## Paket: FR-08 / `MD-A4` — Materialitäts-Gate und LLM-Handoff
 
-- **Scope:** Nur Prompt- und Manifest-Vorbereitung; kein LLM-Call, keine Cloud-Ablage, keine Mailbox-Mutation.
-- **Dateien:** Neu `scripts/core/attachment_handoff.py`, `tests/test_maildesk_attachments_mda4.py`.
-- **Eingang:** Extraktionsergebnis aus MD-A3 + Materialitäts-Review (`supplementary` vs `required_for_decision`).
-- **Ausgang:** Untrusted Context `<untrusted_attachment_content>` mit Escape-Schutz, strikte Budgets (15k Chars/Datei, 30k Chars/Mail kumulativ).
+- **Status:** ✅ Abgeschlossen & Verifiziert
+- **Scope:** Nur Prompt- und Manifest-Vorbereitung; rein deklaratives Modul, kein LLM-Call, keine Cloud-Ablage, keine Mailbox-Mutation.
+
+### 1. Zusammenfassung der Umsetzung
+
+1. **Deklaratives Handoff-Modul (`core/attachment_handoff.py`):**
+   - `build_attachment_analysis_handoff()` erstellt ein hashgebundenes Übergabe-Artefakt für nachgelagerte LLM-Prompts oder Manifest-Reviews.
+   - Enforce strikte Budgets: 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`) und 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`).
+   - Stabile deterministische Sortierung der MIME-Parts anhand des Part-Locators.
+   - Truncation wird deterministisch durchgeführt, mit klaren Markern versehen (`[... Truncated at ...]`) und mit `truncated: true` gekennzeichnet.
+2. **Prompt-Injection-Schutz & Kapselung:**
+   - Textinhalte werden in `<untrusted_attachment_content part_locator="..." filename="..." sha256="..." mime_type="..." materiality="..." status="..." truncated="...">` gekapselt.
+   - `escape_untrusted_content()` neutralisiert Breakout-Versuche (z. B. schließende XML-Tags wie `</untrusted_attachment_content>` oder gefälschte Tags) und entfernt Null-Bytes.
+3. **Materialitäts-Matrix & Item-lokales Blocking:**
+   - Zulässige Werte strikt: `supplementary` und `required_for_decision`; alle anderen Werte lösen fail-closed `InvalidMaterialityError` aus.
+   - `supplementary`: Fehler bei der Konvertierung/Extraktion blockieren das Routing nicht. Das Item behält seine Zielordner-Zuweisung und der Fehler wird rein informativ dokumentiert.
+   - `required_for_decision`: Schlägt die Extraktion eines als erforderlich markierten Anhangs fehl, wird **ausschließlich das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`). Andere Items des Batches bleiben unbeeinflusst.
+   - `needs_reply` wird vorab unabhängig ermittelt und bleibt durch das Handoff unter allen Bedingungen strikt unberührt.
+4. **Deterministische Hash-Bindung:**
+   - `compute_handoff_hash()` bindet Mailidentität (`account`, `message_id`, `folder`, `envelope_id`) und Anhangsmetadaten samt Inhalts-Hashes an einen 64-stelligen SHA-256 (`handoff_hash`).
+5. **Classifier- & Batch-Runner-Integration:**
+   - [`core/classifier.py`](skills/mail-desk/scripts/core/classifier.py): Wendet Handoff-Ergebnisse via `apply_attachment_handoff_to_item()` an.
+   - [`references/batch-runner.md`](skills/mail-desk/references/batch-runner.md): Dokumentation der Materialitätsmatrix, Limits und Kapselungsregeln.
+
+---
+
+### 2. Geänderte und neue Dateien
+
+| Datei | Status | Verantwortung |
+| --- | --- | --- |
+| `skills/mail-desk/scripts/core/attachment_handoff.py` | Neu | Materialitäts-Gate, Budgets (15k/30k), Injection-Escaping, Kapselung, Hash-Bindung |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda4.py` | Neu | 14 hermetische Tests für Materialitätswerte, Budgets, Truncation, Injection, Blocking |
+| `skills/mail-desk/scripts/core/classifier.py` | Modifiziert | Handoff-Anwendung und Item-lokales Blocking im Klassifikations- und Draft-Pfad |
+| `skills/mail-desk/references/batch-runner.md` | Modifiziert | Dokumentation von MD-A4 im Batch-Runner-Referenzdokument |
+
+---
+
+### 3. Verifikationsergebnisse & Nachweise
+
+1. **Fokussierte Suite `MD-A4`:**
+   ```powershell
+   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda4.py
+   ```
+   *Ergebnis:* **14 von 14 Tests OK (0.022s)**
+   *Abdeckung:* Beide Materialitätswerte, ungültige Werte (`InvalidMaterialityError`), 15k-Einzelbudget, 30k-Mailbudget (kumulativ), stabile Part-Sortierung, Prompt-Injection-Schutz, `supplementary`-Toleranz, `required_for_decision`-Blocking in INBOX, Item-lokales Blocking im Batch, unverändertes `needs_reply`, deterministische Hash-Bindung, zero LLM / Zero-Subprocess.
+
+2. **Gesamte Mail-Desk-Testsuite:**
+   ```powershell
+   python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
+   ```
+   *Ergebnis:* **315 von 315 Tests OK (21.1s)** — 0 Fehler, 0 Regressionen.
+
+3. **Linter & Formatierungsprüfung:**
+   - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
+   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+
+---
+
+## Nächstes Paket: `MD-A5` — Katalog-/Filemap-gestützter Ablagevorschlag
+
+- **Scope:** Nur read-only `attachment_filing_candidate`; kein Upload, kein Ordneranlegen, kein Filemap-Write.
+- **Dateien:** Neu `scripts/core/attachment_filing.py`, `tests/test_maildesk_attachments_mda5.py`; Batch-Runner-Doku ergänzen.
+- **Eingang:** MD-A2-Ergebnis, optionaler MD-A4-Handoff, eindeutige kataloggestützte Decision.
+- **Matrix:** Kein Storage = `not_configured`; mehrere Storages / stale Filemap = `storage_review_required`; kein belegtes Verzeichnis = `directory_review_required`; gleicher Hash = `already_present`; gleicher Name/anderer Hash = `collision_detected`; eindeutiges Ziel = `proposed`. Events erben nur explizit katalogisierte Storages.
+- **Ausgang:** Bindet Quelle, Storage, relativen Pfad, Namen, Filemap-Zeitstand, Dedupe/Kollision, Begründung und `promotion_status: pending_human_review`.
