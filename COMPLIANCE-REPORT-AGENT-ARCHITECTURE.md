@@ -481,144 +481,18 @@ Archivquellen. Sie ersetzen insbesondere nicht den eigenständigen katalogisiert
 BOKUdrive-Frameworks-Storage und aktivieren weder das abgelehnte ATAEL-Projekt
 noch die enthaltenen historischen KI-Instruktionen.
 
-### 11.3 Mail-Desk-Recovery und Interruption-Härtung (11.–12.09.2026)
+### 11.3 Abgrenzung zu Feature Requests
 
-Ein mit einem kleinen Modell gestarteter Zehn-Mail-Lauf im BOKU-Workspace wurde
-nach vier vollständig persistierten Items unterbrochen. Die fünfte Mail war zu
-diesem Zeitpunkt bereits physisch verschoben, aber noch nicht lokal protokolliert;
-das sechste ausführbare Item war noch nicht begonnen. Der Recovery-Lauf führte
-keine erneuten Mailbox-Mutationen aus, sondern reconciliierte fünf bereits
-verschobene Nachrichten per normalisierter Message-ID gegen ihre realen Ziele:
-`Projekte/MESHE` mit den Envelope-IDs `61`, `62` und `63`,
-`Themen/Netzwerke` mit Envelope-ID `26` sowie `Themen/AIxLLL` mit Envelope-ID
-`58`. Der Final-Location-Index wurde über seinen kanonischen Script-Writer
-atomar ergänzt, der unterbrochene Fortschritt als `failed` abgeschlossen und ein
-falsch positiver Reply-Fall als `dismissed` archiviert. Projekt-/Topic-Evidenz
-wurde quellengebunden nachgezogen; aus historischen Fristen entstanden keine
-neuen, möglicherweise überholten Todos. BOKU-Nachweis: Commit `fa116af`.
+Dieser Bericht bleibt die Compliance- und Audit-Evidenz. Er führt keine
+Paketkarten, Implementierungsreihenfolgen oder Feature-Abnahmen doppelt.
 
-Das daraus abgeleitete Paket `MD-H1` schließt sechs technische Fehlerklassen:
+- Laufende und geplante Arbeit: [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md)
+- Vollständig abgeschlossene FRs: [`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md)
 
-- `skip_known` wird in `draft` und `pipeline` einschließlich
-  `--no-skip-known` nicht mehr durch einen internen Default überschrieben.
-- Eine konfigurierte, fehlgeschlagene Sent-Synchronisation stoppt die Pipeline
-  vor Klassifikation und Mailbox-Mutation mit sichtbarer Fehlerphase.
-- Der Delete-Zweig ist wieder erreichbar; ein fehlgeschlagenes Löschen wird
-  weder als Routing-Erfolg protokolliert noch indiziert.
-- Teilweise fehlgeschlagene Execute-Läufe schreiben den Fortschrittsstatus
-  `failed` statt `completed`.
-- Nullable Himalaya-Absendernamen und -Betreffe brechen die Suche nicht mehr ab.
-- Reads ohne geparste Message-Header werden als Fehler gemeldet und nicht als
-  erfolgreich gelesene leere Mail weitergereicht.
-
-Implementierungsnachweis: Commit `bc00898`; 192/192 Mail-Desk-Tests,
-`compileall`, Mail-Desk-`quick_validate` und `git diff --check` grün. Für kleine
-Modelle bleibt die empfohlene Betriebsform ein begrenzter `draft`-Lauf mit
-anschließender Review und separatem `execute`, vorzugsweise in kleinen Paketen
-von drei bis fünf Mails. Eine autonome Zehn-Mail-Pipeline ist trotz der neuen
-Fail-Closed-Grenzen kein geeigneter Erstauftrag für Luna.
-
-`MD-H2` ergänzt den kontrollierten Standard-Batch-Einstieg. Ein gewöhnlicher
-Auftrag „verarbeite N Mails“ ist im Skill jetzt verbindlich `draft` → sichtbare
-Manifest-Review → `execute` → `verify`; `pipeline` bleibt ausschließlich eine
-ausdrücklich beauftragte Ausnahme. Jeder Draft trägt `expected_count`, aktuelle
-`candidate_count`, `allow_fewer`, `source_folder`, Account und `skip_known` sowie
-einen Pending-SHA-256 über den kanonischen Execute-Request. Vor jeder Execute-
-Seitenwirkung verlangt der Runner eine explizite, hash-gebundene Approval-Receipt
-und prüft Account, Quellordner und Kandidatenzahl. Weniger Kandidaten stoppen
-standardmäßig; `allow_fewer: true` kann ausschließlich diesen Minderbestand nach
-Review erlauben, nie einen Mehrbestand. Gate-Fehler erzeugen weder Progress-,
-Index-, Log-, Evidence- noch Mailbox-Mutationen. Die bestehenden bewussten
-Autonomous-Pipeline- und FR-04-Dossier-Verträge bleiben getrennt kompatibel.
-
-MD-H2-Nachweis: `test_batch_runner_h2_contract.py` deckt Exact Match, Default-
-Stop bei weniger, explizites `allow_fewer`, Stop bei mehr und die vollständige
-Mutationsfreiheit von Gate-Fehlern ab; die vollständige Mail-Desk-Suite,
-`compileall`, `quick_validate` und `git diff --check` sind Bestandteil der
-Abnahme dieses Pakets.
-
-`MD-H3` bindet den Transport jetzt in jeder mailbox-zugreifenden Runner-Fassade
-(`inspect`, `draft`, `search`, `sync_sent`, `verify`, `execute`, `pipeline`) an die
-credentials-freie Workspace-Control-Plane `.agents/mail-desk-backend.json`.
-Die Datei enthält exakt Schema-Version, den unterstützten Adapter `himalaya` und
-den Account (Name oder explizites `null` für den lokalen Standardaccount); sie
-enthält keine Credentials. Apps, Connectorlisten und Manifeste dürfen diese
-Bindung nicht wählen oder übersteuern; ein optionaler `--account`-Wert ist nur
-zulässig, wenn er ihr exakt entspricht. Ein MD-H2- oder FR-04-Account
-bleibt lediglich Review-Evidenz und muss exakt mit dem Workspacewert
-übereinstimmen.
-
-Vor jedem `execute` und jeder ausdrücklich autonomen `pipeline` läuft zusätzlich
-ein bounded, read-only `envelope list -s 1` mit zehn Sekunden Timeout und genau
-einem Versuch ohne nachgelagerten Backoff.
-Der resultierende `mailbox_readiness`-Envelope ist kanonisch. Fehlende oder
-ungültige Konfiguration, Accountdrift, fehlender Adapter, Timeout, Connectivity-
-Fehler oder eine nicht als JSON-Liste parsebare Minimalantwort stoppen vor
-Progress-, Index-, Log-, Evidence-, Handler- und Mailbox-Mutation. Die H3-
-Regressionen prüfen jeden dieser Stops einschließlich der Mutationsfreiheit und
-des Envelope-Shapes; sie laufen zusätzlich zur vollständigen Mail-Desk-Suite.
-
-`MD-H4` macht den damaligen manuellen Recovery-Fall zum regulären, überprüfbaren
-Runner-Vertrag. `batch-recovery-journal.json` führt pro deterministischem Batch
-und normalisierter Message-ID die Phasen von Auswahl über Copy, Zielverifikation
-und Source-Delete bis Index, Log und Evidence. Jede Phasenänderung ist atomar
-gesichert, bevor die nächste externe oder lokale Seitewirkung beginnt. SIGINT und
-Timeout führen in Journal und `runner-progress.json` zu `aborted`; sie erzeugen
-weder einen Abschluss noch einen dauerhaft `running` verbleibenden Lauf.
-
-Der neue first-class-Modus `reconcile` ist standardmäßig read-only. Er berichtet
-für jede betroffene Message-ID Journalphase, erneute Zielverifikation,
-Index-/Log-/Evidence-Stand und den notwendigen Recovery-Schritt. Eine lokale
-Nachreparatur erfordert eine explizite freigegebene Receipt und eine frische
-Zielverifikation; sie ergänzt ausschließlich fehlende lokale Index-, Log- oder
-Evidence-Daten und führt niemals einen Mailbox-Copy oder -Delete aus. Ein
-Execute-Wiederanlauf verifiziert ein bereits journalisiertes Ziel vor jeder
-Copy-Entscheidung und kann deshalb keinen Doppel-Move erzeugen. Die
-Fault-Injection-Regressionen decken Unterbrechungen nach Copy, Verify, Delete,
-Index, Log und Reply-Append ab. Der jeweilige Execute-Resume darf keinen zweiten
-Copy oder Delete und keine doppelte Log-, Reply- oder Evidence-Zeile erzeugen.
-Der Nachweis liegt in `test_maildesk_h4_recovery.py`; vollständige Suite,
-`compileall`, `quick_validate` und `git diff --check` sind Teil der Abnahme.
-
-`MD-H5` schließt die technische Abschlussgrenze: `execute` erzeugt lediglich
-einen quellengebundenen, unreleased `synthesis_candidate`. Ein
-`synthesis_handoff` wird nur nach vollständig erfolgreichem quellengebundenem
-Verify (direkt oder in der Pipeline) oder nach abgeschlossenem Reconcile
-freigegeben. Beide Pfade liefern zusätzlich einen
-versionierten `completion_report` mit den verifizierten Message-IDs. Partial,
-Abort und fehlgeschlagener Verify führen sichtbar zu `recovery_required` und dem
-kanonisch leeren Handoff; es gibt damit keine vorzeitige Synthese- oder
-Abschlussbehauptung. `test_synthesis_handoff.py` und
-`test_maildesk_h5_completion.py` decken die Fehl- und Erfolgsgrenzen ab.
-Der Standalone-Verify übernimmt einen Candidate ausschließlich aus einem
-strukturell vollständigen erfolgreichen Execute-Summary mit exakt passenden
-Result-, Verify- und Candidate-Message-IDs. Freie Top-Level-Candidates,
-partielle/abgebrochene Summaries und beliebige Envelope-`data` werden nicht als
-Provenienz akzeptiert.
-
-Das dokumentierte Luna-Betriebsprofil begrenzt neue Aufträge auf drei bis fünf
-Mails und verlangt Draft → sichtbare Human-/starke-Modell-Review → Execute →
-Verify → Synthese in einer linearen Session. Frische Sessions sind zwischen
-vollständig abgeschlossenen, unabhängigen Batches sinnvoll, nicht innerhalb einer
-Mailbox-Transaktion. Eine autonome Pipeline ist kein Luna-Erstauftrag; Count-,
-Receipt-, Readiness-, Review-, Verify- und Reconcile-Fehler sind Stopbedingungen.
-
-### 11.4 Teilweise umgesetzter FR-08: Anhänge und Cloud-Ablagevorschläge
-
-Der aus einem Luna-Lauf abgeleitete Anhangswunsch ist als `FR-08` paketiert.
-`MD-A1` ist umgesetzt: Das read-only Inventar basiert auf der realen RFC-822-
-MIME-Struktur, bindet Kandidaten fail-closed an Account, normalisierte Message-ID,
-Mailbox-Location und Part-Locator und validiert Größe, MIME-Typ, SHA-256 sowie
-interne Provenienz. Inventarisierungs-, Drift- und Metadatenfehler bleiben sichtbar
-in Review; Betreff-/Preview-Erwähnungen erzeugen keine Anhänge. Der operative
-Clientpfad bleibt manifestgebunden. Die Architektur trennt weiterhin den in `MD-A2`
-offenen Temp-Abruf, die begrenzte untrusted Inhaltsauswertung (`MD-A3`/`MD-A4`) und
-den katalog-/Filemap-gestützten Cloud-Ablagevorschlag (`MD-A5`). Ein vorhandenes
-`cloud_sync` autorisiert weder Upload noch
-neue Ordner; ohne belegtes Ziel bleibt der Candidate in Review. Events besitzen
-keinen eigenen Cloud-Speicher und können nur einen explizit katalogisierten
-Parent-/Subtopic-Storage referenzieren. `needs_reply` bleibt orthogonal. Eine
-spätere Cloud-Promotion soll wegen ihrer externen Schreibwirkung als eigener,
-human-gated Feature Request behandelt werden.
-Für den dokumentierten EUCEN-Ausgangsfall ist aktuell `not_configured` korrekt,
-weil `netzwerke/eucen` im BOKU-Katalog kein `cloud_sync` besitzt.
+Die nach dem Abschlussaudit umgesetzten Mail-Desk-Härtungen und Attachment-
+Erweiterungen ändern das Abschlussurteil nur, wenn sie eine hier bewertete
+Architekturgrenze verletzen oder ein Finding wieder öffnen. Ihre fachlichen
+Verträge, Testzahlen, Modellwahl und Paketstatus werden ausschließlich in den
+FR-Dateien gepflegt. Für jede neue Umsetzung bleiben insbesondere Lock-Ownership,
+atomare Writes, strukturierte CLI-Envelopes, `untrusted_external`-Behandlung,
+Graceful Degradation und unabhängige Validierung verbindliche Compliance-Gates.
