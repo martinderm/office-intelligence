@@ -1226,3 +1226,26 @@ Das Modul `scripts/core/attachment_handoff.py` stellt die deklarative Schnittste
    - Text wird gegen Breakout-Versuche bereinigt (z. B. Schließ-Tags wie `</untrusted_attachment_content>` werden neutralisiert, Null-Bytes entfernt).
 5. **Deterministische Hash-Bindung:**
    - Jedes Handoff-Ergebnis bindet Mail-Identität (`account`, `message_id`, `folder`, `envelope_id`) und Anhangsdaten hashgebunden via 64-stelligem SHA-256 (`handoff_hash`).
+
+---
+
+## FR-08 / MD-A5: Katalog- und Filemap-gestützter Ablagevorschlag (`core/attachment_filing.py`)
+
+Das Modul `scripts/core/attachment_filing.py` erzeugt read-only Ablagevorschläge (`attachment_filing_candidate`) für verifizierte Quarantäne-Anhänge:
+
+1. **Strikte Read-Only-Garantie:**
+   - Keine Datei-Uploads, kein Verzeichnisanlegen (`mkdir`), keine Schreiboperationen auf `filemap.json`, Kataloge oder externe Cloud-Storages.
+   - Ausgabe trägt ausnahmslos `promotion_status: "pending_human_review"`.
+2. **Katalog- und Storage-Auflösung:**
+   - Storages und Zielpfade werden ausschließlich aus Katalogen (`projects.json`, `topics.json`) sowie frischen `filemap.json`-Beständen bezogen.
+   - Events erben Storages ausschließlich von explizit katalogisierten Parent-Topics oder Subtopics.
+   - Mehrere Storages oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`storage_review_required`).
+3. **Entscheidungs-Matrix:**
+   - `not_configured`: Kein Cloud-Storage im Katalog deklariert.
+   - `storage_review_required`: Mehrere Storages konfiguriert, Archiv-/Read-only-Storage deklariert, oder `filemap.json` fehlt/ist stale (> 24h).
+   - `directory_review_required`: Das vorgeschlagene Zielverzeichnis ist im Filemap-Inventar nicht belegt/etabliert.
+   - `already_present`: Eine Datei mit identischem SHA-256 existiert bereits im Zielbereich.
+   - `collision_detected`: Eine Datei mit identischem Namen aber abweichendem SHA-256 existiert bereits.
+   - `proposed`: Eindeutiger, kollisionsfreier und katalogbelegter Zielpfad ermittelt.
+4. **Deterministische Hash-Bindung:**
+   - `candidate_hash` bindet Quelle (`account`, `message_id`, `envelope_id`, `part_locator`, `sha256`), Destination (`storage_id`, `target_dir`, `target_relative_path`), Filemap-Zeitstand und Matrix-Status an einen 64-stelligen SHA-256.
