@@ -1,8 +1,20 @@
 # Feature Requests — aktiver Backlog
 
-Diese Datei enthält nur laufende oder geplante Feature Requests. Abgeschlossene
-FRs stehen in [`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md). Der
-Compliance-Bericht bewertet Konformität und ist kein zweiter Feature-Backlog.
+Diese Datei enthält nur laufende oder geplante Feature Requests sowie deren
+verbindliche Paketkarten.
+
+### Zusammenspiel der Dokumente
+
+- [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md): Aktiver Backlog mit Status, Paketkarten,
+  Spezifikationen und Ausführungsprofilen (SSOT für laufende/geplante Arbeit).
+- [`FEATURE-REQUEST-PROGRESS.md`](FEATURE-REQUEST-PROGRESS.md): Ephemere Arbeitsdatei für den
+  Implementierungsagenten und das Code-Review. Dokumentiert aktuellen Durchführungsstand,
+  Mini-Walkthroughs, Diffs und Verifikationsnachweise des aktiven Pakets; wird nach
+  Abnahme bereinigt.
+- [`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md): Langzeit-Archiv für vollständig
+  abgeschlossene und abgenommene Feature Requests.
+- [`COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md`](COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md):
+  Bewertet normative Konformität zur Agent-Architektur; kein Feature-Backlog.
 
 ## Status und Reihenfolge
 

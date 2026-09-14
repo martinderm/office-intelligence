@@ -166,6 +166,13 @@ den Top-Level-Account wiederholen; Abweichung, fehlende Message-ID oder ungülti
 MIME-Metadaten sind fail-closed Fehler. Der Inventarschritt lädt noch keinen
 Anhang in eine Arbeits- oder Cloud-Ablage herunter.
 
+`attachment_fetch` ruft einen verifizierten MD-A1-Anhangskandidaten sicher und isoliert
+in den temporären Quarantäneordner `data/mail-desk/attachments/<run-id>/` ab.
+Erfordert zwingend eine gültige `approval_receipt` mit passendem `request_hash` gegen
+den deterministischen `review_hash`. Erzwingt Preflight-Drift-Prüfung, Quoten (15 MB einzeln,
+25 MB kumulativ, max. 5 Dateien), Re-Hashing, Re-Typing, aktiven Inhalts-Blocker,
+idempotente Retrys und atomare Sibling-Temp-Promotion.
+
 Clientzweck und Aufrufregel stehen im
 [Himalaya-/IMAP-Adapter](backends/himalaya.md); Batch-Lebenszyklus in
 [`batch-runner.md`](batch-runner.md).

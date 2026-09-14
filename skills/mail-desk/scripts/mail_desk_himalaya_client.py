@@ -461,6 +461,29 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     account=acc,
                     expected_message_id=op.get("expected_message_id", op.get("message_id")),
                 )
+            elif action in ["attachment_fetch", "fetch_attachment"]:
+                from core.attachment_fetch import op_attachment_fetch
+                op_account = op.get("account")
+                if op_account is not None and str(op_account).strip():
+                    if not acc or str(op_account).strip() != str(acc).strip():
+                        raise AccountDriftError(
+                            f"Account drift detected in manifest operation: operation specifies '{op_account}', "
+                            f"but manifest is bound to '{acc}'"
+                        )
+                if not acc or not str(acc).strip():
+                    raise ValueError("Cannot fetch attachment: an explicitly bound account is required.")
+                res = op_attachment_fetch(
+                    candidate=op.get("candidate", {}),
+                    account=acc,
+                    folder=op.get("folder", "INBOX"),
+                    envelope_id=str(op.get("envelope_id", op.get("id"))),
+                    message_id=str(op.get("message_id", op.get("expected_message_id", ""))),
+                    part_locator=str(op.get("part_locator", "")),
+                    inventory_sha256=str(op.get("inventory_sha256", op.get("sha256", ""))),
+                    approval_receipt=op.get("approval_receipt"),
+                    review_hash=op.get("review_hash"),
+                    run_id=op.get("run_id"),
+                )
             else:
                 raise ValueError(f"Unknown operation action: {action}")
 
