@@ -1203,3 +1203,26 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine temporäre Zwischendatei (`.tmp`) geschrieben und anschließend atomar ersetzt, um Korruption bei Prozessabbrüchen zu verhindern.
 3. **Plattformunabhängiges UTF-8:** Standard-Streams (`stdout`/`stderr`) und Dateilese-/schreiboperationen sind strikt auf UTF-8 konfiguriert (verhindert Windows `charmap`-Codierungsfehler bei Umlauten oder Sonderzeichen).
 4. **Fehlertolerante Subprozess-Ausführung:** `subprocess.run(..., errors="replace")` und Timeouts auf Einzelebene stellen sicher, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze nicht den gesamten Batch-Lauf blockieren.
+
+---
+
+## FR-08 / MD-A4: Materialitäts-Gate und LLM-Handoff (`core/attachment_handoff.py`)
+
+Das Modul `scripts/core/attachment_handoff.py` stellt die deklarative Schnittstelle zwischen Anhangs-Extraktion (MD-A3) und nachgelagertem LLM- bzw. Manifest-Kontext bereit:
+
+1. **Rein deklarativer Charakter:**
+   - Kein Aufruf von LLMs, APIs oder Subprozessen; rein deterministische Standard-Bibliothek-Verarbeitung.
+2. **Materialitäts-Matrix:**
+   - `supplementary`: Fehler bei der Extraktion (z. B. Konvertierungsausfall oder Timeout) blockieren nicht. Das Item behält sein reguläres Routing und seine Aktionen; der Extraktionsfehler wird dokumentiert.
+   - `required_for_decision`: Schlägt die Extraktion eines erforderlichen Anhangs fehl, wird **nur das betroffene Item in INBOX** gehalten (`action: {"type": "keep_in_folder", "target_folder": "INBOX"}`, `decision.review_required: true`, `decision.confidence: "low"`). Andere Items des Batches werden nicht beeinträchtigt (item-lokales Blocking).
+   - Ungültige Materialitätswerte lösen fail-closed eine `InvalidMaterialityError` aus.
+   - `needs_reply` wird vorab unabhängig bestimmt und bleibt durch das Handoff unter allen Bedingungen strikt unverändert.
+3. **Strenge Zeichenbudgets & Truncation:**
+   - Maximal 15.000 Zeichen je Anhang (`MAX_CHARS_PER_ATTACHMENT`).
+   - Maximal 30.000 Zeichen je E-Mail kumulativ (`MAX_CHARS_PER_MAIL`).
+   - Überschreitungen werden deterministisch gekappt, sichtbar mit Truncation-Marker versehen und mit `truncated: true` gekennzeichnet.
+4. **Prompt-Injection-Schutz & Kapselung:**
+   - Anhangsinhalte werden ausschließlich in `<untrusted_attachment_content ...>`-Blöcken gekapselt.
+   - Text wird gegen Breakout-Versuche bereinigt (z. B. Schließ-Tags wie `</untrusted_attachment_content>` werden neutralisiert, Null-Bytes entfernt).
+5. **Deterministische Hash-Bindung:**
+   - Jedes Handoff-Ergebnis bindet Mail-Identität (`account`, `message_id`, `folder`, `envelope_id`) und Anhangsdaten hashgebunden via 64-stelligem SHA-256 (`handoff_hash`).

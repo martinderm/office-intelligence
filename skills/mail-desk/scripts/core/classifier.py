@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
+from .attachment_handoff import apply_attachment_handoff_to_item, build_attachment_analysis_handoff
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
@@ -1808,8 +1809,8 @@ def classify_email(
     bound_attachments: list[dict[str, Any]] = []
     inventory_error: str | None = None
 
+    item_account = account or email.get("account")
     if raw_attachments:
-        item_account = account or email.get("account")
         if not item_account or not str(item_account).strip():
             raise ValueError(
                 f"Missing account for envelope {envelope_id}: cannot create manifest with attachment "
@@ -1886,6 +1887,23 @@ def classify_email(
     final_att_err = inventory_error or email.get("attachment_error")
     if final_att_err:
         item_result["attachment_error"] = final_att_err
+
+    handoff = email.get("attachment_analysis_handoff")
+    if not handoff and email.get("attachment_extractions"):
+        handoff = build_attachment_analysis_handoff(
+            mail_identity={
+                "account": item_account,
+                "message_id": norm_mid or raw_mid,
+                "folder": email.get("folder", "INBOX"),
+                "envelope_id": envelope_id,
+            },
+            attachments=email["attachment_extractions"],
+            decision=decision,
+            default_materiality=email.get("materiality") or email.get("attachment_materiality"),
+        )
+
+    if handoff:
+        apply_attachment_handoff_to_item(item_result, handoff)
 
     return item_result
 
