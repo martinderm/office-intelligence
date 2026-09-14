@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
+from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
@@ -932,6 +933,7 @@ def classify_email_two_pass(
         topics=topics,
         sent_lookup=sent_lookup,
         final_index=final_index,
+        account=account,
     )
     triggers = full_body_triggers(email, preview_item)
     if not triggers:
@@ -960,7 +962,11 @@ def classify_email_two_pass(
         if full_email_details.get("error"):
             raise RuntimeError(str(full_email_details["error"]))
         full_email = dict(email)
-        for field in ("message_id", "raw_message_id", "subject", "from", "to", "date", "in_reply_to", "references", "preview"):
+        for field in (
+            "message_id", "raw_message_id", "subject", "from", "to", "date",
+            "in_reply_to", "references", "preview", "attachments",
+            "attachment_status", "attachment_error"
+        ):
             if field in full_email_details:
                 full_email[field] = full_email_details[field]
         full_item = classify_email(
@@ -970,6 +976,7 @@ def classify_email_two_pass(
             topics=topics,
             sent_lookup=sent_lookup,
             final_index=final_index,
+            account=account,
         )
         full_item["decision"]["read_escalation"] = {
             "level": "full_body",
@@ -1073,6 +1080,7 @@ def classify_email(
     topics: list[dict[str, Any]] | None = None,
     sent_lookup: dict[str, Any] | None = None,
     final_index: dict[str, Any] | None = None,
+    account: str | None = None,
 ) -> dict[str, Any]:
     """Classify a single email conservatively and determine recommended target folder and evidence."""
     ws = workspace_root or Path.cwd()
@@ -1796,12 +1804,67 @@ def classify_email(
                 cand_to = cand.get("matched_recipient", "")
                 notes = f"{notes} [Antwort-Kandidat: '{cand_subj}' am {cand_date} an {cand_to}]"
 
+    raw_attachments = email.get("attachments", [])
+    bound_attachments: list[dict[str, Any]] = []
+    inventory_error: str | None = None
+
+    if raw_attachments:
+        item_account = account or email.get("account")
+        if not item_account or not str(item_account).strip():
+            raise ValueError(
+                f"Missing account for envelope {envelope_id}: cannot create manifest with attachment "
+                f"candidates without a bound and verified account."
+            )
+        try:
+            bound_attachments = canonicalize_and_bind_attachments(
+                raw_attachments=raw_attachments,
+                account=str(item_account).strip(),
+                folder=email.get("folder", "INBOX"),
+                envelope_id=envelope_id,
+                message_id=norm_mid or raw_mid,
+            )
+        except AttachmentInventoryValidationError as exc:
+            inventory_error = f"Invalid attachment inventory: {exc}"
+            bound_attachments = []
+        except ValueError as exc:
+            if "account" in str(exc).lower():
+                raise
+            inventory_error = f"Invalid attachment binding: {exc}"
+            bound_attachments = []
+
+    attachment_failed = (
+        email.get("attachment_status") == "attachment_inventory_unavailable"
+        or bool(email.get("attachment_error"))
+        or bool(inventory_error)
+    )
+
+    if attachment_failed:
+        target_folder = "INBOX"
+        decision = {
+            "kind": "unknown",
+            "id": "unclassified",
+            "confidence": "low",
+            "needs_reply": needs_reply,
+            "review_required": True,
+            "review_reason": "attachment_inventory_unavailable",
+        }
+        att_err = inventory_error or email.get("attachment_error") or "MIME attachment inventory unavailable"
+        notes = f"[Review: Anhangs-Inventarisierung nicht verfügbar ({att_err})] {notes}".strip()
+        evidence_spec = None
+        synthesis_targets = []
+        bound_attachments = []
+
     action = {
         "type": "copy_as_move" if target_folder != "INBOX" else "keep_in_folder",
         "target_folder": target_folder,
     }
 
-    return {
+    if attachment_failed:
+        att_status = "attachment_inventory_unavailable"
+    else:
+        att_status = email.get("attachment_status") or ("available" if bound_attachments else "none")
+
+    item_result: dict[str, Any] = {
         "envelope_id": envelope_id,
         "source_folder": email.get("folder", "INBOX"),
         "message_id": norm_mid,
@@ -1817,7 +1880,14 @@ def classify_email(
         "notes": notes or f"Klassifikation: {subject}",
         "evidence": evidence_spec,
         "synthesis_targets": synthesis_targets,
+        "attachments": bound_attachments,
+        "attachment_status": att_status,
     }
+    final_att_err = inventory_error or email.get("attachment_error")
+    if final_att_err:
+        item_result["attachment_error"] = final_att_err
+
+    return item_result
 
 
 def draft_manifest(

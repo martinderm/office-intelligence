@@ -20,7 +20,7 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 
 ## Himalaya JSON client
 
-- `scripts/mail_desk_himalaya_client.py` performs Himalaya/IMAP listing, reading, copying, moving, deleting, searching, and folder checks with structured JSON envelopes and automatic socket/TLS-10054 error handling.
+- `scripts/mail_desk_himalaya_client.py` performs Himalaya/IMAP listing, reading, read-only RFC-822 MIME attachment inspection, copying, moving, deleting, searching, and folder checks with structured JSON envelopes and automatic socket/TLS-10054 error handling.
 - Use its search operation with a normalized `Message-ID` and the relevant folders when a backend lookup is needed; that search result remains locator evidence, not durable identity.
 - **Operational rule: invoke the client only through a JSON input file using `--input`, including single-message and inspection operations.** Direct ad-hoc subcommands with changing arguments are not permitted in the operational agent workflow.
 
@@ -29,6 +29,10 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   ```
 
 - The existing `himalaya-op.json` manifest shape is documented in [`references/cli-operations.md`](../cli-operations.md); its batch lifecycle is documented in [`references/batch-runner.md`](../batch-runner.md).
+- `inspect_attachments` requires the manifest-bound account and a verified RFC
+  `Message-ID`. An optional operation-level `account` is evidence only and must
+  exactly match the manifest-bound account. Inventory or drift failures are
+  errors, never an empty successful attachment result.
 
 ## Envelope IDs
 

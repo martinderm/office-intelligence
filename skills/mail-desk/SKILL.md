@@ -51,6 +51,10 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
 - Backend-Zugriff, Locator und Transport bleiben beim gewählten Adapter;
   Projekt-/Topic-Katalogpflege bei `project-catalog-entry` bzw.
   `topic-catalog-entry`.
+- Das FR-08-`MD-A1`-Inventar verwendet ausschließlich die reale RFC-822-MIME-
+  Struktur. Fehlende Inventarisierung, Account-/Message-ID-Drift oder ungültige
+  Part-Metadaten halten das einzelne Item fail-closed in `INBOX` zur Review.
+  Ein Abruf, eine Extraktion oder Cloud-Ablage ist dadurch noch nicht autorisiert.
 
 ## Mutationen, Identität und Backend
 
@@ -110,7 +114,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    Pipeline-Auftrag erlaubt diesen gesonderten Modus.
 2. Mit dem Adapter Minimalzugriff lesen (Header, Betreff, Absender, Datum, Preview,
    sichtbare Link-/Anhang-/Thread-Hinweise) und **vor** Body-Auswertung den Lesegrad
-   festlegen: `structural`, `selective` oder `full`.
+   festlegen: `structural`, `selective` oder `full`. Reale Anhänge ausschließlich
+   über das manifestgebundene MIME-Inventar erfassen; Betreff, Preview oder
+   Body-Markup sind kein Anhangsnachweis.
 3. Nur nötigen Inhalt laden. Bei Unklarheit oder höherem Wissens-/Fehlerrisiko stets
    `structural → selective → full` eskalieren, nie aus Bequemlichkeit zurück. Nach
    jeder Inhaltslektüre sofort Kernaussage, Aktion, Reply, Todo, Referenzwert und

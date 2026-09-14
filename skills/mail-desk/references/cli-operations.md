@@ -144,10 +144,12 @@ Manifest-Shape:
 
 ```json
 {
+  "account": "BOKU-MARTIN",
   "operations": [
     { "action": "list_folders" },
     { "action": "list_envelopes", "folder": "INBOX", "page_size": 20 },
     { "action": "read", "folder": "INBOX", "envelope_id": "7195" },
+    { "action": "inspect_attachments", "folder": "INBOX", "envelope_id": "7195", "expected_message_id": "message@example.org" },
     { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
     { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
     { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
@@ -156,6 +158,13 @@ Manifest-Shape:
   "delete_input_on_success": true
 }
 ```
+
+`inspect_attachments` exportiert die Nachricht read-only als RFC-822-Quelle und
+liefert ausschließlich validierte, an Account, Message-ID, Folder, Envelope-ID und
+Part-Locator gebundene Kandidaten. Ein optionales `operations[].account` darf nur
+den Top-Level-Account wiederholen; Abweichung, fehlende Message-ID oder ungültige
+MIME-Metadaten sind fail-closed Fehler. Der Inventarschritt lädt noch keinen
+Anhang in eine Arbeits- oder Cloud-Ablage herunter.
 
 Clientzweck und Aufrufregel stehen im
 [Himalaya-/IMAP-Adapter](backends/himalaya.md); Batch-Lebenszyklus in

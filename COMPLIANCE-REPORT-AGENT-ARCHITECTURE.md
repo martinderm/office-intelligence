@@ -603,12 +603,18 @@ vollständig abgeschlossenen, unabhängigen Batches sinnvoll, nicht innerhalb ei
 Mailbox-Transaktion. Eine autonome Pipeline ist kein Luna-Erstauftrag; Count-,
 Receipt-, Readiness-, Review-, Verify- und Reconcile-Fehler sind Stopbedingungen.
 
-### 11.4 Geplanter FR-08: Anhänge und Cloud-Ablagevorschläge
+### 11.4 Teilweise umgesetzter FR-08: Anhänge und Cloud-Ablagevorschläge
 
-Der aus einem Luna-Lauf abgeleitete Anhangswunsch ist als `FR-08` geplant, aber
-nicht implementiert. Die Architektur trennt MIME-Inventar, manifestgebundenen
-Temp-Abruf, begrenzte untrusted Inhaltsauswertung und katalog-/Filemap-gestützten
-Cloud-Ablagevorschlag. Ein vorhandenes `cloud_sync` autorisiert weder Upload noch
+Der aus einem Luna-Lauf abgeleitete Anhangswunsch ist als `FR-08` paketiert.
+`MD-A1` ist umgesetzt: Das read-only Inventar basiert auf der realen RFC-822-
+MIME-Struktur, bindet Kandidaten fail-closed an Account, normalisierte Message-ID,
+Mailbox-Location und Part-Locator und validiert Größe, MIME-Typ, SHA-256 sowie
+interne Provenienz. Inventarisierungs-, Drift- und Metadatenfehler bleiben sichtbar
+in Review; Betreff-/Preview-Erwähnungen erzeugen keine Anhänge. Der operative
+Clientpfad bleibt manifestgebunden. Die Architektur trennt weiterhin den in `MD-A2`
+offenen Temp-Abruf, die begrenzte untrusted Inhaltsauswertung (`MD-A3`/`MD-A4`) und
+den katalog-/Filemap-gestützten Cloud-Ablagevorschlag (`MD-A5`). Ein vorhandenes
+`cloud_sync` autorisiert weder Upload noch
 neue Ordner; ohne belegtes Ziel bleibt der Candidate in Review. Events besitzen
 keinen eigenen Cloud-Speicher und können nur einen explizit katalogisierten
 Parent-/Subtopic-Storage referenzieren. `needs_reply` bleibt orthogonal. Eine

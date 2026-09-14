@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import concurrent.futures
+import email
 import json
 import os
+from pathlib import Path
 import subprocess
+import tempfile
 import time
 from typing import Any
 
+from .attachments import inspect_mime_tree, validate_attachment_candidate_metadata
 from .common import normalize_message_id
 
 
@@ -80,6 +84,27 @@ def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35,
     raise last_err or RuntimeError(f"Himalaya failed after {max_retries} attempts: {' '.join(cmd)}")
 
 
+def fetch_raw_message_eml(
+    env_id: str | int,
+    folder: str = "INBOX",
+    account: str | None = None,
+    timeout: int = 30,
+) -> bytes:
+    """Fetch raw RFC 822 .eml bytes via himalaya message export -F."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dest_eml = Path(tmp_dir) / f"msg_{env_id}.eml"
+        args = [
+            "message", "export", str(env_id),
+            "-f", folder,
+            "-F",
+            "-d", str(dest_eml),
+        ]
+        run_himalaya(args, account=account, timeout=timeout, max_retries=2)
+        if not dest_eml.exists() or dest_eml.stat().st_size == 0:
+            raise RuntimeError(f"Himalaya export produced empty or missing .eml for envelope {env_id}")
+        return dest_eml.read_bytes()
+
+
 def get_single_email_details(
     env_id: str | int,
     folder: str = "INBOX",
@@ -87,8 +112,110 @@ def get_single_email_details(
     preview_lines: int = 30,
     fallback_envelope: dict[str, Any] | None = None,
     full_body: bool = False,
+    inspect_attachments: bool = True,
+    raw_eml: bytes | None = None,
 ) -> dict[str, Any]:
-    """Fetch headers and either a bounded preview or the full body for one envelope."""
+    """Fetch headers, preview/body, and structured MIME attachments for one envelope."""
+    attachments_list: list[dict[str, Any]] = []
+    attachment_status: str = "none"
+    attachment_error: str | None = None
+
+    if raw_eml is not None:
+        try:
+            attachments_list = inspect_mime_tree(raw_eml)
+            inv_reasons = []
+            for a in attachments_list:
+                v, r = validate_attachment_candidate_metadata(a)
+                if not v:
+                    inv_reasons.append(r)
+            if inv_reasons:
+                attachments_list = []
+                attachment_status = "attachment_inventory_unavailable"
+                attachment_error = f"Incomplete attachment inventory in MIME: {'; '.join(inv_reasons)}"
+            else:
+                attachment_status = "available" if attachments_list else "none"
+            eml_b = raw_eml if isinstance(raw_eml, bytes) else raw_eml.encode("utf-8", errors="replace")
+            msg_obj = email.message_from_bytes(eml_b, policy=email.policy.default)
+            raw_mid = str(msg_obj.get("Message-ID", "") or "")
+            norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+            subj = str(msg_obj.get("Subject", "") or "")
+            from_hdr = str(msg_obj.get("From", "") or "")
+            to_hdr = str(msg_obj.get("To", "") or "")
+            date_hdr = str(msg_obj.get("Date", "") or "")
+            in_reply_to = str(msg_obj.get("In-Reply-To", "") or "")
+            references = str(msg_obj.get("References", "") or "")
+
+            body_text = ""
+            try:
+                body_part = msg_obj.get_body(preferencelist=("plain", "html"))
+                if body_part:
+                    content = body_part.get_content()
+                    body_text = content if isinstance(content, str) else str(content or "")
+            except Exception:
+                pass
+            if not body_text:
+                for part in msg_obj.walk():
+                    if not part.is_multipart() and part.get_content_type().lower() in ("text/plain", "text/html"):
+                        payload = part.get_payload(decode=True)
+                        if isinstance(payload, bytes):
+                            body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                            break
+
+            body_lines = body_text.splitlines()
+            preview = "\n".join(body_lines if full_body else body_lines[:preview_lines])
+
+            return {
+                "envelope_id": str(env_id),
+                "folder": folder,
+                "message_id": norm_mid,
+                "raw_message_id": raw_mid,
+                "subject": subj or (fallback_envelope.get("subject", "") if fallback_envelope else ""),
+                "from": from_hdr,
+                "to": to_hdr,
+                "date": date_hdr,
+                "in_reply_to": in_reply_to,
+                "references": references,
+                "preview": preview,
+                "attachments": attachments_list,
+                "attachment_status": attachment_status,
+                "attachment_error": attachment_error,
+                "error": None,
+                "read_level": "full_body" if full_body else "preview",
+            }
+        except Exception as exc:
+            attachments_list = []
+            attachment_status = "attachment_inventory_unavailable"
+            attachment_error = f"Failed to parse MIME tree: {exc}"
+    elif fallback_envelope and fallback_envelope.get("has_attachment") is False:
+        attachments_list = []
+        attachment_status = "none"
+        attachment_error = None
+    elif inspect_attachments:
+        try:
+            eml_data = fetch_raw_message_eml(env_id, folder=folder, account=account)
+            attachments_list = inspect_mime_tree(eml_data)
+            inv_reasons = []
+            for a in attachments_list:
+                v, r = validate_attachment_candidate_metadata(a)
+                if not v:
+                    inv_reasons.append(r)
+            if inv_reasons:
+                attachments_list = []
+                attachment_status = "attachment_inventory_unavailable"
+                attachment_error = f"Incomplete attachment inventory in MIME: {'; '.join(inv_reasons)}"
+            else:
+                attachment_status = "available" if attachments_list else "none"
+                attachment_error = None
+        except Exception as exc:
+            attachments_list = []
+            attachment_status = "attachment_inventory_unavailable"
+            attachment_error = f"Failed to export or inspect message MIME: {exc}"
+    elif fallback_envelope and "attachments" in fallback_envelope:
+        # Fallback attachments without live MIME inspection cannot be trusted as 'available'
+        attachments_list = []
+        attachment_status = "attachment_inventory_unavailable"
+        attachment_error = "Fallback envelope attachments cannot be trusted without verified MIME inspection"
+
     args = [
         "message", "read",
         "-H", "Message-Id", "-H", "In-Reply-To", "-H", "References",
@@ -131,6 +258,9 @@ def get_single_email_details(
                 "in_reply_to": "",
                 "references": "",
                 "preview": "",
+                "attachments": attachments_list,
+                "attachment_status": attachment_status,
+                "attachment_error": attachment_error,
                 "error": str(last_err) if last_err else "Full message read failed.",
                 "read_level": "full_body",
             }
@@ -158,6 +288,9 @@ def get_single_email_details(
             "in_reply_to": "",
             "references": "",
             "preview": "",
+            "attachments": attachments_list,
+            "attachment_status": attachment_status,
+            "attachment_error": attachment_error,
             "error": None if norm_mid else str(last_err),
             "read_level": "preview",
         }
@@ -201,6 +334,9 @@ def get_single_email_details(
             "in_reply_to": headers.get("in-reply-to", ""),
             "references": headers.get("references", ""),
             "preview": "\n".join(body_lines if full_body else body_lines[:preview_lines]),
+            "attachments": attachments_list,
+            "attachment_status": attachment_status,
+            "attachment_error": attachment_error,
             "error": read_error,
             "read_level": "full_body" if full_body else "preview",
         }
@@ -217,6 +353,9 @@ def get_single_email_details(
             "in_reply_to": "",
             "references": "",
             "preview": "",
+            "attachments": attachments_list,
+            "attachment_status": attachment_status,
+            "attachment_error": attachment_error,
             "error": str(e),
             "read_level": "full_body" if full_body else "preview",
         }

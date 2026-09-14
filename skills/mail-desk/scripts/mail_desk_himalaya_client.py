@@ -16,11 +16,18 @@ Usage:
     python3 scripts/mail_desk_himalaya_client.py move -f INBOX -t "Projekte/USAGE-NG" 7195 --json
     python3 scripts/mail_desk_himalaya_client.py delete -f INBOX 7195 --json
     python3 scripts/mail_desk_himalaya_client.py search -q "USAGE-NG" --json
+
+Note:
+    MIME attachment inspection is strictly audited and executed exclusively via JSON
+    manifest (--input), ensuring verified account binding, drift checks, and policy
+    enforcement. The direct operative CLI subcommand for attachment inspection is
+    deliberately disabled to prevent unverified or unbound attachment operations.
 """
 
 from __future__ import annotations
 
 import argparse
+import email
 import json
 from pathlib import Path
 import sys
@@ -28,7 +35,16 @@ from typing import Any
 
 from core.envelope import build_error, build_success, emit_json
 from core.common import normalize_message_id
+from core.attachments import (
+    AccountDriftError,
+    AttachmentDriftError,
+    MessageIdDriftError,
+    bind_attachment_candidate,
+    inspect_mime_tree,
+    verify_attachment_drift,
+)
 from core.himalaya import (
+    fetch_raw_message_eml,
     get_single_email_details,
     run_himalaya,
     search_mailbox,
@@ -284,6 +300,72 @@ def op_search(
     )
 
 
+def op_inspect_attachments(
+    envelope_id: str | int,
+    folder: str = "INBOX",
+    account: str | None = None,
+    expected_message_id: str | None = None,
+    raw_eml: bytes | None = None,
+) -> dict[str, Any]:
+    """Inspect structured MIME attachments for a message.
+
+    Aborts fail-closed if account is not explicitly bound, ensuring safe MIME operations
+    and drift prevention prior to any mailbox export.
+    """
+    if not account or not str(account).strip():
+        raise ValueError("Cannot inspect attachments: an explicitly bound account is required.")
+
+    bound_account = str(account).strip()
+    env_id_str = str(envelope_id)
+    if not env_id_str.strip():
+        raise ValueError("Cannot inspect attachments: envelope_id is required.")
+
+    if raw_eml is None:
+        raw_eml = fetch_raw_message_eml(env_id_str, folder=folder, account=bound_account)
+
+    attachments = inspect_mime_tree(raw_eml)
+
+    eml_bytes = raw_eml if isinstance(raw_eml, bytes) else raw_eml.encode("utf-8", errors="replace")
+    msg = email.message_from_bytes(eml_bytes, policy=email.policy.default)
+    raw_mid = msg.get("Message-ID", "")
+    norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+    subject = str(msg.get("Subject", "") or "")
+
+    if expected_message_id:
+        norm_exp_mid = normalize_message_id(expected_message_id)
+        if norm_mid != norm_exp_mid:
+            raise MessageIdDriftError(
+                f"Message-ID drift detected: message has '{norm_mid}', expected '{norm_exp_mid}'"
+            )
+
+    if not norm_mid:
+        raise ValueError("Missing Message-ID: cannot bind attachment inventory without verified Message-ID.")
+
+    bound_candidates = []
+    for att in attachments:
+        bound_candidates.append(
+            bind_attachment_candidate(
+                attachment=att,
+                account=bound_account,
+                folder=folder,
+                envelope_id=env_id_str,
+                message_id=norm_mid,
+            )
+        )
+
+    return {
+        "envelope_id": env_id_str,
+        "folder": folder,
+        "account": bound_account,
+        "message_id": norm_mid,
+        "raw_message_id": str(raw_mid),
+        "subject": subject,
+        "attachment_count": len(attachments),
+        "attachments": attachments,
+        "bound_candidates": bound_candidates,
+    }
+
+
 # ==============================================================================
 # Manifest Mode
 # ==============================================================================
@@ -362,6 +444,22 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     message_id=op.get("message_id"),
                     folders=op.get("folders"),
                     account=acc,
+                )
+            elif action in ["inspect_attachments", "attachments"]:
+                op_account = op.get("account")
+                if op_account is not None and str(op_account).strip():
+                    if not acc or str(op_account).strip() != str(acc).strip():
+                        raise AccountDriftError(
+                            f"Account drift detected in manifest operation: operation specifies '{op_account}', "
+                            f"but manifest is bound to '{acc}'"
+                        )
+                if not acc or not str(acc).strip():
+                    raise ValueError("Cannot inspect attachments: an explicitly bound account is required.")
+                res = op_inspect_attachments(
+                    envelope_id=str(op.get("envelope_id", op.get("id"))),
+                    folder=op.get("folder", "INBOX"),
+                    account=acc,
+                    expected_message_id=op.get("expected_message_id", op.get("message_id")),
                 )
             else:
                 raise ValueError(f"Unknown operation action: {action}")

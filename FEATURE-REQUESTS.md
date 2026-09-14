@@ -13,7 +13,7 @@ Dieses Dokument fasst die in der Session ab 01.09.2026 erarbeiteten Architektur-
 | `FR-05` | ✅ abgeschlossen | Ja: alle acht Handler ausgelagert | `search`, `resolve`, `inspect`, `draft`, `sync_sent`, `execute`, `verify` und `pipeline` liegen in `scripts/core/modes/`; der durch spätere Dossier-Modi erweiterte Runner umfasst aktuell 1.077 physische Zeilen und behält CLI-/Dispatch-/Kompatibilitätsfassaden sowie gemeinsame Fetch-Helper. |
 | `FR-06` | ✅ abgeschlossen | Ja: U-1 bis U-5, manueller Pilot, Telemetrie, reviewbare Targets und Session-Handoff | Die technische Zwei-Stufen-Architektur ist abgeschlossen; die konkrete inhaltliche Synthese bleibt absichtlich eine LLM-geführte Laufzeitpflicht und wird nicht vom Python-Runner behauptet oder automatisiert. |
 | `FR-07` | ✅ abgeschlossen | H0-Recovery sowie H1–H5 abgeschlossen | Der unterbrochene BOKU-Lauf ist reconciliert; Standard-Batch-Einstieg, Workspace-gebundene Transport-Readiness, first-class Recovery und das fail-closed Completion-/Synthese-Gate sind umgesetzt. |
-| `FR-08` | 🟠 geplant | Manifestgebundene Anhänge, begrenzte Inhaltsauswertung und kataloggestützte Cloud-Ablagevorschläge | Anhänge werden read-only inventarisiert, nach Review sicher temporär abgerufen und begrenzt extrahiert. Policy-Limits und Nutzung der Cloud-Atlas-Toolchain (`markitdown`, `ocrmypdf`) sind spezifiziert; Ablagevorschlag bleibt strikt read-only. |
+| `FR-08` | 🟡 teilweise umgesetzt — MD-A1 abgeschlossen | Manifestgebundene Anhänge, begrenzte Inhaltsauswertung und kataloggestützte Cloud-Ablagevorschläge | Das reale, read-only RFC-822-MIME-Inventar samt Policy-, Provenienz-, Account-, Message-ID-, Location- und Part-Bindung ist umgesetzt. Temporärer Abruf, Extraktion, Materialitätsprüfung und Ablagevorschlag folgen in MD-A2–A5. |
 | `FR-09` | 🟠 geplant | Human-gated Cloud-Promotion für Mail-Anhänge (`attachment_promotion`) | Kontrollierter, hashgebundener Transfer freigegebener `attachment_filing_candidate`-Dateien in katalogisierte Cloud-Storages inklusive Kollisionsschutz, atomarem Write und direkter Cloud-Atlas-Filemap-/Mirror-Anbindung. |
 
 `🟠` bezeichnet dokumentierte Planung ohne vollständige Funktionsimplementierung, `🟡` eine belastbare Teilgrundlage, `⬜` ein noch nicht begonnenes Ziel und `⏸️` ein bewusst depriorisiertes Vorhaben.
@@ -571,7 +571,8 @@ autonomen produktiven Zehn-Mail-Lauf.
 
 ## FR-08: Manifestgebundene Mail-Anhänge und Cloud-Ablagevorschläge
 
-**Status:** 🟠 Geplant. Die Anforderung ist fachlich sinnvoll, aber Lunas
+**Status:** 🟡 Teilweise umgesetzt. `MD-A1` ist abgeschlossen; `MD-A2`–`MD-A5`
+sind offen. Die Anforderung ist fachlich sinnvoll, aber Lunas
 Kurzvorschlag vermischt Transport, Inhaltsauswertung und Cloud-Promotion. FR-08
 trennt diese Grenzen ausdrücklich. Gegenstand ist zunächst ein sicherer,
 reviewbarer Ablagevorschlag; ein automatischer Upload oder eine neue allgemeine
@@ -657,7 +658,7 @@ einen zweiten Agenten abgerufen werden, während der Mailfall mutiert wird.
 
 | Paket | Status | Inhalt | Abnahme |
 | :--- | :--- | :--- | :--- |
-| `MD-A1` | ⬜ offen | Read-only MIME-Inventar und manifestgebundener JSON-Client-Vertrag; keine Preview-Heuristik als Anhangsnachweis. | Tests für keine Anhänge, zwei reale PDFs, nur im Betreff erwähntes PPT, Account-/Message-ID-/Location-Drift und ungültige Part-Locators. |
+| `MD-A1` | ✅ abgeschlossen | Read-only RFC-822-MIME-Inventar und manifestgebundener JSON-Client-Vertrag; keine Preview-Heuristik als Anhangsnachweis. Fail-closed bei fehlender Inventarisierung, Account-/Message-ID- oder Metadatenbindung. | 46 fokussierte hermetische/adversariale Tests sowie 276 Mail-Desk-Regressionstests: keine Anhänge, zwei reale PDFs, nur im Betreff erwähntes PPT, CID-Zuordnung, Policy-Limits, manipulierte Metadaten, Account-/Message-ID-/Location-Drift und ungültige Part-Locators. |
 | `MD-A2` | ⬜ offen | Sicherer run-scoped Abruf mit Temp-Quarantäne, SHA-256, Größenlimits, MIME-Sniffing, Pfadschutz und Cleanup/Recovery. | Tests für Erfolg, Timeout, fehlende Konfiguration, Traversal, Größenlimit, MIME-Drift, Teilfehler und idempotenten Retry ohne Doppeldatei. |
 | `MD-A3` | ⬜ offen | Begrenzte PDF-/Office-/Text-Extraktion inklusive lokaler OCR-Derivate und Qualitäts-/Provenienzmarkern. | Tests für digitale PDF, Bild-PDF, DOCX/PPTX/XLSX, beschädigte/aktive Datei, Tool fehlt, Timeout und deterministische Trunkierung. |
 | `MD-A4` | ⬜ offen | Materialitäts-Gate und LLM-Auswertung mit geladenem Project-/Topic-/Subtopic-Kontext; Reply bleibt orthogonal. | `required_for_decision` blockiert nur das Item; supplementary failure lässt Batch weiterlaufen; keine Instruktion aus Anhangsinhalten wird ausgeführt. |
@@ -695,7 +696,7 @@ Am 13.09.2026 wurden auf Basis der Praxiserfahrungen und der bestehenden Toolcha
      `<untrusted_attachment_content filename="..." sha256="..." format="...">...</untrusted_attachment_content>`.
 
 4. **Verbleibende Vorbedingungen:**
-   - Der Himalaya-JSON-Client benötigt einen nachgewiesenen, nichtinteraktiven Attachment-List-/Download-Vertrag (kein interaktiver Wizard bei fehlender Account-Konfiguration).
+   - Der nichtinteraktive, manifestgebundene Himalaya-MIME-Inventarvertrag ist mit `MD-A1` nachgewiesen. Der sichere, reviewgebundene Download-/Quarantänevertrag folgt in `MD-A2`.
    - Die eigentliche Ablage/Promotion von Anhängen in Cloud-Speicher ist formal in **FR-09** ausgelagert.
 
 ---
