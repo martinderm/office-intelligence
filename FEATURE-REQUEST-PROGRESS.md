@@ -12,8 +12,8 @@
 | --- | --- | --- | --- |
 | `MD-A1` — Read-only MIME-Inventar | ✅ abgeschlossen | `6f86c67` | 46 fokussierte / 276 Gesamt-Tests |
 | `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ abgeschlossen | `bc4d125` | 14 fokussierte / 290 Gesamt-Tests |
-| `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ⬜ nächstes Paket | — | ausstehend |
-| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ⬜ geplant | — | ausstehend |
+| `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
+| `MD-A4` — Materialitäts-Gate & LLM-Handoff | ⬜ nächstes Paket | — | ausstehend |
 | `MD-A5` — Ablagevorschlag | ⬜ geplant | — | ausstehend |
 
 ---
@@ -94,9 +94,66 @@
 
 ---
 
-## Nächstes Paket: `MD-A3` — Begrenzte Extraktion und lokales OCR-Derivat
+## Paket: FR-08 / `MD-A3` — Begrenzte Extraktion und lokales OCR-Derivat
 
-- **Scope:** Nur verifizierte Quarantänedateien; keine Mailbox, kein Cloud-Write, kein LLM.
-- **Dateien:** Neu `scripts/core/attachment_extract.py`, `tests/test_maildesk_attachments_mda3.py`.
-- **Limits:** PDF 10 Seiten; OCR 3 Seiten/30 s; DOCX 40 Absätze; PPTX 15 Slides; XLSX 2 Sheets x 50 Zeilen x 10 Spalten; Prozess 20 s; 15.000 Zeichen je Datei.
-- **OCR-Regel:** Nur Quarantäne-Derivat wird verändert; Original bleibt unverändert.
+- **Status:** ✅ Abgeschlossen & Verifiziert
+- **Scope:** Nur verifizierte Quarantänedateien; keine Mailboxmutation, kein Cloud-Write, kein LLM.
+
+### 1. Zusammenfassung der Umsetzung
+
+1. **Begrenzte Format-Extraktoren:**
+   - [`core/attachment_extract.py`](skills/mail-desk/scripts/core/attachment_extract.py): `extract_attachment_text()` extrahiert strukturierten Text aus Quarantänedateien mit strikten Formatbudgets:
+     - Plain Text / CSV / Markdown: bis 15.000 Zeichen.
+     - PDF (`pymupdf`): maximal 10 Seiten (`MAX_PDF_PAGES`), Zeichenbudget 15.000 Zeichen.
+     - DOCX (`python-docx`): maximal 40 Absätze (`MAX_DOCX_PARAGRAPHS`), Zeichenbudget 15.000 Zeichen.
+     - XLSX (`openpyxl`): maximal 2 Sheets (`MAX_XLSX_SHEETS`), maximal 50 Zeilen (`MAX_XLSX_ROWS`), maximal 10 Spalten (`MAX_XLSX_COLS`), Zeichenbudget 15.000 Zeichen.
+     - PPTX (`python-pptx`): maximal 15 Slides (`MAX_PPTX_SLIDES`), Zeichenbudget 15.000 Zeichen.
+2. **Globales Zeichenlimit & Truncation:**
+   - Jede Extraktion wird bei Erreichen von 15.000 Zeichen (`MAX_CHARS_PER_ATTACHMENT`) hart abgeschnitten (`[... Truncated at 15000 characters ...]`) und setzt das Flag `truncated: True`.
+3. **OCR-Derivat-Isolation & Budget:**
+   - Bei reinen Bild-PDFs (0 extrahierter Text) und aktiviertem `ocr_enabled=True` wird `_run_ocr_derivative()` aufgerufen.
+   - **Original bleibt unberührt:** Das OCR-Ergebnis wird ausschließlich in ein isoliertes Derivat-Verzeichnis geschrieben (`derivatives/<filename>.ocr.pdf`). Die Quarantäne-Quelldatei bleibt byte-identisch unverändert (geprüft via SHA-256).
+   - Budgets: maximal 3 Seiten (`MAX_OCR_PAGES`), OCR-Timeout von maximal 30 Sekunden (`OCR_TIMEOUT_SECONDS`).
+4. **Prozess-Timeout & Fail-Closed-Fehlerbehandlung:**
+   - Gesamt-Prozess-Timeout: 20 Sekunden (`PROCESS_TIMEOUT_SECONDS`).
+   - Fehlende Bibliotheken, defekte Dateien oder nicht unterstützte Formate liefern strukturiert `status: "attachment_conversion_unavailable"` mit Fehlermeldung — niemals scheinbaren Erfolg oder leere Ausgaben ohne Fehlerkennzeichnung.
+
+---
+
+### 2. Geänderte und neue Dateien
+
+| Datei | Status | Verantwortung |
+| --- | --- | --- |
+| `skills/mail-desk/scripts/core/attachment_extract.py` | Neu | Text-Extraktion, Formatbudgets (PDF/DOCX/XLSX/PPTX/Text), OCR-Derivat-Isolation, Timeouts |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda3.py` | Neu | 11 hermetische Tests für Formatbudgets, OCR-Derivat, Timeouts, Fail-Closed |
+
+---
+
+### 3. Verifikationsergebnisse & Nachweise
+
+1. **Fokussierte Suite `MD-A3`:**
+   ```powershell
+   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda3.py
+   ```
+   *Ergebnis:* **11 von 11 Tests OK (2.3s)**
+   *Abdeckung:* Text/CSV, PDF-Seitenlimit (10 Seiten), OCR-Derivat-Isolation & -Budget (Original unberührt), DOCX-Absatzlimit (40), XLSX-Sheets/Zeilen/Spalten-Limits, PPTX-Slide-Limits (15), 15k-Zeichenlimit-Truncation, Gesamt-Timeout, Converter-Ausfall (fail-closed), defekte Dateien (fail-closed).
+
+2. **Gesamte Mail-Desk-Testsuite:**
+   ```powershell
+   python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
+   ```
+   *Ergebnis:* **301 von 301 Tests OK (25.8s)** — 0 Fehler, 0 Regressionen.
+
+3. **Linter & Formatierungsprüfung:**
+   - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
+   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+
+---
+
+## Nächstes Paket: `MD-A4` — Materialitäts-Gate und LLM-Handoff
+
+- **Scope:** Nur Prompt- und Manifest-Vorbereitung; kein LLM-Call, keine Cloud-Ablage, keine Mailbox-Mutation.
+- **Dateien:** Neu `scripts/core/attachment_handoff.py`, `tests/test_maildesk_attachments_mda4.py`.
+- **Eingang:** Extraktionsergebnis aus MD-A3 + Materialitäts-Review (`supplementary` vs `required_for_decision`).
+- **Ausgang:** Untrusted Context `<untrusted_attachment_content>` mit Escape-Schutz, strikte Budgets (15k Chars/Datei, 30k Chars/Mail kumulativ).
