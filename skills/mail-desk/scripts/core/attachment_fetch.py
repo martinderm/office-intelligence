@@ -454,13 +454,18 @@ def detect_mime_and_active_content(
                     eff_mime = "application/zip"
         except Exception:
             eff_mime = "application/zip"
+    elif payload.startswith(bytes([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])):
+        eff_mime = "application/msword"
     else:
         # Check text heuristics
         is_binary = bytes([0]) in payload[:1024]
         if not is_binary:
             try:
                 payload.decode("utf-8")
-                eff_mime = "text/plain"
+                if ext == ".csv":
+                    eff_mime = "text/csv"
+                else:
+                    eff_mime = "text/plain"
             except UnicodeDecodeError:
                 eff_mime = "application/octet-stream"
         else:

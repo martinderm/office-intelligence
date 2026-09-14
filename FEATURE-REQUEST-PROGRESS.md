@@ -129,29 +129,77 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 ---
 
-## Paket: FR-08 / `MD-A3` — Begrenzte Extraktion und lokales OCR-Derivat
+## Paket: FR-08 / `MD-A3` — Begrenzte Extraktion und lokales OCR-Derivat (Gehärtet)
 
 - **Status:** ✅ Abgeschlossen & Verifiziert
 - **Scope:** Nur verifizierte Quarantänedateien; keine Mailboxmutation, kein Cloud-Write, kein LLM.
 
-### 1. Zusammenfassung der Umsetzung
+### 1. Zusammenfassung der Umsetzung & Härtung
 
-1. **Begrenzte Format-Extraktoren:**
-   - [`core/attachment_extract.py`](skills/mail-desk/scripts/core/attachment_extract.py): `extract_attachment_text()` extrahiert strukturierten Text aus Quarantänedateien mit strikten Formatbudgets:
-     - Plain Text / CSV / Markdown: bis 15.000 Zeichen.
-     - PDF (`pymupdf`): maximal 10 Seiten (`MAX_PDF_PAGES`), Zeichenbudget 15.000 Zeichen.
-     - DOCX (`python-docx`): maximal 40 Absätze (`MAX_DOCX_PARAGRAPHS`), Zeichenbudget 15.000 Zeichen.
-     - XLSX (`openpyxl`): maximal 2 Sheets (`MAX_XLSX_SHEETS`), maximal 50 Zeilen (`MAX_XLSX_ROWS`), maximal 10 Spalten (`MAX_XLSX_COLS`), Zeichenbudget 15.000 Zeichen.
-     - PPTX (`python-pptx`): maximal 15 Slides (`MAX_PPTX_SLIDES`), Zeichenbudget 15.000 Zeichen.
-2. **Globales Zeichenlimit & Truncation:**
-   - Jede Extraktion wird bei Erreichen von 15.000 Zeichen (`MAX_CHARS_PER_ATTACHMENT`) hart abgeschnitten (`[... Truncated at 15000 characters ...]`) und setzt das Flag `truncated: True`.
-3. **OCR-Derivat-Isolation & Budget:**
-   - Bei reinen Bild-PDFs (0 extrahierter Text) und aktiviertem `ocr_enabled=True` wird `_run_ocr_derivative()` aufgerufen.
-   - **Original bleibt unberührt:** Das OCR-Ergebnis wird ausschließlich in ein isoliertes Derivat-Verzeichnis geschrieben (`derivatives/<filename>.ocr.pdf`). Die Quarantäne-Quelldatei bleibt byte-identisch unverändert (geprüft via SHA-256).
-   - Budgets: maximal 3 Seiten (`MAX_OCR_PAGES`), OCR-Timeout von maximal 30 Sekunden (`OCR_TIMEOUT_SECONDS`).
-4. **Prozess-Timeout & Fail-Closed-Fehlerbehandlung:**
-   - Gesamt-Prozess-Timeout: 20 Sekunden (`PROCESS_TIMEOUT_SECONDS`).
-   - Fehlende Bibliotheken, defekte Dateien oder nicht unterstützte Formate liefern strukturiert `status: "attachment_conversion_unavailable"` mit Fehlermeldung — niemals scheinbaren Erfolg oder leere Ausgaben ohne Fehlerkennzeichnung.
+1. **Strikte MD-A2-Envelope- und Hash-Validierung (`validate_mda2_fetch_result`):**
+   - Akzeptiert ausschließlich verifizierte MD-A2-Ergebnis-Envelopes mit Status `fetched` oder `already_fetched`.
+   - `expected_sha256: str` ist ein **zwingender Pflichtparameter** von `extract_attachment_content` und `validate_mda2_fetch_result`.
+   - `run_id` wird strikt gegen Path-Traversal, illegale Zeichen und Windows-Gerätenamen (`CON`, `PRN`, `AUX`, `NUL`, etc.) validiert (`is_valid_run_id`).
+   - `relative_path` und `effective_mime_type` sind Pflichtfelder.
+   - `fetch_sha256` und `inventory_sha256` müssen zwingend vorliegen, gültige 64-stellige Hex-Strings sein und exakt mit `expected_sha256` übereinstimmen.
+   - **Pre-Extraction-Prüfung:** Der Hash der Quelldatei auf der Festplatte wird vor der Verarbeitung berechnet und gegen `fetch_sha256` geprüft; bei Abweichung bricht die Extraktion sofort fail-closed mit `HashDriftError` ab.
+
+2. **Pfadcontainment, Symlink- und Windows-Reparse-Point-Schutz:**
+   - Quelle und Derivate werden ausschließlich innerhalb des aktiven Run-Verzeichnisses `data/mail-desk/attachments/<run-id>/` aufgelöst.
+   - Absolute Pfade, Windows-Laufwerksbuchstaben, `..`-Traversal-Sequenzen und Unterverzeichnisse innerhalb der Run-Quarantäne werden fail-closed mit `ValueError` abgewiesen.
+   - **Unresolved Root Guard:** Symlink- und Junction-Checks (`check_quarantine_path_security`) prüfen die Pfadhierarchie bereits auf dem **unaufgelösten** `raw_attachments_root`, um Junction-Escapes vor der Auflösung zuverlässig zu erkennen.
+
+3. **MIME- und Dateiendungs-Drift-Schutz (Fail-Closed vor Parseraufruf):**
+   - Re-Sniffing der Quelldatei via `detect_mime_and_active_content()` und Re-Validierung gegen das MD-A2-Envelope (`validate_mime_and_extension`).
+   - Abweichungen zwischen MD-A2 `effective_mime_type` und dem tatsächlichen Dateiinhalt lösen `MimeDriftError` aus.
+   - Nicht zur Dateiendung passende MIME-Typen lösen `ExtensionMimeDriftError` aus.
+   - `.docm`, `.xlsm`, `.pptm`, `.ps1`, `.bat`, `.cmd`, `.exe` und alle weiteren in der Policy konfigurierten `disallowed_extensions` werden vor jedem Parseraufruf abgewiesen (`DisallowedExtensionError`).
+   - OOXML-Archive werden vorab auf `vbaProject.bin` und `macroEnabled` in `[Content_Types].xml` geprüft (`ActiveContentBlockedError`).
+
+4. **Echter Prozess-Worker mit Win32 Job Object, Win64 ctypes-Signaturen, portablem POSIX-Handshake und Process-Tree-Terminierung:**
+   - `run_with_timeout` führt Extraktions- und OCR-Workflows standardmäßig in einem isolierten `multiprocessing.Process`-Worker aus.
+   - **Vollständige Win64-kompatible `ctypes`-Signaturen & Fail-Closed Guard (`_init_win32_signatures`, `_get_verified_kernel32`):**
+     - Unter Windows besitzen alle Win32-APIs (`CreateJobObjectW`, `SetInformationJobObject`, `AssignProcessToJobObject`, `TerminateJobObject`, `OpenProcess`, `CloseHandle`, `GetExitCodeProcess`) explizit deklarierte `argtypes` und `restype`.
+     - HANDLE-Rückgaben und -Parameter sind strikt als pointerbreite Typen (`wintypes.HANDLE` / `c_void_p`, 8 Bytes auf Win64) typisiert, wodurch 32-Bit-Truncation, Stack-Corruption oder Sign-Extension auf 64-Bit-Windows ausgeschlossen sind.
+     - **Kein unsicherer Win32-Fallback:** Fehlgeschlagene oder fehlende Signaturinitialisierung speichert den Fehler in `_win32_init_error`. `_get_verified_kernel32()` bricht fail-closed mit `RuntimeError` ab; ein Rückgriff auf unkonfiguriertes `ctypes.windll.kernel32` ist in allen Funktionen (`WindowsJobObject`, `is_process_alive`) vollständig eliminiert.
+   - **Strikter 2-Phasen-Handshake (Windows & POSIX):**
+     - Der Worker startet, etabliert seine Confinement-Grenze und meldet `"READY"` über eine Duplex-Pipe; er blockiert zwingend, bis der übergeordnete Prozess die Isolation verifiziert und autorisiert hat.
+     - **Windows Confinement:** Das Job Object wird mit `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE (0x2000)` konfiguriert und der Worker-PID zugewiesen. Schlägt `CreateJobObjectW`, `SetInformationJobObject`, `AssignProcessToJobObject` oder die Signaturverifikation fehl, terminiert der Parent den Worker sofort via `terminate_process_tree`, schließt die Pipe und bricht fail-closed mit `RuntimeError` ab — **bevor der Worker jemals die Nutzfunktion ausführt**.
+     - **POSIX Confinement:** Der Worker ruft `os.setpgid(0, 0)` auf, um seine eigene Prozessgruppe zu etablieren. Schlägt `setpgid` fehl, bricht der Worker strukturiert ab, meldet einen Fehler und sendet niemals `"READY"`.
+     - **Parent PGID-Verifikation:** Unter POSIX verifiziert der Parent vor dem Senden von `"START"` zwingend `os.getpgid(proc.pid) == proc.pid`. Bei Abweichung oder Fehler terminiert der Parent den Worker **strikt einzeln** (`_terminate_single_process(proc)`), tötet **niemals eine unbestätigte oder fremde Prozessgruppe** und bricht fail-closed mit `RuntimeError` ab.
+     - **Tree-Kill mit Leader-Guard (`terminate_process_tree`):** Auch bei Timeouts prüft `terminate_process_tree` unter POSIX vor jedem `os.killpg(pid, SIGKILL)` nachweislich `pgid == pid`. Ist der Prozess nicht Gruppenführer, wird nur der Einzelprozess beendet.
+   - Erst nach nachweislich erfolgreicher Confinement-Verifikation sendet der Parent das `"START"`-Signal. Erst danach führt der Worker die eigentliche Nutzfunktion aus.
+   - **Kein stiller Thread-Fallback im Produktionspfad:** `allow_thread_fallback=False` ist im Produktionspfad strikt erzwungen. Unpicklbare Objekte lösen fail-closed eine `RuntimeError`-Exception aus.
+   - **Hermetische Dependency Injection für Tests:** `extract_attachment_content` akzeptiert optionale module-level picklbare Runner (`_ocr_runner`, `_lock_verifier`), um Tests unter 100% echter Prozessisolation auszuführen.
+
+5. **Parent-Owned Temp-Derivate & Sibling-Sicheres Zero-Leakage-Cleanup:**
+   - Der übergeordnete Prozess (`extract_attachment_content`) bestimmt den invocationsspezifischen temporären Derivatpfad deterministisch vorab (`.{target_file.stem}.ocr.{invocation_id}.tmp`).
+   - Bei Timeout, Abbruch oder Nichterreichen des `extracted`-Status räumt der übergeordnete Prozess **ausschließlich** den parent-owned, invocationsspezifischen Pfad ab (`_cleanup_temp_artifacts(known_temp_deriv_path)`).
+   - **Kein Globbing von Geschwisterdateien:** Das Cleanup entfernt niemals Sibling-Temp-Dateien (`.{file_stem}.ocr.*.tmp`) desselben Dateistamms; aktive Temp-Dateien paralleler Aufrufe unter derselben Lock-Ownership bleiben vollständig intakt und geschützt.
+   - Keine vorzeitige Verzeichniserstellung: Das `derivatives`-Verzeichnis wird erst nach erfolgreicher Workspace-Lock-Prüfung bei tatsächlichem OCR-Bedarf angelegt.
+
+6. **Zweistufiger Workspace-Lock-Check & Derivat-Isolation:**
+   - Workspace-Lock wird **zweistufig** erzwungen: unmittelbar vor der Erstellung temporärer Derivatdateien (`.tmp`) UND unmittelbar vor der atomaren Promotion (`_atomic_no_clobber_promote`). Ein Lock-Verlust während der OCR-Phase bricht den Vorgang fail-closed ab und bereinigt die Temp-Dateien.
+   - OCR-Derivate werden ausschließlich in `derivatives/<filename>.ocr.pdf` über temporäre Geschwisterdateien (`.tmp`) geschrieben und via `_atomic_no_clobber_promote` atomar verlinkt. Bei abweichendem Hash wird `QuarantineCollisionError` ausgelöst.
+   - Bei Post-OCR Source-Hash-Drift wird ein bestehendes Derivat nur dann gelöscht, wenn es in diesem Aufruf neu erzeugt wurde (`was_newly_created`), um idempotente bestehende Zieldateien nicht zu zerstören.
+
+7. **Gemischte PDFs mit korrekter Seitenadressierung:**
+   - Digitale Seiten werden nativ extrahiert.
+   - Bildbasierte Seiten werden bis zum OCR-Budget (`max_ocr_pages`, Default 3) OCR-verarbeitet.
+   - **0-basierte Adressierung:** OCR-Seiten im Volltext-Derivat werden mit `p_num - 1` adressiert, sodass Bildseiten an beliebigen Positionen (z. B. Seite 3) exakt aus dem OCR-Dokument gelesen werden.
+   - Bei Überschreiten des Budgets wird `[Page X: image page skipped - OCR page limit of 3 exceeded]` eingefügt und `truncation_reason: "ocr_page_limit_exceeded"` gesetzt.
+   - Bei Ausfall des OCR-Tools bleiben native Textseiten erhalten (`quality: "partial"`, `truncation_reason: "ocr_unavailable"`).
+
+8. **In-Flight Memory- und Format-Budgets:**
+   - Text- und Zeichenbegrenzungen (15.000 Zeichen `max_chars_per_attachment`) werden in Office-Parsern (`python-docx`, `openpyxl`, `python-pptx`) und `MarkItDown` bereits während der zeilen-/absatzweisen Verarbeitung erzwungen.
+   - DOCX: max. 40 Absätze (`max_docx_paragraphs`).
+   - XLSX: max. 2 Sheets (`max_xlsx_sheets`), max. 50 Zeilen (`max_xlsx_rows`), max. 10 Spalten (`max_xlsx_cols`).
+   - PPTX: max. 15 Folien (`max_pptx_slides`).
+   - PDF: max. 10 Seiten (`max_pdf_pages`), max. 3 OCR-Seiten (`max_ocr_pages`).
+
+9. **Echte Tool-Versionen & Ausgabe-Transparenz:**
+   - Echte Versionsausgabe via Modul-Inspektion (`pymupdf`, `python-docx`, `openpyxl`, `python-pptx`, `ocrmypdf`, `markitdown`).
+   - Vollständiger Output-Kontrakt mit `source_sha256`, `derivative_sha256`, `derivative_relative_path`, `method`, `tool`, `tool_version`, `quality`, `scope`, `truncation_reason`, `character_count`, `text` und `error`.
 
 ---
 
@@ -159,8 +207,9 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 | Datei | Status | Verantwortung |
 | --- | --- | --- |
-| `skills/mail-desk/scripts/core/attachment_extract.py` | Neu | Text-Extraktion, Formatbudgets (PDF/DOCX/XLSX/PPTX/Text), OCR-Derivat-Isolation, Timeouts |
-| `skills/mail-desk/tests/test_maildesk_attachments_mda3.py` | Neu | 11 hermetische Tests für Formatbudgets, OCR-Derivat, Timeouts, Fail-Closed |
+| `skills/mail-desk/scripts/core/attachment_extract.py` | Gehärtet | Bounded Extraction, Win64 pointerbreite `ctypes`-Signaturen (`_init_win32_signatures`), strikt fail-closed `_get_verified_kernel32()` ohne unsicheren `ctypes.windll.kernel32`-Fallback, Win32 Job Object Confinement, portabler POSIX `setpgid`/PGID-Handshake mit Leader-Guard, Process-Tree-Terminierung ohne Tötung fremder Gruppen (`_terminate_single_process`), Parent-Owned Temp-Derivate (`_cleanup_temp_artifacts`), Fail-Closed Prozessisolation ohne silenten Thread-Fallback, strikte MD-A2-Envelope-Prüfung (`expected_sha256` Pflicht), MIME-/Extension-Drift-Guard, Pfadcontainment (unresolved root), zweistufiger Workspace-Lock, Immutabilitätsprüfungen, Mixed-PDF-Page-Mapping (`p_num - 1`), In-Flight-Budgets, echte Toolversionen |
+| `skills/mail-desk/scripts/core/attachment_fetch.py` | Angepasst | `detect_mime_and_active_content`: Erkennung von `text/csv` und `application/msword` (CFBF magic) zur Vermeidung falscher MIME-Drifts |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda3.py` | Erweitert | 36 hermetische TDD- und Adversarial-Tests (inkl. Fail-Closed-Verhalten bei fehlgeschlagener Win32-Signaturinitialisierung ohne Payload-Ausführung und ohne Zugriff auf unkonfiguriertes `windll.kernel32`, POSIX `setpgid`-Fehler und PGID-Mismatch ohne Payload-Ausführung, Win64 pointer-wide ctypes-Signaturen, Handshake-Fail-Closed-Confinement bei Win32 Job Object Fehlern, Sibling-Temp-Erhalt ohne Globbing, Grandchild-Prozessbaum-Kill, Late-Write-Prevention, Zero-Leakage-Temp-Cleanup, Pfadescape, Traversal, Root-Junction, Envelope-Gaps, Hash-Drift, MIME-Drift, Makroformate, 20/30s-Timeouts, Digital/Image/Mixed-PDFs, zweistufiger Lockverlust vor Promotion, Derivat-Race, bestehendes Derivat-Preservation, partielles OCR-Cleanup, unberührtes Original, Missing Tools) |
 
 ---
 
@@ -168,21 +217,58 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 1. **Fokussierte Suite `MD-A3`:**
    ```powershell
-   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda3.py
+   python -m unittest -v skills/mail-desk/tests/test_maildesk_attachments_mda3.py
    ```
-   *Ergebnis:* **11 von 11 Tests OK (2.3s)**
-   *Abdeckung:* Text/CSV, PDF-Seitenlimit (10 Seiten), OCR-Derivat-Isolation & -Budget (Original unberührt), DOCX-Absatzlimit (40), XLSX-Sheets/Zeilen/Spalten-Limits, PPTX-Slide-Limits (15), 15k-Zeichenlimit-Truncation, Gesamt-Timeout, Converter-Ausfall (fail-closed), defekte Dateien (fail-closed).
+   *Ergebnis:* **36 von 36 Tests OK (30.567s)**
+   *Abdeckung (alle 36 Tests grün):*
+   - `test_extract_digital_pdf_within_limit`
+   - `test_extract_digital_pdf_exceeding_10_pages_truncated`
+   - `test_character_budget_15000_chars_truncated`
+   - `test_extract_plain_text_and_csv`
+   - `test_extract_docx_within_and_exceeding_paragraph_limit`
+   - `test_extract_xlsx_sheet_and_grid_limit`
+   - `test_extract_pptx_slide_limit`
+   - `test_extract_image_pdf_ocr_local_derivative_preserves_original`
+   - `test_extract_mixed_pdf_extracts_digital_and_ocrs_image_pages`
+   - `test_extract_mixed_pdf_exceeding_ocr_budget_marked_truncated`
+   - `test_path_escapes_and_traversal_rejected_fail_closed`
+   - `test_unsafe_run_id_rejected_fail_closed`
+   - `test_mda2_envelope_integrity_and_hash_drift_fail_closed`
+   - `test_macro_formats_and_active_content_rejected_before_parsers`
+   - `test_process_worker_terminates_and_prevents_late_write`
+   - `test_process_timeout_enforced_and_aborts_cleanly`
+   - `test_ocr_timeout_enforced_and_cleans_temporary_artifacts`
+   - `test_workspace_lock_missing_fails_closed_zero_mutation`
+   - `test_workspace_lock_loss_immediately_before_promotion_aborts`
+   - `test_partial_ocr_cleanup_on_error_and_source_immutability`
+   - `test_derivative_collision_race_fails_closed_no_clobber`
+   - `test_derivative_already_exists_same_hash_idempotent`
+   - `test_existing_idempotent_derivative_preserved_on_source_drift`
+   - `test_mime_drift_against_mda2_envelope_fails_closed`
+   - `test_attachments_root_junction_fails_closed_before_resolve`
+   - `test_mixed_pdf_with_image_page_not_page_one`
+   - `test_mixed_pdf_ocr_failure_preserves_native_text`
+   - `test_corrupt_file_handled_gracefully`
+   - `test_missing_tool_returns_attachment_conversion_unavailable`
+   - `test_process_worker_tree_kill_terminates_grandchild_process_and_prevents_late_write`
+   - `test_timeout_cleans_partially_written_temp_derivative_zero_leakage`
+   - `test_job_confinement_failure_aborts_fail_closed_without_executing_payload`
+   - `test_cleanup_removes_only_own_invocation_temp_path_preserving_sibling`
+   - `test_posix_confinement_setpgid_failure_and_pgid_mismatch_without_executing_payload`
+   - `test_win32_ctypes_signatures_64bit_pointer_width`
+   - `test_failed_win32_signature_init_fails_closed_without_payload_or_untyped_api`
 
 2. **Gesamte Mail-Desk-Testsuite:**
    ```powershell
    python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
    ```
-   *Ergebnis:* **301 von 301 Tests OK (25.8s)** — 0 Fehler, 0 Regressionen.
+   *Ergebnis:* **376 von 376 Tests OK (43.092s)** — 0 Fehler, 0 Regressionen.
 
-3. **Linter & Formatierungsprüfung:**
+3. **Linter, Catalog-Validation & Git-Check:**
    - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
-   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `python scripts/validate-skills-catalog.py` (aus Skills-Root) ➔ **Skills catalog validation passed (Exit 0)**
    - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+   - `git status` ➔ **Ungestaged belassen (Review-Modus, kein Commit gemäß Vorgabe)**
 
 ---
 
