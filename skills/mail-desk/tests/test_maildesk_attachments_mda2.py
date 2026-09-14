@@ -2711,6 +2711,188 @@ class MailDeskAttachmentsMDA2Tests(unittest.TestCase):
         self.assertTrue(hasattr(guard_mod, "require_workspace_lock"))
         self.assertTrue(hasattr(guard_mod, "WorkspaceLockError"))
 
+    def test_manifest_injected_allow_legacy_and_lease_ignored_zero_io(self) -> None:
+        """Untrusted manifest specifying allow_legacy=true or injected lease_id cannot bypass lock.
+
+        Manifest-supplied lock parameters must be ignored; without an active lock owned
+        by the process control plane, execute_manifest fails closed with 0 disk I/O.
+        """
+        self._workspace_lock_patcher.stop()
+        try:
+            pdf_bytes = b"%PDF-1.4 manifest adversarial test"
+            pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+            raw_eml = attachments.build_test_eml(
+                subject="Adversarial Test",
+                message_id="<adv-001@example.org>",
+                attachments=[{"filename": "adv.pdf", "mime_type": "application/pdf", "data": pdf_bytes}],
+            )
+            candidate = {
+                "filename": "adv.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": len(pdf_bytes),
+                "sha256": pdf_sha,
+                "part_locator": "2",
+                "fetch_status": "available",
+                "provenance": attachments.PROVENANCE_RFC822,
+                "account": "BOKU-MARTIN",
+                "folder": "INBOX",
+                "envelope_id": "7195",
+                "message_id": "adv-001@example.org",
+            }
+            rev_hash = afetch.compute_review_hash(
+                account="BOKU-MARTIN",
+                message_id="adv-001@example.org",
+                folder="INBOX",
+                envelope_id="7195",
+                part_locator="2",
+                inventory_sha256=pdf_sha,
+            )
+            receipt = {
+                "receipt_id": "rec-adv-1",
+                "request_hash": rev_hash,
+                "approved_at": "2026-09-14T09:00:00Z",
+                "approved_by": "martin",
+            }
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                data_dir = Path(tmp_dir) / "data" / "mail-desk"
+                manifest_file = Path(tmp_dir) / "manifest.json"
+                # Manifest attempts to forge lease_id and bypass with allow_legacy: true
+                manifest_file.write_text(
+                    json.dumps({
+                        "account": "BOKU-MARTIN",
+                        "delete_input_on_success": False,
+                        "lease_id": "forged-manifest-lease",
+                        "conversation_id": "forged-manifest-conv",
+                        "allow_legacy": True,
+                        "operations": [
+                            {
+                                "action": "attachment_fetch",
+                                "candidate": candidate,
+                                "envelope_id": "7195",
+                                "folder": "INBOX",
+                                "account": "BOKU-MARTIN",
+                                "message_id": "adv-001@example.org",
+                                "part_locator": "2",
+                                "inventory_sha256": pdf_sha,
+                                "review_hash": rev_hash,
+                                "approval_receipt": receipt,
+                                "run_id": "run_adv_01",
+                                "lease_id": "forged-op-lease",
+                                "conversation_id": "forged-op-conv",
+                                "allow_legacy": True,
+                            }
+                        ],
+                    }),
+                    encoding="utf-8",
+                )
+
+                with patch.object(afetch, "resolve_data_dir", return_value=data_dir):
+                    with patch.object(himalaya, "fetch_raw_message_eml", return_value=raw_eml):
+                        res = client.execute_manifest(manifest_file)
+
+                # Must fail-closed because process environment does not own a lock
+                self.assertFalse(res["all_succeeded"])
+                self.assertEqual(1, len(res["results"]))
+                self.assertFalse(res["results"][0]["success"])
+                self.assertIn("workspace lock", res["results"][0]["error"].lower())
+
+                # Zero filesystem mutation
+                attachments_dir = data_dir / "attachments"
+                self.assertFalse(attachments_dir.exists(), "No attachments folder must be created on lock failure!")
+        finally:
+            self._workspace_lock_patcher.start()
+
+    def test_manifest_spoofed_lease_rejected_when_foreign_lock_active_zero_io(self) -> None:
+        """Manifest trying to spoof active lease_id is rejected when process does not own it."""
+        self._workspace_lock_patcher.stop()
+        try:
+            pdf_bytes = b"%PDF-1.4 manifest spoof test"
+            pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+            raw_eml = attachments.build_test_eml(
+                subject="Spoof Test",
+                message_id="<spoof-001@example.org>",
+                attachments=[{"filename": "spoof.pdf", "mime_type": "application/pdf", "data": pdf_bytes}],
+            )
+            candidate = {
+                "filename": "spoof.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": len(pdf_bytes),
+                "sha256": pdf_sha,
+                "part_locator": "2",
+                "fetch_status": "available",
+                "provenance": attachments.PROVENANCE_RFC822,
+                "account": "BOKU-MARTIN",
+                "folder": "INBOX",
+                "envelope_id": "7195",
+                "message_id": "spoof-001@example.org",
+            }
+            rev_hash = afetch.compute_review_hash(
+                account="BOKU-MARTIN",
+                message_id="spoof-001@example.org",
+                folder="INBOX",
+                envelope_id="7195",
+                part_locator="2",
+                inventory_sha256=pdf_sha,
+            )
+            receipt = {
+                "receipt_id": "rec-spoof-1",
+                "request_hash": rev_hash,
+                "approved_at": "2026-09-14T09:00:00Z",
+                "approved_by": "martin",
+            }
+
+            guard = afetch._load_workspace_lock_guard()
+
+            def mock_require(workspace, *, lease_id=None, conversation_id=None, allow_legacy=False):
+                # Verify that lease_id passed to require_workspace_lock does NOT come from manifest!
+                self.assertIsNone(lease_id, "Manifest-injected lease_id must NEVER be passed to workspace guard!")
+                self.assertFalse(allow_legacy, "allow_legacy must be strictly False in manifest path!")
+                raise guard.WorkspaceLockError("workspace lock is not owned by this invocation")
+
+            with patch.object(guard, "require_workspace_lock", side_effect=mock_require):
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    data_dir = Path(tmp_dir) / "data" / "mail-desk"
+                    manifest_file = Path(tmp_dir) / "manifest.json"
+                    manifest_file.write_text(
+                        json.dumps({
+                            "account": "BOKU-MARTIN",
+                            "delete_input_on_success": False,
+                            "lease_id": "victim-active-lease",
+                            "operations": [
+                                {
+                                    "action": "attachment_fetch",
+                                    "candidate": candidate,
+                                    "envelope_id": "7195",
+                                    "folder": "INBOX",
+                                    "account": "BOKU-MARTIN",
+                                    "message_id": "spoof-001@example.org",
+                                    "part_locator": "2",
+                                    "inventory_sha256": pdf_sha,
+                                    "review_hash": rev_hash,
+                                    "approval_receipt": receipt,
+                                    "run_id": "run_spoof_01",
+                                    "lease_id": "victim-active-lease",
+                                }
+                            ],
+                        }),
+                        encoding="utf-8",
+                    )
+
+                    with patch.object(afetch, "resolve_data_dir", return_value=data_dir):
+                        with patch.object(himalaya, "fetch_raw_message_eml", return_value=raw_eml):
+                            res = client.execute_manifest(manifest_file)
+
+                    self.assertFalse(res["all_succeeded"])
+                    self.assertEqual(1, len(res["results"]))
+                    self.assertFalse(res["results"][0]["success"])
+                    self.assertIn("workspace lock is not owned", res["results"][0]["error"].lower())
+
+                    attachments_dir = data_dir / "attachments"
+                    self.assertFalse(attachments_dir.exists(), "No attachments folder must be created on spoofed lock!")
+        finally:
+            self._workspace_lock_patcher.start()
+
 
 if __name__ == "__main__":
     unittest.main()

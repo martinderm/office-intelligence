@@ -11,7 +11,7 @@
 | Paket | Status | Commit | Verifikation |
 | --- | --- | --- | --- |
 | `MD-A1` — Read-only MIME-Inventar | ✅ abgeschlossen | `6f86c67` | 46 fokussierte / 276 Gesamt-Tests |
-| `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ nachgebessert | Review (ungestaged) | 35 fokussierte / 349 Gesamt-Tests |
+| `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ nachgebessert | Review (ungestaged) | 37 fokussierte / 351 Gesamt-Tests |
 | `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
 | `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ abgeschlossen | `a50652f` | 14 fokussierte / 315 Gesamt-Tests |
 | `MD-A5` — Ablagevorschlag | ✅ abgeschlossen | `286e238` | 13 fokussierte / 328 Gesamt-Tests |
@@ -27,30 +27,34 @@
 
 Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig behoben:
 
-1. **Gemeinsame Serialisierung von Quotenprüfung, Promotion und Inventarupdate:**
+1. **Ausschluss von Workspace-Lock-Parametern aus dem Manifestvertrag:**
+   - [`mail_desk_himalaya_client.py`](skills/mail-desk/scripts/mail_desk_himalaya_client.py): `lease_id`, `conversation_id` und `allow_legacy` wurden vollständig aus dem Manifestvertrag entfernt. Untrusted Manifest- oder Operationsdaten können die Mutationsautorisierung weder liefern noch übersteuern; `allow_legacy=False` ist im produktiven Manifestpfad zwingend verankert.
+   - Autorisierung erfolgt ausschließlich über die vertrauenswürdige Harness-/Prozess-Control-Plane.
+   - Adversariale Tests verifizieren, dass eingeschleuste Lock-IDs und `allow_legacy: true` im Manifest ignoriert werden und ohne tatsächlich gehaltenen Lock fail-closed mit strikten 0 Disk-I/O abbrechen.
+2. **Gemeinsame Serialisierung von Quotenprüfung, Promotion und Inventarupdate:**
    - [`op_attachment_fetch()`](skills/mail-desk/scripts/core/attachment_fetch.py): Quotenprüfung (`check_quarantine_quotas`), Re-Check des Zielzustands, atomare Promotion (`_atomic_no_clobber_promote`) und Inventaraktualisierung (`_record_in_quarantine_inventory_unlocked`) bilden eine unteilbare gemeinsame kritische Sektion unter `_QuarantineInventoryLock(run_dir)`.
    - Nach Lock-Erwerb werden Zieldateizustand und per-Message-Quoten mit den aktuellen Werten erneut geprüft. Konkurrierende Threads können dadurch die Grenzwerte von 5 Dateien bzw. 25 MB kumulativ niemals überschreiten.
-2. **Erzwungener Workspace-Lock vor jeglicher lokaler Mutation:**
+3. **Erzwungener Workspace-Lock vor jeglicher lokaler Mutation:**
    - [`verify_workspace_lock()`](skills/mail-desk/scripts/core/attachment_fetch.py): Bindet den kanonischen `workspace-lock/scripts/workspace_lock_guard.py` dynamisch über `Path.resolve().parents` ein (keine Code-Kopie).
    - Bricht bei fehlendem, inaktivem oder fremdem Lock fail-closed mit `WorkspaceLockError` ab, bevor ein Verzeichnis (`run_dir`) angelegt, ein Lockfile erstellt, eine Temp-Datei geschrieben oder das Inventar mutiert wird (strikte 0 Disk-I/O Garantie).
    - Auch [`cleanup_run_quarantine()`](skills/mail-desk/scripts/core/attachment_fetch.py) erzwingt die Workspace-Lock-Ownership vor dem Löschen.
-3. **Kein überschreibender `os.replace`-Fallback in No-Clobber-Promotion:**
+4. **Kein überschreibender `os.replace`-Fallback in No-Clobber-Promotion:**
    - [`_atomic_no_clobber_promote()`](skills/mail-desk/scripts/core/attachment_fetch.py): Nutzt atomares `os.link()` (NTFS-Hardlink).
    - Wenn das Dateisystem keine atomaren Hardlinks unterstützt (`OSError`), bricht die Promotion fail-closed mit `RuntimeError` ab und löscht die Temp-Datei; es wird niemals `os.replace()` als Fallback ausgeführt, um Zieldateien unter Concurrent-Races unter keinen Umständen zu überschreiben.
-4. **Quoteninventar fail-closed & geschützt vor Race-Conditions:**
+5. **Quoteninventar fail-closed & geschützt vor Race-Conditions:**
    - [`_load_quarantine_inventory()`](skills/mail-desk/scripts/core/attachment_fetch.py): Beschädigtes JSON, Lesefehler oder schematisch ungültige Inventare werfen `QuarantineInventoryError`.
    - Fehlt `.quarantine-inventory.json` in einem bestehenden Run-Verzeichnis mit vorhandenen Dateien, bricht die Quotenprüfung fail-closed mit `QuarantineInventoryError` ab (kein stilles Zurücksetzen auf 0).
-5. **Vollständige Sicherheitsvalidierung im `already_fetched`-Pfad:**
+6. **Vollständige Sicherheitsvalidierung im `already_fetched`-Pfad:**
    - Auch bei einer bereits existierenden Datei mit identischem Hash werden Active-Content-Prüfung, gesperrte Endungen, MIME-/Endungsdrift und Quotenlimit vollständig durchlaufen.
    - Vorplatzierte Dateien werden ordnungsgemäß in `.quarantine-inventory.json` nachgetragen und verbleiben nicht außerhalb der Quotenüberwachung.
-6. **Pfadprüfung bricht bei `lstat`-I/O-Fehlern fail-closed ab:**
+7. **Pfadprüfung bricht bei `lstat`-I/O-Fehlern fail-closed ab:**
    - [`check_quarantine_path_security()`](skills/mail-desk/scripts/core/attachment_fetch.py): Fehler von `os.lstat()` (z. B. `PermissionError`) werden nicht mehr ignoriert (`except OSError: pass`), sondern lösen `SymlinkEscapeError` aus.
-7. **Freie Pfade & Windows-Gerätenamen vor I/O abgewiesen:**
+8. **Freie Pfade & Windows-Gerätenamen vor I/O abgewiesen:**
    - [`validate_attachment_filename()`](skills/mail-desk/scripts/core/attachment_fetch.py): Freie Kandidatenpfade (`../../bericht.pdf`, `sub/folder.pdf`) und Windows-Gerätenamen einschließlich Erweiterung (`CON.txt`, `AUX.pdf`, `NUL.dat`, `COM1.doc`, etc.) werden vor jeglichem I/O mit `ValueError` abgewiesen (keine stille Bereinigung oder Ersetzung).
-8. **Gesperrte Endungen (`transport.disallowed_extensions`) & OOXML-Inspektion:**
+9. **Gesperrte Endungen (`transport.disallowed_extensions`) & OOXML-Inspektion:**
    - Auslesen aus Policy (`.docm`, `.xlsm`, `.pptm`, `.ps1`, `.bat`, etc.) blockiert fail-closed.
    - Echte OOXML-Paketanalyse (`[Content_Types].xml`, `word/document.xml`), Abweisung reiner ZIPs und Sperrung von Makro-Paketen (`vbaProject.bin`).
-9. **Policy-Timeout (25s) & RFC-3339 Receipt:**
+10. **Policy-Timeout (25s) & RFC-3339 Receipt:**
    - `download_timeout_seconds` an `himalaya.fetch_raw_message_eml` durchgereicht.
    - `"approved_at": "now"` abgewiesen; strikte RFC-3339 Zeitzonen-Prüfung und kanonisches versioniertes JSON-Hashing (`schema_version: 1`).
 
@@ -61,8 +65,8 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 | Datei | Status | Verantwortung |
 | --- | --- | --- |
 | `skills/mail-desk/scripts/core/attachment_fetch.py` | Modifiziert | Quarantäne-Abruf, No-Clobber-Promotion, RFC-3339 Receipt, OOXML-Sniffing, Per-Message-Quoten, Lockfile, Fail-Closed Inventory, Dynamic Workspace-Lock Guard |
-| `skills/mail-desk/scripts/mail_desk_himalaya_client.py` | Modifiziert | Manifest-Runner leitet Lease-/Conversation-ID und Allow-Legacy an `op_attachment_fetch` weiter |
-| `skills/mail-desk/tests/test_maildesk_attachments_mda2.py` | Modifiziert | 35 hermetische TDD-/Adversarial-Tests einschließlich Barrier-Parallelitätsrennen und Workspace-Lock Fail-Closed |
+| `skills/mail-desk/scripts/mail_desk_himalaya_client.py` | Modifiziert | Manifest-Runner entfernt Lock-Parameter aus Manifestvertrag; erzwingt zwingend `allow_legacy=False` |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda2.py` | Modifiziert | 37 hermetische TDD-/Adversarial-Tests einschließlich Lock-Spoofing-/Bypass-Tests, Barrier-Races und Fail-Closed mit 0 I/O |
 
 ---
 
@@ -72,7 +76,7 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
    ```powershell
    python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda2.py
    ```
-   *Ergebnis:* **35 von 35 Tests OK (1.565s)**
+   *Ergebnis:* **37 von 37 Tests OK (1.704s)**
    *Abdeckung:*
    - `test_compute_review_hash_is_deterministic`
    - `test_verify_approval_receipt_valid_and_drifts`
@@ -108,12 +112,14 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
    - `test_workspace_lock_foreign_owner_fails_closed_zero_io`
    - `test_workspace_lock_owned_succeeds_and_cleanup_checks_lock`
    - `test_workspace_lock_dynamic_loader_locates_canonical_guard`
+   - `test_manifest_injected_allow_legacy_and_lease_ignored_zero_io`
+   - `test_manifest_spoofed_lease_rejected_when_foreign_lock_active_zero_io`
 
 2. **Gesamte Mail-Desk-Testsuite:**
    ```powershell
    python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
    ```
-   *Ergebnis:* **349 von 349 Tests OK (11.408s)** — 0 Fehler, 0 Regressionen.
+   *Ergebnis:* **351 von 351 Tests OK (11.257s)** — 0 Fehler, 0 Regressionen.
 
 3. **Linter, Catalog-Validation & Git-Check:**
    - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
