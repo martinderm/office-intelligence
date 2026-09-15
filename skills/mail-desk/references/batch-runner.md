@@ -1248,21 +1248,39 @@ Das Modul `scripts/core/attachment_handoff.py` stellt die gehärtete, deklarativ
 
 ## FR-08 / MD-A5: Katalog- und Filemap-gestützter Ablagevorschlag (`core/attachment_filing.py`)
 
-Das Modul `scripts/core/attachment_filing.py` erzeugt read-only Ablagevorschläge (`attachment_filing_candidate`) für verifizierte Quarantäne-Anhänge:
+Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarative Ablagevorschläge (`attachment_filing_candidate`) für verifizierte Quarantäne-Anhänge:
 
 1. **Strikte Read-Only-Garantie:**
    - Keine Datei-Uploads, kein Verzeichnisanlegen (`mkdir`), keine Schreiboperationen auf `filemap.json`, Kataloge oder externe Cloud-Storages.
    - Ausgabe trägt ausnahmslos `promotion_status: "pending_human_review"`.
-2. **Katalog- und Storage-Auflösung:**
-   - Storages und Zielpfade werden ausschließlich aus Katalogen (`projects.json`, `topics.json`) sowie frischen `filemap.json`-Beständen bezogen.
-   - Events erben Storages ausschließlich von explizit katalogisierten Parent-Topics oder Subtopics.
-   - Mehrere Storages oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`storage_review_required`).
-3. **Entscheidungs-Matrix:**
+2. **Strikte MD-A2-Abrufvalidierung (`validate_mda2_attachment`):**
+   - Erzwingt `manifest_account` bzw. `bound_account` ausschließlich als explizite Keyword-Parameter bei `validate_mda2_attachment()` und `propose_attachment_filing()`. Eine Übernahme aus dem untrusted Attachment-Composite ist vollständig ausgeschlossen (fail-closed). Sind beide Parameter gesetzt, müssen sie nach Whitespace-Trimming exakt übereinstimmen; jede Abweichung bricht fail-closed mit `InvalidMDA2FetchError` ab. `operation.account` bleibt optional und dient als Drift-Evidenz (wenn vorhanden, muss er exakt übereinstimmen). Manifest-Account, MD-A1-Kandidat und Review-Hash sind kryptografisch an denselben Account gebunden.
+   - Bindet `operation` (MD-A2 Manifest-Operation mit zwingend `action == "attachment_fetch"`, `review_hash`, `approval_receipt`), externen `candidate` (MD-A1) und `result` (reales MD-A2 Fetch-Ergebnis mit Status `fetched`/`already_fetched`, `run_id`, relativem Quarantänepfad exakt nach Schema `data/mail-desk/attachments/<run_id>/<sanitized_filename>`).
+   - Keine `quarantine_evidence` als Caller-Input: Physische Evidenz wird bei gesetztem `verify_physical_evidence=True` read-only direkt über den kanonischen MD-A2-Helper (`verify_quarantine_attachment_artifact()`) geprüft. Dieser erzwingt `check_quarantine_path_security()` (Symlink-/Reparse-Schutz über die gesamte Pfadhierarchie), die vollständige Validierung des `.quarantine-inventory.json`-Schemas (inkl. Konsistenzprüfung von `count` und `total_bytes` sowie Integrität aller Fremdeinträge) und den realen Datei-SHA-256 auf der Platte (fail-closed bei jeder Abweichung).
+   - Test-Helper (`build_test_mda2_composite()`) verbleiben vollständig in den Testmodulen und sind nicht Teil des Produktionscodes.
+   - Freie oder unvollständige Attachment-Dictionaries brechen fail-closed mit `InvalidMDA2FetchError` ab und können niemals einen `proposed`-Kandidaten erzeugen.
+   - Trennt den ursprünglichen Dateinamen (`filename`/`original_filename`) strikt vom bereinigten Zielnamen (`clean_filename`/`target_filename`).
+3. **MD-A4-Handoff-Validierung & kryptografische Bindung:**
+   - Wird ein MD-A4-Handoff übergeben, wird er mit `validate_attachment_handoff()` gegen dieselbe Mail-Identität, Decision und verifizierte `canonical_parts` geprüft.
+   - Sein `handoff_hash` wird als Evidenz in den Kandidaten gebunden und fließt in `candidate_hash` ein.
+4. **Katalog- und Storage-Auflösung mit realem Decision-Schema:**
+   - Unterstützt das kanonische Classifier-Schema: `kind` bleibt `project` oder `topic`; `subtopic` und `event` sind optionale Skalare.
+   - Validiert Parent, Subtopic, Event und vorhandene Event-`cloud_storage`-Selektoren (`scope: topic|subtopic`, `storage_id`) exakt gegen den Katalog (`topics.json`).
+   - Mehrere Storages ohne Selektor oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`storage_review_required`).
+5. **Vollständiger Ausschluss von `decision.target_dir`:**
+   - `decision.target_dir` wird ignoriert; Zielverzeichnisse dürfen ausschließlich aus kanonischer Katalogkonfiguration (`storage_cfg.target_dir`) oder einem eindeutig belegten Verzeichnis einer frischen Filemap stammen.
+   - Ist kein eindeutig belegtes Verzeichnis nachweisbar: `directory_review_required`.
+6. **Kanonische Cloud-Atlas-Filemap-Validierung (`validate_cloud_atlas_filemap`):**
+   - Bindet `schema_version == 1`, `kind == "cloud-filemap"`, `scope` (`project`|`topic`), `storage_id`, `project`, `scan_dir`, `output_dir` und Zeitstand.
+   - Kein generischer ungeprüfter `"filemap"`-In-Memory-Fallback: Filemaps müssen zwingend unter der exakten `storage_id` bereitgestellt werden.
+7. **Workspace-Containment für Katalogpfade (`resolve_and_validate_filemap_path`):**
+   - Konfigurierte `output_json`-Pfade werden nur workspace-relativ akzeptiert. Absolute Pfade, `..`-Traversal und Symlink-Ausbrüche nach `resolve()` führen fail-closed zu `storage_review_required`.
+8. **Entscheidungs-Matrix:**
    - `not_configured`: Kein Cloud-Storage im Katalog deklariert.
-   - `storage_review_required`: Mehrere Storages konfiguriert, Archiv-/Read-only-Storage deklariert, oder `filemap.json` fehlt/ist stale (> 24h).
+   - `storage_review_required`: Mehrere Storages konfiguriert, Archiv-/Read-only-Storage deklariert, oder `filemap.json` fehlt/ist stale (> 24h)/schematisch ungültig.
    - `directory_review_required`: Das vorgeschlagene Zielverzeichnis ist im Filemap-Inventar nicht belegt/etabliert.
-   - `already_present`: Eine Datei mit identischem SHA-256 existiert bereits im Zielbereich.
+   - `already_present`: Eine Datei mit identischem 64-Hex SHA-256 existiert bereits im Zielbereich.
    - `collision_detected`: Eine Datei mit identischem Namen aber abweichendem SHA-256 existiert bereits.
    - `proposed`: Eindeutiger, kollisionsfreier und katalogbelegter Zielpfad ermittelt.
-4. **Deterministische Hash-Bindung:**
-   - `candidate_hash` bindet Quelle (`account`, `message_id`, `envelope_id`, `part_locator`, `sha256`), Destination (`storage_id`, `target_dir`, `target_relative_path`), Filemap-Zeitstand und Matrix-Status an einen 64-stelligen SHA-256.
+9. **Deterministische Hash-Bindung:**
+   - `candidate_hash` bindet Quelle (inkl. Originalname und Quarantäne-Evidenz), Destination, Filemap-Evidenz, Handoff-Hash und Matrix-Status deterministisch an einen 64-stelligen SHA-256.

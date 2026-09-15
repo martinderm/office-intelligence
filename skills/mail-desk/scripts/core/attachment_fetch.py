@@ -17,7 +17,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import sys
@@ -660,13 +660,18 @@ def _validate_inventory_schema(inv: Any, inv_file: Path) -> dict[str, Any]:
             raise QuarantineInventoryError(
                 f"Corrupted quarantine inventory '{inv_file}': 'total_bytes' for message '{mid}' must be non-negative integer"
             )
+        if count != len(files):
+            raise QuarantineInventoryError(
+                f"Corrupted quarantine inventory '{inv_file}': 'count' ({count}) does not match number of files ({len(files)}) for message '{mid}'"
+            )
+        calc_total_bytes = 0
         for fname, finfo in files.items():
             if not isinstance(finfo, dict):
                 raise QuarantineInventoryError(
                     f"Corrupted quarantine inventory '{inv_file}': file entry '{fname}' must be an object"
                 )
             sha = finfo.get("sha256")
-            if not isinstance(sha, str) or len(sha) != 64:
+            if not isinstance(sha, str) or len(sha) != 64 or not re.fullmatch(r"^[0-9a-fA-F]{64}$", sha):
                 raise QuarantineInventoryError(
                     f"Corrupted quarantine inventory '{inv_file}': invalid sha256 for '{fname}' in message '{mid}'"
                 )
@@ -675,6 +680,11 @@ def _validate_inventory_schema(inv: Any, inv_file: Path) -> dict[str, Any]:
                 raise QuarantineInventoryError(
                     f"Corrupted quarantine inventory '{inv_file}': invalid size_bytes for '{fname}' in message '{mid}'"
                 )
+            calc_total_bytes += sbytes
+        if total_bytes != calc_total_bytes:
+            raise QuarantineInventoryError(
+                f"Corrupted quarantine inventory '{inv_file}': 'total_bytes' ({total_bytes}) does not match sum of file sizes ({calc_total_bytes}) for message '{mid}'"
+            )
     return inv
 
 
@@ -710,6 +720,137 @@ def _load_quarantine_inventory(run_dir: Path, is_recording: bool = False) -> dic
         )
 
     return {"schema_version": 1, "messages": {}}
+
+
+def verify_quarantine_attachment_artifact(
+    run_id: str,
+    relative_path: str,
+    expected_sha256: str,
+    expected_size_bytes: int,
+    message_id: str,
+    workspace_root: Path | str | None = None,
+    clean_filename: str | None = None,
+) -> dict[str, Any]:
+    """Verify read-only physical quarantine file and inventory against canonical MD-A2 security rules.
+
+    Guarantees:
+    - Path security, containment, and reparse point inspection via check_quarantine_path_security().
+    - Strict full schema validation of .quarantine-inventory.json (including count, total_bytes, and all entries).
+    - File existence, read integrity, byte size, and deterministic SHA-256 hash match on disk.
+    - Consistency between message inventory entry and candidate/result.
+    - Strictly fail-closed: raises QuarantineInventoryError, SymlinkEscapeError, ValueError, or FileNotFoundError.
+
+    Returns:
+        dict with metadata:
+        {
+            "physical_verified": True,
+            "inventory_path": str,
+            "physical_file_path": str,
+            "sha256": str,
+            "size_bytes": int,
+        }
+    """
+    ws = Path(workspace_root or Path.cwd()).resolve()
+    attachments_root = ws / "data" / "mail-desk" / "attachments"
+
+    if not is_valid_run_id(run_id):
+        raise ValueError(f"Invalid or unsafe run_id: {run_id!r}")
+
+    run_dir = attachments_root / run_id
+    inv_file = run_dir / INVENTORY_FILENAME
+    if not inv_file.is_file():
+        raise QuarantineInventoryError(
+            f"Quarantine inventory file not found at '{inv_file}'; physical verification failed"
+        )
+
+    try:
+        raw_text = inv_file.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+    except Exception as err:
+        raise QuarantineInventoryError(
+            f"Failed to read or parse quarantine inventory '{inv_file}': {err}"
+        ) from err
+
+    inv = _validate_inventory_schema(data, inv_file)
+
+    target_file = ws / PurePosixPath(relative_path)
+    if not target_file.is_file():
+        raise FileNotFoundError(f"Physical quarantine file missing at '{target_file}'")
+
+    check_quarantine_path_security(target_file, attachments_root)
+
+    if target_file.is_symlink() or os.path.islink(target_file):
+        raise SymlinkEscapeError(f"Symlink detected at quarantine file: {target_file}")
+
+    if os.name == "nt" and target_file.exists():
+        try:
+            stat_res = os.lstat(target_file)
+            if getattr(stat_res, "st_file_attributes", 0) & 0x400:
+                raise SymlinkEscapeError(f"Reparse point detected at quarantine file: {target_file}")
+        except SymlinkEscapeError:
+            raise
+        except OSError as err:
+            raise SymlinkEscapeError(
+                f"Failed to inspect quarantine file attributes (lstat error): '{target_file}': {err}"
+            ) from err
+
+    norm_mid = normalize_message_id(message_id) or message_id
+    msgs = inv.get("messages", {})
+    msg_entry = msgs.get(norm_mid) or msgs.get(f"<{norm_mid}>") or msgs.get(message_id)
+    if not isinstance(msg_entry, dict):
+        raise QuarantineInventoryError(
+            f"Quarantine inventory '{inv_file}' missing entry for message '{norm_mid}'"
+        )
+
+    files_entry = msg_entry.get("files", {})
+    if not isinstance(files_entry, dict):
+        raise QuarantineInventoryError(
+            f"Quarantine inventory 'files' for '{norm_mid}' must be a mapping"
+        )
+
+    expected_fname = clean_filename or PurePosixPath(relative_path).name
+    f_entry = files_entry.get(expected_fname)
+    if not isinstance(f_entry, dict):
+        raise QuarantineInventoryError(
+            f"Quarantine inventory for '{norm_mid}' has no file entry for '{expected_fname}'"
+        )
+
+    inv_sha = str(f_entry.get("sha256") or "").strip().lower()
+    exp_sha = str(expected_sha256).strip().lower()
+    if inv_sha != exp_sha:
+        raise QuarantineInventoryError(
+            f"Quarantine inventory SHA-256 drift for '{expected_fname}': '{inv_sha}' != expected '{exp_sha}'"
+        )
+
+    inv_size = f_entry.get("size_bytes")
+    if inv_size != expected_size_bytes:
+        raise QuarantineInventoryError(
+            f"Quarantine inventory size drift for '{expected_fname}': {inv_size} != expected {expected_size_bytes}"
+        )
+
+    try:
+        actual_bytes = target_file.read_bytes()
+    except OSError as err:
+        raise OSError(f"Failed to read physical quarantine file '{target_file}': {err}") from err
+
+    actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
+    if actual_sha != exp_sha:
+        raise ValueError(
+            f"Physical quarantine file SHA-256 hash drift: actual '{actual_sha}' != expected '{exp_sha}'"
+        )
+
+    if len(actual_bytes) != expected_size_bytes:
+        raise ValueError(
+            f"Physical quarantine file size drift: actual {len(actual_bytes)} != expected {expected_size_bytes}"
+        )
+
+    return {
+        "physical_verified": True,
+        "inventory_path": str(inv_file),
+        "physical_file_path": str(target_file),
+        "sha256": actual_sha,
+        "size_bytes": len(actual_bytes),
+    }
 
 
 def _record_in_quarantine_inventory_unlocked(

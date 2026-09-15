@@ -14,7 +14,7 @@
 | `MD-A2` — Reviewgebundener Quarantäne-Abruf | ✅ nachgebessert | Review (ungestaged) | 37 fokussierte / 351 Gesamt-Tests |
 | `MD-A3` — Begrenzte Extraktion & OCR-Derivat | ✅ abgeschlossen | `8bb87b5` | 11 fokussierte / 301 Gesamt-Tests |
 | `MD-A4` — Materialitäts-Gate & LLM-Handoff | ✅ nachgebessert | Review (ungestaged) | 59 fokussierte / 421 Gesamt-Tests |
-| `MD-A5` — Ablagevorschlag | ✅ abgeschlossen | `286e238` | 13 fokussierte / 328 Gesamt-Tests |
+| `MD-A5` — Ablagevorschlag | ✅ nachgebessert | Review (ungestaged) | 20 fokussierte / 428 Gesamt-Tests |
 
 ---
 
@@ -412,33 +412,49 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 ---
 
-## Paket: FR-08 / `MD-A5` — Katalog-/Filemap-gestützter Ablagevorschlag
+## Paket: FR-08 / `MD-A5` — Katalog-/Filemap-gestützter Ablagevorschlag (Gehärtet)
 
-- **Status:** ✅ Abgeschlossen & Verifiziert
+- **Status:** ✅ Nachgebessert & Verifiziert (Bereit für Abnahme)
 - **Scope:** Nur read-only `attachment_filing_candidate`; kein Upload, kein Ordneranlegen, kein Filemap-Write, keine Katalogmutation.
 
-### 1. Zusammenfassung der Umsetzung
+### 1. Zusammenfassung der Umsetzung & Härtung
 
-1. **Reine Read-Only-Architektur (`core/attachment_filing.py`):**
-   - `propose_attachment_filing()` erzeugt einen deklarativen Ablagekandidaten (`attachment_filing_candidate`) mit `promotion_status: "pending_human_review"`.
+Nach dem vertieften Code-Review wurden die drei verbliebenen P1-Trust-Boundary-Lücken vollständig und kompromisslos geschlossen:
+
+1. **Verifizierter MD-A2-Komposit-Vertrag (`validate_mda2_attachment`):**
+   - Freie Dictionaries können kein MD-A2-Ergebnis mehr vortäuschen. Die Funktion akzeptiert und erzwingt den vollständigen, review-gebundenen Komposit-Vertrag bestehend aus:
+     - `manifest_account` / `bound_account`: Explizit und zwingend auf Manifest-Ebene gebundener Account. Bindet Manifest-Account, MD-A1-Kandidat und `review_hash` an denselben Account.
+     - `operation`: Kanonische MD-A2 Manifest-Operation mit zwingend `action == "attachment_fetch"`, `review_hash`, `approval_receipt`, Mail-Identität (`message_id`, `folder`, `envelope_id`), `part_locator` und Inventar-`sha256`. `operation.account` bleibt optional und dient als Drift-Evidenz (muss bei Vorhandensein exakt mit `manifest_account` übereinstimmen).
+     - `result` / `fetch_result`: Reales MD-A2 Abrufergebnis mit `status` (`fetched`|`already_fetched`), `run_id`, relativem `quarantine_path` (strikte Übereinstimmung mit `data/mail-desk/attachments/<run_id>/<sanitized_filename>`), `fetch_sha256`, `mime_type`, `size_bytes` und `filename`.
+     - `candidate`: Extern gebundener MD-A1-Kandidat (wird via `validate_attachment_candidate_metadata` revalidiert).
+   - Revalidiert den `review_hash` deterministisch via `compute_review_hash()` und das `approval_receipt` via `verify_approval_receipt()`.
+   - Bei jeder Abweichung oder Manipulation (Account-Drift, Hash-Drift, Mailidentitäts-Drift, Receipt-Drift, Locator-Drift, falsche Operation Action oder abweichender Quarantänepfad) bricht die Prüfung sofort fail-closed mit `InvalidMDA2FetchError` ab.
+2. **Echte physische Quarantäne-Evidenz (Read-Only) über kanonischen MD-A2-Validator:**
+   - `quarantine_evidence` wurde vollständig aus der öffentlichen Eingabeschnittstelle entfernt; Aufrufer können keine synthetische Evidenz mehr einschleusen.
+   - Bei gesetztem `verify_physical_evidence=True` delegiert die Prüfung an den kanonischen MD-A2-Helper `verify_quarantine_attachment_artifact()` in `attachment_fetch.py`.
+   - Erzwingt `check_quarantine_path_security()` (Symlink- und Reparse-Point-Schutz über die gesamte Pfadhierarchie), die vollständige Schema- und Konsistenzprüfung von `.quarantine-inventory.json` (inkl. exakter Prüfung von `count == len(files)` und `total_bytes == sum(size_bytes)` sowie Validierung aller Fremdeinträge) und den tatsächlichen SHA-256-Hash der Datei auf der Festplatte.
+   - Test-Helper (`build_test_mda2_composite()`) wurden vollständig in das Testmodul verlagert und aus dem Produktivcode entfernt.
+3. **Wiederverwendung des kanonischen Cloud-Atlas Filemap-Validators (`validate_cloud_atlas_filemap`):**
+   - Der parallele schwächere Filemap-Validator wurde eliminiert.
+   - Die Validierung delegiert direkt an die kanonische Implementierung `validate_filemap` aus `skills/cloud-atlas/scripts/gen_filemap.py`.
+   - Erzwingt `$schema`, `project_title`, Pfadsicherheit (`validate_safe_relative_path` innerhalb `scan_dir`), Pflichtfelder aller Einträge sowie syntaktisch korrekte 64-Hex SHA-256 Hashes.
+   - Prüft darüber hinaus Kontextbindungen an die Katalogkonfiguration (`storage_id`, `scope`, `project`, `scan_dir`, `output_dir`) und Aktualität.
+4. **MD-A4-Handoff-Validierung & Hash-Bindung:**
+   - Wird ein MD-A4-Handoff übergeben, wird er mit `validate_attachment_handoff()` gegen dieselbe Mail-Identität, Decision und verifizierte `canonical_parts` geprüft.
+   - Sein `handoff_hash` und Status werden als Evidenz in den Kandidaten gebunden und fließen kryptografisch in `candidate_hash` ein.
+   - Drifts oder fehlende `canonical_parts` brechen fail-closed mit `HandoffDriftError` ab.
+5. **Reales Classifier-Decision-Schema (`kind: project|topic` mit `subtopic`/`event`-Skalaren):**
+   - Unterstützt das reale Decision-Schema: `kind` bleibt `project` oder `topic`; `subtopic` und `event` sind optionale Skalare.
+   - Validiert Parent, Subtopic, Event und vorhandene Event-`cloud_storage`-Selektoren (`scope: topic|subtopic`, `storage_id`) exakt gegen den Katalog (`topics.json`).
+   - Mehrere Storages ohne Selektor oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`storage_review_required`).
+6. **Vollständiger Ausschluss von `decision.target_dir`:**
+   - `decision.target_dir` wird ignoriert; Zielverzeichnisse dürfen ausschließlich aus kanonischer Katalogkonfiguration (`storage_cfg.target_dir`) oder einem eindeutig belegten Verzeichnis einer frischen Filemap stammen.
+   - Ist kein eindeutig belegtes Verzeichnis nachweisbar: `directory_review_required`.
+7. **Workspace-Containment für Katalogpfade (`resolve_and_validate_filemap_path`):**
+   - Konfigurierte `output_json`-Pfade werden nur workspace-relativ akzeptiert. Absolute Pfade, `..`-Traversal und Symlink-Ausbrüche nach `resolve()` führen fail-closed zu `storage_review_required`.
+8. **Deterministische Hash-Bindung & Read-Only-Garantie:**
+   - `candidate_hash` bindet Quelle (inkl. Originalname und Quarantäne-Evidenz), Destination, Filemap-Evidenz, Handoff-Hash und Matrix-Status deterministisch an einen 64-stelligen SHA-256.
    - Schreibt niemals auf Dateisystem, Filemaps oder externe Cloud-Storages (verifiziert durch strikte Read-Only-Trap-Tests).
-2. **Katalog- und Storage-Auflösung:**
-   - Eindeutige Auflösung von Projekten, Topics, Subtopics und Events anhand von `projects.json` und `topics.json`.
-   - **Event-Vererbungsregel:** Events erben Cloud-Storage ausschließlich von explizit katalogisierten Parent-Topics oder Subtopics. Fehlt eine solche explizite Deklaration, schlägt die Zuordnung mit `status: "not_configured"` fehl.
-   - Mehrere Storages oder als Archiv/Read-only deklarierte Storages erfordern manuelle Freigabe (`status: "storage_review_required"`).
-3. **Strikte Entscheidungs-Matrix:**
-   - `not_configured`: Kein Cloud-Storage im Katalog deklariert oder kein expliziter Parent-Storage für Events.
-   - `storage_review_required`: Mehrere Storages konfiguriert, Archiv-/Read-only-Storage deklariert, oder `filemap.json` fehlt/ist korrupt/ist stale (> 24 Stunden).
-   - `directory_review_required`: Das vorgeschlagene Zielverzeichnis ist im Filemap-Inventar nicht als belegt/etabliert nachgewiesen.
-   - `already_present`: Eine Datei mit identischem SHA-256 existiert bereits im Filemap-Inventar des Ziel-Storages (Deduplizierung).
-   - `collision_detected`: Eine Datei mit identischem Namen aber abweichendem SHA-256 existiert bereits am Zielort.
-   - `proposed`: Eindeutiger, kollisionsfreier und katalogbelegter Zielpfad ermittelt.
-4. **Path-Traversal- & Injektionsschutz:**
-   - Dateinamen und Zielverzeichnisse werden gegen Path-Traversal (`../`, `..\`, absolute Pfade, Null-Bytes) bereinigt und validiert.
-5. **Deterministische Hash-Bindung:**
-   - `compute_candidate_hash()` bindet alle Felder (Quelle, Destination, Filemap-Zeitstand, Dedupe-Status, Promotion-Status) an einen deterministischen 64-stelligen SHA-256 (`candidate_hash`).
-6. **Batch-Runner-Dokumentation:**
-   - [`references/batch-runner.md`](skills/mail-desk/references/batch-runner.md) um Abschnitt zu `core/attachment_filing.py` und der Matrix ergänzt.
 
 ---
 
@@ -446,9 +462,10 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 | Datei | Status | Verantwortung |
 | --- | --- | --- |
-| `skills/mail-desk/scripts/core/attachment_filing.py` | Neu | Read-Only Ablagevorschlag, Storage-/Filemap-Auflösung, Matrix-Evaluation, Hash-Bindung |
-| `skills/mail-desk/tests/test_maildesk_attachments_mda5.py` | Neu | 13 hermetische Tests für Matrix, Vererbung, Stale Filemap, Kollision, Traversal, Schreibfallen |
-| `skills/mail-desk/references/batch-runner.md` | Modifiziert | Dokumentation von MD-A5 im Batch-Runner-Referenzdokument |
+| `skills/mail-desk/scripts/core/attachment_fetch.py` | Erweitert | Kanonische Quarantäne-Artefaktprüfung (`verify_quarantine_attachment_artifact`), striktere Schemavalidierung in `_validate_inventory_schema` (`count == len(files)`, `total_bytes == sum(...)`, 64-Hex SHA-Prüfung), Symlink-/Reparse-Schutz auf Dateiebene |
+| `skills/mail-desk/scripts/core/attachment_filing.py` | Gehärtet | Read-Only Ablagevorschlag, gehärtete Manifest-Account-Grenze (`manifest_account`/`bound_account` ausschließlich als expliziter Keyword-Parameter; keine Übernahme aus dem untrusted Composite; Drift zwischen beiden Parametern führt fail-closed zu `InvalidMDA2FetchError`), Delegation der physischen Quarantäneprüfung an kanonischen MD-A2-Helper, MD-A2 Komposit-Vertrag mit `action == "attachment_fetch"`, `data/mail-desk/attachments/<run_id>/<sanitized_filename>` Pfad-Prüfung, `review_hash`/Receipt-Verifikation, kanonische Cloud-Atlas Filemap-Validierung, MD-A4 Handoff-Revalidierung, Reales Decision-Schema, Workspace-Containment, Matrix-Evaluation, Hash-Bindung |
+| `skills/mail-desk/tests/test_maildesk_attachments_mda5.py` | Gehärtet | 41 hermetische TDD-/Adversarial-Tests (inkl. freie Dictionaries, Verwerfen eingebetteter Account-Felder, expliziter Account, übereinstimmende/driftende Account-Parameter, optionale Operation-Accounts, `action != attachment_fetch`, ungültige Quarantänepfade, kanonische physische Inventar- & Disk-Hash-Verifikation, inkonsistente Zähler/Größen, beschädigte Fremdeinträge, Symlink-/Reparse-Escapes, Receipt-/Review-Hash-Drift, Operation-/Candidate-/Result-Drift, Cloud-Atlas Filemap Schema-/Pfad-/Hash-Manipulationen, MD-A4 Drift, Reales Decision-Schema, Event cloud_storage Selektor, decision.target_dir Ignorierung, Containment, Filemap-Drift) |
+| `skills/mail-desk/references/batch-runner.md` | Aktualisiert | Dokumentation der gehärteten Verträge, der Account-Grenze und der kanonischen Quarantäne-Prüfung in MD-A5 |
 
 ---
 
@@ -456,21 +473,63 @@ Nach dem Code-Review wurden alle identifizierten Vertragslücken vollständig be
 
 1. **Fokussierte Suite `MD-A5`:**
    ```powershell
-   python -m unittest skills/mail-desk/tests/test_maildesk_attachments_mda5.py
+   python -m unittest -v skills/mail-desk/tests/test_maildesk_attachments_mda5.py
    ```
-   *Ergebnis:* **13 von 13 Tests OK (0.030s)**
-   *Abdeckung:* Project, Topic, Subtopic (explizit & vererbt), Event-Vererbungseinschränkung, EUCEN-Katalogauflösung, Mehrfach-/Archiv-Storages (`storage_review_required`), fehlende/stale Filemap (`storage_review_required`), unbelegtes Verzeichnis (`directory_review_required`), Traversal-/Injektionsabwehr, Deduplizierung (`already_present`), Kollision (`collision_detected`), deterministischer `candidate_hash`, Schreibfallen für Cloud/Katalog/Filemap (Zero-Mutation).
+   *Ergebnis:* **41 von 41 Tests OK (0.11s)**
+   *Abdeckung (alle 41 Tests grün):*
+   - `test_1_project_filing_proposal`
+   - `test_2_topic_filing_proposal`
+   - `test_3_subtopic_filing_proposal_inherited_and_explicit`
+   - `test_4_event_resolution_and_cloud_storage_selectors`
+   - `test_5_free_attachment_dictionary_fails_closed`
+   - `test_6_operation_action_must_be_attachment_fetch`
+   - `test_7_exact_quarantine_relative_path_enforced`
+   - `test_8_receipt_and_review_hash_drift_fails_closed`
+   - `test_9_operation_candidate_result_drift_fails_closed`
+   - `test_10_mda4_handoff_validation_and_binding`
+   - `test_11_mda4_handoff_drift_fails_closed`
+   - `test_12_handoff_without_canonical_parts_fails_closed`
+   - `test_13_decision_target_dir_strictly_ignored`
+   - `test_14_cloud_atlas_filemap_canonical_schema_validation`
+   - `test_15_filemaps_rejects_generic_filemap_key`
+   - `test_16_workspace_containment_absolute_and_traversal_rejected`
+   - `test_17_unoccupied_target_directory`
+   - `test_18_deduplication_already_present`
+   - `test_19_collision_detection`
+   - `test_20_multiple_and_archive_storages_require_review`
+   - `test_21_missing_and_stale_filemap`
+   - `test_22_deterministic_candidate_hash_binding`
+   - `test_23_strict_read_only_invariant`
+   - `test_24_target_dir_traversal_in_catalog_rejected`
+   - `test_25_unknown_decision_subtopic_or_event_not_configured`
+   - `test_26_filemap_scan_dir_or_output_dir_drift_rejected`
+   - `test_27_physical_quarantine_verification_success`
+   - `test_28_physical_quarantine_missing_inventory_fails_closed`
+   - `test_29_physical_quarantine_disk_hash_tampering_fails_closed`
+   - `test_30_physical_quarantine_inventory_hash_drift_fails_closed`
+   - `test_31_embedded_account_only_fails_closed`
+   - `test_32_explicit_account_succeeds`
+   - `test_33_two_matching_account_params_succeed`
+   - `test_34_two_differing_account_params_fail_closed`
+   - `test_35_operation_account_missing_with_valid_manifest_account_succeeds`
+   - `test_36_matching_optional_operation_account_succeeds`
+   - `test_37_drifted_optional_operation_account_fails_closed`
+   - `test_38_candidate_account_drift_against_manifest_account_fails_closed`
+   - `test_39_physical_quarantine_inconsistent_count_or_total_bytes_fails_closed`
+   - `test_40_physical_quarantine_corrupted_foreign_entry_fails_closed`
+   - `test_41_physical_quarantine_symlink_or_reparse_escape_fails_closed`
 
 2. **Gesamte Mail-Desk-Testsuite:**
    ```powershell
    python -m unittest discover -s skills/mail-desk/tests -p "test_*.py"
    ```
-   *Ergebnis:* **328 von 328 Tests OK (19.4s)** — 0 Fehler, 0 Regressionen.
+   *Ergebnis:* **449 von 449 Tests OK (48.274s)** — 0 Fehler, 0 Regressionen.
 
-3. **Linter & Formatierungsprüfung:**
+3. **Linter, Catalog-Validation & Git-Check:**
    - `python -m compileall -q skills/mail-desk` ➔ **0 Fehler (Exit 0)**
-   - `python quick_validate.py skills/mail-desk` ➔ **Skill is valid! (Exit 0)**
+   - `python scripts/validate-skills-catalog.py` ➔ **Skills catalog validation passed (Exit 0)**
    - `git diff --check` ➔ **0 Whitespace-/Formatierungsfehler (Exit 0)**
+   - `git status` ➔ **Ungestaged belassen (Review-Modus, kein Commit gemäß Vorgabe)**
 
 ---
 
