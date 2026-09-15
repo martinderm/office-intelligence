@@ -13,7 +13,10 @@ from .common import (
 )
 from .evidence import flush_batch_evidence, update_evidence_file
 from .himalaya import (
+    HimalayaInvocationError,
+    build_himalaya_command,
     get_single_email_details,
+    resolve_himalaya_invocation,
     run_himalaya,
     search_mailbox,
     verify_in_target_folder,
@@ -64,6 +67,9 @@ __all__ = [
     "resolve_evidence_dir",
     "resolve_final_index_path",
     "run_himalaya",
+    "HimalayaInvocationError",
+    "build_himalaya_command",
+    "resolve_himalaya_invocation",
     "get_single_email_details",
     "verify_in_target_folder",
     "search_mailbox",

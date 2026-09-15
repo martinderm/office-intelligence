@@ -138,15 +138,16 @@ class MailDeskReadinessTests(unittest.TestCase):
 
     def test_single_attempt_timeout_or_transient_failure_never_sleeps(self) -> None:
         timeout = subprocess.TimeoutExpired(["himalaya"], 10)
-        with patch.object(himalaya.subprocess, "run", side_effect=timeout), patch.object(
+        with patch.object(himalaya, "build_himalaya_command", return_value=["himalaya"]), patch.object(himalaya.subprocess, "run", side_effect=timeout), patch.object(
             himalaya.time, "sleep",
         ) as sleep:
-            with self.assertRaises(subprocess.TimeoutExpired):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
                 himalaya.run_himalaya(["folder", "list"], max_retries=1)
+        self.assertEqual("himalaya_timeout", raised.exception.reason_code)
         sleep.assert_not_called()
 
         transient = subprocess.CompletedProcess([], 1, "", "cannot connect")
-        with patch.object(himalaya.subprocess, "run", return_value=transient), patch.object(
+        with patch.object(himalaya, "build_himalaya_command", return_value=["himalaya"]), patch.object(himalaya.subprocess, "run", return_value=transient), patch.object(
             himalaya.time, "sleep",
         ) as sleep:
             with self.assertRaisesRegex(RuntimeError, "transient error"):
@@ -176,11 +177,11 @@ class MailDeskReadinessTests(unittest.TestCase):
                 self.assertEqual(expected_args, himalaya._insert_account_arg(input_args, "BOKU-MARTIN"))
 
         # Verify run_himalaya passes the correctly placed args to subprocess.run
-        with patch.object(himalaya.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as mock_run:
+        with patch.object(himalaya, "resolve_himalaya_invocation", return_value=("himalaya", Path("C:/test/config.toml"))), patch.object(himalaya.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "ok", "")) as mock_run:
             himalaya.run_himalaya(["-o", "json", "folder", "list"], account="BOKU-MARTIN", max_retries=1)
             mock_run.assert_called_once()
             called_cmd = mock_run.call_args[0][0]
-            self.assertEqual(["himalaya", "-o", "json", "folder", "list", "-a", "BOKU-MARTIN"], called_cmd)
+            self.assertEqual(["himalaya", "-c", str(Path("C:/test/config.toml")), "-o", "json", "folder", "list", "-a", "BOKU-MARTIN"], called_cmd)
 
 
 if __name__ == "__main__":

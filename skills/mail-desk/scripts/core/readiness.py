@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .envelope import build_error, build_success
-from .himalaya import run_himalaya
+from .himalaya import HimalayaInvocationError, run_himalaya
 
 
 BACKEND_CONFIG_RELATIVE_PATH = Path(".agents") / "mail-desk-backend.json"
@@ -154,7 +154,7 @@ def mailbox_readiness_preflight(
             "Mailbox readiness timed out before any mutation.",
             {"backend": SUPPORTED_BACKEND, "account": binding.get("account"), "folder": folder},
             error_type="Timeout",
-            error_details={"reason_code": "timeout", "timeout_seconds": READINESS_TIMEOUT_SECONDS},
+            error_details={"reason_code": "himalaya_timeout", "timeout_seconds": READINESS_TIMEOUT_SECONDS},
         )
     except FileNotFoundError:
         return build_error(
@@ -163,6 +163,16 @@ def mailbox_readiness_preflight(
             {"backend": SUPPORTED_BACKEND, "account": binding.get("account"), "folder": folder},
             error_type="AdapterUnavailable",
             error_details={"reason_code": "adapter_unavailable"},
+        )
+    except HimalayaInvocationError as exc:
+        reason_code = exc.reason_code
+        error_type = "AdapterUnavailable" if reason_code == "himalaya_unavailable" else "HimalayaBootstrap"
+        return build_error(
+            READINESS_ACTION,
+            "Mailbox readiness stopped before any mutation.",
+            {"backend": SUPPORTED_BACKEND, "account": binding.get("account"), "folder": folder},
+            error_type=error_type,
+            error_details={"reason_code": reason_code},
         )
     except ValueError as exc:
         return build_error(

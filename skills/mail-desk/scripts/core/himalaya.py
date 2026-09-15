@@ -7,6 +7,7 @@ import email
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import time
@@ -14,6 +15,55 @@ from typing import Any
 
 from .attachments import inspect_mime_tree, validate_attachment_candidate_metadata
 from .common import normalize_message_id
+
+
+class HimalayaInvocationError(RuntimeError):
+    """A fail-closed, classified Himalaya bootstrap or command failure."""
+
+    def __init__(self, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+def _default_himalaya_config_path() -> Path:
+    """Return the platform's non-interactive Himalaya config location."""
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata) / "himalaya" / "config.toml"
+    return Path.home() / ".config" / "himalaya" / "config.toml"
+
+
+def resolve_himalaya_invocation() -> tuple[str, Path]:
+    """Resolve an installed CLI and a readable config without invoking either.
+
+    ``HIMALAYA_CONFIG`` is the only supported override.  It is intentionally a
+    config *path*, not an arbitrary command hook: accepting a command string
+    would turn workspace configuration into a shell-execution boundary.
+    """
+    configured = os.environ.get("HIMALAYA_CONFIG")
+    config_path = Path(configured).expanduser() if configured else _default_himalaya_config_path()
+    if not config_path.is_absolute():
+        raise HimalayaInvocationError(
+            "himalaya_config_invalid", "HIMALAYA_CONFIG must be an absolute configuration file path."
+        )
+    if not config_path.is_file():
+        raise HimalayaInvocationError(
+            "himalaya_config_missing", "Himalaya configuration is missing; refusing interactive setup."
+        )
+    executable = shutil.which("himalaya")
+    if not executable:
+        raise HimalayaInvocationError(
+            "himalaya_unavailable", "Himalaya executable is unavailable; no mailbox command was started."
+        )
+    return executable, config_path
+
+
+def build_himalaya_command(args: list[str], account: str | None = None) -> list[str]:
+    """Build a shell-free CLI command after fail-fast bootstrap validation."""
+    if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in args):
+        raise ValueError("Himalaya arguments must be a non-empty list of non-empty text tokens.")
+    executable, config_path = resolve_himalaya_invocation()
+    return [executable, "-c", str(config_path)] + _insert_account_arg(args, account)
 
 
 def _insert_account_arg(args: list[str], account: str | None) -> list[str]:
@@ -43,10 +93,14 @@ def _insert_account_arg(args: list[str], account: str | None) -> list[str]:
 
 
 def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35, max_retries: int = 5) -> str:
-    """Execute himalaya CLI command safely with UTF-8 replacement and retry on transient TLS errors."""
+    """Execute a non-interactive Himalaya command, retrying transient failures only."""
+    if not isinstance(timeout, int) or timeout <= 0:
+        raise ValueError("timeout must be a positive integer.")
+    if not isinstance(max_retries, int) or max_retries < 1:
+        raise ValueError("max_retries must be at least one.")
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
-    cmd = ["himalaya"] + _insert_account_arg(args, account)
+    cmd = build_himalaya_command(args, account)
 
     last_err = None
     for attempt in range(max_retries):
@@ -64,24 +118,26 @@ def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35,
             if res.returncode != 0:
                 err_msg = res.stderr.strip()
                 # Check for transient connection errors
-                if "10054" in err_msg or "TLS stream" in err_msg or "cannot connect" in err_msg or "broken pipe" in err_msg.lower():
-                    last_err = RuntimeError(f"Himalaya transient error: {err_msg}")
+                if _is_transient_himalaya_error(err_msg):
+                    last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
                     if attempt < max_retries - 1:
                         time.sleep(2.0 * (attempt + 1))
                         continue
                     break
-                raise RuntimeError(f"Himalaya failed: {' '.join(cmd)}\nStderr: {err_msg}")
+                raise HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {err_msg}")
             return res.stdout
         except subprocess.TimeoutExpired as te:
-            last_err = te
-            if attempt < max_retries - 1:
-                time.sleep(2.0 * (attempt + 1))
-        except Exception as e:
-            last_err = e
-            if attempt < max_retries - 1:
-                time.sleep(2.0 * (attempt + 1))
+            raise HimalayaInvocationError(
+                "himalaya_timeout", "Himalaya timed out; refusing to retry the mailbox command."
+            ) from te
 
-    raise last_err or RuntimeError(f"Himalaya failed after {max_retries} attempts: {' '.join(cmd)}")
+    raise last_err or HimalayaInvocationError("himalaya_timeout", "Himalaya timed out.")
+
+
+def _is_transient_himalaya_error(stderr: str) -> bool:
+    """Keep retries narrowly limited to transport failures."""
+    message = stderr.lower()
+    return any(token in message for token in ("10054", "tls stream", "cannot connect", "broken pipe", "connection reset", "timed out"))
 
 
 def fetch_raw_message_eml(

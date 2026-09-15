@@ -20,6 +20,21 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 
 ## Himalaya JSON client
 
+### Non-interactive bootstrap
+
+- The adapter resolves only the `himalaya` executable and the config file. Set
+  `HIMALAYA_CONFIG` to an absolute, readable `config.toml` path when the
+  installation does not use the platform default (`%APPDATA%\\himalaya\\config.toml`
+  on Windows). The adapter supplies it as `-c <path>`.
+- `HIMALAYA_COMMAND` is deliberately unsupported. Command strings, shells and
+  interactive setup are never configuration interfaces for this adapter.
+- Before starting a mailbox process, the adapter verifies executable and config.
+  Missing config is `himalaya_config_missing`, an invalid override is
+  `himalaya_config_invalid`, and a missing executable is `himalaya_unavailable`.
+  These stop immediately and cannot launch Himalaya's setup wizard.
+- Only bounded timeout and transport/TLS failures are retried. Config, account,
+  authentication, syntax and other command failures are returned immediately.
+
 - `scripts/mail_desk_himalaya_client.py` performs Himalaya/IMAP listing, reading, read-only RFC-822 MIME attachment inspection, copying, moving, deleting, searching, and folder checks with structured JSON envelopes and automatic socket/TLS-10054 error handling.
 - Use its search operation with a normalized `Message-ID` and the relevant folders when a backend lookup is needed; that search result remains locator evidence, not durable identity.
 - **Operational rule: invoke the client only through a JSON input file using `--input`, including single-message and inspection operations.** Direct ad-hoc subcommands with changing arguments are not permitted in the operational agent workflow.
