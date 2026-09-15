@@ -32,8 +32,9 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   Missing config is `himalaya_config_missing`, an invalid override is
   `himalaya_config_invalid`, and a missing executable is `himalaya_unavailable`.
   These stop immediately and cannot launch Himalaya's setup wizard.
-- Only bounded timeout and transport/TLS failures are retried. Config, account,
-  authentication, syntax and other command failures are returned immediately.
+- A timeout stops immediately. Only bounded transport/TLS failures are retried.
+  Config, account, authentication, syntax and other command failures are returned
+  immediately.
 
 - `scripts/mail_desk_himalaya_client.py` performs Himalaya/IMAP listing, reading, read-only RFC-822 MIME attachment inspection, copying, moving, deleting, searching, and folder checks with structured JSON envelopes and automatic socket/TLS-10054 error handling.
 - Use its search operation with a normalized `Message-ID` and the relevant folders when a backend lookup is needed; that search result remains locator evidence, not durable identity.
@@ -42,6 +43,18 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   ```bash
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
+
+### Temporary host execution boundary
+
+If the sandbox cannot read the configured Himalaya config but the same bounded,
+read-only probe succeeds on the host, execute only the JSON-input client above
+outside the sandbox. Build and review the exact manifest inside the sandbox, pass
+the trusted host `HIMALAYA_CONFIG`, and return the structured JSON envelope for
+normal processing. Do not approve arbitrary Himalaya commands or a blanket
+`himalaya`/`python` command prefix. Read operations may cross this boundary;
+copy, move, delete and send still require their existing operation-specific human
+approval, workspace lock, identity/location preconditions and verification. This
+is a temporary compatibility path pending FR-10's least-privilege gateway.
 
 - The existing `himalaya-op.json` manifest shape is documented in [`references/cli-operations.md`](../cli-operations.md); its batch lifecycle is documented in [`references/batch-runner.md`](../batch-runner.md).
 - `inspect_attachments` requires the manifest-bound account and a verified RFC

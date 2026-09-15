@@ -69,6 +69,16 @@ Der Lock schützt lokale gemeinsame Writer, nicht andere Mailbox-Clients; er ers
 die adapterseitigen Preconditions und Zielverifikation gegen externe
 Zustandsänderungen nicht. Beides bleibt nötig.
 
+Kann die Sandbox die konfigurierte Himalaya-Config nicht lesen, obwohl ein eng
+begrenzter Host-Probe erfolgreich ist, darf vorübergehend nur der bestehende
+JSON-Manifest-Client außerhalb der Sandbox ausgeführt werden. Manifest-Erstellung,
+Review und Auswertung bleiben in der Sandbox; die Host-Ausführung erhält exakt das
+reviewte Manifest und `HIMALAYA_CONFIG` aus der vertrauenswürdigen Host-Konfiguration
+und gibt nur das strukturierte Ergebnis zurück. Freie Himalaya-Kommandos und eine
+pauschale dauerhafte Freigabe für `himalaya` oder `python` sind verboten.
+Mailbox-Schreibaktionen behalten unabhängig davon Human Approval, Lock,
+Preconditions und Verify. Diese Übergangslösung wird durch FR-10 abgelöst.
+
 Vor dem Fach-Skript prüft der ausführende Harness seine Ownership über
 `workspace-lock/scripts/workspace_lock_guard.py` mit `require_workspace_lock()` und
 der eigenen Lease- oder Conversation-ID. Der gemeinsame Guard wird nicht in den

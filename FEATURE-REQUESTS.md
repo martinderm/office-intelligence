@@ -21,10 +21,14 @@ verbindliche Paketkarten.
 | ID | Status | Erledigter Teil | Nächstes Paket |
 | --- | --- | --- | --- |
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` |
+| `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 
 ```text
 Human Gate → MD-P1 → MD-P2 → MD-P3
 ```
+
+FR-10 ist unabhängig von FR-09 und sollte vor einem breiteren produktiven
+Mailbox-Betrieb umgesetzt werden.
 
 ## Ausführungsprofil für Coding Agents
 
@@ -351,3 +355,52 @@ Trust-Boundaries, fokussierte und vollständige Testergebnisse, bekannte bewusst
 Grenzen und den Commit-Kandidaten. Der Review-Agent prüft zuerst adversarial die
 Autorisierungs- und Idempotenzgrenzen, danach Tests und Diff. Korrekturen bleiben im
 selben Paket; erst ein grünes Review erlaubt Commit und die nächste frische Session.
+
+## FR-10: Least-Privilege Mailbox Gateway
+
+**Status:** ⬜ Geplant. Bis zur Umsetzung darf bei sandbox-unzugänglicher
+Himalaya-Config ausschließlich der bestehende JSON-Manifest-Client eng begrenzt
+außerhalb der Sandbox laufen. Das ist keine Freigabe für freie Himalaya-Kommandos
+oder einen pauschalen dauerhaften Command-Prefix.
+
+**Ziel:** Ein hostseitiges Gateway hält Config und Credentials außerhalb der
+Sandbox und bietet Mail-Desk nur versionierte, schema-validierte Operationen mit
+strikter Workspace-, Backend- und Account-Bindung. Es gibt keine Shell- oder
+generische Execute-Schnittstelle; Ergebnisse und Fehler sind strukturierte JSON-
+Envelopes. Umsetzung paketweise in frischen Terra-high-Sessions, jeweils mit
+separatem Review und Commit.
+
+### MD-G1 — Read-only Host-Gateway
+
+Implementiere einen schmalen Hostprozess für `list`, `read`, `search`,
+`inspect_attachments` und den bereits reviewgebundenen Attachment-Export. Er
+akzeptiert nur ein versioniertes Manifest, bindet Workspace, Account und
+Config-Profil serverseitig, erzwingt Größen-, Anzahl-, Laufzeit- und
+Parallelitätslimits und gibt weder Configpfade noch Secrets zurück. Unbekannte
+Felder, Operationen, Account-Drift und unzugängliche Config stoppen fail-closed.
+Tests müssen Schema-Manipulation, Shell-/Argument-Injection, Timeout, Drift,
+Parallelitätslimit und Credential-Leakage adversarial abdecken.
+
+### MD-G2 — Gated Mailbox Writes
+
+Erweitere das Gateway um `copy`, `move`, `delete` und `send`, aber nur mit
+operationsspezifischer, hashgebundener Human-Receipt, aktivem Workspace-Lock,
+Message-ID-/Ort-Preconditions, Idempotenzschlüssel, Zielverifikation und
+append-only Audit-Journal. Eine generische Schreib- oder Execute-Operation bleibt
+verboten. Partial Failure und Drift führen zu `recovery_required`, nie zu stiller
+Fortsetzung.
+
+### MD-G3 — Sandbox-Integration und Ablösung
+
+Ergänze den Mail-Desk um Capability Discovery und einen einzigen Gateway-
+Transportadapter. Fehlt oder scheitert das Gateway, stoppt der Live-Mailboxpfad
+strukturiert; es gibt keinen stillen Direkt-CLI-Fallback. Hermetische End-to-End-
+Tests decken Read, Export, freigegebene Writes, Retry und Recovery ab. Nach grüner
+Abnahme werden die temporäre Host-Eskalation und alle dafür erteilten schmalen
+Ausnahmen entfernt; Dokumentation und Progress-Datei werden nachgezogen.
+
+**Gesamtabnahme:** Fokustests und vollständige Mail-Desk-Suite, Compileall,
+Skill-Validierung und `git diff --check` sind grün. Ein End-to-End-Test beweist,
+dass ein Sandbox-Client ohne Secret- oder Configzugriff lesen kann und dass jede
+Mailbox-Mutation ohne passende Receipt, Lock oder Preconditions fail-closed
+bleibt.
