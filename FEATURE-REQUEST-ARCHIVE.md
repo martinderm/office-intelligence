@@ -16,6 +16,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-05` | ✅ | Acht Batch-Runner-Handler modularisiert, CLI-Rand kompatibel gehalten | Handler-, Dispatch- und Gesamtsuite |
 | `FR-06` | ✅ | Zweistufiger Post-Batch-Synthesevertrag mit Telemetrie, Targets und verifiziertem Handoff | U-1–U-5, manueller Pilot und Synthese-Handoff-Tests |
 | `FR-07` | ✅ | Kontrollierter Batch-Einstieg, Workspace-Bindung, Readiness, Recovery und Completion-Gate | H0-Recovery, MD-H1–H5, Fault-Injection und BOKU-Pilot |
+| `FR-08` | ✅ | Manifestgebundener Anhangsfluss vom RFC-822-Inventar bis zum read-only Ablagevorschlag | MD-A1–MD-A5, 449 Mail-Desk-Gesamttests und unabhängige Reviews |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -80,6 +81,29 @@ per normalisierter Message-ID ohne erneute Mailboxmutation. Das daraus abgeleite
 Luna-Profil bleibt: drei bis fünf Mails, sichtbare starke/humane Review und lineare
 Ausführung innerhalb eines Batches; frische Sessions nur zwischen unabhängigen
 Batches.
+
+## FR-08 — Manifestgebundene Mail-Anhänge und Ablagevorschläge
+
+Der abgeschlossene Anhangsfluss inventarisiert ausschließlich reale RFC-822-MIME-
+Parts, ruft freigegebene Anhänge review- und accountgebunden in eine lokale
+Quarantäne ab, extrahiert Inhalte innerhalb fester Ressourcen- und Sicherheitsgrenzen
+und erzeugt einen gegen Mailidentität, Inventar und Decision gebundenen LLM-Handoff.
+Der abschließende `attachment_filing_candidate` in Schema 1 verwendet ausschließlich
+Katalog- und frische Filemap-Evidenz und bleibt strikt read-only; FR-08 autorisiert
+weder Cloud-Uploads noch Ordner-, Filemap- oder Katalogänderungen.
+
+- `MD-A1`: RFC-822-MIME-Inventar und kanonische Part-Bindung (`6f86c67`).
+- `MD-A2`: Reviewgebundener Quarantäne-Abruf und Lock-/Manifest-Härtung
+  (`1f31629`, `9e7c7d8`).
+- `MD-A3`: Begrenzte Extraktion und lokales OCR-Derivat (`8bb87b5`, `51a583b`).
+- `MD-A4`: Materialitäts-Gate und integritätsgebundener LLM-Handoff
+  (`a50652f`, `5eea87e`).
+- `MD-A5`: Katalog-/Filemap-gestützter Ablagevorschlag und geschlossene
+  Account-/Quarantäne-Vertrauensgrenzen (`286e238`, `e655b02`).
+
+Die finale Abnahme umfasste 41 fokussierte MD-A5-Tests und 449 grüne
+Mail-Desk-Gesamttests. Die eigentliche Cloud-Promotion bleibt ausschließlich
+Gegenstand von FR-09 und dessen separatem Human Gate.
 
 ## Archivierungsregel
 
