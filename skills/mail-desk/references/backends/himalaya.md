@@ -26,6 +26,9 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   `HIMALAYA_CONFIG` to an absolute, readable `config.toml` path when the
   installation does not use the platform default (`%APPDATA%\\himalaya\\config.toml`
   on Windows). The adapter supplies it as `-c <path>`.
+  Himalaya 1.2.0 interpretiert Windows-Drive-Doppelpunkte in `-c` als Pfadlistentrenner;
+  der Adapter konvertiert deshalb lokale Windows-Drive-Pfade deterministisch auf
+  `\\localhost\<drive>$\...`.
 - `HIMALAYA_COMMAND` is deliberately unsupported. Command strings, shells and
   interactive setup are never configuration interfaces for this adapter.
 - Before starting a mailbox process, the adapter verifies executable and config.

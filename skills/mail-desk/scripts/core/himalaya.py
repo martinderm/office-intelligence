@@ -8,6 +8,7 @@ import email.policy
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +27,30 @@ class HimalayaInvocationError(RuntimeError):
         self.reason_code = reason_code
 
 
+_WINDOWS_DRIVE_PATH_REGEX = re.compile(r"^([A-Za-z]):[\\/](.*)$")
+
+
+def normalize_himalaya_config_path(config_path: str | Path) -> Path:
+    """Normalize local Windows drive paths to deterministic local UNC admin share paths.
+
+    Himalaya 1.2.0 interprets Windows drive colons in '-c' arguments as path list
+    separators. Under Windows, absolute local drive paths (e.g. 'C:\\...' or 'd:/...')
+    are converted to local UNC admin share paths (e.g. '\\\\localhost\\C$\\...' or
+    '\\\\localhost\\d$\\...'). Existing UNC paths, POSIX paths, and relative paths
+    are preserved semantically.
+    """
+    raw_str = str(config_path).strip()
+    if raw_str.startswith(("\\\\", "//")):
+        normalized = raw_str.replace("/", "\\")
+        return Path(normalized)
+    m = _WINDOWS_DRIVE_PATH_REGEX.match(raw_str)
+    if m:
+        drive_letter = m.group(1)
+        rest = m.group(2).replace("/", "\\")
+        return Path(f"\\\\localhost\\{drive_letter}$\\{rest}")
+    return Path(config_path)
+
+
 def _default_himalaya_config_path() -> Path:
     """Return the platform's non-interactive Himalaya config location."""
     appdata = os.environ.get("APPDATA")
@@ -42,7 +67,11 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
     would turn workspace configuration into a shell-execution boundary.
     """
     configured = os.environ.get("HIMALAYA_CONFIG")
-    config_path = Path(configured).expanduser() if configured else _default_himalaya_config_path()
+    if configured:
+        expanded = Path(configured).expanduser()
+        config_path = normalize_himalaya_config_path(expanded)
+    else:
+        config_path = _default_himalaya_config_path()
     if not config_path.is_absolute():
         raise HimalayaInvocationError(
             "himalaya_config_invalid", "HIMALAYA_CONFIG must be an absolute configuration file path."
