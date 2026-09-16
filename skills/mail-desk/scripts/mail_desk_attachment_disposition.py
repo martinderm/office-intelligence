@@ -23,6 +23,11 @@ from core import (
     DispositionDriftError,
     DispositionLockRequiredError,
     DispositionApplyError,
+    ReceiptError,
+    ReceiptMissingError,
+    ReceiptMalformedError,
+    ReceiptDriftError,
+    RecoveryEvidenceMissingError,
     QuarantineIndexError,
     WorkspaceLockRequiredError,
     AttachmentIndexDriftError,
@@ -96,11 +101,11 @@ def main() -> None:
 
     # record
     rec_p = subparsers.add_parser("record", parents=[common_parser], help="Record a disposition decision into attachment-disposition-log.jsonl")
-    rec_p.add_argument("--input", type=Path, default=None, help="Path to JSON file containing payload")
+    rec_p.add_argument("--input", type=Path, default=None, help="Path to JSON file containing payload (with approval_receipt)")
+    rec_p.add_argument("--receipt", type=str, default=None, help="Path to approval receipt JSON file or raw JSON string")
     rec_p.add_argument("--attachment-id", type=str, default=None, help="Attachment ID")
     rec_p.add_argument("--index-entry-sha256", type=str, default=None, help="Canonical SHA-256 hash of quarantine index entry")
     rec_p.add_argument("--decision", type=str, choices=list(sorted(ALLOWED_DECISIONS)), default=None, help="Disposition decision (retain, discard, promote)")
-    rec_p.add_argument("--human-receipt-hash", type=str, default=None, help="Verified human receipt hash (64-hex SHA-256)")
     rec_p.add_argument("--timestamp", type=str, default=None, help="RFC-3339 timestamp (default: now)")
     rec_p.add_argument("--rationale", type=str, default=None, help="Optional bounded rationale")
     rec_p.add_argument("--review-after", type=str, default=None, help="Optional RFC-3339 review date for retain")
@@ -112,9 +117,9 @@ def main() -> None:
     subparsers.add_parser("report", parents=[common_parser], help="Perform read-only reporting on quarantined attachments")
 
     # apply-discard
-    apply_p = subparsers.add_parser("apply-discard", parents=[common_parser], help="Apply authorized physical deletion for eligible discard attachments")
-    apply_p.add_argument("--apply-receipt-hash", type=str, required=True, help="Verified 64-hex apply receipt hash")
-    apply_p.add_argument("--attachment-id", type=str, default=None, help="Optional specific attachment ID to discard")
+    apply_p = subparsers.add_parser("apply-discard", parents=[common_parser], help="Apply authorized physical deletion for an eligible discard attachment")
+    apply_p.add_argument("--attachment-id", type=str, required=True, help="Specific attachment ID to discard (mandatory; bulk apply is forbidden)")
+    apply_p.add_argument("--receipt", type=str, required=True, help="Path to apply approval receipt JSON file or raw JSON string")
 
     args = parser.parse_args()
 
@@ -133,6 +138,20 @@ def main() -> None:
 
     # 1. record subcommand
     if args.subcommand == "record":
+        receipt_obj = None
+        if args.receipt is not None:
+            r_path = Path(args.receipt)
+            if r_path.is_file():
+                try:
+                    receipt_obj = json.loads(r_path.read_text(encoding="utf-8"))
+                except Exception as err:
+                    _emit_error("record", f"Failed to parse receipt file '{args.receipt}': {err}", exc=err, json_output=is_json)
+            else:
+                try:
+                    receipt_obj = json.loads(args.receipt)
+                except Exception as err:
+                    _emit_error("record", f"Invalid receipt JSON: {err}", exc=err, json_output=is_json)
+
         payload: dict[str, Any] = {}
         if args.input is not None:
             if not args.input.is_file():
@@ -141,18 +160,26 @@ def main() -> None:
                 payload = json.loads(args.input.read_text(encoding="utf-8"))
             except Exception as err:
                 _emit_error("record", f"Failed to parse input file '{args.input}': {err}", exc=err, json_output=is_json)
+            if receipt_obj is not None:
+                payload["approval_receipt"] = receipt_obj
         else:
-            if not args.attachment_id or not args.index_entry_sha256 or not args.decision or not args.human_receipt_hash:
+            if not args.attachment_id or not args.index_entry_sha256 or not args.decision:
                 _emit_error(
                     "record",
-                    "Missing required arguments: --attachment-id, --index-entry-sha256, --decision, --human-receipt-hash (or --input)",
+                    "Missing required arguments: --attachment-id, --index-entry-sha256, --decision (and --receipt or --input)",
+                    json_output=is_json,
+                )
+            if receipt_obj is None:
+                _emit_error(
+                    "record",
+                    "Missing required approval receipt: provide --receipt <file_or_json>. Raw hashes are not authorization.",
                     json_output=is_json,
                 )
             payload = {
                 "attachment_id": args.attachment_id,
                 "index_entry_sha256": args.index_entry_sha256,
                 "decision": args.decision,
-                "human_receipt_hash": args.human_receipt_hash,
+                "approval_receipt": receipt_obj,
                 "timestamp": args.timestamp or utc_now_iso(),
             }
             if args.rationale is not None:
@@ -195,10 +222,31 @@ def main() -> None:
 
     # 3. apply-discard subcommand
     elif args.subcommand == "apply-discard":
+        apply_receipt_obj = None
+        if args.receipt is not None:
+            r_path = Path(args.receipt)
+            if r_path.is_file():
+                try:
+                    apply_receipt_obj = json.loads(r_path.read_text(encoding="utf-8"))
+                except Exception as err:
+                    _emit_error("apply-discard", f"Failed to parse receipt file '{args.receipt}': {err}", exc=err, json_output=is_json)
+            else:
+                try:
+                    apply_receipt_obj = json.loads(args.receipt)
+                except Exception as err:
+                    _emit_error("apply-discard", f"Invalid receipt JSON: {err}", exc=err, json_output=is_json)
+
+        if not apply_receipt_obj:
+            _emit_error(
+                "apply-discard",
+                "Missing required --receipt mapping. Verifiable apply receipt contract is required.",
+                json_output=is_json,
+            )
+
         try:
             apply_res = apply_discard(
-                apply_receipt_hash=args.apply_receipt_hash,
                 attachment_id=args.attachment_id,
+                apply_receipt=apply_receipt_obj,
                 workspace_root=ws,
                 data_dir=dd,
                 index_path=idx_p,

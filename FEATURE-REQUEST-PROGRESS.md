@@ -5,37 +5,31 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
-- `FR-11 / MD-Q3` — Disposition, Promotion-Link und sichere Bereinigung ist umgesetzt:
+- `FR-11 / MD-Q3` — Disposition, Promotion-Link und sichere Bereinigung ist umgesetzt und gehärtet:
   - Implementierung des versionierten, append-only Dispositionslogs in
     `skills/mail-desk/scripts/core/attachment_disposition_log.py` sowie der CLI-
     Fassade `skills/mail-desk/scripts/mail_desk_attachment_disposition.py` für
     `data/mail-desk/attachment-disposition-log.jsonl`.
-  - Schema-1-Einträge binden deterministische 64-Hex-`decision_id`, `attachment_id`,
-    kanonischen Quarantäneindex-Eintragshash (`canonical_index_entry_sha256`), Entscheidung
-    (`retain`, `discard`, `promote`), RFC-3339-Zeitstempel, Human-Receipt-Hash (64-Hex-SHA-256)
-    und optionale Metadaten (`rationale`, `review_after`, `candidate_review_hash`,
-    `promotion_id`, `promotion_status`).
-  - Rekursive Prüfung schließt verbotene Inhalte (`prompt`, `credentials`, `extracted_text`, etc.)
-    und unbekannte Felder fail-closed aus (`ForbiddenContentError`, `DispositionSchemaError`).
-  - Read-only Reporting (`report_dispositions`) klassifiziert alle Quarantäne-Anhänge
-    deterministisch und mutationsfrei in `eligible`, `protected` oder `invalid`.
-  - Separater, explizit autorisierter Discard-Apply-Schritt (`apply_discard`) unter zwingendem
-    Workspace-Lock (`DispositionLockRequiredError`), der 10 Vorbedingungen vor jeder physischen
-    Löschung prüft (Lock, Run-ID-Validierung, Pfad-Containment, Symlink-/0x400-Reparse-Schutz,
-    physische Existenz, Disk-SHA-256 vs. Index vs. `.quarantine-inventory.json`, logischer Discard-
-    Nachweis, Index-Eintragshash-Bindung, Ausschluss aktiver Runs / Journals / Locks, Ausschluss
-    aktiver Promotionen).
-  - Nach verifizierter Löschung wird das physische Inventar `.quarantine-inventory.json`
-    unter Lock konsistent bereinigt und der Quarantäneindex atomar aktualisiert (Eintrag entfernt);
-    das append-only Dispositionslog bewahrt den vollständigen Audit-Trail.
-  - Partial-Failure-Transaktionssicherheit: Schlägt die physische Löschung oder die Inventar-
-    Aktualisierung fehl, bleibt der Quarantäneindex unverändert; spätere Läufe können
-    nach Behebung des Fehlers idempotent wiederholt werden.
-  - Schlanke FR-09-Promotion-Verknüpfung (`promote` bindet `candidate_review_hash`, FR-09-Ergebnis
-    trägt `promotion_id` nach) ohne doppelte Promotion-Engine oder Cloud-Sync.
+  - Verifizierbare Receipt-Contracts: Rohe 64-Hex-Hashes autorisieren weder Entscheidungen noch
+    Löschungen. Approval-Receipts erfordern einen validierten Contract (`receipt_id`,
+    `request_hash`, `approved_at`, `approved_by`).
+  - Deterministische Request-Hash-Bindung:
+    - Disposition-Request: Bindet `attachment_id`, `index_entry_sha256`, `decision`, `review_after`, `rationale`, `candidate_review_hash`, `promotion_id`, `promotion_status`.
+    - Apply-Request: Bindet den exakten Löschumfang (`action: discard`, `attachment_id`, `decision_id`, `index_entry_sha256`, `quarantine_path`, `sha256`, `size_bytes`, `run_id`, `schema_version: 1`). Bulk-Apply ist strikt verboten (`attachment_id` zwingend).
+  - Persistiertes Apply-/Recovery-Journal (`data/mail-desk/attachment-discard-journal.json`):
+    - Zustandsmaschine mit den Status `prepared`, `file_deleted`, `inventory_updated`, `index_updated`, `completed`, `failed`.
+    - `prepared` wird zwingend **vor** dem physischen `unlink` persistiert.
+    - Eine fehlende Datei auf der Festplatte wird **nur** dann bereinigt/wiederhergestellt, wenn ein passender, unmanipulierter `file_deleted`-Journaleintrag für dasselbe Receipt und denselben vorherigen Indexzustand existiert (`RecoveryEvidenceMissingError`).
+  - Atomare Inventar-Mutation (`update_quarantine_inventory_atomic`):
+    - Re-validiert `.quarantine-inventory.json` vor und nach der Mutation.
+    - Schreibt atomar über Sibling-Temp-Datei (`os.replace` mit fsync); verschluckt keine Fehler (`InventoryUpdateError`).
+    - Schlägt die Inventar-Aktualisierung nach `unlink` fehl, wird `state: "failed"` im Journal protokolliert und der Quarantäneindex **unberührt** gelassen (`DispositionApplyError`).
+  - Synchrone Pre-Unlink-Sicherheitsprüfung: Re-Verifikation aller 10 Vorbedingungen (Workspace-Lock, Run-Evidence, Pfad-Containment, Symlink-/0x400-Reparse-Schutz, physische Bytes/SHA-256, Inventar, Index-Hash, Discard-Entscheidung, Apply-Receipt) unmittelbar vor dem `unlink`.
+  - Rekursive Inhaltsprüfung schließt verbotene Inhalte (`prompt`, `credentials`, `extracted_text`, etc.) in Receipts und Logs fail-closed aus (`ForbiddenContentError`).
+  - Read-only Reporting (`report_dispositions`) klassifiziert alle Quarantäne-Anhänge mutationsfrei in `eligible`, `protected` oder `invalid`.
+  - Schlanke FR-09-Promotion-Verknüpfung (`promote` bindet `candidate_review_hash`, FR-09-Ergebnis trägt `promotion_id` nach) ohne doppelte Promotion-Engine oder Cloud-Sync.
   - Byte-Identität von `data/mail-desk/final-location-index.json` garantiert.
-  - Review-Verifikation: 20 fokussierte MD-Q3-Tests, 26 MD-Q1/MD-Q2-Tests, vollständige
-    Mail-Desk-Suite (>490 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
+  - Review-Verifikation: 16 fokussierte MD-Q3-Tests (inkl. adversarieller Tests gegen Hash-Bypässe, Scope-Drift, manipulierte Journale und Inventarfehler), 42 Quarantäne-Tests (MD-Q1–Q3), vollständige Mail-Desk-Suite (506 Tests grün), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
   - Grenzen: Keine eigenständige Promotion-Ausführung oder Cloud-Remote-Sync (Scope von FR-09).
 - `FR-11 / MD-Q2` — Versionierter Quarantäneindex ist abgenommen:
   - Implementierung des Datenzugriffs und der Schema-1-Verifikation in

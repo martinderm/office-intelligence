@@ -2,10 +2,12 @@
 
 Provides:
 - Append-only versioned logging for `data/mail-desk/attachment-disposition-log.jsonl`.
-- Fail-closed Schema 1 validation and deterministic hash-bound `decision_id` computation.
+- Verifiable Receipt contracts with canonical request-hash binding (no raw 64-hex authorization).
+- Persisted, hash-bound Apply-/Recovery-Journal (`attachment-discard-journal.json`) with strict state transitions.
 - Read-only reporting classifying quarantined attachments into `eligible`, `protected`, and `invalid`.
-- Separately authorized, atomic discard-apply engine enforcing 10 pre-conditions under workspace lock.
-- FR-09 promotion link without implementing a duplicate promotion engine or cloud-sync.
+- Exactly-one-attachment Discard-Apply engine enforcing 10 pre-unlink conditions under workspace lock.
+- Atomic `.quarantine-inventory.json` updates via sibling temp file + replace with fail-closed error propagation.
+- FR-09 promotion link without duplicate promotion engine or remote cloud-sync.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import os
 from pathlib import Path, PurePath, PurePosixPath
 import re
 import sys
+import uuid
 from typing import Any, Mapping
 
 from core.common import normalize_message_id, resolve_data_dir, utc_now_iso
@@ -29,7 +32,6 @@ from core.attachment_fetch import (
     validate_attachment_filename,
     verify_quarantine_attachment_artifact,
     verify_workspace_lock,
-    _load_workspace_lock_guard,
     _load_quarantine_inventory,
     _validate_inventory_schema,
     _QuarantineInventoryLock,
@@ -81,11 +83,40 @@ class DispositionApplyError(DispositionError):
     """Raised when discard apply preconditions fail or partial recovery is required."""
 
 
+class ReceiptError(DispositionError):
+    """Base exception for authorization receipt errors."""
+
+
+class ReceiptMissingError(ReceiptError):
+    """Raised when a required approval or apply receipt is missing or empty."""
+
+
+class ReceiptMalformedError(ReceiptError):
+    """Raised when a receipt is not a dictionary or misses required contract fields."""
+
+
+class ReceiptDriftError(ReceiptError):
+    """Raised when a receipt's request_hash does not match the computed canonical request hash."""
+
+
+class RecoveryEvidenceMissingError(DispositionApplyError):
+    """Raised when a target file is missing from disk and lacks matching file_deleted recovery journal evidence."""
+
+
+class RecoveryJournalCorruptedError(DispositionApplyError):
+    """Raised when the discard recovery journal is structurally invalid or unreadable."""
+
+
+class InventoryUpdateError(DispositionApplyError):
+    """Raised when updating .quarantine-inventory.json fails."""
+
+
 # ==============================================================================
 # Constants & Enums
 # ==============================================================================
 
 DISPOSITION_LOG_FILENAME = "attachment-disposition-log.jsonl"
+DISCARD_JOURNAL_FILENAME = "attachment-discard-journal.json"
 
 DECISION_RETAIN = "retain"
 DECISION_DISCARD = "discard"
@@ -99,9 +130,27 @@ STATUS_INVALID = "invalid"
 
 ALLOWED_REPORT_STATUSES = {STATUS_ELIGIBLE, STATUS_PROTECTED, STATUS_INVALID}
 
-RATIONALE_MAX_LENGTH = 256
+RATIONALE_MAX_LENGTH = 500
 PROMOTION_ID_MAX_LENGTH = 128
 ALLOWED_PROMOTION_STATUSES = {"pending", "promoted", "failed", "rejected"}
+
+RECEIPT_REQUIRED_KEYS = {"receipt_id", "request_hash", "approved_at", "approved_by"}
+
+JOURNAL_STATE_PREPARED = "prepared"
+JOURNAL_STATE_FILE_DELETED = "file_deleted"
+JOURNAL_STATE_INVENTORY_UPDATED = "inventory_updated"
+JOURNAL_STATE_INDEX_UPDATED = "index_updated"
+JOURNAL_STATE_COMPLETED = "completed"
+JOURNAL_STATE_FAILED = "failed"
+
+ALLOWED_JOURNAL_STATES = {
+    JOURNAL_STATE_PREPARED,
+    JOURNAL_STATE_FILE_DELETED,
+    JOURNAL_STATE_INVENTORY_UPDATED,
+    JOURNAL_STATE_INDEX_UPDATED,
+    JOURNAL_STATE_COMPLETED,
+    JOURNAL_STATE_FAILED,
+}
 
 ALLOWED_DISPOSITION_ENTRY_FIELDS = {
     "decision_id",
@@ -146,9 +195,196 @@ def resolve_disposition_log_path(
     return (resolve_data_dir() / DISPOSITION_LOG_FILENAME).resolve()
 
 
+def resolve_discard_journal_path(
+    journal_path: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    workspace_root: Path | str | None = None,
+) -> Path:
+    """Resolve absolute path to attachment-discard-journal.json."""
+    if journal_path is not None:
+        return Path(journal_path).resolve()
+    if data_dir is not None:
+        return (Path(data_dir) / DISCARD_JOURNAL_FILENAME).resolve()
+    if workspace_root is not None:
+        return (Path(workspace_root) / "data" / "mail-desk" / DISCARD_JOURNAL_FILENAME).resolve()
+    return (resolve_data_dir() / DISCARD_JOURNAL_FILENAME).resolve()
+
+
 # ==============================================================================
-# Deterministic Identity & Hash Binding
+# Verifiable Receipt Contracts & Canonical Request Hashing
 # ==============================================================================
+
+def validate_receipt_structure(receipt: Any, *, context: str = "disposition") -> dict[str, Any]:
+    """Strictly validate receipt contract structure fail-closed.
+
+    Raw 64-hex strings are rejected. Must be a mapping containing:
+    - receipt_id: non-empty string
+    - request_hash: 64-hex SHA-256
+    - approved_at: RFC-3339 timestamp
+    - approved_by: non-empty string
+    """
+    if receipt is None:
+        raise ReceiptMissingError(f"Missing required approval receipt for {context}")
+    if not isinstance(receipt, (dict, Mapping)):
+        raise ReceiptMalformedError(
+            f"Approval receipt for {context} must be a dictionary, got {type(receipt).__name__}. "
+            "Raw 64-hex strings do not constitute authorization."
+        )
+
+    receipt_dict = dict(receipt)
+    missing = RECEIPT_REQUIRED_KEYS - set(receipt_dict.keys())
+    if missing:
+        raise ReceiptMalformedError(
+            f"Approval receipt for {context} missing required field(s): {sorted(missing)}"
+        )
+
+    # Check forbidden content in receipt
+    forbidden = _find_forbidden_content_keys(receipt_dict)
+    if forbidden:
+        raise ForbiddenContentError(
+            f"Forbidden content keys detected in {context} receipt: {sorted(forbidden)}"
+        )
+
+    rid = str(receipt_dict["receipt_id"]).strip()
+    if not rid or len(rid) > 128:
+        raise ReceiptMalformedError(f"Invalid 'receipt_id' in {context} receipt: must be 1-128 chars")
+
+    rhash = str(receipt_dict["request_hash"]).strip().lower()
+    if not SHA256_HEX_REGEX.fullmatch(rhash):
+        raise ReceiptMalformedError(
+            f"Invalid 'request_hash' in {context} receipt: must be 64-hex SHA-256, got {receipt_dict['request_hash']!r}"
+        )
+
+    rat = str(receipt_dict["approved_at"]).strip()
+    if not RFC3339_REGEX.fullmatch(rat):
+        raise ReceiptMalformedError(
+            f"Invalid 'approved_at' in {context} receipt: must be RFC-3339, got {receipt_dict['approved_at']!r}"
+        )
+
+    rby = str(receipt_dict["approved_by"]).strip()
+    if not rby or len(rby) > 128:
+        raise ReceiptMalformedError(f"Invalid 'approved_by' in {context} receipt: must be 1-128 chars")
+
+    return {
+        "receipt_id": rid,
+        "request_hash": rhash,
+        "approved_at": rat,
+        "approved_by": rby,
+    }
+
+
+def canonical_receipt_sha256(receipt: Mapping[str, Any], *, context: str = "disposition") -> str:
+    """Compute deterministic 64-hex SHA-256 over a validated canonical receipt."""
+    validated = validate_receipt_structure(receipt, context=context)
+    canonical_json = json.dumps(validated, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def verify_approval_receipt(
+    receipt: Any,
+    expected_request_hash: str,
+    *,
+    context: str = "disposition",
+) -> dict[str, Any]:
+    """Verify receipt structure, exact request_hash match, and return canonical receipt info."""
+    norm_exp_hash = str(expected_request_hash).strip().lower()
+    if not SHA256_HEX_REGEX.fullmatch(norm_exp_hash):
+        raise ValueError(f"Invalid expected_request_hash for {context}: {expected_request_hash!r}")
+
+    validated = validate_receipt_structure(receipt, context=context)
+    if validated["request_hash"] != norm_exp_hash:
+        raise ReceiptDriftError(
+            f"Receipt drift detected for {context}: receipt request_hash '{validated['request_hash']}' "
+            f"does not match computed request hash '{norm_exp_hash}'"
+        )
+
+    receipt_hash = canonical_receipt_sha256(validated, context=context)
+    return {
+        "receipt": validated,
+        "receipt_hash": receipt_hash,
+    }
+
+
+# ==============================================================================
+# Disposition Request Hashing & Decision ID
+# ==============================================================================
+
+def build_disposition_request(
+    *,
+    attachment_id: str,
+    index_entry_sha256: str,
+    decision: str,
+    rationale: str | None = None,
+    review_after: str | None = None,
+    candidate_review_hash: str | None = None,
+    promotion_id: str | None = None,
+    promotion_status: str | None = None,
+    schema_version: int = 1,
+) -> dict[str, Any]:
+    """Construct the canonical disposition request structure to be bound by receipt."""
+    norm_att_id = str(attachment_id).strip().lower()
+    norm_idx_hash = str(index_entry_sha256).strip().lower()
+    norm_dec = str(decision).strip().lower()
+
+    if not SHA256_HEX_REGEX.fullmatch(norm_att_id):
+        raise DispositionSchemaError(f"Invalid attachment_id: {attachment_id!r}")
+    if not SHA256_HEX_REGEX.fullmatch(norm_idx_hash):
+        raise DispositionSchemaError(f"Invalid index_entry_sha256: {index_entry_sha256!r}")
+    if norm_dec not in ALLOWED_DECISIONS:
+        raise DispositionSchemaError(f"Invalid decision: {decision!r}")
+
+    req: dict[str, Any] = {
+        "action": "attachment_disposition",
+        "attachment_id": norm_att_id,
+        "decision": norm_dec,
+        "index_entry_sha256": norm_idx_hash,
+        "schema_version": int(schema_version),
+    }
+    if rationale is not None:
+        req["rationale"] = str(rationale).strip()
+    if review_after is not None:
+        req["review_after"] = str(review_after).strip()
+    if candidate_review_hash is not None:
+        req["candidate_review_hash"] = str(candidate_review_hash).strip().lower()
+    if promotion_id is not None:
+        req["promotion_id"] = str(promotion_id).strip()
+    if promotion_status is not None:
+        req["promotion_status"] = str(promotion_status).strip().lower()
+
+    return req
+
+
+def canonical_disposition_request_sha256(request: Mapping[str, Any]) -> str:
+    """Compute deterministic SHA-256 hash of a disposition request."""
+    if not isinstance(request, (dict, Mapping)):
+        raise TypeError("disposition request must be a mapping")
+    req_dict = dict(request)
+    # Exclude any receipts or extra internal keys
+    req_dict.pop("receipt", None)
+    req_dict.pop("approval_receipt", None)
+    req_dict.pop("decision_id", None)
+    req_dict.pop("timestamp", None)
+    req_dict.pop("human_receipt_hash", None)
+
+    canonical_json = json.dumps(req_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def build_disposition_receipt(
+    *,
+    request_hash: str,
+    receipt_id: str | None = None,
+    approved_at: str | None = None,
+    approved_by: str = "human_reviewer",
+) -> dict[str, Any]:
+    """Helper to construct a valid disposition approval receipt for tests and callers."""
+    return {
+        "receipt_id": receipt_id or f"rcpt_{uuid.uuid4().hex[:16]}",
+        "request_hash": str(request_hash).strip().lower(),
+        "approved_at": approved_at or utc_now_iso(),
+        "approved_by": str(approved_by).strip(),
+    }
+
 
 def compute_decision_id(
     *,
@@ -204,23 +440,93 @@ def compute_decision_id(
 
 
 # ==============================================================================
+# Apply Request Hashing & Receipt
+# ==============================================================================
+
+def build_apply_request(
+    *,
+    attachment_id: str,
+    decision_id: str,
+    index_entry_sha256: str,
+    quarantine_path: str,
+    sha256: str,
+    size_bytes: int,
+    run_id: str,
+    schema_version: int = 1,
+) -> dict[str, Any]:
+    """Construct the exact canonical apply request bounding the deletion scope."""
+    norm_att_id = str(attachment_id).strip().lower()
+    norm_dec_id = str(decision_id).strip().lower()
+    norm_idx_hash = str(index_entry_sha256).strip().lower()
+    norm_sha = str(sha256).strip().lower()
+    norm_run = str(run_id).strip()
+    norm_path = PurePosixPath(quarantine_path).as_posix()
+
+    if not SHA256_HEX_REGEX.fullmatch(norm_att_id):
+        raise DispositionApplyError(f"Invalid attachment_id: {attachment_id!r}")
+    if not SHA256_HEX_REGEX.fullmatch(norm_dec_id):
+        raise DispositionApplyError(f"Invalid decision_id: {decision_id!r}")
+    if not SHA256_HEX_REGEX.fullmatch(norm_idx_hash):
+        raise DispositionApplyError(f"Invalid index_entry_sha256: {index_entry_sha256!r}")
+    if not SHA256_HEX_REGEX.fullmatch(norm_sha):
+        raise DispositionApplyError(f"Invalid sha256: {sha256!r}")
+    if not is_valid_run_id(norm_run):
+        raise DispositionApplyError(f"Invalid run_id: {run_id!r}")
+
+    return {
+        "action": "discard",
+        "attachment_id": norm_att_id,
+        "decision_id": norm_dec_id,
+        "index_entry_sha256": norm_idx_hash,
+        "quarantine_path": norm_path,
+        "run_id": norm_run,
+        "schema_version": int(schema_version),
+        "sha256": norm_sha,
+        "size_bytes": int(size_bytes),
+    }
+
+
+def canonical_apply_request_sha256(request: Mapping[str, Any]) -> str:
+    """Compute deterministic SHA-256 hash of an apply request."""
+    if not isinstance(request, (dict, Mapping)):
+        raise TypeError("apply request must be a mapping")
+    req_dict = dict(request)
+    req_dict.pop("receipt", None)
+    req_dict.pop("apply_receipt", None)
+    canonical_json = json.dumps(req_dict, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def build_apply_receipt(
+    *,
+    request_hash: str,
+    receipt_id: str | None = None,
+    approved_at: str | None = None,
+    approved_by: str = "human_operator",
+) -> dict[str, Any]:
+    """Helper to construct a valid apply approval receipt for tests and callers."""
+    return {
+        "receipt_id": receipt_id or f"rcpt_apply_{uuid.uuid4().hex[:16]}",
+        "request_hash": str(request_hash).strip().lower(),
+        "approved_at": approved_at or utc_now_iso(),
+        "approved_by": str(approved_by).strip(),
+    }
+
+
+def verify_apply_receipt(
+    receipt: Any,
+    expected_request_hash: str,
+) -> dict[str, Any]:
+    """Verify an apply approval receipt fail-closed."""
+    return verify_approval_receipt(receipt, expected_request_hash, context="apply_discard")
+
+
+# ==============================================================================
 # Schema 1 Validation
 # ==============================================================================
 
 def validate_disposition_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    """Strictly validate a disposition entry against Schema 1 fail-closed.
-
-    Enforces:
-    - Rejection of unknown root fields.
-    - Recursive rejection of forbidden content keys (prompt, credentials, body, tokens, etc.).
-    - Strict regex matching on attachment_id, index_entry_sha256, human_receipt_hash, timestamp.
-    - Exclusive decision semantics:
-      - 'retain': optional review_after (RFC-3339), forbidden candidate_review_hash / promotion fields.
-      - 'promote': mandatory candidate_review_hash (64-hex), forbidden review_after.
-      - 'discard': forbidden candidate_review_hash, review_after, promotion fields.
-    - Bounded rationale without multiline breaks or path traversal.
-    - Deterministic decision_id derivation and fail-closed identity drift detection.
-    """
+    """Strictly validate a disposition entry against Schema 1 fail-closed."""
     if not isinstance(entry, dict):
         raise DispositionSchemaError(f"Disposition entry must be a dict, got {type(entry).__name__}")
 
@@ -287,7 +593,7 @@ def validate_disposition_entry(entry: dict[str, Any]) -> dict[str, Any]:
             raise DispositionSchemaError(
                 f"'rationale' exceeds maximum length of {RATIONALE_MAX_LENGTH} characters: length={len(rat_str)}"
             )
-        if "\n" in rat_str or "\r" in rat_str:
+        if any(c in rat_str for c in ("\n", "\r")):
             raise DispositionSchemaError("'rationale' must be a single line, newline characters are forbidden")
         norm_rationale = rat_str
 
@@ -438,14 +744,12 @@ def load_disposition_log(log_path: Path) -> dict[str, Any]:
         dec_id = validated["decision_id"]
         att_id = validated["attachment_id"]
 
-        # Duplicate ID check: idempotent repetition vs drift
         existing = by_decision_id.get(dec_id)
         if existing is not None:
             if existing != validated:
                 raise DispositionDriftError(
                     f"Duplicate decision_id '{dec_id}' with conflicting content on line {line_num}"
                 )
-            # Identical duplicate: accept as no-op without duplicating in index list
             continue
 
         entries.append(validated)
@@ -469,26 +773,17 @@ def record_disposition_entry(
     log_path: Path | str | None = None,
     *,
     payload: dict[str, Any],
+    approval_receipt: Mapping[str, Any] | None = None,
     workspace_root: Path | str | None = None,
     data_dir: Path | str | None = None,
     index_path: Path | str | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    """Append a validated disposition decision into attachment-disposition-log.jsonl under workspace lock.
-
-    Guarantees:
-    - Strictly enforces active, invocation-owned workspace lock (zero legacy bypass).
-    - Validates attachment_id exists in attachment-quarantine-index.json.
-    - Validates index_entry_sha256 matches the current canonical hash of the index entry on disk.
-    - Strictly validates entry fields against Schema 1 and rejects forbidden content.
-    - Pure idempotent repetition for identical decision entries (no-op).
-    - Fail-closed drift abort if same decision_id has differing content.
-    - Append-only write: existing bytes are NEVER rewritten or truncated.
-    """
+    """Append a validated disposition decision into attachment-disposition-log.jsonl under workspace lock."""
     ws = Path(workspace_root or Path.cwd()).resolve()
-    idx_p = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
     lp = resolve_disposition_log_path(log_path, data_dir=data_dir, workspace_root=ws)
+    idx_p = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
 
     # 1. Lock Verification
     try:
@@ -500,84 +795,118 @@ def record_disposition_entry(
         )
     except Exception as err:
         raise DispositionLockRequiredError(
-            f"Disposition log mutation requires an active, owned workspace lock: {err}"
+            f"Recording a disposition requires an active, owned workspace lock: {err}"
         ) from err
 
-    # 2. Validate entry schema
-    canonical_entry = validate_disposition_entry(payload)
-    att_id = canonical_entry["attachment_id"]
-    dec_id = canonical_entry["decision_id"]
-    declared_idx_hash = canonical_entry["index_entry_sha256"]
+    # 2. Extract and Verify Receipt Contract
+    receipt_to_verify = approval_receipt or payload.get("approval_receipt") or payload.get("receipt")
+    if receipt_to_verify is None:
+        raw_receipt_hash = payload.get("human_receipt_hash")
+        if raw_receipt_hash:
+            raise ReceiptMalformedError(
+                "Raw 64-hex 'human_receipt_hash' is not accepted as authorization. "
+                "An explicit verifiable 'approval_receipt' mapping is required."
+            )
+        raise ReceiptMissingError("Missing required 'approval_receipt' mapping.")
 
-    # 3. Verify against quarantine index on disk
-    index_data = load_quarantine_index(idx_p)
-    items = index_data.get("items", {})
-    if att_id not in items:
-        raise KeyError(
-            f"Attachment '{att_id}' does not exist in quarantine index '{idx_p}'"
+    # 3. Verify target attachment in quarantine index
+    att_id = payload.get("attachment_id")
+    if not att_id or not isinstance(att_id, str):
+        raise DispositionSchemaError("Payload missing required 'attachment_id'")
+    norm_att_id = att_id.strip().lower()
+
+    idx_data = load_quarantine_index(idx_p)
+    items = idx_data.get("items", {})
+    if norm_att_id not in items:
+        raise DispositionDriftError(
+            f"Cannot record disposition for attachment '{norm_att_id}': not present in quarantine index '{idx_p}'"
         )
+    target_idx_entry = items[norm_att_id]
+    current_canonical_idx_hash = canonical_index_entry_sha256(target_idx_entry)
 
-    current_idx_entry = items[att_id]
-    actual_idx_hash = canonical_index_entry_sha256(current_idx_entry)
+    # 4. Canonical Request Hash computation
+    disp_request = build_disposition_request(
+        attachment_id=norm_att_id,
+        index_entry_sha256=current_canonical_idx_hash,
+        decision=payload.get("decision", ""),
+        rationale=payload.get("rationale"),
+        review_after=payload.get("review_after"),
+        candidate_review_hash=payload.get("candidate_review_hash"),
+        promotion_id=payload.get("promotion_id"),
+        promotion_status=payload.get("promotion_status"),
+        schema_version=1,
+    )
+    computed_req_hash = canonical_disposition_request_sha256(disp_request)
 
-    if actual_idx_hash != declared_idx_hash:
-        raise AttachmentIndexDriftError(
-            f"Quarantine index entry hash drift for '{att_id}': "
-            f"log declares '{declared_idx_hash}', current index computes '{actual_idx_hash}'"
-        )
+    # 5. Verify Receipt against computed request hash
+    verified_receipt_info = verify_approval_receipt(
+        receipt_to_verify,
+        computed_req_hash,
+        context="disposition",
+    )
+    receipt_hash = verified_receipt_info["receipt_hash"]
 
-    # 4. Check existing disposition log for idempotency and drift
-    log_data = load_disposition_log(lp)
-    existing = log_data["by_decision_id"].get(dec_id)
+    # 6. Build final entry payload
+    prepared_entry = dict(payload)
+    prepared_entry.pop("approval_receipt", None)
+    prepared_entry.pop("receipt", None)
+    prepared_entry["attachment_id"] = norm_att_id
+    prepared_entry["index_entry_sha256"] = current_canonical_idx_hash
+    prepared_entry["human_receipt_hash"] = receipt_hash
+    if "timestamp" not in prepared_entry or not prepared_entry["timestamp"]:
+        prepared_entry["timestamp"] = utc_now_iso()
+
+    validated_entry = validate_disposition_entry(prepared_entry)
+    dec_id = validated_entry["decision_id"]
+
+    # 7. Check existing log state (idempotency check)
+    current_log = load_disposition_log(lp)
+    existing = current_log["by_decision_id"].get(dec_id)
     if existing is not None:
-        if existing == canonical_entry:
+        if existing == validated_entry:
             return {
                 "status": "unchanged",
                 "decision_id": dec_id,
-                "entry": existing,
+                "attachment_id": norm_att_id,
+                "entry": validated_entry,
             }
         raise DispositionDriftError(
-            f"Conflicting existing decision for decision_id '{dec_id}' in disposition log"
+            f"Decision '{dec_id}' already exists in log '{lp}' with differing content"
         )
 
-    # 5. Append-only write with flush and fsync
     lp.parent.mkdir(parents=True, exist_ok=True)
-    serialized_line = json.dumps(canonical_entry, sort_keys=True, separators=(",", ":"), ensure_ascii=False) + "\n"
-
-    with open(lp, "a", encoding="utf-8") as fh:
-        fh.write(serialized_line)
-        fh.flush()
-        try:
-            os.fsync(fh.fileno())
-        except OSError:
-            pass
+    line_bytes = (json.dumps(validated_entry, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    with open(lp, "ab") as f:
+        f.write(line_bytes)
+        f.flush()
+        os.fsync(f.fileno())
 
     return {
         "status": "recorded",
         "decision_id": dec_id,
-        "entry": canonical_entry,
+        "attachment_id": norm_att_id,
+        "entry": validated_entry,
     }
 
 
 # ==============================================================================
-# Active Run & Promotion State Inspection
+# Active Run & Journal Detection
 # ==============================================================================
 
 def check_active_run_evidence(run_id: str, workspace_root: Path) -> tuple[bool, str | None]:
-    """Inspect whether a quarantine run is currently active or locked."""
-    if not is_valid_run_id(run_id):
+    """Check whether a run directory exhibits active locks, temporary files, or running journals."""
+    norm_run = str(run_id).strip()
+    if not is_valid_run_id(norm_run):
         return True, f"Invalid run_id: {run_id!r}"
 
-    run_dir = workspace_root / "data" / "mail-desk" / "attachments" / run_id
+    run_dir = workspace_root / "data" / "mail-desk" / "attachments" / norm_run
     if not run_dir.exists():
         return False, None
 
-    # Check .quarantine-inventory.lock
-    lock_file = run_dir / ".quarantine-inventory.lock"
-    if lock_file.exists():
-        return True, f"Active inventory lock found at '{lock_file}'"
+    inv_lock = run_dir / ".quarantine-inventory.lock"
+    if inv_lock.exists():
+        return True, f"Active inventory lock present in run directory: {inv_lock}"
 
-    # Check temp files
     try:
         temp_files = [p for p in run_dir.iterdir() if p.name.endswith(".tmp") or p.name.startswith(".inv.")]
         if temp_files:
@@ -585,7 +914,6 @@ def check_active_run_evidence(run_id: str, workspace_root: Path) -> tuple[bool, 
     except OSError as err:
         return True, f"Failed to inspect run directory: {err}"
 
-    # Check batch-recovery-journal.json
     journal_path = workspace_root / "data" / "mail-desk" / "batch-recovery-journal.json"
     if journal_path.exists():
         try:
@@ -601,6 +929,187 @@ def check_active_run_evidence(run_id: str, workspace_root: Path) -> tuple[bool, 
 
 
 # ==============================================================================
+# Discard & Recovery Journal
+# ==============================================================================
+
+def load_discard_journal(journal_path: Path) -> dict[str, Any]:
+    """Load and parse attachment-discard-journal.json fail-closed."""
+    if not journal_path.exists():
+        return {"schema_version": 1, "updated_at": utc_now_iso(), "entries": {}}
+
+    try:
+        raw_text = journal_path.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+    except Exception as err:
+        raise RecoveryJournalCorruptedError(f"Failed to parse discard journal '{journal_path}': {err}") from err
+
+    if not isinstance(data, dict):
+        raise RecoveryJournalCorruptedError(f"Discard journal root must be dict, got {type(data).__name__}")
+
+    if data.get("schema_version") != 1:
+        raise RecoveryJournalCorruptedError(f"Unsupported discard journal schema_version: {data.get('schema_version')}")
+
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        raise RecoveryJournalCorruptedError("Discard journal missing 'entries' dict")
+
+    return data
+
+
+def _save_discard_journal_atomic(journal_path: Path, journal_data: dict[str, Any]) -> None:
+    """Save attachment-discard-journal.json atomically using sibling temp file and replace."""
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = journal_path.parent / f"{journal_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    journal_data["updated_at"] = utc_now_iso()
+    try:
+        data_bytes = json.dumps(journal_data, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        with open(tmp_path, "wb") as f:
+            f.write(data_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, journal_path)
+    except Exception as err:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise RecoveryJournalCorruptedError(f"Failed to atomically write discard journal '{journal_path}': {err}") from err
+
+
+def record_journal_state(
+    journal_path: Path,
+    *,
+    attachment_id: str,
+    decision_id: str,
+    apply_receipt_hash: str,
+    apply_request_hash: str,
+    previous_index_entry_sha256: str,
+    quarantine_path: str,
+    sha256: str,
+    size_bytes: int,
+    run_id: str,
+    state: str,
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Persist a journal state transition atomically."""
+    if state not in ALLOWED_JOURNAL_STATES:
+        raise ValueError(f"Invalid journal state: {state!r}")
+
+    journal = load_discard_journal(journal_path)
+    entries = journal.setdefault("entries", {})
+
+    journal_entry_id = hashlib.sha256(
+        f"{attachment_id}:{decision_id}:{apply_receipt_hash}:{previous_index_entry_sha256}".encode("utf-8")
+    ).hexdigest()
+
+    now_iso = utc_now_iso()
+    entry = entries.get(journal_entry_id)
+    if entry is None:
+        entry = {
+            "journal_entry_id": journal_entry_id,
+            "attachment_id": attachment_id,
+            "decision_id": decision_id,
+            "apply_receipt_hash": apply_receipt_hash,
+            "apply_request_hash": apply_request_hash,
+            "previous_index_entry_sha256": previous_index_entry_sha256,
+            "quarantine_path": quarantine_path,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "run_id": run_id,
+            "state": state,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+            "history": [{"state": state, "timestamp": now_iso}],
+            "error": error,
+        }
+        entries[journal_entry_id] = entry
+    else:
+        entry["state"] = state
+        entry["updated_at"] = now_iso
+        entry["history"].append({"state": state, "timestamp": now_iso})
+        if error is not None:
+            entry["error"] = error
+
+    _save_discard_journal_atomic(journal_path, journal)
+    return entry
+
+
+# ==============================================================================
+# Atomic Inventory Mutation
+# ==============================================================================
+
+def _find_inventory_message_entry(
+    msgs: dict[str, Any], mid: str
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Find a message entry in inventory dict by matching normalized, literal, or bracketed message ID."""
+    if not isinstance(msgs, dict):
+        return None, None
+    norm_mid = normalize_message_id(mid) or "__default__"
+    if norm_mid in msgs and isinstance(msgs[norm_mid], dict):
+        return norm_mid, msgs[norm_mid]
+    if mid in msgs and isinstance(msgs[mid], dict):
+        return mid, msgs[mid]
+    raw_bracketed = f"<{norm_mid}>"
+    if raw_bracketed in msgs and isinstance(msgs[raw_bracketed], dict):
+        return raw_bracketed, msgs[raw_bracketed]
+    for k, v in msgs.items():
+        if isinstance(v, dict) and normalize_message_id(k) == norm_mid:
+            return k, v
+    return None, None
+
+
+def update_quarantine_inventory_atomic(
+    run_dir: Path,
+    message_id: str,
+    clean_filename: str,
+) -> None:
+    """Update .quarantine-inventory.json atomically using sibling temp file and replace.
+
+    Fail-closed: Never swallows errors. Re-validates inventory schema before and after.
+    """
+    inv_file = run_dir / INVENTORY_FILENAME
+    if not inv_file.exists():
+        raise InventoryUpdateError(f"Missing inventory file in run directory: {inv_file}")
+
+    try:
+        raw_text = inv_file.read_text(encoding="utf-8")
+        inv = json.loads(raw_text)
+    except Exception as err:
+        raise InventoryUpdateError(f"Failed to read inventory file '{inv_file}': {err}") from err
+
+    _validate_inventory_schema(inv, inv_file)
+
+    msgs = inv.get("messages", {})
+    matched_key, msg_entry = _find_inventory_message_entry(msgs, message_id)
+    if msg_entry and isinstance(msg_entry.get("files"), dict):
+        files_dict = msg_entry["files"]
+        files_dict.pop(clean_filename, None)
+        msg_entry["count"] = len(files_dict)
+        msg_entry["total_bytes"] = sum(f.get("size_bytes", 0) for f in files_dict.values())
+        if msg_entry["count"] == 0 and matched_key is not None:
+            msgs.pop(matched_key, None)
+
+    _validate_inventory_schema(inv, inv_file)
+
+    tmp_file = run_dir / f"{INVENTORY_FILENAME}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    try:
+        inv_bytes = json.dumps(inv, indent=2, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        with open(tmp_file, "wb") as f:
+            f.write(inv_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, inv_file)
+    except Exception as err:
+        if tmp_file.exists():
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass
+        raise InventoryUpdateError(f"Failed to atomically write inventory '{inv_file}': {err}") from err
+
+
+# ==============================================================================
 # Read-Only Reporting
 # ==============================================================================
 
@@ -610,22 +1119,18 @@ def report_dispositions(
     data_dir: Path | str | None = None,
     index_path: Path | str | None = None,
     log_path: Path | str | None = None,
+    journal_path: Path | str | None = None,
 ) -> dict[str, Any]:
-    """Perform strictly read-only reporting classifying every quarantined attachment.
-
-    Guarantees:
-    - Strictly read-only: mutates neither the index, log, inventories, nor disk files.
-    - Classifies each entry into exactly one of: 'eligible', 'protected', 'invalid'.
-    """
+    """Perform strictly read-only reporting classifying every quarantined attachment."""
     ws = Path(workspace_root or Path.cwd()).resolve()
     idx_p = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
     lp = resolve_disposition_log_path(log_path, data_dir=data_dir, workspace_root=ws)
+    jp = resolve_discard_journal_path(journal_path, data_dir=data_dir, workspace_root=ws)
 
     try:
         index_data = load_quarantine_index(idx_p)
         items = index_data.get("items", {})
     except Exception:
-        # Fall back to raw JSON parsing so individual invalid items can still be classified
         try:
             raw_text = idx_p.read_text(encoding="utf-8")
             raw_data = json.loads(raw_text)
@@ -635,6 +1140,8 @@ def report_dispositions(
 
     log_data = load_disposition_log(lp)
     latest_decisions = log_data.get("latest_by_attachment_id", {})
+    journal_data = load_discard_journal(jp)
+    journal_entries = journal_data.get("entries", {})
 
     attachments_root = (ws / "data" / "mail-desk" / "attachments").resolve()
 
@@ -643,7 +1150,7 @@ def report_dispositions(
     protected_count = 0
     invalid_count = 0
 
-    for att_id, entry in items.items():
+    for att_id, entry in sorted(items.items()):
         rel_path = entry.get("quarantine_path", "")
         run_id = entry.get("run_id", "")
         exp_sha = str(entry.get("sha256") or "").strip().lower()
@@ -738,19 +1245,38 @@ def report_dispositions(
             })
             continue
 
-        # Physical file presence
+        # Physical file presence & Recovery check
         if not target_file.exists():
-            invalid_count += 1
-            results.append({
-                "attachment_id": att_id,
-                "status": STATUS_INVALID,
-                "decision": None,
-                "message_id": mid,
-                "filename": clean_fn,
-                "run_id": run_id,
-                "quarantine_path": rel_path,
-                "reason": f"Physical file missing from disk: {target_file}",
-            })
+            matching_journal = any(
+                je.get("attachment_id") == att_id and je.get("state") in (
+                    JOURNAL_STATE_FILE_DELETED, JOURNAL_STATE_INVENTORY_UPDATED, JOURNAL_STATE_INDEX_UPDATED
+                )
+                for je in journal_entries.values()
+            )
+            if matching_journal:
+                eligible_count += 1
+                results.append({
+                    "attachment_id": att_id,
+                    "status": STATUS_ELIGIBLE,
+                    "decision": DECISION_DISCARD,
+                    "message_id": mid,
+                    "filename": clean_fn,
+                    "run_id": run_id,
+                    "quarantine_path": rel_path,
+                    "reason": "Physical file deleted; pending recovery index update",
+                })
+            else:
+                invalid_count += 1
+                results.append({
+                    "attachment_id": att_id,
+                    "status": STATUS_INVALID,
+                    "decision": None,
+                    "message_id": mid,
+                    "filename": clean_fn,
+                    "run_id": run_id,
+                    "quarantine_path": rel_path,
+                    "reason": f"Physical file missing from disk without recovery journal evidence: {target_file}",
+                })
             continue
 
         if not target_file.is_file() or target_file.is_symlink() or os.path.islink(target_file):
@@ -763,7 +1289,7 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "reason": "Target file is not a regular file or is a symlink",
+                "reason": f"Target path is not a regular file or is a symlink: {target_file}",
             })
             continue
 
@@ -780,7 +1306,7 @@ def report_dispositions(
                         "filename": clean_fn,
                         "run_id": run_id,
                         "quarantine_path": rel_path,
-                        "reason": "Windows reparse point detected on target file",
+                        "reason": f"Windows reparse point detected: {target_file}",
                     })
                     continue
             except OSError as err:
@@ -797,12 +1323,12 @@ def report_dispositions(
                 })
                 continue
 
-        # Verify disk bytes & SHA-256
-        actual_bytes = target_file.read_bytes()
-        actual_size = len(actual_bytes)
-        actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
-
-        if actual_size != exp_size or actual_sha != exp_sha:
+        # Physical byte verification
+        try:
+            actual_bytes = target_file.read_bytes()
+            actual_size = len(actual_bytes)
+            actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
+        except OSError as err:
             invalid_count += 1
             results.append({
                 "attachment_id": att_id,
@@ -812,21 +1338,88 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "reason": f"File hash or size drift: actual({actual_size}B, {actual_sha}) != expected({exp_size}B, {exp_sha})",
+                "reason": f"Failed to read disk bytes: {err}",
             })
             continue
 
-        # Verify inventory
+        if exp_size is not None and actual_size != exp_size:
+            invalid_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": STATUS_INVALID,
+                "decision": None,
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "reason": f"File size drift on disk: expected {exp_size}, got {actual_size}",
+            })
+            continue
+
+        if exp_sha and actual_sha != exp_sha:
+            invalid_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": STATUS_INVALID,
+                "decision": None,
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "reason": f"SHA-256 drift on disk: expected {exp_sha}, got {actual_sha}",
+            })
+            continue
+
+        # Verify against .quarantine-inventory.json
+        run_dir = target_file.parent
+        inv_file = run_dir / INVENTORY_FILENAME
+        if not inv_file.exists():
+            invalid_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": STATUS_INVALID,
+                "decision": None,
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "reason": f"Missing inventory file: {inv_file}",
+            })
+            continue
+
         try:
-            verify_quarantine_attachment_artifact(
-                run_id=run_id,
-                relative_path=rel_path,
-                expected_sha256=exp_sha,
-                expected_size_bytes=exp_size,
-                message_id=mid,
-                workspace_root=ws,
-                clean_filename=clean_fn,
-            )
+            inv = json.loads(inv_file.read_text(encoding="utf-8"))
+            _validate_inventory_schema(inv, inv_file)
+            msgs = inv.get("messages", {})
+            _, msg_entry = _find_inventory_message_entry(msgs, mid)
+            files_dict = msg_entry.get("files", {}) if msg_entry else {}
+            inv_file_entry = files_dict.get(clean_fn)
+            if not inv_file_entry:
+                invalid_count += 1
+                results.append({
+                    "attachment_id": att_id,
+                    "status": STATUS_INVALID,
+                    "decision": None,
+                    "message_id": mid,
+                    "filename": clean_fn,
+                    "run_id": run_id,
+                    "quarantine_path": rel_path,
+                    "reason": f"File '{clean_fn}' not found in inventory for message '{norm_mid}'",
+                })
+                continue
+            if inv_file_entry.get("sha256", "").lower() != exp_sha:
+                invalid_count += 1
+                results.append({
+                    "attachment_id": att_id,
+                    "status": STATUS_INVALID,
+                    "decision": None,
+                    "message_id": mid,
+                    "filename": clean_fn,
+                    "run_id": run_id,
+                    "quarantine_path": rel_path,
+                    "reason": "SHA-256 mismatch between index and inventory",
+                })
+                continue
         except Exception as err:
             invalid_count += 1
             results.append({
@@ -837,13 +1430,13 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "reason": f"Inventory verification failure: {err}",
+                "reason": f"Inventory check failed: {err}",
             })
             continue
 
-        # 2. Check Disposition Log
-        disp = latest_decisions.get(att_id)
-        if disp is None:
+        # Check Active Run Evidence
+        active_run, active_reason = check_active_run_evidence(run_id, ws)
+        if active_run:
             protected_count += 1
             results.append({
                 "attachment_id": att_id,
@@ -853,32 +1446,46 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "reason": "No disposition decision recorded; quarantined by default",
+                "reason": f"Active run evidence: {active_reason}",
             })
             continue
 
-        # Check index entry hash drift between index and disposition log
-        current_canonical_idx_hash = canonical_index_entry_sha256(entry)
-        if disp["index_entry_sha256"] != current_canonical_idx_hash:
-            invalid_count += 1
+        # Evaluate latest disposition decision
+        latest_disp = latest_decisions.get(att_id)
+        if latest_disp is None:
+            protected_count += 1
             results.append({
                 "attachment_id": att_id,
-                "status": STATUS_INVALID,
-                "decision": disp["decision"],
+                "status": STATUS_PROTECTED,
+                "decision": None,
                 "message_id": mid,
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "reason": f"Disposition binds index entry hash '{disp['index_entry_sha256']}', but current index computes '{current_canonical_idx_hash}'",
+                "reason": "No disposition decision recorded yet",
             })
             continue
 
-        decision_type = disp["decision"]
+        dec = latest_disp["decision"]
+        recorded_idx_hash = latest_disp["index_entry_sha256"]
+        current_canonical_idx_hash = canonical_index_entry_sha256(entry)
 
-        # 3. Decision classification
-        if decision_type == DECISION_RETAIN:
+        if recorded_idx_hash != current_canonical_idx_hash:
+            invalid_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": STATUS_INVALID,
+                "decision": dec,
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "reason": f"Quarantine index entry has drifted since decision was recorded (recorded={recorded_idx_hash}, current={current_canonical_idx_hash})",
+            })
+            continue
+
+        if dec == DECISION_RETAIN:
             protected_count += 1
-            review_after = disp.get("review_after")
             results.append({
                 "attachment_id": att_id,
                 "status": STATUS_PROTECTED,
@@ -887,12 +1494,12 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "review_after": review_after,
-                "reason": f"Retained per decision '{disp['decision_id']}'" + (f" (review_after: {review_after})" if review_after else ""),
+                "review_after": latest_disp.get("review_after"),
+                "reason": "Explicit retain decision recorded",
             })
             continue
 
-        if decision_type == DECISION_PROMOTE:
+        if dec == DECISION_PROMOTE:
             protected_count += 1
             results.append({
                 "attachment_id": att_id,
@@ -902,43 +1509,26 @@ def report_dispositions(
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "candidate_review_hash": disp.get("candidate_review_hash"),
-                "promotion_status": disp.get("promotion_status") or "pending",
-                "reason": f"Promote decision '{disp['decision_id']}' pending or bound to FR-09",
+                "candidate_review_hash": latest_disp.get("candidate_review_hash"),
+                "promotion_status": latest_disp.get("promotion_status"),
+                "reason": "Explicit promote decision recorded; awaits FR-09 promotion completion",
             })
             continue
 
-        if decision_type == DECISION_DISCARD:
-            # Check for active run
-            is_active, active_reason = check_active_run_evidence(run_id, ws)
-            if is_active:
-                protected_count += 1
-                results.append({
-                    "attachment_id": att_id,
-                    "status": STATUS_PROTECTED,
-                    "decision": DECISION_DISCARD,
-                    "message_id": mid,
-                    "filename": clean_fn,
-                    "run_id": run_id,
-                    "quarantine_path": rel_path,
-                    "reason": f"Active run protects quarantine file: {active_reason}",
-                })
-                continue
-
-            # Eligible for discard cleanup
+        if dec == DECISION_DISCARD:
             eligible_count += 1
             results.append({
                 "attachment_id": att_id,
                 "status": STATUS_ELIGIBLE,
                 "decision": DECISION_DISCARD,
-                "decision_id": disp["decision_id"],
                 "message_id": mid,
                 "filename": clean_fn,
                 "run_id": run_id,
                 "quarantine_path": rel_path,
-                "human_receipt_hash": disp["human_receipt_hash"],
-                "reason": "Valid discard decision and verified physical state; eligible for apply_discard",
+                "decision_id": latest_disp["decision_id"],
+                "reason": "Authorized discard decision recorded and all preconditions satisfied",
             })
+            continue
 
     return {
         "status": "completed",
@@ -953,35 +1543,37 @@ def report_dispositions(
 
 
 # ==============================================================================
-# Discard-Apply Engine
+# Mutating Discard Apply Engine (Single Attachment Bound)
 # ==============================================================================
 
 def apply_discard(
     *,
-    apply_receipt_hash: str,
-    attachment_id: str | None = None,
+    attachment_id: str,
+    apply_receipt: Mapping[str, Any],
     workspace_root: Path | str | None = None,
     data_dir: Path | str | None = None,
     index_path: Path | str | None = None,
     log_path: Path | str | None = None,
+    journal_path: Path | str | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute authorized physical deletion and atomic index update for eligible discard items.
+    """Apply authorized physical deletion and index removal for EXACTLY ONE attachment.
 
     Guarantees:
-    - Enforces verified workspace lock ownership (zero legacy bypass).
-    - Requires valid 64-hex apply_receipt_hash.
-    - Re-verifies all 10 pre-conditions per attachment immediately before file deletion.
-    - Updates .quarantine-inventory.json under inventory lock upon physical file deletion.
-    - Atomically updates attachment-quarantine-index.json only AFTER physical deletion.
-    - Does NOT claim a whole run is cleaned if only individual files were deleted.
-    - Fully idempotent: retry after partial failure completes pending index updates cleanly.
-    - Dispositionslog remains strictly append-only and unmodified.
+    - Zwingender Workspace-Lock (`DispositionLockRequiredError`).
+    - Exakter Löschumfang: bulk apply is strictly forbidden; `attachment_id` is mandatory.
+    - Verifiable `apply_receipt` bound to canonical apply request hash (no raw 64-hex bypass).
+    - Persisted Apply-/Recovery-Journal (`attachment-discard-journal.json`) written prior to unlink.
+    - Re-verification of all 10 preconditions immediately before unlinking.
+    - Atomic `.quarantine-inventory.json` update; errors are never swallowed.
+    - Atomic index removal only after verified successful inventory update.
+    - Missing files are only recovered if valid, matching `file_deleted` journal evidence exists.
     """
     ws = Path(workspace_root or Path.cwd()).resolve()
     idx_p = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
     lp = resolve_disposition_log_path(log_path, data_dir=data_dir, workspace_root=ws)
+    jp = resolve_discard_journal_path(journal_path, data_dir=data_dir, workspace_root=ws)
 
     # 1. Lock Verification
     try:
@@ -996,184 +1588,353 @@ def apply_discard(
             f"Discard apply requires an active, owned workspace lock: {err}"
         ) from err
 
-    # 2. Validate Apply Receipt Hash
-    if not apply_receipt_hash or not isinstance(apply_receipt_hash, str):
-        raise DispositionApplyError("Missing required 'apply_receipt_hash'")
-    norm_apply_hash = apply_receipt_hash.strip().lower()
-    if not SHA256_HEX_REGEX.fullmatch(norm_apply_hash):
+    # 2. Scope & Receipt Structure Verification: Exactly one attachment_id required
+    if not attachment_id or not isinstance(attachment_id, str):
+        raise DispositionApplyError("attachment_id is mandatory; bulk apply is forbidden")
+    norm_att_id = str(attachment_id).strip().lower()
+    if not SHA256_HEX_REGEX.fullmatch(norm_att_id):
+        raise DispositionSchemaError(f"Invalid attachment_id: {attachment_id!r}")
+
+    # Validate receipt contract format immediately (fail closed on malformed receipt)
+    validate_receipt_structure(apply_receipt, context="apply_receipt")
+
+    # 3. Load Quarantine Index & verify entry presence
+    index_data = load_quarantine_index(idx_p)
+    items = index_data.get("items", {})
+    entry = items.get(norm_att_id)
+    if entry is None:
+        journal = load_discard_journal(jp)
+        existing_je = next(
+            (je for je in journal.get("entries", {}).values() if je.get("attachment_id") == norm_att_id),
+            None
+        )
+        if existing_je and existing_je.get("state") in (JOURNAL_STATE_COMPLETED, JOURNAL_STATE_INDEX_UPDATED):
+            return {
+                "status": "completed",
+                "message": f"Attachment '{norm_att_id}' already discarded and removed from index",
+                "attachment_id": norm_att_id,
+                "deleted_count": 0,
+            }
         raise DispositionApplyError(
-            f"Invalid 'apply_receipt_hash': must be 64-hex SHA-256, got {apply_receipt_hash!r}"
+            f"Attachment '{norm_att_id}' not found in quarantine index '{idx_p}'"
         )
 
-    # 3. Read-only Report to find eligible candidates
-    report = report_dispositions(
-        workspace_root=ws,
-        data_dir=data_dir,
-        index_path=idx_p,
-        log_path=lp,
+    rel_path = entry["quarantine_path"]
+    run_id = entry["run_id"]
+    exp_sha = entry["sha256"]
+    exp_size = entry["size_bytes"]
+    mid = entry["message_id"]
+    clean_fn = entry.get("clean_filename") or entry.get("filename")
+    expected_idx_hash = canonical_index_entry_sha256(entry)
+
+    # 4. Load Dispositions Log & verify latest decision is 'discard'
+    log_data = load_disposition_log(lp)
+    latest_disp = log_data["latest_by_attachment_id"].get(norm_att_id)
+    if not latest_disp:
+        raise DispositionApplyError(
+            f"No disposition decision recorded for attachment '{norm_att_id}' in '{lp}'"
+        )
+    if latest_disp["decision"] != DECISION_DISCARD:
+        raise DispositionApplyError(
+            f"Attachment '{norm_att_id}' latest decision is '{latest_disp['decision']}', not 'discard'"
+        )
+    if latest_disp["index_entry_sha256"] != expected_idx_hash:
+        raise DispositionDriftError(
+            f"Attachment '{norm_att_id}' index entry has drifted since discard decision was recorded"
+        )
+    decision_id = latest_disp["decision_id"]
+
+    # 5. Build Canonical Apply Request & Verify Receipt
+    apply_req = build_apply_request(
+        attachment_id=norm_att_id,
+        decision_id=decision_id,
+        index_entry_sha256=expected_idx_hash,
+        quarantine_path=rel_path,
+        sha256=exp_sha,
+        size_bytes=exp_size,
+        run_id=run_id,
+        schema_version=1,
     )
+    computed_apply_req_hash = canonical_apply_request_sha256(apply_req)
 
-    eligible_map = {item["attachment_id"]: item for item in report["items"] if item["status"] == STATUS_ELIGIBLE}
+    verified_apply_receipt_info = verify_apply_receipt(apply_receipt, computed_apply_req_hash)
+    apply_receipt_hash = verified_apply_receipt_info["receipt_hash"]
 
-    # If specific attachment requested:
-    target_ids: list[str] = []
-    if attachment_id is not None:
-        norm_target_id = str(attachment_id).strip().lower()
-        if not SHA256_HEX_REGEX.fullmatch(norm_target_id):
-            raise DispositionSchemaError(f"Invalid attachment_id: {attachment_id!r}")
-        if norm_target_id not in eligible_map:
-            # Check if this item is in recovery state (already deleted on disk, but index update pending)
-            index_data = load_quarantine_index(idx_p)
-            log_data = load_disposition_log(lp)
-            items = index_data.get("items", {})
-            if norm_target_id in items:
-                latest_disp = log_data["latest_by_attachment_id"].get(norm_target_id)
-                if latest_disp and latest_disp["decision"] == DECISION_DISCARD:
-                    target_file = ws / PurePosixPath(items[norm_target_id]["quarantine_path"])
-                    if not target_file.exists():
-                        # Recovery candidate!
-                        target_ids.append(norm_target_id)
-            if not target_ids:
-                raise DispositionApplyError(
-                    f"Attachment '{norm_target_id}' is not eligible for discard (current status is protected or invalid)"
-                )
-        else:
-            target_ids.append(norm_target_id)
-    else:
-        target_ids = list(eligible_map.keys())
-
-    if not target_ids:
-        return {
-            "status": "unchanged",
-            "message": "No eligible attachments to discard",
-            "deleted_count": 0,
-            "deleted_files": [],
-            "failed_files": [],
-        }
-
-    deleted_files: list[dict[str, Any]] = []
-    failed_files: list[dict[str, Any]] = []
-
+    # 6. Physical File & Recovery Evidence Check
     attachments_root = (ws / "data" / "mail-desk" / "attachments").resolve()
+    target_file = ws / PurePosixPath(rel_path)
 
-    # Load current index data under lock for mutations
-    index_data = load_quarantine_index(idx_p)
-    items = index_data.setdefault("items", {})
+    journal = load_discard_journal(jp)
+    journal_entry_id = hashlib.sha256(
+        f"{norm_att_id}:{decision_id}:{apply_receipt_hash}:{expected_idx_hash}".encode("utf-8")
+    ).hexdigest()
+    existing_journal_entry = journal.get("entries", {}).get(journal_entry_id)
 
-    for att_id in target_ids:
-        entry = items.get(att_id)
-        if entry is None:
-            # Already removed from index (idempotent no-op)
-            continue
+    if not target_file.exists():
+        if (
+            not existing_journal_entry
+            or existing_journal_entry.get("attachment_id") != norm_att_id
+            or existing_journal_entry.get("decision_id") != decision_id
+            or existing_journal_entry.get("apply_receipt_hash") != apply_receipt_hash
+            or existing_journal_entry.get("previous_index_entry_sha256") != expected_idx_hash
+            or existing_journal_entry.get("state") not in (
+                JOURNAL_STATE_FILE_DELETED,
+                JOURNAL_STATE_INVENTORY_UPDATED,
+                JOURNAL_STATE_INDEX_UPDATED,
+                JOURNAL_STATE_COMPLETED,
+            )
+        ):
+            raise RecoveryEvidenceMissingError(
+                f"Target file '{target_file}' is missing from disk, but no valid matching file_deleted recovery journal entry exists for receipt '{apply_receipt_hash}'. Index will not be modified."
+            )
 
-        rel_path = entry["quarantine_path"]
-        run_id = entry["run_id"]
-        exp_sha = entry["sha256"]
-        exp_size = entry["size_bytes"]
-        mid = entry["message_id"]
-        clean_fn = entry.get("clean_filename") or entry.get("filename")
+        current_state = existing_journal_entry["state"]
+        run_dir = ws / "data" / "mail-desk" / "attachments" / run_id
 
-        target_file = ws / PurePosixPath(rel_path)
-
-        # Case A: File exists -> perform verified deletion
-        if target_file.exists():
-            # Security re-check immediately before unlinking
-            try:
-                check_quarantine_path_security(target_file, attachments_root)
-            except SymlinkEscapeError as err:
-                failed_files.append({"attachment_id": att_id, "error": f"Security violation: {err}"})
-                continue
-
-            if target_file.is_symlink() or os.path.islink(target_file):
-                failed_files.append({"attachment_id": att_id, "error": "Target is a symlink"})
-                continue
-
-            if os.name == "nt":
-                try:
-                    stat_res = os.lstat(target_file)
-                    if getattr(stat_res, "st_file_attributes", 0) & 0x400:
-                        failed_files.append({"attachment_id": att_id, "error": "Windows reparse point detected"})
-                        continue
-                except OSError as err:
-                    failed_files.append({"attachment_id": att_id, "error": f"Failed to check attributes: {err}"})
-                    continue
-
-            # Verify bytes
-            actual_bytes = target_file.read_bytes()
-            if len(actual_bytes) != exp_size or hashlib.sha256(actual_bytes).hexdigest().lower() != exp_sha:
-                failed_files.append({"attachment_id": att_id, "error": "Disk bytes drifted before unlink"})
-                continue
-
-            # Physical deletion
-            try:
-                target_file.unlink()
-            except OSError as err:
-                failed_files.append({"attachment_id": att_id, "error": f"Failed to unlink physical file: {err}"})
-                continue
-
-            if target_file.exists():
-                failed_files.append({"attachment_id": att_id, "error": "File still exists after unlink"})
-                continue
-
-            # Update .quarantine-inventory.json under lock
-            run_dir = target_file.parent
+        if current_state == JOURNAL_STATE_FILE_DELETED:
             try:
                 with _QuarantineInventoryLock(run_dir):
-                    inv_file = run_dir / INVENTORY_FILENAME
-                    if inv_file.exists():
-                        try:
-                            inv = json.loads(inv_file.read_text(encoding="utf-8"))
-                            msgs = inv.get("messages", {})
-                            norm_mid = normalize_message_id(mid) or "__default__"
-                            msg_entry = msgs.get(norm_mid)
-                            if msg_entry and isinstance(msg_entry.get("files"), dict):
-                                files_dict = msg_entry["files"]
-                                files_dict.pop(clean_fn, None)
-                                msg_entry["count"] = len(files_dict)
-                                msg_entry["total_bytes"] = sum(f.get("size_bytes", 0) for f in files_dict.values())
-                                if msg_entry["count"] == 0:
-                                    msgs.pop(norm_mid, None)
-                                inv_file.write_text(json.dumps(inv, indent=2, sort_keys=True), encoding="utf-8")
-                        except Exception:
-                            pass
-            except Exception:
-                pass
+                    update_quarantine_inventory_atomic(run_dir, mid, clean_fn)
+                record_journal_state(
+                    jp,
+                    attachment_id=norm_att_id,
+                    decision_id=decision_id,
+                    apply_receipt_hash=apply_receipt_hash,
+                    apply_request_hash=computed_apply_req_hash,
+                    previous_index_entry_sha256=expected_idx_hash,
+                    quarantine_path=rel_path,
+                    sha256=exp_sha,
+                    size_bytes=exp_size,
+                    run_id=run_id,
+                    state=JOURNAL_STATE_INVENTORY_UPDATED,
+                )
+                current_state = JOURNAL_STATE_INVENTORY_UPDATED
+            except Exception as err:
+                record_journal_state(
+                    jp,
+                    attachment_id=norm_att_id,
+                    decision_id=decision_id,
+                    apply_receipt_hash=apply_receipt_hash,
+                    apply_request_hash=computed_apply_req_hash,
+                    previous_index_entry_sha256=expected_idx_hash,
+                    quarantine_path=rel_path,
+                    sha256=exp_sha,
+                    size_bytes=exp_size,
+                    run_id=run_id,
+                    state=JOURNAL_STATE_FAILED,
+                    error={"stage": "inventory_update", "error": str(err)},
+                )
+                raise DispositionApplyError(f"Recovery failed at inventory update: {err}") from err
 
-            # Atomically update quarantine index (remove discarded item)
-            items.pop(att_id, None)
-            index_data["updated_at"] = utc_now_iso()
-            save_quarantine_index_atomic(idx_p, index_data)
+        if current_state in (JOURNAL_STATE_INVENTORY_UPDATED, JOURNAL_STATE_INDEX_UPDATED):
+            remove_quarantine_entry(
+                idx_p,
+                attachment_id=norm_att_id,
+                workspace_root=ws,
+                lease_id=lease_id,
+                conversation_id=conversation_id,
+            )
+            record_journal_state(
+                jp,
+                attachment_id=norm_att_id,
+                decision_id=decision_id,
+                apply_receipt_hash=apply_receipt_hash,
+                apply_request_hash=computed_apply_req_hash,
+                previous_index_entry_sha256=expected_idx_hash,
+                quarantine_path=rel_path,
+                sha256=exp_sha,
+                size_bytes=exp_size,
+                run_id=run_id,
+                state=JOURNAL_STATE_COMPLETED,
+            )
 
-            deleted_files.append({
-                "attachment_id": att_id,
-                "quarantine_path": rel_path,
-                "clean_filename": clean_fn,
-                "message_id": mid,
-                "sha256": exp_sha,
-                "status": "deleted",
-            })
+        return {
+            "status": "completed",
+            "message": "Recovered discard apply from journal evidence",
+            "attachment_id": norm_att_id,
+            "deleted_count": 1,
+            "apply_receipt_hash": apply_receipt_hash,
+            "recovered": True,
+        }
 
-        else:
-            # Case B: File already gone on disk (Recovery after aborted index update)
-            items.pop(att_id, None)
-            index_data["updated_at"] = utc_now_iso()
-            save_quarantine_index_atomic(idx_p, index_data)
+    # 7. Pre-Unlink Gate: Re-verify all 10 conditions immediately before unlinking
+    active_run, active_reason = check_active_run_evidence(run_id, ws)
+    if active_run:
+        raise DispositionApplyError(f"Active run evidence detected before unlink: {active_reason}")
 
-            deleted_files.append({
-                "attachment_id": att_id,
-                "quarantine_path": rel_path,
-                "clean_filename": clean_fn,
-                "message_id": mid,
-                "sha256": exp_sha,
-                "status": "recovered_index_updated",
-            })
+    posix_rel = PurePosixPath(rel_path)
+    expected_run_prefix = PurePosixPath(f"data/mail-desk/attachments/{run_id}")
+    try:
+        posix_rel.relative_to(expected_run_prefix)
+    except ValueError as err:
+        raise DispositionApplyError(f"Path containment violation: {err}") from err
 
-    status_str = "completed" if not failed_files else ("partial" if deleted_files else "failed")
+    check_quarantine_path_security(target_file, attachments_root)
+    if target_file.is_symlink() or os.path.islink(target_file):
+        raise DispositionApplyError("Target file is a symlink")
+    if os.name == "nt":
+        stat_res = os.lstat(target_file)
+        if getattr(stat_res, "st_file_attributes", 0) & 0x400:
+            raise DispositionApplyError("Windows reparse point detected on target file")
+
+    actual_bytes = target_file.read_bytes()
+    if len(actual_bytes) != exp_size:
+        raise PhysicalVerificationError(
+            f"File size drift immediately before unlink: expected {exp_size}, got {len(actual_bytes)}"
+        )
+    actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
+    if actual_sha != exp_sha:
+        raise PhysicalVerificationError(
+            f"File SHA-256 drift immediately before unlink: expected {exp_sha}, got {actual_sha}"
+        )
+
+    run_dir = target_file.parent
+    inv_file = run_dir / INVENTORY_FILENAME
+    if not inv_file.exists():
+        raise PhysicalVerificationError(f"Inventory missing immediately before unlink: {inv_file}")
+    inv = json.loads(inv_file.read_text(encoding="utf-8"))
+    _validate_inventory_schema(inv, inv_file)
+    _, msg_entry = _find_inventory_message_entry(inv.get("messages", {}), mid)
+    file_inv = msg_entry.get("files", {}).get(clean_fn) if msg_entry else None
+    if not file_inv or file_inv.get("sha256", "").lower() != exp_sha:
+        raise PhysicalVerificationError("Inventory entry mismatch immediately before unlink")
+
+    # 8. Step 1: Journal State 'prepared'
+    record_journal_state(
+        jp,
+        attachment_id=norm_att_id,
+        decision_id=decision_id,
+        apply_receipt_hash=apply_receipt_hash,
+        apply_request_hash=computed_apply_req_hash,
+        previous_index_entry_sha256=expected_idx_hash,
+        quarantine_path=rel_path,
+        sha256=exp_sha,
+        size_bytes=exp_size,
+        run_id=run_id,
+        state=JOURNAL_STATE_PREPARED,
+    )
+
+    # 9. Step 2: Physical Unlink
+    try:
+        target_file.unlink()
+    except OSError as err:
+        record_journal_state(
+            jp,
+            attachment_id=norm_att_id,
+            decision_id=decision_id,
+            apply_receipt_hash=apply_receipt_hash,
+            apply_request_hash=computed_apply_req_hash,
+            previous_index_entry_sha256=expected_idx_hash,
+            quarantine_path=rel_path,
+            sha256=exp_sha,
+            size_bytes=exp_size,
+            run_id=run_id,
+            state=JOURNAL_STATE_FAILED,
+            error={"stage": "unlink", "error": str(err)},
+        )
+        raise DispositionApplyError(f"Failed to unlink target file '{target_file}': {err}") from err
+
+    if target_file.exists():
+        record_journal_state(
+            jp,
+            attachment_id=norm_att_id,
+            decision_id=decision_id,
+            apply_receipt_hash=apply_receipt_hash,
+            apply_request_hash=computed_apply_req_hash,
+            previous_index_entry_sha256=expected_idx_hash,
+            quarantine_path=rel_path,
+            sha256=exp_sha,
+            size_bytes=exp_size,
+            run_id=run_id,
+            state=JOURNAL_STATE_FAILED,
+            error={"stage": "unlink_verification", "error": "File still exists on disk"},
+        )
+        raise DispositionApplyError("Target file still exists on disk after unlink")
+
+    # Record journal state 'file_deleted'
+    record_journal_state(
+        jp,
+        attachment_id=norm_att_id,
+        decision_id=decision_id,
+        apply_receipt_hash=apply_receipt_hash,
+        apply_request_hash=computed_apply_req_hash,
+        previous_index_entry_sha256=expected_idx_hash,
+        quarantine_path=rel_path,
+        sha256=exp_sha,
+        size_bytes=exp_size,
+        run_id=run_id,
+        state=JOURNAL_STATE_FILE_DELETED,
+    )
+
+    # 10. Step 3: Atomic Inventory Mutation
+    try:
+        with _QuarantineInventoryLock(run_dir):
+            update_quarantine_inventory_atomic(run_dir, mid, clean_fn)
+    except Exception as err:
+        record_journal_state(
+            jp,
+            attachment_id=norm_att_id,
+            decision_id=decision_id,
+            apply_receipt_hash=apply_receipt_hash,
+            apply_request_hash=computed_apply_req_hash,
+            previous_index_entry_sha256=expected_idx_hash,
+            quarantine_path=rel_path,
+            sha256=exp_sha,
+            size_bytes=exp_size,
+            run_id=run_id,
+            state=JOURNAL_STATE_FAILED,
+            error={"stage": "inventory_update", "error": str(err)},
+        )
+        raise DispositionApplyError(
+            f"Physical file was deleted, but inventory update failed: {err}. Index left unchanged for recovery."
+        ) from err
+
+    # Record journal state 'inventory_updated'
+    record_journal_state(
+        jp,
+        attachment_id=norm_att_id,
+        decision_id=decision_id,
+        apply_receipt_hash=apply_receipt_hash,
+        apply_request_hash=computed_apply_req_hash,
+        previous_index_entry_sha256=expected_idx_hash,
+        quarantine_path=rel_path,
+        sha256=exp_sha,
+        size_bytes=exp_size,
+        run_id=run_id,
+        state=JOURNAL_STATE_INVENTORY_UPDATED,
+    )
+
+    # 11. Step 4: Atomic Index Removal
+    remove_quarantine_entry(
+        idx_p,
+        attachment_id=norm_att_id,
+        workspace_root=ws,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+    )
+
+    # Record journal state 'completed'
+    record_journal_state(
+        jp,
+        attachment_id=norm_att_id,
+        decision_id=decision_id,
+        apply_receipt_hash=apply_receipt_hash,
+        apply_request_hash=computed_apply_req_hash,
+        previous_index_entry_sha256=expected_idx_hash,
+        quarantine_path=rel_path,
+        sha256=exp_sha,
+        size_bytes=exp_size,
+        run_id=run_id,
+        state=JOURNAL_STATE_COMPLETED,
+    )
 
     return {
-        "status": status_str,
-        "apply_receipt_hash": norm_apply_hash,
-        "deleted_count": len(deleted_files),
-        "deleted_files": deleted_files,
-        "failed_files": failed_files,
+        "status": "completed",
+        "attachment_id": norm_att_id,
+        "quarantine_path": rel_path,
+        "clean_filename": clean_fn,
+        "message_id": mid,
+        "sha256": exp_sha,
+        "apply_receipt_hash": apply_receipt_hash,
+        "deleted_count": 1,
     }
