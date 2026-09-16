@@ -6,6 +6,7 @@ Part of FR-08 (MD-A1).
 from __future__ import annotations
 
 import email
+import email.policy
 from email.message import EmailMessage
 import hashlib
 from pathlib import Path

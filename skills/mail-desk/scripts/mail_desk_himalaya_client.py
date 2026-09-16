@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import email
+import email.policy
 import json
 from pathlib import Path
 import sys

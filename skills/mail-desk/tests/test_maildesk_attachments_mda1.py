@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -32,6 +33,41 @@ class MailDeskAttachmentsMDA1Tests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self._himalaya_blocker.stop()
+
+    def test_mime_inventory_works_in_fresh_interpreter(self) -> None:
+        """The parser must not depend on another module importing email.policy first."""
+        script = """
+import json
+import sys
+sys.path.insert(0, sys.argv[1])
+from core.attachments import build_test_eml, inspect_mime_tree
+import mail_desk_himalaya_client as client
+raw = build_test_eml(
+    subject="Fresh interpreter",
+    message_id="<fresh@boku.ac.at>",
+    attachments=[{"filename": "fresh.pdf", "mime_type": "application/pdf", "data": b"%PDF-1.4"}],
+)
+inventory = inspect_mime_tree(raw)
+result = client.op_inspect_attachments(
+    envelope_id="17",
+    folder="INBOX",
+    account="BOKU-MARTIN",
+    expected_message_id="fresh@boku.ac.at",
+    raw_eml=raw,
+)
+assert len(inventory) == 1
+assert result["message_id"] == "fresh@boku.ac.at"
+print(json.dumps({"filename": inventory[0]["filename"]}))
+"""
+        completed = subprocess.run(
+            [sys.executable, "-I", "-c", script, str(MAIL_DESK_ROOT / "scripts")],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual({"filename": "fresh.pdf"}, json.loads(completed.stdout))
 
     def test_policy_defaults_contain_expected_thresholds(self) -> None:
         policy = attachment_policy.DEFAULT_ATTACHMENT_POLICY

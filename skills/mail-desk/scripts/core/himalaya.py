@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import email
+import email.policy
 import json
 import os
 from pathlib import Path
