@@ -173,6 +173,42 @@ den deterministischen `review_hash`. Erzwingt Preflight-Drift-Prüfung, Quoten (
 25 MB kumulativ, max. 5 Dateien), Re-Hashing, Re-Typing, aktiven Inhalts-Blocker,
 idempotente Retrys und atomare Sibling-Temp-Promotion.
 
+## Workspace-Integration: Attachment-Quarantäne (Integrationsempfehlung)
+
+Der Mail-Desk legt abgerufene Anhänge isoliert unter `data/mail-desk/attachments/<run_id>/` ab. Das Skill-Bundle selbst ist kein Mail-Desk-Laufzeitworkspace und verändert Consumer-`.gitignore`-Dateien nicht autonom. Die folgenden Integrationsregeln sind Empfehlungen für nutzende Consumer-Workspaces; vor einer Übernahme sind bestehende Workspace-Regeln sorgfältig zu prüfen, und vorhandene Regeln dürfen nicht unbesehen ersetzt werden.
+
+### Empfohlener Integrationsblock für neue Workspaces
+
+Für neu eingerichtete Consumer-Workspaces ohne bestehende Mail-Desk-Ignoreregeln wird folgender vollständiger `.gitignore`-Block empfohlen:
+
+```gitignore
+data/*
+!data/mail-desk/
+!data/mail-desk/**
+/data/mail-desk/attachments/
+```
+
+### Empfehlung für bestehende Workspaces mit etablierter Mail-Desk-Negation
+
+Besitzt ein bestehender Consumer-Workspace bereits die etablierte Negationskette
+```gitignore
+data/*
+!data/mail-desk/
+!data/mail-desk/**
+```
+wird ausdrücklich empfohlen, **ausschließlich** die engere Root-Regel
+```gitignore
+/data/mail-desk/attachments/
+```
+direkt nach der bestehenden Negation `!data/mail-desk/**` anzufügen, statt bestehende Regeln zu ersetzen oder zu duplizieren.
+
+### Hygiene- und Versionierungsregeln
+
+- **Empfehlung für Consumer-Workspaces:** Die obigen Blöcke sind Integrationsvorschläge zur Übernahme in den jeweiligen Consumer-Workspace. Der Skill verändert Consumer-`.gitignore`-Dateien nie autonom. Vor Übernahme bestehende Regeln prüfen; keine vorhandenen Regeln ersetzen.
+- **Flüchtige Laufzeitdaten:** Der gesamte Unterbaum `data/mail-desk/attachments/<run_id>/` inklusive Binärdateien (z. B. PDF, Bilder, Office-Dokumente), run-lokalen Inventaren (`.quarantine-inventory.json`), Lock-Dateien (`.quarantine-inventory.lock`), temporären Sibling-Dateien (`.*.tmp`) und Extraktions-Derivaten (`derivatives/`) sind rein lokale Laufzeitdaten und bleiben strikt ignoriert. Sie werden weder als Evidence noch als Final-Index-Inhalt behandelt.
+- **Versionierbare Metadaten:** Sämtliche Mail-Desk-Metadaten außerhalb des `attachments/`-Unterbaums — insbesondere `action-log.jsonl`, `replies-needed.jsonl`, `pending-review.jsonl`, `final-location-index.json`, Batch-Manifeste, `batch-recovery-journal.json`, `runner-progress.json` sowie der geplante versionierte `data/mail-desk/attachment-quarantine-index.json` (MD-Q2) — bleiben versionierbar und trackbar.
+- **Stop-Bedingung bei getrackten Quarantänedateien:** Bereits versehentlich getrackte Quarantänedateien im Git-Index sind eine strikte Fail-Closed-Stop-Bedingung. Der Skill entfernt solche Dateien nicht autonom aus dem Git-Index; sie erfordern manuelle Klärung vor der weiteren Ausführung.
+
 Clientzweck und Aufrufregel stehen im
 [Himalaya-/IMAP-Adapter](backends/himalaya.md); Batch-Lebenszyklus in
 [`batch-runner.md`](batch-runner.md).

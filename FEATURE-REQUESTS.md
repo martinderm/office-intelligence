@@ -22,6 +22,7 @@ verbindliche Paketkarten.
 | --- | --- | --- | --- |
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
+| `FR-11` | 🟨 in Umsetzung | Quarantäne-Inventar und Cleanup-Funktionen aus FR-08; `MD-Q1` abgenommen | `MD-Q2` |
 
 ```text
 Human Gate → MD-P1 → MD-P2 → MD-P3
@@ -404,3 +405,119 @@ Skill-Validierung und `git diff --check` sind grün. Ein End-to-End-Test beweist
 dass ein Sandbox-Client ohne Secret- oder Configzugriff lesen kann und dass jede
 Mailbox-Mutation ohne passende Receipt, Lock oder Preconditions fail-closed
 bleibt.
+
+## FR-11: Attachment-Quarantäne-Hygiene und Lebenszyklus
+
+**Status:** 🟨 In Umsetzung. `MD-Q1` ist abgenommen; nächstes Paket ist `MD-Q2`.
+FR-08 legt abgerufene Anhänge und das zugehörige
+`.quarantine-inventory.json` unter `data/mail-desk/attachments/<run_id>/` ab. Diese
+Dateien sind lokale Laufzeit-/Quarantänedaten und dürfen weder gestaged noch
+committed werden. Mail-Desk-Metadaten, Logs, Manifeste und Evidence außerhalb
+dieses Unterbaums bleiben weiterhin versionierbar.
+
+**Indexentscheidung:** `final-location-index.json` bleibt ausschließlich der
+scriptverwaltete Index der verifizierten Mailboxposition einer Nachricht. Er erhält
+keine Attachment-, Quarantäne- oder lokalen Dateipfade. Zusätzlich entsteht ein
+kleiner, versionierter `data/mail-desk/attachment-quarantine-index.json`: Er ist das
+operative Verzeichnis aller erfolgreich analysierten Anhänge, die nach physischer
+Verifikation aktuell noch lokal in Quarantäne liegen. Die Binärdateien und das
+run-lokale `.quarantine-inventory.json` bleiben ignorierte Laufzeitdaten.
+
+Der neue Index enthält keine extrahierten Inhalte und keine absoluten Hostpfade.
+Eine spätere Dispositionsentscheidung (`retain`, `discard`, `promote`) wird separat
+append-only dokumentiert. Eine Entscheidung `promote` führt selbst keine Promotion
+aus; sie verweist nur auf den freigegebenen FR-09-Workflow. FR-09-Receipts und
+Journale bleiben alleiniger Nachweis der tatsächlichen Promotion.
+
+### MD-Q1 — Git-Hygiene und Vertragsabsicherung
+
+**Scope:** kleines, isoliertes Paket; frische Terra-medium-Session genügt. Vor der
+Änderung `AGENTS.md`, `.gitignore`, `skills/mail-desk/SKILL.md`,
+`references/cli-operations.md`, `core/attachment_fetch.py` und die MD-A2-Tests
+lesen. Workspace-Lock setzen; fremde Änderungen nicht stagen, committen oder
+verändern.
+
+1. In der Attachment-CLI-Referenz einen dokumentierten, hermetisch getesteten
+   Integrationsvorschlag für Consumer-Workspaces bereitstellen. Keine direkte
+   Änderung einer `.gitignore` im Skill-Bundle verlangen; der Skill darf
+   Consumer-`.gitignore`-Dateien nie autonom verändern.
+2. In der Attachment-CLI-Referenz knapp festhalten, dass der gesamte
+   `attachments/<run_id>/`-Baum inklusive Inventar, Lock-, Temp-, Extraktions- und
+   Binärdateien lokale Laufzeitdaten sind. Sie werden weder als Evidence noch als
+   Final-Index-Inhalt behandelt. Der geplante Quarantäneindex liegt bewusst als
+   separate Datei außerhalb dieses ignorierten Unterbaums.
+3. Bestehende Quarantänedateien nicht löschen, verschieben, stagen oder öffnen.
+   Bereits versehentlich getrackte Dateien sind eine Stop-Bedingung und werden nicht
+   autonom aus dem Index entfernt.
+4. Einen hermetischen Test oder ein deterministisches Prüfskript ergänzen, das den
+   dokumentierten Integrationsvorschlag extrahiert und in einem temporären
+   Git-Repository beweist: PDF, beliebige Binärdatei, `.quarantine-inventory.json`,
+   Inventory-Lock und Temp-Dateien unter `data/mail-desk/attachments/` sind ignoriert;
+   `action-log.jsonl`, `final-location-index.json`, Batch-Manifeste und Evidence
+   außerhalb dieses Unterbaums bleiben trackbar.
+
+**Abnahme:** fokussierter Ignore-Vertragstest, vollständige Mail-Desk-Suite,
+Compileall, Skill-Validierung und `git diff --check` grün. Das Paket ändert
+weder Attachment-Fetch-, Cleanup-, Promotion- noch Final-Index-Schemata.
+
+### MD-Q2 — Versionierter Quarantäneindex
+
+**Scope:** separates Folgepaket nach grünem MD-Q1. Implementiere ausschließlich
+scriptbasierten Zugriff auf
+`data/mail-desk/attachment-quarantine-index.json` Schema 1. Manuelles Lesen oder
+Schreiben im operativen Agentenfluss ist verboten. Der Writer benötigt den
+Workspace-Lock und atomaren Replace; parallele oder fremde Locks stoppen.
+
+Ein Eintrag wird erst nach erfolgreicher Extraktion/Analyse und erneuter physischer
+Verifikation gegen `.quarantine-inventory.json`, SHA-256 und Größe angelegt. Der
+deterministische `attachment_id` bindet normalisierte Message-ID, MIME-Part-Locator
+und Inventar-SHA-256. Pflichtfelder:
+
+- `attachment_id`, normalisierte `message_id`, Account und ursprünglicher Folder;
+- Part-Locator, bereinigter Dateiname, normalisierter MIME-Typ, SHA-256 und Größe;
+- `run_id` und workspace-relativer Quarantänepfad, niemals ein absoluter Pfad;
+- `analysis_status: "completed"`, Analysezeitpunkt sowie Version/Hash des
+  Extraktions- bzw. Analysevertrags;
+- `lifecycle_state: "quarantined"` und optionaler Verweis auf die jüngste
+  Dispositionsentscheidung.
+
+Keine Mailtexte, extrahierten Inhalte, LLM-Prompts/-Antworten, Credentials oder
+temporären Envelope-IDs aufnehmen. Idempotente Wiederholung mit identischer
+Bindung ist No-op; abweichender Pfad, Hash, Größe oder Identität ist Drift und
+stoppt. Ein read-only `reconcile` prüft Index gegen Laufzeitinventar und Datei.
+Fehlende oder manipulierte Dateien werden als `missing_review`/`drift` gemeldet,
+nicht still aus dem Index entfernt oder neu geschrieben.
+
+**Pflichttests:** atomarer Writer, Lock, deterministische ID, Idempotenz,
+Pfad-Containment, Symlink/Reparse Point, manipuliertes Inventar, Hash-/Größendrift,
+fehlende Datei, unbekannte Felder/Statuswerte, keine absoluten Pfade oder Inhalte,
+Reconcile ohne Mutation sowie zwei analysierte PDFs aus getrennten Runs. Der
+Final Location Index bleibt byte-identisch.
+
+### MD-Q3 — Disposition, Promotion-Link und sichere Bereinigung
+
+**Scope:** separates Folgepaket nach grünem MD-Q2. Ergänze die versionierte,
+append-only Datei `data/mail-desk/attachment-disposition-log.jsonl` mit
+scriptbasiertem Writer. Jede Entscheidung bindet `decision_id`, `attachment_id`,
+aktuellen Quarantäneindex-Eintragshash, Entscheidung (`retain`, `discard`,
+`promote`), Zeitstempel, Human-Receipt-Hash und optional eine Begründung ohne
+extrahierten Inhalt.
+
+`retain` darf ein optionales `review_after` setzen. `discard` autorisiert die
+physische Bereinigung erst in einem separaten Apply-Schritt. `promote` autorisiert
+nur die Übergabe an FR-09 und bindet dessen Candidate-/Review-Hash; erst ein
+verifiziertes FR-09-Ergebnis darf `promotion_id` und Promotionstatus nachtragen.
+Keine doppelte Promotion-Engine und keine Behauptung eines Cloud-Remote-Syncs.
+
+Vor jeder Löschung sind Workspace-Lock, Run-ID-Validierung, Pfad-Containment,
+Reparse-/Symlink-Schutz, Indexeintragshash und aktuelles
+`.quarantine-inventory.json` zu prüfen. Aktive Runs, offene/fehlgeschlagene
+Promotionen und Anhänge ohne passende `discard`-Receipt bleiben unangetastet.
+Nach verifizierter Löschung wird der aktive Quarantäneindex atomisch aktualisiert;
+das append-only Dispositionslog bewahrt den Audit-Trail.
+
+Der Default ist read-only Reporting (`eligible`, `protected`, `invalid`). Partial
+Failure bleibt sichtbar und darf weder Inventar noch Verzeichnis teilweise als
+erfolgreich bereinigt melden. Tests decken Receipt-/Hash-Drift, Retention-Grenzen,
+manipulierte Run-IDs, Symlinks/Reparse Points, aktive Promotionen, Idempotenz und
+Abbruch zwischen Dateien ab. Keine Mailbox-, Evidence- oder Final-Index-Mutation.

@@ -7,6 +7,18 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 
 ## Aktueller Stand
 
+- `FR-11 / MD-Q1` — Git-Hygiene und Vertragsabsicherung ist abgenommen:
+  - `skills/mail-desk/references/cli-operations.md` dokumentiert einen getesteten
+    Integrationsvorschlag für Consumer-Workspaces (`data/*`, `!data/mail-desk/`,
+    `!data/mail-desk/**`, `/data/mail-desk/attachments/`), die Nicht-Mutation durch
+    den Skill, die Einstufung als flüchtige Laufzeitdaten und die Stop-Bedingung bei
+    getrackten Dateien. Das Skill-Bundle selbst bleibt von der Quarantäne-Ignore-Regel frei.
+  - Hermetischer Ignore-Vertragstest `test_maildesk_attachment_quarantine_mdq1.py`
+    extrahiert die Integrationsvorschläge direkt aus der Dokumentation und beweist
+    alle Ignore- und Trackbarkeit-Invarianten (sowohl Vollblock als auch Einzelregel-Ergänzung)
+    in einem temporären Git-Repository.
+  - Review-Verifikation: 5 fokussierte MD-Q1-Tests und 469 Tests der vollständigen
+    Mail-Desk-Suite grün; Compileall, Quick-Validate und `git diff --check` sauber.
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist zur Review bereit:
   `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der
@@ -24,8 +36,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
 
-## Nächstes Paket nach Freigabe
+## Nächste Pakete nach Freigabe (parallele Stränge)
 
-`FR-09 / MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-
-Preflight. Paketkarte und Abnahmebedingungen stehen in
-[`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-11:** `MD-Q2` — Versionierter Quarantäneindex (`data/mail-desk/attachment-quarantine-index.json` Schema 1).
