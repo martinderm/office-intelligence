@@ -28,8 +28,8 @@ Das Wurzelelement erlaubt ausschließlich drei Felder (`ALLOWED_ROOT_FIELDS`):
 }
 ```
 
-### 1.2 Die 16 kanonischen Eintragsfelder (`CANONICAL_ENTRY_FIELDS`)
-Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 16 Schlüssel:
+### 1.2 Die 17 kanonischen Eintragsfelder (`CANONICAL_ENTRY_FIELDS`)
+Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 17 Schlüssel:
 
 | Feldname | Typ / Regex | Beschreibung |
 | :--- | :--- | :--- |
@@ -47,9 +47,9 @@ Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 16 Schlüssel:
 | `analysis_status` | Enum | Fest auf `"completed"` (`ALLOWED_ANALYSIS_STATUSES`). |
 | `analyzed_at` | RFC 3339 String | Zeitstempel der Extraktion und Analyse. |
 | `contract_version` | String | Version des Extraktionsvertrags (z. B. `"1.0"`). |
-| `contract_hash` | String / Hex | Hash des bindenden Prüfvertrags. |
+| `contract_hash` | String / Hex | Hash des bindenden Prüfvertrags (optionaler 64-Hex-SHA-256). |
 | `lifecycle_state` | Enum | Fest auf `"quarantined"` (`ALLOWED_LIFECYCLE_STATES`). |
-| `disposition_ref` | String / `null` | Max. 128 Zeichen (`DISPOSITION_REF_REGEX`) oder `null` (MD-Q3 Vorbereitung). |
+| `disposition_ref` | String / `null` | Max. 128 Zeichen (`DISPOSITION_REF_REGEX`) oder `null`. |
 
 ### 1.3 Ableitung der deterministischen `attachment_id`
 Definiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L172-L196):
@@ -69,7 +69,36 @@ Die Anwesenheit folgender Felder (auch verschachtelt) führt über `_find_forbid
 
 ---
 
-## 2. Quarantäne-Inventar (`.quarantine-inventory.json`)
+## 2. Versioniertes Append-Only Dispositionslog (`attachment-disposition-log.jsonl`)
+
+Das Dispositionslog ist der unveränderliche, append-only Prüfpfad aller getroffenen Dispositionen (`retain`, `discard`, `promote`).
+
+* **Dateipfad:** `data/mail-desk/attachment-disposition-log.jsonl` (JSON-Lines)
+* **Implementierungsdatei:** [`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)
+* **CLI-Fassade:** [`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py)
+* **Aktuelle Schema-Version:** `1`
+
+### 2.1 Eintragsfelder Schema 1
+Jede Zeile im JSONL-Format repräsentiert eine Disposition und erzwingt:
+
+| Feldname | Typ / Format | Pflicht | Beschreibung |
+| :--- | :--- | :--- | :--- |
+| `schema_version` | Integer (`1`) | Ja | Schema-Version des Eintrags. |
+| `decision_id` | `^[0-9a-fA-F]{64}$` | Ja | Deterministischer SHA-256 Hash aus `attachment_id`, `index_entry_sha256`, `decision`, `human_receipt_hash`, `timestamp`. |
+| `attachment_id` | `^[0-9a-fA-F]{64}$` | Ja | Referenzierte Attachment-ID aus dem Quarantäneindex. |
+| `index_entry_sha256` | `^[0-9a-fA-F]{64}$` | Ja | Kanonischer Hash des Quarantäneindex-Eintrags zum Entscheidungszeitpunkt (`canonical_index_entry_sha256`). |
+| `decision` | Enum | Ja | `"retain"`, `"discard"`, `"promote"` (`ALLOWED_DECISIONS`). |
+| `timestamp` | RFC 3339 String | Ja | Zeitpunkt der Entscheidungserfassung. |
+| `human_receipt_hash` | `^[0-9a-fA-F]{64}$` | Ja | SHA-256 Nachweis der menschlichen Freigabe / des Receipts. |
+| `rationale` | String (max 500 Zeichen) | Nein | Optionale fachliche Begründung (ohne verbotene Inhalte). |
+| `review_after` | RFC 3339 String | Nein | Nur bei `retain`: Wiedervorlagezeitpunkt. |
+| `candidate_review_hash` | `^[0-9a-fA-F]{64}$` | Nein | Bei `promote`: Bindung an den FR-08/FR-09 Filing-Candidate. |
+| `promotion_id` | String (max 128 Zeichen)| Nein | Nach FR-09-Vollzug: Eindeutige Kennung der Ablage. |
+| `promotion_status` | String (max 64 Zeichen) | Nein | Nach FR-09-Vollzug: Status der Cloud-Promotion. |
+
+---
+
+## 3. Quarantäne-Inventar (`.quarantine-inventory.json`)
 
 * **Speicherort:** `data/mail-desk/attachments/<run_id>/.quarantine-inventory.json`
 * **Implementierungsdatei:** [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py)
@@ -80,9 +109,9 @@ Die Anwesenheit folgender Felder (auch verschachtelt) führt über `_find_forbid
 
 ---
 
-## 3. Begleitende Indizes & Control-Plane-Objekte
+## 4. Begleitende Indizes & Control-Plane-Objekte
 
-### 3.1 Final Location Index (`final-location-index.json`)
+### 4.1 Final Location Index (`final-location-index.json`)
 * **Dateipfad:** `data/mail-desk/final-location-index.json`
 * **Implementierungsdatei:** [`scripts/core/index.py`](../scripts/core/index.py#L12-L28)
 * **Schema-Version:** `1`

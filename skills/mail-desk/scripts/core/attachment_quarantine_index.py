@@ -768,6 +768,129 @@ def record_quarantine_entry(
     }
 
 
+def canonical_index_entry_sha256(entry: dict[str, Any]) -> str:
+    """Compute deterministic SHA-256 hash over canonical MD-Q2 index entry."""
+    canon = validate_quarantine_index_entry(entry)
+    serialized = json.dumps(canon, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def remove_quarantine_entry(
+    index_path: Path | str | None = None,
+    *,
+    attachment_id: str,
+    workspace_root: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically remove an entry from attachment-quarantine-index.json under verified workspace lock.
+
+    Guarantees:
+    - Enforces verified workspace lock ownership before mutation (zero legacy bypass).
+    - Idempotent: if attachment_id is already absent, returns status='unchanged'.
+    - Atomically replaces attachment-quarantine-index.json.
+    """
+    ws = Path(workspace_root or Path.cwd()).resolve()
+    idx_path = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
+
+    # 1. Lock Verification
+    try:
+        verify_quarantine_workspace_lock(
+            workspace_root=ws,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            data_dir=idx_path.parent,
+        )
+    except Exception as err:
+        raise WorkspaceLockRequiredError(
+            f"Quarantine index mutation requires an active, owned workspace lock: {err}"
+        ) from err
+
+    norm_id = str(attachment_id).strip().lower()
+    if not SHA256_HEX_REGEX.fullmatch(norm_id):
+        raise AttachmentIndexSchemaError(f"Invalid attachment_id: {attachment_id!r}")
+
+    index_data = load_quarantine_index(idx_path)
+    items = index_data.setdefault("items", {})
+
+    if norm_id not in items:
+        return {
+            "status": "unchanged",
+            "attachment_id": norm_id,
+            "item": None,
+        }
+
+    removed_item = items.pop(norm_id)
+    index_data["updated_at"] = utc_now_iso()
+    save_quarantine_index_atomic(idx_path, index_data)
+
+    return {
+        "status": "removed",
+        "attachment_id": norm_id,
+        "item": removed_item,
+    }
+
+
+def update_quarantine_entry_disposition_ref(
+    index_path: Path | str | None = None,
+    *,
+    attachment_id: str,
+    disposition_ref: str | None,
+    workspace_root: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """Atomically update disposition_ref for an entry in attachment-quarantine-index.json under verified workspace lock."""
+    ws = Path(workspace_root or Path.cwd()).resolve()
+    idx_path = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
+
+    # 1. Lock Verification
+    try:
+        verify_quarantine_workspace_lock(
+            workspace_root=ws,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            data_dir=idx_path.parent,
+        )
+    except Exception as err:
+        raise WorkspaceLockRequiredError(
+            f"Quarantine index mutation requires an active, owned workspace lock: {err}"
+        ) from err
+
+    norm_id = str(attachment_id).strip().lower()
+    if not SHA256_HEX_REGEX.fullmatch(norm_id):
+        raise AttachmentIndexSchemaError(f"Invalid attachment_id: {attachment_id!r}")
+
+    index_data = load_quarantine_index(idx_path)
+    items = index_data.setdefault("items", {})
+
+    if norm_id not in items:
+        raise KeyError(f"Attachment '{norm_id}' not found in quarantine index")
+
+    entry = items[norm_id]
+    if entry.get("disposition_ref") == disposition_ref:
+        return {
+            "status": "unchanged",
+            "attachment_id": norm_id,
+            "item": entry,
+        }
+
+    mutated = dict(entry)
+    mutated["disposition_ref"] = disposition_ref
+    validated = validate_quarantine_index_entry(mutated)
+    items[norm_id] = validated
+    index_data["updated_at"] = utc_now_iso()
+    save_quarantine_index_atomic(idx_path, index_data)
+
+    return {
+        "status": "updated",
+        "attachment_id": norm_id,
+        "item": validated,
+    }
+
+
 # ==============================================================================
 # Read-Only Reconciliation
 # ==============================================================================

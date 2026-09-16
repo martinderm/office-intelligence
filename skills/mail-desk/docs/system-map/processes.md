@@ -91,7 +91,51 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 
 ---
 
-## 4. Der Read-Only Reconcile Flow
+## 4. Die Attachment-Disposition & Sichere Bereinigung (MD-Q3)
+
+Implementiert in [`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py) und der CLI [`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py):
+
+```
+┌────────────────────────────────┐
+│   Quarantäneindex-Eintrag      │
+└───────────────┬────────────────┘
+                │
+                ▼
+┌────────────────────────────────┐       Lock-Prüfung &
+│  Record Disposition (append)   │──────► Index-Hash-Bindung (canonical_index_entry_sha256)
+└───────────────┬────────────────┘       Audit-Trail in attachment-disposition-log.jsonl
+                │
+       ┌────────┴────────┐
+       ▼                 ▼
+[Read-Only Report]   [Apply Discard (mutierend)]
+  - eligible           10 Vorbedingungen (Lock, Inventar, Disk-SHA, kein aktiver Run)
+  - protected       ──► Physisches Unlink
+  - invalid         ──► Konsistentes .quarantine-inventory.json Update
+                    ──► Atomares Entfernen aus attachment-quarantine-index.json
+```
+
+1. **Entscheidungserfassung (`record_disposition_entry`):**
+   - Prüft Workspace-Lock (`require_workspace_lock`).
+   - Lädt Quarantäneindex-Eintrag und validiert Identität des kanonischen Eintrags-Hashs (`canonical_index_entry_sha256`).
+   - Schreibt deterministisch gebildeten Eintrag (`decision_id`) append-only mit `flush` und `os.fsync` in `attachment-disposition-log.jsonl`.
+   - Der Quarantäneindex wird in dieser Phase bewusst nicht verändert, um den kanonischen Hash für Folgeschritte stabil zu halten.
+2. **Read-Only Reporting (`report_dispositions`):**
+   - Rein lesende Inspektion von Index, Dispositionslog, physischer Disk und Inventaren.
+   - Klassifiziert jedes Quarantäne-Item disjunkt in:
+     - `eligible`: Berechtigt für physische Löschung (gültige `discard`-Entscheidung, alle 10 Vorbedingungen erfüllt).
+     - `protected`: Vor Löschung geschützt (Entscheidung `retain`, unvollständige `promote`-Ablage, fehlende Freigabe, aktive Sperre/Run).
+     - `invalid`: Schemadefekt, Pfadtraversierung, Symlink/Reparse-Point oder Integritätsdrift.
+3. **Sichere Physische Bereinigung (`apply_discard`):**
+   - Erfordert verbindlichen Workspace-Lock und explizite Autorisierung (`apply_receipt_hash`).
+   - Verifiziert 10 Vorbedingungen vor jeder physischen Dateioperation.
+   - Löscht physische Binärdatei via `os.unlink`.
+   - Aktualisiert `.quarantine-inventory.json` unter Lock.
+   - Aktualisiert `attachment-quarantine-index.json` atomar (entfernt bereinigte Einträge).
+   - Bei Teilausfällen stoppt der Prozess transaktionssicher (keine unvollständige Statusmeldung).
+
+---
+
+## 5. Der Read-Only Reconcile Flow
 
 Implementiert in [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py):
 
@@ -103,7 +147,7 @@ Implementiert in [`scripts/core/modes/reconcile.py`](../scripts/core/modes/recon
 
 ---
 
-## 5. Himalaya Invocation Lifecycle
+## 6. Himalaya Invocation Lifecycle
 
 Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
 
