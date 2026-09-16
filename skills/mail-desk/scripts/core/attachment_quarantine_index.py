@@ -29,6 +29,7 @@ from core.attachment_fetch import (
     validate_attachment_filename,
     verify_quarantine_attachment_artifact,
     verify_workspace_lock,
+    _load_workspace_lock_guard,
     _load_quarantine_inventory,
     _validate_inventory_schema,
 )
@@ -105,6 +106,27 @@ ALLOWED_ENTRY_FIELDS = {
     "disposition_ref",
 }
 
+ALLOWED_ROOT_FIELDS = {"schema_version", "updated_at", "items"}
+
+CANONICAL_ENTRY_FIELDS = (
+    "attachment_id",
+    "message_id",
+    "account",
+    "folder",
+    "part_locator",
+    "clean_filename",
+    "mime_type",
+    "sha256",
+    "size_bytes",
+    "run_id",
+    "quarantine_path",
+    "analysis_status",
+    "analyzed_at",
+    "contract_version",
+    "lifecycle_state",
+    "disposition_ref",
+)
+
 FORBIDDEN_ENTRY_FIELDS = {
     "text",
     "extracted_text",
@@ -174,7 +196,7 @@ def resolve_quarantine_index_path(
 # ==============================================================================
 
 def load_quarantine_index(index_path: Path) -> dict[str, Any]:
-    """Load attachment quarantine index or initialize Schema 1 root."""
+    """Load attachment quarantine index and strictly validate Schema 1 root and all items fail-closed."""
     if not index_path.exists():
         return {
             "schema_version": SCHEMA_VERSION,
@@ -190,21 +212,66 @@ def load_quarantine_index(index_path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise QuarantineIndexError(f"Corrupted quarantine index '{index_path}': root must be a JSON object")
 
+    # 1. Reject unknown root fields
+    unknown_root = set(data.keys()) - ALLOWED_ROOT_FIELDS
+    if unknown_root:
+        raise AttachmentIndexSchemaError(
+            f"Unknown root field(s) in quarantine index '{index_path}': {sorted(unknown_root)}"
+        )
+
+    # 2. Validate schema_version
     schema_ver = data.get("schema_version")
     if schema_ver != SCHEMA_VERSION:
         raise QuarantineIndexError(
             f"Unsupported quarantine index schema_version: {schema_ver!r} (expected {SCHEMA_VERSION})"
         )
 
-    if not isinstance(data.get("items"), dict):
-        data["items"] = {}
+    # 3. Validate updated_at
+    updated_at = data.get("updated_at")
+    if updated_at is not None:
+        if not isinstance(updated_at, str) or not RFC3339_REGEX.fullmatch(updated_at):
+            raise AttachmentIndexSchemaError(
+                f"Invalid root 'updated_at' timestamp: {updated_at!r}"
+            )
 
-    return data
+    # 4. Strictly validate items container (never fall back silently to {})
+    items = data.get("items")
+    if not isinstance(items, dict):
+        raise AttachmentIndexSchemaError(
+            f"Quarantine index 'items' must be a JSON object (dict), got {type(items).__name__}"
+        )
+
+    # 5. Strictly validate all entries fail-closed
+    validated_items: dict[str, Any] = {}
+    for key, entry in items.items():
+        if not isinstance(key, str) or not key.strip():
+            raise AttachmentIndexSchemaError(f"Invalid item key in quarantine index: {key!r}")
+        validated_entry = validate_quarantine_index_entry(entry)
+        if key != validated_entry["attachment_id"]:
+            raise AttachmentIndexDriftError(
+                f"Quarantine index key drift: dictionary key '{key}' does not match entry attachment_id '{validated_entry['attachment_id']}'"
+            )
+        validated_items[key] = validated_entry
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": updated_at,
+        "items": validated_items,
+    }
 
 
 def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None:
     """Save quarantine index atomically via temporary file replacement."""
-    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION or not isinstance(data.get("items"), dict):
+    if not isinstance(data, dict):
+        raise QuarantineIndexError("Cannot save invalid quarantine index data: root must be a dict")
+
+    unknown_root = set(data.keys()) - ALLOWED_ROOT_FIELDS
+    if unknown_root:
+        raise AttachmentIndexSchemaError(
+            f"Unknown root field(s) when saving quarantine index: {sorted(unknown_root)}"
+        )
+
+    if data.get("schema_version") != SCHEMA_VERSION or not isinstance(data.get("items"), dict):
         raise QuarantineIndexError("Cannot save invalid or non-Schema 1 quarantine index data")
 
     index_path.parent.mkdir(parents=True, exist_ok=True)
@@ -397,6 +464,54 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
 # Writer Operation: Lock, Verification, Idempotency & Replace
 # ==============================================================================
 
+def verify_quarantine_workspace_lock(
+    workspace_root: str | Path | None = None,
+    *,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+    data_dir: Path | None = None,
+) -> Any:
+    """Strictly verify invocation-owned workspace lock before quarantine index mutation.
+
+    Legacy lock bypass is strictly forbidden for MD-Q2; allow_legacy is hardcoded to False,
+    and WORKSPACE_LOCK_ALLOW_LEGACY in os.environ is ignored.
+    """
+    ws: Path
+    if workspace_root is not None:
+        ws = Path(workspace_root).resolve()
+    else:
+        env_ws = os.environ.get("WORKSPACE_ROOT", "").strip()
+        if env_ws:
+            ws = Path(env_ws).resolve()
+        elif data_dir is not None:
+            cand = Path(data_dir).resolve()
+            found_ws = None
+            for p in [cand, *cand.parents]:
+                if (p / ".agents").is_dir() or (p / ".git").is_dir():
+                    found_ws = p
+                    break
+            ws = found_ws if found_ws is not None else Path.cwd().resolve()
+        else:
+            cand = Path.cwd().resolve()
+            found_ws = None
+            for p in [cand, *cand.parents]:
+                if (p / ".agents").is_dir() or (p / ".git").is_dir():
+                    found_ws = p
+                    break
+            ws = found_ws if found_ws is not None else Path.cwd().resolve()
+
+    eff_lease_id = lease_id if lease_id is not None else os.environ.get("WORKSPACE_LOCK_LEASE_ID") or None
+    eff_conv_id = conversation_id if conversation_id is not None else os.environ.get("WORKSPACE_LOCK_CONVERSATION_ID") or None
+
+    guard = _load_workspace_lock_guard()
+    return guard.require_workspace_lock(
+        ws,
+        lease_id=eff_lease_id,
+        conversation_id=eff_conv_id,
+        allow_legacy=False,
+    )
+
+
 def record_quarantine_entry(
     index_path: Path | str | None = None,
     *,
@@ -405,30 +520,28 @@ def record_quarantine_entry(
     data_dir: Path | str | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
     verify_physical: bool = True,
 ) -> dict[str, Any]:
     """Record an analyzed attachment in the quarantine index under verified workspace lock.
 
     Guarantees:
-    - Enforces verified workspace lock ownership before mutation.
+    - Enforces verified workspace lock ownership before mutation (zero legacy bypass).
     - Strictly validates entry fields against Schema 1, rejecting forbidden/unknown keys.
     - Verifies physical file existence, size, SHA-256, and .quarantine-inventory.json integrity.
     - Inspects symlink and Windows reparse point safety fail-closed.
     - Pure idempotent repetition for identical entries (no-op).
-    - Fail-closed drift abort if existing entry or physical state differs.
+    - Fail-closed drift abort across all 16 canonical fields.
     - Atomically replaces attachment-quarantine-index.json.
     """
     ws = Path(workspace_root or Path.cwd()).resolve()
     idx_path = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
 
-    # 1. Lock Verification
+    # 1. Lock Verification (strictly require invocation-owned lock, zero legacy bypass)
     try:
-        verify_workspace_lock(
+        verify_quarantine_workspace_lock(
             workspace_root=ws,
             lease_id=lease_id,
             conversation_id=conversation_id,
-            allow_legacy=allow_legacy,
             data_dir=idx_path.parent,
         )
     except Exception as err:
@@ -498,16 +611,15 @@ def record_quarantine_entry(
     index_data = load_quarantine_index(idx_path)
     items = index_data.setdefault("items", {})
 
-    # 5. Idempotency & Drift Detection
+    # 5. Idempotency & Drift Detection across all 16 canonical fields
     existing = items.get(att_id)
     if existing is not None:
-        # Check invariant fields
-        for field in ("sha256", "size_bytes", "quarantine_path", "run_id", "message_id", "part_locator"):
-            ex_val = str(existing.get(field) or "").strip().lower()
-            new_val = str(canonical_entry.get(field) or "").strip().lower()
+        for field in CANONICAL_ENTRY_FIELDS:
+            ex_val = existing.get(field)
+            new_val = canonical_entry.get(field)
             if ex_val != new_val:
                 raise AttachmentIndexDriftError(
-                    f"Quarantine index drift on existing attachment_id '{att_id}': field '{field}' differs ('{ex_val}' != '{new_val}')"
+                    f"Quarantine index drift on existing attachment_id '{att_id}': field '{field}' differs ({ex_val!r} != {new_val!r})"
                 )
 
         # Idempotent repetition: identical entry exists -> no-op
@@ -556,7 +668,7 @@ def reconcile_quarantine_index(
     missing_count = 0
     drift_count = 0
 
-    attachments_root = ws / "data" / "mail-desk" / "attachments"
+    attachments_root = (ws / "data" / "mail-desk" / "attachments").resolve()
 
     for att_id, entry in items.items():
         rel_path = entry.get("quarantine_path", "")
@@ -566,7 +678,87 @@ def reconcile_quarantine_index(
         mid = entry.get("message_id", "")
         clean_fn = entry.get("clean_filename") or entry.get("filename") or ""
 
-        target_file = ws / PurePosixPath(rel_path)
+        # Containment & Security Checks BEFORE any file access
+        if not is_valid_run_id(run_id):
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Invalid run_id: {run_id!r}",
+            })
+            continue
+
+        if (
+            not rel_path
+            or os.path.isabs(rel_path)
+            or PurePath(rel_path).is_absolute()
+            or rel_path.startswith("/")
+            or rel_path.startswith("\\")
+            or (len(rel_path) > 1 and rel_path[1] == ":")
+        ):
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Absolute quarantine_path rejected: {rel_path!r}",
+            })
+            continue
+
+        posix_rel = PurePosixPath(rel_path)
+        if any(part == ".." for part in posix_rel.parts):
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Directory traversal rejected: {rel_path!r}",
+            })
+            continue
+
+        expected_run_prefix = PurePosixPath(f"data/mail-desk/attachments/{run_id}")
+        try:
+            posix_rel.relative_to(expected_run_prefix)
+        except ValueError:
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"quarantine_path '{rel_path}' does not reside under expected run prefix '{expected_run_prefix}'",
+            })
+            continue
+
+        target_file = ws / posix_rel
+
+        # Path security (symlink / boundary escape check)
+        try:
+            check_quarantine_path_security(target_file, attachments_root)
+        except SymlinkEscapeError as err:
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Path security violation: {err}",
+            })
+            continue
 
         if not target_file.exists():
             missing_count += 1

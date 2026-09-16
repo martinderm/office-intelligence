@@ -12,19 +12,20 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
     `skills/mail-desk/scripts/core/attachment_quarantine_index.py` sowie der CLI-
     Fassade `skills/mail-desk/scripts/mail_desk_attachment_quarantine_index.py` für
     `data/mail-desk/attachment-quarantine-index.json`.
-  - Vertragliche Absicherungen:
-    - Atomarer Replace via Temp-Datei und zwingender Nachweis des Workspace-Locks (`WorkspaceLockRequiredError`).
+  - Vertragliche Absicherungen & Hardening:
+    - Atomarer Replace via Temp-Datei und zwingender Nachweis des Workspace-Locks (`WorkspaceLockRequiredError`), vollständiger Ausschluss von Legacy-Lock-Bypässen (`allow_legacy=False`, `--allow-legacy` entfernt, `WORKSPACE_LOCK_ALLOW_LEGACY` ignoriert).
     - Deterministische 64-Hex-`attachment_id` aus normalisierter `message_id`, `part_locator` und Inventar-SHA-256.
     - Vollständige Pflichtfelder (Account, ursprünglicher Folder, Part-Locator, bereinigter Dateiname, normalisierter MIME-Typ, SHA-256, Dateigröße, Run-ID, relativer Pfad, `analysis_status: "completed"`, `analyzed_at`, `contract_version`, `lifecycle_state: "quarantined"`, `disposition_ref: null`).
-    - Strikte Containment- und Absolute-Path-Prüfung: ausschließlich workspace-relative Quarantänepfade unter `data/mail-desk/attachments/<run_id>/`.
+    - Fail-closed Schema-1-Root- und Entry-Validierung in `load_quarantine_index`: Unbekannte Root-Felder, ungültige/nicht-Dictionary `items` (kein stiller Fallback), Key/`attachment_id`-Drift oder ungültige Einträge brechen sofort ab.
+    - Strikte Containment- und Absolute-Path-Prüfung: Quarantänepfade müssen workspace-relativ unter `data/mail-desk/attachments/<run_id>/` liegen; `reconcile` prüft Containment vor jedem I/O und öffnet/liest niemals Dateien außerhalb des Quarantäne-Run-Baums.
     - Fail-Closed Symlink- und Windows-Reparse-Point-Erkennung (0x400).
     - Physische Re-Verifikation gegen Disk-Bytes und `.quarantine-inventory.json` vor Index-Eintrag.
-    - Idempotente Wiederholung identischer Einträge ist No-op (`status: "unchanged"`).
-    - Abweichungen stoppen fail-closed als Drift (`AttachmentIndexDriftError`).
+    - Idempotente Wiederholung prüft alle 16 kanonischen Felder auf Identität (`status: "unchanged"`).
+    - Jede Abweichung auf einem der 16 Felder stoppt fail-closed als Drift (`AttachmentIndexDriftError`).
     - Verbotene Inhalte (`text`, `extracted_text`, `body`, `prompt`, `credentials`, `envelope_id`) und unbekannte Felder werden abgewiesen.
     - Read-only `reconcile` meldet `consistent`, `missing_review` und `drift` ohne Mutation von Index oder Disk.
     - Byte-Identität von `data/mail-desk/final-location-index.json` garantiert.
-  - Review-Verifikation: 13 fokussierte MD-Q2-Tests, vollständige Mail-Desk-Suite (482 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
+  - Review-Verifikation: 18 fokussierte MD-Q2-Tests (inklusive 5 adversarieller Testsuiten), vollständige Mail-Desk-Suite (487 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
   - Grenzen: Noch keine Disposition oder physische Löschung (MD-Q3); Quarantäne-Binärdateien und Inventare bleiben unversioniert.
 - `FR-11 / MD-Q1` — Git-Hygiene und Vertragsabsicherung ist abgenommen:
   - `skills/mail-desk/references/cli-operations.md` dokumentiert einen getesteten

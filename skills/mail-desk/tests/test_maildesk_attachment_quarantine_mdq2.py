@@ -710,6 +710,314 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
         self.assertTrue(recon_json["success"])
         self.assertEqual(recon_json["data"]["reconcile"]["consistent_count"], 1)
 
+    # --------------------------------------------------------------------------
+    # 14. Adversarial Root & Item Container Validation
+    # --------------------------------------------------------------------------
+    def test_adversarial_items_as_list_or_null_and_unknown_root_fields(self) -> None:
+        """load_quarantine_index must strictly fail-closed on list/null items and unknown root fields."""
+        index_path = self.data_dir / INDEX_FILENAME
+
+        # 1. items as list (never silently fallback to {})
+        index_path.write_text(json.dumps({"schema_version": 1, "updated_at": None, "items": []}), encoding="utf-8")
+        with self.assertRaises(AttachmentIndexSchemaError):
+            load_quarantine_index(index_path)
+
+        # 2. items as None / null
+        index_path.write_text(json.dumps({"schema_version": 1, "updated_at": None, "items": None}), encoding="utf-8")
+        with self.assertRaises(AttachmentIndexSchemaError):
+            load_quarantine_index(index_path)
+
+        # 3. items as primitive (integer or string)
+        index_path.write_text(json.dumps({"schema_version": 1, "updated_at": None, "items": 123}), encoding="utf-8")
+        with self.assertRaises(AttachmentIndexSchemaError):
+            load_quarantine_index(index_path)
+
+        # 4. unknown root fields in index file
+        index_path.write_text(
+            json.dumps({"schema_version": 1, "updated_at": None, "items": {}, "hacked_field": "injected"}),
+            encoding="utf-8",
+        )
+        with self.assertRaises(AttachmentIndexSchemaError):
+            load_quarantine_index(index_path)
+
+        # 5. save_quarantine_index_atomic rejects unknown root fields
+        with self.assertRaises(AttachmentIndexSchemaError):
+            save_quarantine_index_atomic(
+                index_path,
+                {"schema_version": 1, "updated_at": None, "items": {}, "rogue": 1},
+            )
+
+    # --------------------------------------------------------------------------
+    # 15. Adversarial Key and attachment_id Drift
+    # --------------------------------------------------------------------------
+    def test_adversarial_key_and_attachment_id_drift(self) -> None:
+        """load_quarantine_index must fail-closed if item key does not match attachment_id or ID drifted."""
+        index_path = self.data_dir / INDEX_FILENAME
+        e = self._create_sample_quarantine_run(
+            "run_drift_key", "<drift_key@example.org>", "doc.pdf", b"%PDF-1.4 sample key drift"
+        )
+
+        # 1. Key mismatch (dict key != entry["attachment_id"])
+        bad_key_data = {
+            "schema_version": 1,
+            "updated_at": None,
+            "items": {
+                "mismatched_key_12345": e,
+            },
+        }
+        index_path.write_text(json.dumps(bad_key_data, indent=2), encoding="utf-8")
+        with self.assertRaises(AttachmentIndexDriftError):
+            load_quarantine_index(index_path)
+
+        # 2. Entry attachment_id differs from deterministic computed ID
+        bad_id_entry = dict(e)
+        bad_id_entry["attachment_id"] = "0" * 64
+        bad_id_data = {
+            "schema_version": 1,
+            "updated_at": None,
+            "items": {
+                "0" * 64: bad_id_entry,
+            },
+        }
+        index_path.write_text(json.dumps(bad_id_data, indent=2), encoding="utf-8")
+        with self.assertRaises(AttachmentIndexDriftError):
+            load_quarantine_index(index_path)
+
+    # --------------------------------------------------------------------------
+    # 16. Adversarial Traversal, Absolute & Foreign Run Paths
+    # --------------------------------------------------------------------------
+    def test_adversarial_traversal_absolute_and_foreign_run_paths(self) -> None:
+        """quarantine index and reconcile must reject traversal, absolute, and foreign run paths without opening files."""
+        index_path = self.data_dir / INDEX_FILENAME
+
+        # Place a confidential canary file completely outside quarantine
+        secret_file = self.ws_root / "confidential_outside.txt"
+        secret_content = b"TOP_SECRET_CANARY_DO_NOT_READ"
+        secret_file.write_bytes(secret_content)
+
+        e = self._create_sample_quarantine_run(
+            "run_trav_01", "<trav@example.org>", "doc.pdf", b"%PDF-1.4 sample trav"
+        )
+
+        # Case A: Traversal path escaping to canary file
+        entry_trav = dict(e)
+        entry_trav["quarantine_path"] = "data/mail-desk/attachments/../../confidential_outside.txt"
+        trav_data = {
+            "schema_version": 1,
+            "updated_at": None,
+            "items": {
+                e["attachment_id"]: entry_trav,
+            },
+        }
+        index_path.write_text(json.dumps(trav_data, indent=2), encoding="utf-8")
+
+        # load_quarantine_index must fail closed
+        with self.assertRaises(QuarantineIndexError):
+            load_quarantine_index(index_path)
+
+        # reconcile must fail-closed and NEVER open or read confidential_outside.txt
+        original_read_bytes = Path.read_bytes
+        read_calls: list[str] = []
+
+        def tracked_read_bytes(path_obj: Path) -> bytes:
+            read_calls.append(str(path_obj))
+            return original_read_bytes(path_obj)
+
+        with patch.object(Path, "read_bytes", side_effect=tracked_read_bytes):
+            with self.assertRaises(QuarantineIndexError):
+                reconcile_quarantine_index(index_path, workspace_root=self.ws_root)
+
+        for called_path in read_calls:
+            self.assertNotIn("confidential_outside.txt", called_path)
+
+        # Case B: Absolute path
+        entry_abs = dict(e)
+        entry_abs["quarantine_path"] = "/confidential_outside.txt"
+        abs_data = {
+            "schema_version": 1,
+            "updated_at": None,
+            "items": {
+                e["attachment_id"]: entry_abs,
+            },
+        }
+        index_path.write_text(json.dumps(abs_data, indent=2), encoding="utf-8")
+        with self.assertRaises(QuarantineIndexError):
+            load_quarantine_index(index_path)
+
+        # Case C: Foreign run path (escapes expected run_id)
+        entry_foreign = dict(e)
+        entry_foreign["run_id"] = "run_trav_01"
+        entry_foreign["quarantine_path"] = "data/mail-desk/attachments/run_FOREIGN_OTHER/doc.pdf"
+        foreign_data = {
+            "schema_version": 1,
+            "updated_at": None,
+            "items": {
+                e["attachment_id"]: entry_foreign,
+            },
+        }
+        index_path.write_text(json.dumps(foreign_data, indent=2), encoding="utf-8")
+        with self.assertRaises(QuarantineIndexError):
+            load_quarantine_index(index_path)
+
+    # --------------------------------------------------------------------------
+    # 17. Adversarial Rejection of Legacy Lock Bypass
+    # --------------------------------------------------------------------------
+    def test_adversarial_legacy_lock_bypass_rejected(self) -> None:
+        """MD-Q2 must strictly require active owned lock and reject legacy bypass."""
+        entry = self._create_sample_quarantine_run(
+            "run_lock_bypass", "<bypass@example.org>", "bypass.pdf", b"%PDF-1.4 lock bypass"
+        )
+        index_path = self.data_dir / INDEX_FILENAME
+
+        # Remove lock file completely
+        if self.lock_file.exists():
+            self.lock_file.unlink()
+
+        # 1. Direct record without lock fails
+        with self.assertRaises(WorkspaceLockRequiredError):
+            record_quarantine_entry(
+                index_path,
+                payload=entry,
+                workspace_root=self.ws_root,
+            )
+
+        # 2. Setting WORKSPACE_LOCK_ALLOW_LEGACY does NOT authorize mutation
+        with patch.dict(os.environ, {"WORKSPACE_LOCK_ALLOW_LEGACY": "1"}):
+            with self.assertRaises(WorkspaceLockRequiredError):
+                record_quarantine_entry(
+                    index_path,
+                    payload=entry,
+                    workspace_root=self.ws_root,
+                )
+
+        # 3. CLI rejects --allow-legacy argument
+        script_path = _scripts_dir / "mail_desk_attachment_quarantine_index.py"
+        manifest_file = self.data_dir / "cli_bypass_input.json"
+        manifest_file.write_text(json.dumps(entry), encoding="utf-8")
+
+        res = subprocess.run(
+            [sys.executable, str(script_path), "record", "--input", str(manifest_file), "--allow-legacy", "--json"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(res.returncode, 0)
+        self.assertIn("unrecognized arguments: --allow-legacy", res.stderr)
+
+        # 4. CLI with WORKSPACE_LOCK_ALLOW_LEGACY=1 without lock fails
+        res_env = subprocess.run(
+            [sys.executable, str(script_path), "record", "--input", str(manifest_file), "--data-dir", str(self.data_dir), "--json"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "WORKSPACE_LOCK_ALLOW_LEGACY": "1", "WORKSPACE_ROOT": str(self.ws_root)},
+        )
+        out_json = json.loads(res_env.stdout)
+        self.assertFalse(out_json["success"])
+        self.assertIn("WorkspaceLockRequiredError", out_json["error"]["type"])
+
+    # --------------------------------------------------------------------------
+    # 18. Adversarial Drift on Every Canonical Field
+    # --------------------------------------------------------------------------
+    def test_adversarial_drift_of_all_canonical_fields(self) -> None:
+        """Every single one of the 16 canonical fields must trigger AttachmentIndexDriftError on mismatch."""
+        # Ensure lock is active
+        self._write_lock_file(lease_id=self.lease_id, conv_id=self.conv_id)
+        index_path = self.data_dir / INDEX_FILENAME
+
+        entry = self._create_sample_quarantine_run(
+            "run_canon_01", "<canon_01@example.org>", "canon.pdf", b"%PDF-1.4 canonical field test"
+        )
+        att_id = entry["attachment_id"]
+
+        # Initial record succeeds
+        res = record_quarantine_entry(
+            index_path,
+            payload=entry,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res["status"], "created")
+
+        # Repetition with identical entry is unchanged
+        res_unchanged = record_quarantine_entry(
+            index_path,
+            payload=entry,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res_unchanged["status"], "unchanged")
+
+        # Define 16 mutations for canonical fields
+        drift_variations: dict[str, Any] = {
+            "attachment_id": "f" * 64,
+            "message_id": "<canon_drifted@example.org>",
+            "account": "other_account",
+            "folder": "OtherFolder",
+            "part_locator": "99",
+            "clean_filename": "other.pdf",
+            "mime_type": "application/octet-stream",
+            "sha256": "e" * 64,
+            "size_bytes": entry["size_bytes"] + 42,
+            "run_id": "run_other_99",
+            "quarantine_path": f"data/mail-desk/attachments/{entry['run_id']}/other.pdf",
+            "analysis_status": "in_progress",
+            "analyzed_at": "2026-09-16T18:00:00Z",
+            "contract_version": "v2",
+            "lifecycle_state": "promoted",
+            "disposition_ref": "disp_ref_123",
+        }
+
+        canonical_fields = (
+            "attachment_id",
+            "message_id",
+            "account",
+            "folder",
+            "part_locator",
+            "clean_filename",
+            "mime_type",
+            "sha256",
+            "size_bytes",
+            "run_id",
+            "quarantine_path",
+            "analysis_status",
+            "analyzed_at",
+            "contract_version",
+            "lifecycle_state",
+            "disposition_ref",
+        )
+        self.assertEqual(set(drift_variations.keys()), set(canonical_fields))
+
+        # 1. Verify end-to-end drift via record_quarantine_entry for schema-compatible field drifts
+        # e.g. account, folder, analyzed_at, contract_version, disposition_ref
+        for field in ("account", "folder", "analyzed_at", "contract_version", "disposition_ref"):
+            mutated_entry = dict(entry)
+            mutated_entry[field] = drift_variations[field]
+            with self.assertRaises(AttachmentIndexDriftError, msg=f"Field '{field}' failed to trigger drift"):
+                record_quarantine_entry(
+                    index_path,
+                    payload=mutated_entry,
+                    workspace_root=self.ws_root,
+                    lease_id=self.lease_id,
+                    conversation_id=self.conv_id,
+                )
+
+        # 2. Verify all 16 canonical fields fail-closed against existing index comparison
+        original_entry = dict(entry)
+        for field, drifted_val in drift_variations.items():
+            existing_mock = dict(original_entry)
+            existing_mock[field] = drifted_val
+            with patch("core.attachment_quarantine_index.load_quarantine_index", return_value={"schema_version": 1, "updated_at": None, "items": {att_id: existing_mock}}):
+                with self.assertRaises(AttachmentIndexDriftError, msg=f"Field '{field}' in existing entry failed to trigger drift in record_quarantine_entry"):
+                    record_quarantine_entry(
+                        index_path,
+                        payload=entry,
+                        workspace_root=self.ws_root,
+                        lease_id=self.lease_id,
+                        conversation_id=self.conv_id,
+                        verify_physical=False,
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()

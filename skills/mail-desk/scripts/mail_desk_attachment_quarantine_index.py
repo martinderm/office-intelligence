@@ -85,7 +85,6 @@ def execute_record(
     workspace_root: Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Execute a single record operation under workspace lock."""
@@ -97,7 +96,6 @@ def execute_record(
         data_dir=data_dir,
         lease_id=lease_id,
         conversation_id=conversation_id,
-        allow_legacy=allow_legacy,
     )
     return res
 
@@ -110,7 +108,6 @@ def main() -> None:
     common_parser.add_argument("--workspace-root", type=Path, default=None, help="Explicit workspace root")
     common_parser.add_argument("--lease-id", type=str, default=None, help="Workspace lock lease ID")
     common_parser.add_argument("--conversation-id", type=str, default=None, help="Workspace lock conversation ID")
-    common_parser.add_argument("--allow-legacy", action="store_true", default=False, help="Allow legacy single-session lock")
 
     parser = argparse.ArgumentParser(
         parents=[common_parser],
@@ -175,7 +172,6 @@ def main() -> None:
 
             eff_lease = args.lease_id or os.environ.get("WORKSPACE_LOCK_LEASE_ID")
             eff_conv = args.conversation_id or os.environ.get("WORKSPACE_LOCK_CONVERSATION_ID")
-            eff_legacy = args.allow_legacy or (os.environ.get("WORKSPACE_LOCK_ALLOW_LEGACY", "").lower() in ("1", "true"))
 
             res = execute_record(
                 payload,
@@ -183,7 +179,6 @@ def main() -> None:
                 workspace_root=ws,
                 lease_id=eff_lease,
                 conversation_id=eff_conv,
-                allow_legacy=eff_legacy,
                 index_path=idx_path,
             )
             _emit_success("record", f"Quarantine entry {res['status']}", res, json_output=args.json)
