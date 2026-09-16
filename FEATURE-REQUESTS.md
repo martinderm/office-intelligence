@@ -23,6 +23,9 @@ verbindliche Paketkarten.
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-11` | 🟨 in Umsetzung | Quarantäne-Inventar und Cleanup-Funktionen aus FR-08; `MD-Q1` und `MD-Q2` abgenommen | `MD-Q3` |
+| `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
+| `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
+
 
 ```text
 Human Gate → MD-P1 → MD-P2 → MD-P3
@@ -521,3 +524,113 @@ Failure bleibt sichtbar und darf weder Inventar noch Verzeichnis teilweise als
 erfolgreich bereinigt melden. Tests decken Receipt-/Hash-Drift, Retention-Grenzen,
 manipulierte Run-IDs, Symlinks/Reparse Points, aktive Promotionen, Idempotenz und
 Abbruch zwischen Dateien ab. Keine Mailbox-, Evidence- oder Final-Index-Mutation.
+
+---
+
+## FR-12: Modularisierung von cloud-atlas convert_cloud_docs.py
+
+**Status:** ⬜ Geplant. Reine Refactoring- und Modularisierungsmaßnahme; keine Verhaltens-
+oder Schnittstellenänderung.
+
+### Problem & Motivation
+
+`convert_cloud_docs.py` ist mit **103,5 KB und ~2.200 Zeilen** die größte Einzeldatei im
+gesamten Repository. Sie vereint derzeit CLI-Argument-Parsing, Prozess-Pools,
+Pandoc-Subprozess-Isolation, LibreOffice-Headless-Aufrufe, Tesseract-OCR-Verzweigung,
+Bildlink-Neutralisierung, Frontmatter-Injektion und atomare Writes in einem einzigen Modul.
+Dies erschwert Reviews, erhöht das Fehlerrisiko bei Feature-Erweiterungen und belastet
+Coding-Agenten mit übermäßigem Kontext.
+
+### Ziel & Invarianten
+
+- Vollständige Entflechtung in modulare Konverter-Treiber unter
+  `skills/cloud-atlas/scripts/core/converters/`.
+- **100 % Schnittstellen- und Verhaltensstabilität:** Die CLI-Fassade
+  `skills/cloud-atlas/scripts/convert_cloud_docs.py` behält alle Argumente
+  (`--project-id`, `--topic-id`, `--ocr-policy`, `--file-timeout`, `--jobs`, `--no-ocr`,
+  `--redo-ocr`, `--json`, etc.), dieselben Structured CLI Envelopes, Exit-Codes und
+  Fehlerformate.
+- Alle 41 bestehenden Tests der Cloud-Atlas-Suite müssen ohne Anpassung ihrer Assertions
+  grün bleiben.
+
+### CA-M1 — Auslagerung der Konverter-Treiber und Markdown-Cleaner
+
+**Scope:**
+1. Erstellung des Unterpakets `skills/cloud-atlas/scripts/core/converters/`:
+   - `pandoc.py`: Kapselung des Pandoc-Aufrufs, Timeouts und Markdown-Extraktion.
+   - `libreoffice.py`: Headless-Konvertierung alter Binärformate (`.doc`) mit isoliertem
+     Temp-Benutzerprofil.
+   - `ocr.py`: Tesseract-Pipeline, Prüfung von `local_derivative` vs. `enrich_source`,
+     Signaturprüfung für PDFs.
+   - `markdown_cleaner.py`: Bildlink-Neutralisierung (`neutralize_missing_local_image_links`),
+     zirkelfreies Payload-Hashing (`calculate_markdown_payload_sha256`), Frontmatter-Injektion.
+2. Isolierte Unit-Tests für jedes neue Submodul unter `skills/cloud-atlas/tests/`.
+
+### CA-M2 — Verschlankung des Haupt-Runners und Testabnahme
+
+**Scope:**
+1. Refactoring von `skills/cloud-atlas/scripts/convert_cloud_docs.py`: Bindet die neuen
+   Module aus `core.converters` ein und reduziert die Hauptdatei auf einen schlanken,
+   übersichtlichen CLI- und Multiprocessing-Orchestrator (< 350 Zeilen).
+2. Vollständige Regressionstestung der gesamten Cloud-Atlas-Testsuite (`test_*.py`).
+
+**Abnahme:** Alle 41 Tests grün, `python -B -m compileall -q skills/cloud-atlas`,
+`python scripts/validate-skills-catalog.py` und `git diff --check` sauber.
+
+---
+
+## FR-13: Domänenorientierte Binnengliederung und Matcher-Entflechtung von mail-desk
+
+**Status:** ⬜ Geplant. Reine Refactoring- und Modularisierungsmaßnahme; keine Verhaltens-
+oder Schnittstellenänderung.
+
+### Problem & Motivation
+
+`skills/mail-desk/scripts/core/` enthält derzeit 24 Module mit über 500 KB Code in einer
+völlig flachen Verzeichnisstruktur. Darin befindet sich mit `classifier.py` (**91,6 KB,
+~2.000 Zeilen**) ein weiterer massiver Monolith, der Datums-Parsing, Katalog-Laden,
+Projekt-Workpackage-Matching, Deliverables-, Task- und Milestone-Matching, Topic-Matching,
+Mehrdeutigkeits-Filter und Manifest-Drafting in einer Datei bündelt. Zudem sind die
+sicherheitskritischen Quarantäne-Dateien (MD-A/MD-Q) nicht als geschlossene Domäne
+abgegrenzt.
+
+### Ziel & Invarianten
+
+- Strukturierung von `mail-desk/scripts/core/` in fachliche Subpakete:
+  - `quarantine/` (MD-A/MD-Q Subsystem für Anhänge)
+  - `matching/` (Triage- und Katalog-Abgleich-Heuristiken)
+  - `transport/` (Himalaya CLI, Search by ID, Preflight)
+- **100 % Abwärtskompatibilität:** Alle bestehenden CLI-Fassaden
+  (`mail_desk_batch_runner.py`, `mail_desk_attachment_quarantine_index.py`, etc.) und
+  alle Re-Exports in `scripts/core/__init__.py` bleiben erhalten.
+- Keine Änderung an den 16 Pflichtfeldern des Quarantäneindex oder den Hash-Garantien.
+- Alle >489 Tests der Mail-Desk-Suite müssen ohne Assertion-Brüche grün bleiben.
+
+### MD-M1 — Entflechtung des 2.000-Zeilen-Monolithen classifier.py
+
+**Scope:**
+1. Erstellung des Unterpakets `skills/mail-desk/scripts/core/matching/`:
+   - `date_parser.py`: Datums-Parsing (`parse_date_to_year_month`).
+   - `project_matching.py`: Workpackage-, Task-, Deliverable- und Milestone-Matching
+     gegen Schema v3.
+   - `topic_matching.py`: Topic- und Subtopic-Matching gegen `topics.json`.
+   - `ambiguity.py`: Filterung mehrdeutiger Kandidaten, Beibehaltung in INBOX bei Unklarheit.
+2. `classifier.py` importiert die Sub-Matcher und bleibt als konsolidierte API-Fassade
+   bestehen; Reduzierung der Dateigröße um > 60 %.
+
+### MD-M2 — Paketierung der Quarantäne-Module unter core/quarantine/
+
+**Scope:**
+1. Überführung der zusammengehörigen Quarantäne- und Anhangsmodule in
+   `skills/mail-desk/scripts/core/quarantine/`:
+   - `attachment_quarantine_index.py`
+   - `attachment_fetch.py`
+   - `attachment_extract.py`
+   - `attachment_filing.py`
+   - `attachment_policy.py`
+   - `attachment_handoff.py`
+2. Bereitstellung transparenter Re-Exports in `scripts/core/` zur Garantie nahtloser
+   Kompatibilität für bestehende Test-Suites und externe Konsumenten.
+
+**Abnahme:** Vollständige Mail-Desk-Suite (>489 Tests) grün, Compileall,
+`validate-skills-catalog.py` und `git diff --check` sauber.
