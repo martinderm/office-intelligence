@@ -83,6 +83,7 @@ RFC3339_REGEX = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
 )
 
+CONTRACT_VERSION_REGEX = re.compile(r"^[a-zA-Z0-9_.-]{1,64}$")
 MAX_DISPOSITION_REF_LENGTH = 128
 DISPOSITION_REF_REGEX = re.compile(r"^[a-zA-Z0-9_.:/-]{1,128}$")
 
@@ -126,6 +127,7 @@ CANONICAL_ENTRY_FIELDS = (
     "analysis_status",
     "analyzed_at",
     "contract_version",
+    "contract_hash",
     "lifecycle_state",
     "disposition_ref",
 )
@@ -492,34 +494,31 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
             f"analyzed_at must be a valid RFC-3339 timestamp with timezone offset: {analyzed_at!r}"
         )
 
-    # 15. Contract version / hash (fail-closed against contradictory aliases)
+    # 15. Contract version (mandatory bounded identifier)
     raw_cv = entry.get("contract_version")
-    raw_ch = entry.get("contract_hash")
-
-    if raw_cv is not None and raw_ch is not None:
-        cv_str = str(raw_cv).strip()
-        ch_str = str(raw_ch).strip()
-        if not cv_str:
-            raise AttachmentIndexSchemaError("Missing or empty 'contract_version'")
-        if not ch_str:
-            raise AttachmentIndexSchemaError("Missing or empty 'contract_hash'")
-        if cv_str != ch_str:
-            raise AttachmentIndexDriftError(
-                f"Contradictory contract version alias fields: 'contract_version' ({cv_str!r}) != 'contract_hash' ({ch_str!r})"
-            )
-        contract_ver = cv_str
-    elif raw_cv is not None:
-        cv_str = str(raw_cv).strip()
-        if not cv_str:
-            raise AttachmentIndexSchemaError("Missing or empty 'contract_version'")
-        contract_ver = cv_str
-    elif raw_ch is not None:
-        ch_str = str(raw_ch).strip()
-        if not ch_str:
-            raise AttachmentIndexSchemaError("Missing or empty 'contract_hash'")
-        contract_ver = ch_str
-    else:
+    if raw_cv is None or not str(raw_cv).strip():
         raise AttachmentIndexSchemaError("Missing required 'contract_version'")
+    cv_str = str(raw_cv).strip()
+    if len(cv_str) > 64 or not CONTRACT_VERSION_REGEX.fullmatch(cv_str):
+        raise AttachmentIndexSchemaError(
+            f"Invalid 'contract_version': must match {CONTRACT_VERSION_REGEX.pattern} (max 64 chars), got {raw_cv!r}"
+        )
+    contract_ver = cv_str
+
+    # 15b. Optional contract hash (strictly 64-hex SHA-256 if provided, never an alias for version)
+    raw_ch = entry.get("contract_hash")
+    contract_hash = None
+    if raw_ch is not None:
+        if not isinstance(raw_ch, str):
+            raise AttachmentIndexSchemaError(
+                f"'contract_hash' must be a string, got {type(raw_ch).__name__}"
+            )
+        ch_str = raw_ch.strip().lower()
+        if not SHA256_HEX_REGEX.fullmatch(ch_str):
+            raise AttachmentIndexSchemaError(
+                f"Invalid 'contract_hash': must be a 64-character hexadecimal SHA-256 hash, got {raw_ch!r}"
+            )
+        contract_hash = ch_str
 
     # 16. Lifecycle state
     lifecycle_st = str(entry.get("lifecycle_state") or "").strip()
@@ -562,7 +561,7 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
                 f"attachment_id drift: provided '{provided_id}' does not match computed deterministic ID '{computed_id}'"
             )
 
-    return {
+    ret = {
         "attachment_id": computed_id,
         "message_id": norm_mid,
         "account": account,
@@ -580,10 +579,12 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "analysis_status": ANALYSIS_STATUS_COMPLETED,
         "analyzed_at": analyzed_at,
         "contract_version": contract_ver,
-        "contract_hash": contract_ver,
         "lifecycle_state": LIFECYCLE_STATE_QUARANTINED,
         "disposition_ref": disposition_ref,
     }
+    if contract_hash is not None:
+        ret["contract_hash"] = contract_hash
+    return ret
 
 
 # ==============================================================================
@@ -656,7 +657,7 @@ def record_quarantine_entry(
     - Verifies physical file existence, size, SHA-256, and .quarantine-inventory.json integrity.
     - Inspects symlink and Windows reparse point safety fail-closed.
     - Pure idempotent repetition for identical entries (no-op).
-    - Fail-closed drift abort across all 16 canonical fields.
+    - Fail-closed drift abort across all 17 canonical fields.
     - Atomically replaces attachment-quarantine-index.json.
     """
     ws = Path(workspace_root or Path.cwd()).resolve()
@@ -737,7 +738,7 @@ def record_quarantine_entry(
     index_data = load_quarantine_index(idx_path)
     items = index_data.setdefault("items", {})
 
-    # 5. Idempotency & Drift Detection across all 16 canonical fields
+    # 5. Idempotency & Drift Detection across all 17 canonical fields
     existing = items.get(att_id)
     if existing is not None:
         for field in CANONICAL_ENTRY_FIELDS:

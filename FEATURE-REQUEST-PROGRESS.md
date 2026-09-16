@@ -20,14 +20,15 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
     - Strikte Containment- und Absolute-Path-Prüfung: Quarantänepfade müssen workspace-relativ unter `data/mail-desk/attachments/<run_id>/` liegen; `reconcile` prüft Containment vor jedem I/O und öffnet/liest niemals Dateien außerhalb des Quarantäne-Run-Baums.
     - Fail-Closed Symlink- und Windows-Reparse-Point-Erkennung (0x400).
     - Physische Re-Verifikation gegen Disk-Bytes und `.quarantine-inventory.json` vor Index-Eintrag.
-    - Idempotente Wiederholung prüft alle 16 kanonischen Felder auf Identität (`status: "unchanged"`).
-    - Jede Abweichung auf einem der 16 Felder stoppt fail-closed als Drift (`AttachmentIndexDriftError`).
-    - Widersprüchliche Aliasfelder (`folder` vs `original_folder`, `clean_filename` vs `filename`, `mime_type` vs `effective_mime_type`, `contract_version` vs `contract_hash`) stoppen fail-closed als Drift (`AttachmentIndexDriftError`).
+    - Idempotente Wiederholung prüft alle 17 kanonischen Felder auf Identität (`status: "unchanged"`).
+    - Jede Abweichung auf einem der 17 Felder stoppt fail-closed als Drift (`AttachmentIndexDriftError`).
+    - Widersprüchliche Aliasfelder (`folder` vs `original_folder`, `clean_filename` vs `filename`, `mime_type` vs `effective_mime_type`) stoppen fail-closed als Drift (`AttachmentIndexDriftError`).
+    - `contract_version` (verpflichtender, deterministisch begrenzter Bezeichner) und `contract_hash` (optionaler, strikt validierter 64-Hex-SHA-256) sind sauber entkoppelt und keine Aliase; die Version wird niemals als Hash persistiert, `"1"` wird fail-closed abgewiesen und nie als Hash emittiert; Idempotenz und Hash-Drift bei gleicher Version werden nach eigener Semantik fail-closed geprüft.
     - `disposition_ref` ist strikt auf `null` oder deterministisch begrenzte Strings (max. 128 Zeichen) beschränkt; beliebige Dictionaries oder verschachtelte verbotene Inhalte (`prompt`, `credentials`, `body`, etc.) werden rekursiv fail-closed abgewiesen (`ForbiddenContentError` bzw. `AttachmentIndexSchemaError`).
     - Verbotene Inhalte (`text`, `extracted_text`, `body`, `prompt`, `credentials`, `envelope_id`) und unbekannte Felder werden abgewiesen.
     - Read-only `reconcile` meldet `consistent`, `missing_review` und `drift` ohne Mutation von Index oder Disk.
     - Byte-Identität von `data/mail-desk/final-location-index.json` garantiert.
-  - Review-Verifikation: 20 fokussierte MD-Q2-Tests (inklusive umfassender adversarieller Testsuiten), vollständige Mail-Desk-Suite (489 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
+  - Review-Verifikation: 21 fokussierte MD-Q2-Tests (inklusive umfassender adversarieller Testsuiten), vollständige Mail-Desk-Suite (489 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
   - Grenzen: Noch keine Disposition oder physische Löschung (MD-Q3); Quarantäne-Binärdateien und Inventare bleiben unversioniert.
 - `FR-11 / MD-Q1` — Git-Hygiene und Vertragsabsicherung ist abgenommen:
   - `skills/mail-desk/references/cli-operations.md` dokumentiert einen getesteten

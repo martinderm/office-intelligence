@@ -918,7 +918,7 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
     # 18. Adversarial Drift on Every Canonical Field
     # --------------------------------------------------------------------------
     def test_adversarial_drift_of_all_canonical_fields(self) -> None:
-        """Every single one of the 16 canonical fields must trigger AttachmentIndexDriftError on mismatch."""
+        """Every single one of the 17 canonical fields must trigger AttachmentIndexDriftError on mismatch."""
         # Ensure lock is active
         self._write_lock_file(lease_id=self.lease_id, conv_id=self.conv_id)
         index_path = self.data_dir / INDEX_FILENAME
@@ -948,7 +948,7 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
         )
         self.assertEqual(res_unchanged["status"], "unchanged")
 
-        # Define 16 mutations for canonical fields
+        # Define 17 mutations for canonical fields
         drift_variations: dict[str, Any] = {
             "attachment_id": "f" * 64,
             "message_id": "<canon_drifted@example.org>",
@@ -964,6 +964,7 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
             "analysis_status": "in_progress",
             "analyzed_at": "2026-09-16T18:00:00Z",
             "contract_version": "v2",
+            "contract_hash": "c" * 64,
             "lifecycle_state": "promoted",
             "disposition_ref": "disp_ref_123",
         }
@@ -983,14 +984,15 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
             "analysis_status",
             "analyzed_at",
             "contract_version",
+            "contract_hash",
             "lifecycle_state",
             "disposition_ref",
         )
         self.assertEqual(set(drift_variations.keys()), set(canonical_fields))
 
         # 1. Verify end-to-end drift via record_quarantine_entry for schema-compatible field drifts
-        # e.g. account, folder, analyzed_at, contract_version, disposition_ref
-        for field in ("account", "folder", "analyzed_at", "contract_version", "disposition_ref"):
+        # e.g. account, folder, analyzed_at, contract_version, contract_hash, disposition_ref
+        for field in ("account", "folder", "analyzed_at", "contract_version", "contract_hash", "disposition_ref"):
             mutated_entry = dict(entry)
             mutated_entry[field] = drift_variations[field]
             with self.assertRaises(AttachmentIndexDriftError, msg=f"Field '{field}' failed to trigger drift"):
@@ -1002,7 +1004,7 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
                     conversation_id=self.conv_id,
                 )
 
-        # 2. Verify all 16 canonical fields fail-closed against existing index comparison
+        # 2. Verify all 17 canonical fields fail-closed against existing index comparison
         original_entry = dict(entry)
         for field, drifted_val in drift_variations.items():
             existing_mock = dict(original_entry)
@@ -1153,20 +1155,167 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
         self.assertEqual(val_m["mime_type"], "application/pdf")
         self.assertEqual(val_m["effective_mime_type"], "application/pdf")
 
-        # 4. contract_version vs contract_hash
-        bad_cv = dict(entry)
-        bad_cv["contract_version"] = "1"
-        bad_cv["contract_hash"] = "2"
-        with self.assertRaises(AttachmentIndexDriftError):
-            validate_quarantine_index_entry(bad_cv)
+    # --------------------------------------------------------------------------
+    # 21. Contract Version and Contract Hash Semantics
+    # --------------------------------------------------------------------------
+    def test_contract_version_and_contract_hash_semantics(self) -> None:
+        """contract_version (required bounded id) and contract_hash (optional 64-hex) are distinct and strictly validated."""
+        # Ensure lock is active for storage tests
+        self._write_lock_file(lease_id=self.lease_id, conv_id=self.conv_id)
+        index_path = self.data_dir / INDEX_FILENAME
 
-        # Matching contract version aliases succeed
-        good_cv = dict(entry)
-        good_cv["contract_version"] = "1"
-        good_cv["contract_hash"] = "1"
-        val_cv = validate_quarantine_index_entry(good_cv)
-        self.assertEqual(val_cv["contract_version"], "1")
-        self.assertEqual(val_cv["contract_hash"], "1")
+        entry = self._create_sample_quarantine_run(
+            "run_cv_ch_01", "<cv_ch_01@example.org>", "cv_ch.pdf", b"%PDF-1.4 contract version test"
+        )
+        att_id = entry["attachment_id"]
+
+        # 1. Version without hash: validated entry has contract_version and NO contract_hash.
+        # Specifically verify "1" is never emitted as contract_hash!
+        entry_no_hash = dict(entry)
+        entry_no_hash.pop("contract_hash", None)
+        entry_no_hash["contract_version"] = "1.0.0"
+        val_no_hash = validate_quarantine_index_entry(entry_no_hash)
+        self.assertEqual(val_no_hash["contract_version"], "1.0.0")
+        self.assertNotIn("contract_hash", val_no_hash)
+        self.assertNotEqual(val_no_hash.get("contract_hash"), "1")
+
+        # Record version-only entry to disk and verify storage hygiene
+        res_no_hash = record_quarantine_entry(
+            index_path,
+            payload=entry_no_hash,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res_no_hash["status"], "created")
+        self.assertNotIn("contract_hash", res_no_hash["item"])
+        disk_idx = load_quarantine_index(index_path)
+        disk_item = disk_idx["items"][att_id]
+        self.assertEqual(disk_item["contract_version"], "1.0.0")
+        self.assertNotIn("contract_hash", disk_item)
+        self.assertNotEqual(disk_item.get("contract_hash"), "1")
+
+        # 2. Version with valid hash: 64-character hexadecimal SHA-256
+        valid_hash = "a" * 64
+        entry_with_hash = dict(entry)
+        entry_with_hash["contract_version"] = "1.0.0"
+        entry_with_hash["contract_hash"] = valid_hash
+        val_with_hash = validate_quarantine_index_entry(entry_with_hash)
+        self.assertEqual(val_with_hash["contract_version"], "1.0.0")
+        self.assertEqual(val_with_hash["contract_hash"], valid_hash)
+
+        # 3. Invalid / non-hex / malformed contract_hash raises AttachmentIndexSchemaError
+        invalid_hashes = [
+            "1",                           # Not 64 hex characters (specifically tested!)
+            "2",
+            "not-a-hash",
+            "g" * 64,                      # Invalid hex character 'g'
+            "a" * 63,                      # Too short (63 chars)
+            "a" * 65,                      # Too long (65 chars)
+            "",                            # Empty string
+            "   ",                         # Whitespace only
+            12345,                         # Non-string integer
+            {"hash": "nested"},            # Non-string dict
+        ]
+        for bad_hash in invalid_hashes:
+            bad_entry = dict(entry)
+            bad_entry["contract_hash"] = bad_hash
+            with self.assertRaises(
+                AttachmentIndexSchemaError,
+                msg=f"Expected AttachmentIndexSchemaError for invalid contract_hash: {bad_hash!r}",
+            ):
+                validate_quarantine_index_entry(bad_entry)
+
+        # 4. Missing or invalid contract_version raises AttachmentIndexSchemaError
+        invalid_versions = [
+            None,
+            "",
+            "   ",
+            "has spaces in version",
+            "invalid#version!",
+            "x" * 65,                      # Max length is 64 chars
+        ]
+        for bad_ver in invalid_versions:
+            bad_v_entry = dict(entry)
+            bad_v_entry["contract_version"] = bad_ver
+            with self.assertRaises(
+                AttachmentIndexSchemaError,
+                msg=f"Expected AttachmentIndexSchemaError for invalid contract_version: {bad_ver!r}",
+            ):
+                validate_quarantine_index_entry(bad_v_entry)
+
+        # 5. Hash drift with same version triggers AttachmentIndexDriftError
+        # Existing entry on disk currently has contract_version='1.0.0' and NO contract_hash
+        # Mutating with contract_hash added triggers drift
+        entry_drift_add_hash = dict(entry_no_hash)
+        entry_drift_add_hash["contract_hash"] = valid_hash
+        with self.assertRaises(
+            AttachmentIndexDriftError,
+            msg="Adding contract_hash to entry without hash must trigger drift",
+        ):
+            record_quarantine_entry(
+                index_path,
+                payload=entry_drift_add_hash,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
+
+        # Now test drift between two different valid hashes on a fresh entry
+        entry_hash_a = self._create_sample_quarantine_run(
+            "run_cv_ch_02", "<cv_ch_02@example.org>", "cv_ch_2.pdf", b"%PDF-1.4 second test"
+        )
+        entry_hash_a["contract_version"] = "v1"
+        entry_hash_a["contract_hash"] = "a" * 64
+        res_a = record_quarantine_entry(
+            index_path,
+            payload=entry_hash_a,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res_a["status"], "created")
+        self.assertEqual(res_a["item"]["contract_hash"], "a" * 64)
+
+        # Idempotent repeat with identical contract_version and contract_hash
+        res_a_repeat = record_quarantine_entry(
+            index_path,
+            payload=entry_hash_a,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res_a_repeat["status"], "unchanged")
+
+        # Mutate hash to different valid 64-hex SHA-256 with SAME contract_version -> Drift!
+        entry_hash_b = dict(entry_hash_a)
+        entry_hash_b["contract_hash"] = "b" * 64
+        with self.assertRaises(
+            AttachmentIndexDriftError,
+            msg="Different contract_hash with same version must trigger drift",
+        ):
+            record_quarantine_entry(
+                index_path,
+                payload=entry_hash_b,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
+
+        # Remove contract_hash from entry that has a contract_hash -> Drift!
+        entry_hash_removed = dict(entry_hash_a)
+        entry_hash_removed.pop("contract_hash")
+        with self.assertRaises(
+            AttachmentIndexDriftError,
+            msg="Removing contract_hash from entry with hash must trigger drift",
+        ):
+            record_quarantine_entry(
+                index_path,
+                payload=entry_hash_removed,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
 
 
 if __name__ == "__main__":
