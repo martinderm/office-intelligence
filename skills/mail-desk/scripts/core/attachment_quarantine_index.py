@@ -1,0 +1,739 @@
+"""Deterministic script-based versioned attachment quarantine index (MD-Q2).
+
+Provides Schema 1 storage and verification for `data/mail-desk/attachment-quarantine-index.json`.
+Strictly enforces workspace lock ownership, atomic writes, deterministic attachment_id derivation,
+renewed physical inventory verification, symlink/reparse point safety, fail-closed drift detection,
+and read-only reconciliation without mutation.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path, PurePath, PurePosixPath
+import re
+import sys
+import tempfile
+import time
+from typing import Any
+
+from core.common import normalize_message_id, resolve_data_dir, utc_now_iso
+from core.attachment_policy import sanitize_attachment_filename
+from core.attachment_fetch import (
+    INVENTORY_FILENAME,
+    SymlinkEscapeError,
+    QuarantineInventoryError,
+    check_quarantine_path_security,
+    is_valid_run_id,
+    validate_attachment_filename,
+    verify_quarantine_attachment_artifact,
+    verify_workspace_lock,
+    _load_quarantine_inventory,
+    _validate_inventory_schema,
+)
+
+
+# ==============================================================================
+# Exceptions
+# ==============================================================================
+
+class QuarantineIndexError(ValueError):
+    """Base exception for all quarantine index errors."""
+
+
+class WorkspaceLockRequiredError(QuarantineIndexError):
+    """Raised when mutation is attempted without a valid, owned workspace lock."""
+
+
+class AttachmentIndexDriftError(QuarantineIndexError):
+    """Raised when an attachment drifts in identity, hash, size, path, or inventory."""
+
+
+class AttachmentIndexSchemaError(QuarantineIndexError):
+    """Raised when an index entry violates Schema 1 or contains unknown fields/status values."""
+
+
+class ForbiddenContentError(QuarantineIndexError):
+    """Raised when forbidden content (mail body, extracted text, prompts, credentials, envelope-id) is present."""
+
+
+class PhysicalVerificationError(QuarantineIndexError):
+    """Raised when physical file or quarantine inventory verification fails."""
+
+
+# ==============================================================================
+# Constants & Enums
+# ==============================================================================
+
+INDEX_FILENAME = "attachment-quarantine-index.json"
+SCHEMA_VERSION = 1
+
+LIFECYCLE_STATE_QUARANTINED = "quarantined"
+ANALYSIS_STATUS_COMPLETED = "completed"
+
+ALLOWED_LIFECYCLE_STATES = {LIFECYCLE_STATE_QUARANTINED}
+ALLOWED_ANALYSIS_STATUSES = {ANALYSIS_STATUS_COMPLETED}
+
+PART_LOCATOR_REGEX = re.compile(r"^\d+(?:\.\d+)*$")
+MIME_TYPE_REGEX = re.compile(r"^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$")
+SHA256_HEX_REGEX = re.compile(r"^[0-9a-fA-F]{64}$")
+RFC3339_REGEX = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
+)
+
+ALLOWED_ENTRY_FIELDS = {
+    "attachment_id",
+    "message_id",
+    "account",
+    "folder",
+    "original_folder",
+    "part_locator",
+    "clean_filename",
+    "filename",
+    "mime_type",
+    "effective_mime_type",
+    "sha256",
+    "size_bytes",
+    "run_id",
+    "quarantine_path",
+    "analysis_status",
+    "analyzed_at",
+    "contract_version",
+    "contract_hash",
+    "lifecycle_state",
+    "disposition_ref",
+}
+
+FORBIDDEN_ENTRY_FIELDS = {
+    "text",
+    "extracted_text",
+    "content",
+    "body",
+    "prompt",
+    "llm_prompt",
+    "response",
+    "model_response",
+    "credentials",
+    "password",
+    "token",
+    "tokens",
+    "api_key",
+    "envelope_id",
+    "himalaya_id",
+}
+
+
+# ==============================================================================
+# Deterministic Identity & Path Resolution
+# ==============================================================================
+
+def compute_attachment_id(
+    message_id: str,
+    part_locator: str,
+    inventory_sha256: str,
+) -> str:
+    """Compute deterministic 64-char SHA-256 ID binding normalized mid, locator, and inventory hash."""
+    norm_mid = normalize_message_id(message_id)
+    norm_loc = str(part_locator).strip()
+    norm_sha = str(inventory_sha256).strip().lower()
+
+    if not norm_mid:
+        raise ValueError("message_id is required to compute attachment_id")
+    if not norm_loc:
+        raise ValueError("part_locator is required to compute attachment_id")
+    if not norm_sha:
+        raise ValueError("inventory_sha256 is required to compute attachment_id")
+
+    canonical_dict = {
+        "inventory_sha256": norm_sha,
+        "message_id": norm_mid,
+        "part_locator": norm_loc,
+    }
+    canonical_json = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def resolve_quarantine_index_path(
+    index_path: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    workspace_root: Path | str | None = None,
+) -> Path:
+    """Resolve absolute path to attachment-quarantine-index.json."""
+    if index_path is not None:
+        return Path(index_path).resolve()
+    if data_dir is not None:
+        return (Path(data_dir) / INDEX_FILENAME).resolve()
+    if workspace_root is not None:
+        return (Path(workspace_root) / "data" / "mail-desk" / INDEX_FILENAME).resolve()
+    return (resolve_data_dir() / INDEX_FILENAME).resolve()
+
+
+# ==============================================================================
+# Data Access Layer: Load & Atomic Save
+# ==============================================================================
+
+def load_quarantine_index(index_path: Path) -> dict[str, Any]:
+    """Load attachment quarantine index or initialize Schema 1 root."""
+    if not index_path.exists():
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "updated_at": None,
+            "items": {},
+        }
+    try:
+        raw_text = index_path.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+    except Exception as err:
+        raise QuarantineIndexError(f"Failed to read or parse quarantine index '{index_path}': {err}") from err
+
+    if not isinstance(data, dict):
+        raise QuarantineIndexError(f"Corrupted quarantine index '{index_path}': root must be a JSON object")
+
+    schema_ver = data.get("schema_version")
+    if schema_ver != SCHEMA_VERSION:
+        raise QuarantineIndexError(
+            f"Unsupported quarantine index schema_version: {schema_ver!r} (expected {SCHEMA_VERSION})"
+        )
+
+    if not isinstance(data.get("items"), dict):
+        data["items"] = {}
+
+    return data
+
+
+def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None:
+    """Save quarantine index atomically via temporary file replacement."""
+    if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION or not isinstance(data.get("items"), dict):
+        raise QuarantineIndexError("Cannot save invalid or non-Schema 1 quarantine index data")
+
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        newline="\n",
+        dir=index_path.parent,
+        prefix=index_path.name + ".",
+        suffix=".tmp",
+        delete=False,
+    ) as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+        temp_path = Path(f.name)
+
+    temp_path.replace(index_path)
+
+
+# ==============================================================================
+# Entry Validation & Canonical Binding
+# ==============================================================================
+
+def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Strictly validate and normalize a candidate quarantine index entry fail-closed against Schema 1.
+
+    Rejects:
+    - Non-dictionary entries
+    - Forbidden content keys (text, body, prompt, credentials, envelope_id, etc.)
+    - Unknown/unsupported keys outside ALLOWED_ENTRY_FIELDS
+    - Absolute quarantine paths or directory traversal outside boundaries
+    - Invalid analysis_status (must be 'completed')
+    - Invalid lifecycle_state (must be 'quarantined')
+    - Missing required fields
+    - attachment_id drift if provided
+    """
+    if not isinstance(entry, dict):
+        raise AttachmentIndexSchemaError("Index entry must be a dictionary")
+
+    # 1. Reject forbidden content fields
+    forbidden_present = set(entry.keys()) & FORBIDDEN_ENTRY_FIELDS
+    if forbidden_present:
+        raise ForbiddenContentError(
+            f"Forbidden content keys detected in index entry: {sorted(forbidden_present)}"
+        )
+
+    # 2. Reject unknown fields
+    unknown_fields = set(entry.keys()) - ALLOWED_ENTRY_FIELDS
+    if unknown_fields:
+        raise AttachmentIndexSchemaError(
+            f"Unknown fields in quarantine index entry: {sorted(unknown_fields)}"
+        )
+
+    # 3. Message ID
+    raw_mid = entry.get("message_id")
+    if not raw_mid or not str(raw_mid).strip():
+        raise AttachmentIndexSchemaError("Missing required 'message_id'")
+    norm_mid = normalize_message_id(str(raw_mid))
+
+    # 4. Account
+    account = str(entry.get("account") or "").strip()
+    if not account:
+        raise AttachmentIndexSchemaError("Missing required 'account'")
+
+    # 5. Folder (original folder)
+    folder = str(entry.get("folder") or entry.get("original_folder") or "").strip()
+    if not folder:
+        raise AttachmentIndexSchemaError("Missing required 'folder'")
+
+    # 6. Part locator
+    raw_loc = str(entry.get("part_locator") or "").strip()
+    if not raw_loc or not PART_LOCATOR_REGEX.fullmatch(raw_loc):
+        raise AttachmentIndexSchemaError(f"Missing or invalid 'part_locator': {raw_loc!r}")
+
+    # 7. Clean filename
+    raw_fn = str(entry.get("clean_filename") or entry.get("filename") or "").strip()
+    if not raw_fn:
+        raise AttachmentIndexSchemaError("Missing required 'clean_filename'")
+    clean_fn = validate_attachment_filename(raw_fn)
+
+    # 8. Normalized MIME type
+    raw_mime = str(entry.get("mime_type") or entry.get("effective_mime_type") or "").strip()
+    if not raw_mime or not MIME_TYPE_REGEX.fullmatch(raw_mime):
+        raise AttachmentIndexSchemaError(f"Missing or invalid 'mime_type': {raw_mime!r}")
+    norm_mime = raw_mime.lower()
+
+    # 9. SHA-256
+    raw_sha = str(entry.get("sha256") or "").strip()
+    if not raw_sha or not SHA256_HEX_REGEX.fullmatch(raw_sha):
+        raise AttachmentIndexSchemaError(f"Missing or invalid 'sha256': {raw_sha!r}")
+    norm_sha = raw_sha.lower()
+
+    # 10. Size in bytes
+    size_bytes = entry.get("size_bytes")
+    if size_bytes is None or isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes <= 0:
+        raise AttachmentIndexSchemaError(f"'size_bytes' must be a positive integer, got: {size_bytes!r}")
+
+    # 11. Run ID
+    run_id = str(entry.get("run_id") or "").strip()
+    if not run_id or not is_valid_run_id(run_id):
+        raise AttachmentIndexSchemaError(f"Missing or invalid 'run_id': {run_id!r}")
+
+    # 12. Quarantine path: strictly workspace-relative
+    q_path = str(entry.get("quarantine_path") or "").strip()
+    if not q_path:
+        raise AttachmentIndexSchemaError("Missing required 'quarantine_path'")
+
+    # Fail closed on absolute paths
+    if os.path.isabs(q_path) or PurePath(q_path).is_absolute() or q_path.startswith("/") or q_path.startswith("\\") or (len(q_path) > 1 and q_path[1] == ":"):
+        raise QuarantineIndexError(f"quarantine_path must be workspace-relative, never absolute: {q_path!r}")
+
+    # Normalize posix relative path and check containment
+    posix_path = PurePosixPath(q_path)
+    if any(part == ".." for part in posix_path.parts):
+        raise QuarantineIndexError(f"quarantine_path contains directory traversal: {q_path!r}")
+
+    expected_prefix = PurePosixPath(f"data/mail-desk/attachments/{run_id}")
+    try:
+        posix_path.relative_to(expected_prefix)
+    except ValueError:
+        raise QuarantineIndexError(
+            f"quarantine_path '{q_path}' must reside under expected run prefix '{expected_prefix}'"
+        )
+
+    # 13. Analysis status
+    analysis_st = str(entry.get("analysis_status") or "").strip()
+    if analysis_st not in ALLOWED_ANALYSIS_STATUSES:
+        raise AttachmentIndexSchemaError(
+            f"analysis_status must be 'completed', got: {analysis_st!r}"
+        )
+
+    # 14. Analyzed at (RFC-3339)
+    analyzed_at = str(entry.get("analyzed_at") or "").strip()
+    if not analyzed_at or not RFC3339_REGEX.fullmatch(analyzed_at):
+        raise AttachmentIndexSchemaError(
+            f"analyzed_at must be a valid RFC-3339 timestamp with timezone offset: {analyzed_at!r}"
+        )
+
+    # 15. Contract version / hash
+    contract_ver = str(entry.get("contract_version") or entry.get("contract_hash") or "").strip()
+    if not contract_ver:
+        raise AttachmentIndexSchemaError("Missing required 'contract_version'")
+
+    # 16. Lifecycle state
+    lifecycle_st = str(entry.get("lifecycle_state") or "").strip()
+    if lifecycle_st not in ALLOWED_LIFECYCLE_STATES:
+        raise AttachmentIndexSchemaError(
+            f"lifecycle_state must be 'quarantined', got: {lifecycle_st!r}"
+        )
+
+    # 17. Optional disposition ref
+    disposition_ref = entry.get("disposition_ref")
+    if disposition_ref is not None and not isinstance(disposition_ref, (str, dict)):
+        raise AttachmentIndexSchemaError("'disposition_ref' must be null, string, or object")
+
+    # 18. Deterministic attachment_id derivation & drift verification
+    computed_id = compute_attachment_id(norm_mid, raw_loc, norm_sha)
+    provided_id = entry.get("attachment_id")
+    if provided_id is not None:
+        norm_provided = str(provided_id).strip().lower()
+        if norm_provided != computed_id:
+            raise AttachmentIndexDriftError(
+                f"attachment_id drift: provided '{provided_id}' does not match computed deterministic ID '{computed_id}'"
+            )
+
+    return {
+        "attachment_id": computed_id,
+        "message_id": norm_mid,
+        "account": account,
+        "folder": folder,
+        "original_folder": folder,
+        "part_locator": raw_loc,
+        "clean_filename": clean_fn,
+        "filename": clean_fn,
+        "mime_type": norm_mime,
+        "effective_mime_type": norm_mime,
+        "sha256": norm_sha,
+        "size_bytes": size_bytes,
+        "run_id": run_id,
+        "quarantine_path": posix_path.as_posix(),
+        "analysis_status": ANALYSIS_STATUS_COMPLETED,
+        "analyzed_at": analyzed_at,
+        "contract_version": contract_ver,
+        "lifecycle_state": LIFECYCLE_STATE_QUARANTINED,
+        "disposition_ref": disposition_ref,
+    }
+
+
+# ==============================================================================
+# Writer Operation: Lock, Verification, Idempotency & Replace
+# ==============================================================================
+
+def record_quarantine_entry(
+    index_path: Path | str | None = None,
+    *,
+    payload: dict[str, Any],
+    workspace_root: Path | str | None = None,
+    data_dir: Path | str | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+    allow_legacy: bool = False,
+    verify_physical: bool = True,
+) -> dict[str, Any]:
+    """Record an analyzed attachment in the quarantine index under verified workspace lock.
+
+    Guarantees:
+    - Enforces verified workspace lock ownership before mutation.
+    - Strictly validates entry fields against Schema 1, rejecting forbidden/unknown keys.
+    - Verifies physical file existence, size, SHA-256, and .quarantine-inventory.json integrity.
+    - Inspects symlink and Windows reparse point safety fail-closed.
+    - Pure idempotent repetition for identical entries (no-op).
+    - Fail-closed drift abort if existing entry or physical state differs.
+    - Atomically replaces attachment-quarantine-index.json.
+    """
+    ws = Path(workspace_root or Path.cwd()).resolve()
+    idx_path = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
+
+    # 1. Lock Verification
+    try:
+        verify_workspace_lock(
+            workspace_root=ws,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            allow_legacy=allow_legacy,
+            data_dir=idx_path.parent,
+        )
+    except Exception as err:
+        raise WorkspaceLockRequiredError(
+            f"Quarantine index mutation requires an active, owned workspace lock: {err}"
+        ) from err
+
+    # 2. Schema 1 entry validation & normalization
+    canonical_entry = validate_quarantine_index_entry(payload)
+    att_id = canonical_entry["attachment_id"]
+    run_id = canonical_entry["run_id"]
+    rel_path = canonical_entry["quarantine_path"]
+    expected_sha = canonical_entry["sha256"]
+    expected_size = canonical_entry["size_bytes"]
+    clean_fn = canonical_entry["clean_filename"]
+    mid = canonical_entry["message_id"]
+
+    # 3. Renewed Physical Verification against disk and .quarantine-inventory.json
+    if verify_physical:
+        target_file = ws / PurePosixPath(rel_path)
+        if not target_file.is_file():
+            raise FileNotFoundError(f"Physical quarantine file missing at '{target_file}'")
+
+        attachments_root = ws / "data" / "mail-desk" / "attachments"
+        try:
+            check_quarantine_path_security(target_file, attachments_root)
+        except SymlinkEscapeError as err:
+            raise PhysicalVerificationError(f"Symlink or reparse point security violation: {err}") from err
+
+        if target_file.is_symlink() or os.path.islink(target_file):
+            raise PhysicalVerificationError(f"Symlink detected at quarantine file: {target_file}")
+
+        if os.name == "nt" and target_file.exists():
+            try:
+                stat_res = os.lstat(target_file)
+                if getattr(stat_res, "st_file_attributes", 0) & 0x400:
+                    raise PhysicalVerificationError(f"Reparse point detected at quarantine file: {target_file}")
+            except OSError as err:
+                raise PhysicalVerificationError(f"Failed to inspect quarantine file attributes: {err}") from err
+
+        # Verify disk bytes & SHA-256
+        actual_bytes = target_file.read_bytes()
+        actual_size = len(actual_bytes)
+        actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
+
+        if actual_size != expected_size:
+            raise AttachmentIndexDriftError(
+                f"Quarantine file size drift: disk file has {actual_size} bytes, entry declares {expected_size}"
+            )
+        if actual_sha != expected_sha:
+            raise AttachmentIndexDriftError(
+                f"Quarantine file hash drift: disk file has '{actual_sha}', entry declares '{expected_sha}'"
+            )
+
+        # Verify .quarantine-inventory.json via canonical validator
+        verify_quarantine_attachment_artifact(
+            run_id=run_id,
+            relative_path=rel_path,
+            expected_sha256=expected_sha,
+            expected_size_bytes=expected_size,
+            message_id=mid,
+            workspace_root=ws,
+            clean_filename=clean_fn,
+        )
+
+    # 4. Load current index
+    index_data = load_quarantine_index(idx_path)
+    items = index_data.setdefault("items", {})
+
+    # 5. Idempotency & Drift Detection
+    existing = items.get(att_id)
+    if existing is not None:
+        # Check invariant fields
+        for field in ("sha256", "size_bytes", "quarantine_path", "run_id", "message_id", "part_locator"):
+            ex_val = str(existing.get(field) or "").strip().lower()
+            new_val = str(canonical_entry.get(field) or "").strip().lower()
+            if ex_val != new_val:
+                raise AttachmentIndexDriftError(
+                    f"Quarantine index drift on existing attachment_id '{att_id}': field '{field}' differs ('{ex_val}' != '{new_val}')"
+                )
+
+        # Idempotent repetition: identical entry exists -> no-op
+        return {
+            "status": "unchanged",
+            "attachment_id": att_id,
+            "item": existing,
+        }
+
+    # 6. Insert new entry & save atomically
+    items[att_id] = canonical_entry
+    index_data["updated_at"] = utc_now_iso()
+    save_quarantine_index_atomic(idx_path, index_data)
+
+    return {
+        "status": "created",
+        "attachment_id": att_id,
+        "item": canonical_entry,
+    }
+
+
+# ==============================================================================
+# Read-Only Reconciliation
+# ==============================================================================
+
+def reconcile_quarantine_index(
+    index_path: Path | str | None = None,
+    *,
+    workspace_root: Path | str | None = None,
+    data_dir: Path | str | None = None,
+) -> dict[str, Any]:
+    """Perform read-only reconciliation of the quarantine index against physical disk and inventory.
+
+    Guarantees:
+    - Strictly read-only: mutates neither the index nor files on disk.
+    - Classifies each entry as 'consistent', 'missing_review', or 'drift'.
+    - Never silently removes or overwrites records.
+    """
+    ws = Path(workspace_root or Path.cwd()).resolve()
+    idx_path = resolve_quarantine_index_path(index_path, data_dir=data_dir, workspace_root=ws)
+    index_data = load_quarantine_index(idx_path)
+    items = index_data.get("items", {})
+
+    results: list[dict[str, Any]] = []
+    consistent_count = 0
+    missing_count = 0
+    drift_count = 0
+
+    attachments_root = ws / "data" / "mail-desk" / "attachments"
+
+    for att_id, entry in items.items():
+        rel_path = entry.get("quarantine_path", "")
+        run_id = entry.get("run_id", "")
+        exp_sha = str(entry.get("sha256") or "").strip().lower()
+        exp_size = entry.get("size_bytes")
+        mid = entry.get("message_id", "")
+        clean_fn = entry.get("clean_filename") or entry.get("filename") or ""
+
+        target_file = ws / PurePosixPath(rel_path)
+
+        if not target_file.exists():
+            missing_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "missing_review",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Physical file does not exist at '{target_file}'",
+            })
+            continue
+
+        if not target_file.is_file() or target_file.is_symlink() or os.path.islink(target_file):
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": "Target is not a regular file or is a symlink",
+            })
+            continue
+
+        if os.name == "nt":
+            try:
+                stat_res = os.lstat(target_file)
+                if getattr(stat_res, "st_file_attributes", 0) & 0x400:
+                    drift_count += 1
+                    results.append({
+                        "attachment_id": att_id,
+                        "status": "drift",
+                        "message_id": mid,
+                        "filename": clean_fn,
+                        "run_id": run_id,
+                        "quarantine_path": rel_path,
+                        "details": "Windows reparse point detected",
+                    })
+                    continue
+            except OSError:
+                pass
+
+        try:
+            actual_bytes = target_file.read_bytes()
+            actual_size = len(actual_bytes)
+            actual_sha = hashlib.sha256(actual_bytes).hexdigest().lower()
+
+            if actual_size != exp_size or actual_sha != exp_sha:
+                drift_count += 1
+                results.append({
+                    "attachment_id": att_id,
+                    "status": "drift",
+                    "message_id": mid,
+                    "filename": clean_fn,
+                    "run_id": run_id,
+                    "quarantine_path": rel_path,
+                    "details": f"Hash or size drift: disk ({actual_sha}, {actual_size}) != index ({exp_sha}, {exp_size})",
+                })
+                continue
+
+            # Check .quarantine-inventory.json
+            verify_quarantine_attachment_artifact(
+                run_id=run_id,
+                relative_path=rel_path,
+                expected_sha256=exp_sha,
+                expected_size_bytes=exp_size,
+                message_id=mid,
+                workspace_root=ws,
+                clean_filename=clean_fn,
+            )
+
+            consistent_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "consistent",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": "Physical file and inventory match quarantine index",
+            })
+        except Exception as err:
+            drift_count += 1
+            results.append({
+                "attachment_id": att_id,
+                "status": "drift",
+                "message_id": mid,
+                "filename": clean_fn,
+                "run_id": run_id,
+                "quarantine_path": rel_path,
+                "details": f"Physical or inventory verification error: {err}",
+            })
+
+    overall_status = "consistent" if (missing_count == 0 and drift_count == 0) else ("drift" if drift_count > 0 else "missing_review")
+
+    return {
+        "status": overall_status,
+        "total_entries": len(items),
+        "consistent_count": consistent_count,
+        "missing_review_count": missing_count,
+        "drift_count": drift_count,
+        "results": results,
+    }
+
+
+# ==============================================================================
+# Read-Only Lookups & Statistics
+# ==============================================================================
+
+def lookup_quarantine_entry(
+    index_path: Path,
+    attachment_id: str | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any] | None:
+    """Lookup a quarantine index entry by deterministic attachment_id or normalized message_id."""
+    data = load_quarantine_index(index_path)
+    items = data.get("items", {})
+
+    if attachment_id is not None:
+        norm_id = str(attachment_id).strip().lower()
+        if norm_id in items:
+            return items[norm_id]
+
+    if message_id is not None:
+        norm_mid = normalize_message_id(message_id)
+        for entry in items.values():
+            if entry.get("message_id") == norm_mid:
+                return entry
+
+    return None
+
+
+def get_quarantine_index_stats(index_path: Path) -> dict[str, Any]:
+    """Calculate summary statistics for attachment-quarantine-index.json."""
+    data = load_quarantine_index(index_path)
+    items = data.get("items", {})
+
+    accounts: dict[str, int] = {}
+    mime_types: dict[str, int] = {}
+    lifecycle_states: dict[str, int] = {}
+    total_bytes = 0
+
+    for item in items.values():
+        acc = item.get("account", "unknown")
+        accounts[acc] = accounts.get(acc, 0) + 1
+
+        mime = item.get("mime_type", "unknown")
+        mime_types[mime] = mime_types.get(mime, 0) + 1
+
+        state = item.get("lifecycle_state", "unknown")
+        lifecycle_states[state] = lifecycle_states.get(state, 0) + 1
+
+        total_bytes += int(item.get("size_bytes", 0))
+
+    file_size_bytes = index_path.stat().st_size if index_path.exists() else 0
+
+    return {
+        "index_file": str(index_path),
+        "file_size_bytes": file_size_bytes,
+        "total_indexed_items": len(items),
+        "total_quarantine_bytes": total_bytes,
+        "schema_version": data.get("schema_version", SCHEMA_VERSION),
+        "updated_at": data.get("updated_at"),
+        "accounts": accounts,
+        "mime_types": mime_types,
+        "lifecycle_states": lifecycle_states,
+    }

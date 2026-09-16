@@ -55,6 +55,27 @@ from .sent_indexer import (
 )
 from .progress import BatchProgressTracker
 from .envelope import build_error, build_success, emit_json
+from .attachment_quarantine_index import (
+    INDEX_FILENAME,
+    SCHEMA_VERSION,
+    LIFECYCLE_STATE_QUARANTINED,
+    ANALYSIS_STATUS_COMPLETED,
+    QuarantineIndexError,
+    WorkspaceLockRequiredError,
+    AttachmentIndexDriftError,
+    AttachmentIndexSchemaError,
+    ForbiddenContentError,
+    PhysicalVerificationError,
+    compute_attachment_id,
+    resolve_quarantine_index_path,
+    load_quarantine_index,
+    save_quarantine_index_atomic,
+    validate_quarantine_index_entry,
+    record_quarantine_entry,
+    reconcile_quarantine_index,
+    lookup_quarantine_entry,
+    get_quarantine_index_stats,
+)
 
 __all__ = [
     "atomic_rewrite_jsonl",
@@ -97,4 +118,23 @@ __all__ = [
     "build_success",
     "build_error",
     "emit_json",
+    "INDEX_FILENAME",
+    "SCHEMA_VERSION",
+    "LIFECYCLE_STATE_QUARANTINED",
+    "ANALYSIS_STATUS_COMPLETED",
+    "QuarantineIndexError",
+    "WorkspaceLockRequiredError",
+    "AttachmentIndexDriftError",
+    "AttachmentIndexSchemaError",
+    "ForbiddenContentError",
+    "PhysicalVerificationError",
+    "compute_attachment_id",
+    "resolve_quarantine_index_path",
+    "load_quarantine_index",
+    "save_quarantine_index_atomic",
+    "validate_quarantine_index_entry",
+    "record_quarantine_entry",
+    "reconcile_quarantine_index",
+    "lookup_quarantine_entry",
+    "get_quarantine_index_stats",
 ]
