@@ -1,0 +1,127 @@
+# Office Intelligence — Paket System Map: Nomen (Objects)
+
+> **Typ**: ICM Form 6 (`system-map`), Dimension: Nomen  
+> **Ziel**: Vollständige Dokumentation aller Datenstrukturen, Schemas, Indizes und Metadaten-Objekte, die bundle-weit oder über Desk-Grenzen hinweg verwendet werden.  
+> **Gültig für**: Repository Root & konsumierende Workspaces (relativ)
+
+---
+
+## 1. Das Datenzonen-Modell (Target Workspace Contract)
+
+Das Skill-Bundle mutiert keine eigenen Daten im Bundle-Verzeichnis, sondern erzeugt, pflegt und liest Datenstrukturen in den vier kanonischen Zonen eines konsumierenden Agent-Workspaces:
+
+```
+<workspace-root>/
+├── memory/
+│   ├── references/          ◄── Dauerhafte Referenz- und Katalogdaten (SSOT)
+│   │   ├── projects/        (projects.json, Workpackages, Projekt-Notizen)
+│   │   └── topics/          (topics.json, Subtopics, Themen-Notizen)
+│   ├── evidence/            ◄── Auditsichere, unveränderliche Fach-Nachweise
+│   │   ├── meetings/        (Protokolle, Aufzeichnungsmetadaten)
+│   │   ├── events/          (Konferenzprogramme, Vortragsmitschriften)
+│   │   └── mail/            (Verifizierte Mail-Dossiers & Intake-Logs)
+│   └── cloud/               ◄── Lokale Spiegel und Konvertierungs-Derivate
+│       ├── projects/        (Cloud-Atlas Projekt-Mirrors & Derivate)
+│       └── topics/          (Cloud-Atlas Topic-Mirrors & Derivate)
+└── data/                    ◄── Flüchtige / maschinengenerierte Laufzeit- & Betriebsdaten
+    └── mail-desk/           (Quarantäne-Dateien, Quarantäne-Indizes)
+```
+
+---
+
+## 2. Übergreifende Kontroll- & Steuerungs-Objekte
+
+### 2.1 Workspace Lock Lease (`workspace-lock`)
+Vor jeder mutierenden Dateioperation in einem Ziel-Workspace muss eine exklusive Lock-Lease gehalten werden.
+
+* **Speicherort:** `<workspace-root>/.agents/session.lock`
+* **Guard-Modul:** `workspace-lock/scripts/workspace_lock_guard.py` (SSOT im Nachbar-Skill)
+* **Felder der Lease:**
+  * `conversation_id`: String (aktive Harness-Sitzung)
+  * `harness`: String (z. B. `antigravity`, `daedalus`, `claude-code`)
+  * `acquired_at`: ISO 8601 Timestamp
+  * `expires_at`: ISO 8601 Timestamp
+  * `intent`: Kurzbeschreibung der geplanten Mutation
+* **Invariant:** Schreibende Skripte prüfen via `require_workspace_lock()`. Ohne Lease bricht die Ausführung sofort mit `WorkspaceLockRequiredError` ab.
+
+### 2.2 Structured CLI Envelope
+Alle Python-Skripte des Bundles emittieren maschinenlesbare JSON-Envelopes nach dem Standard des Shared Skills Authoring Guides:
+
+```json
+{
+  "status": "ok",
+  "data": {
+    "summary": "Operation erfolgreich abgeschlossen",
+    "details": {}
+  },
+  "error": null,
+  "stopcode": null
+}
+```
+
+Bei Fehlern:
+```json
+{
+  "status": "error",
+  "data": null,
+  "error": "Fehlermeldung im Klartext",
+  "stopcode": "WORKSPACE_LOCK_REQUIRED",
+  "details": {
+    "reason": "Keine gültige Lease für aktuellen Workspace gefunden",
+    "target_workspace": "rel/path/to/ws"
+  }
+}
+```
+
+---
+
+## 3. Zentrale Wissens- & Katalog-Objekte
+
+### 3.1 Projektkatalog (`project-catalog-entry`)
+Zentrale Registrierung aller aktiven und archivierten Projekte.
+
+* **Dateipfad:** `memory/references/projects/projects.json`
+* **Validierungsskript:** `skills/project-catalog-entry/scripts/validate_projects.py`
+* **Migrationsskript:** `skills/project-catalog-entry/scripts/migrate_project_wps.py`
+* **Schema-Version:** `Schema v3`
+* **Schema-Kern (Projekt-Ebene):**
+  * Pflichtfelder: `id` (Lowercase Slug), `title`, `mailbox_folder` (Pfad im Mailbox-Account).
+  * Root-Felder: `kuerzel`, `project_website`, `project_reference`, `laufzeit`, `gesamtbudget`, `institution_budget`, `boku_budget`, `reference_md`, `description`, `updated_at`.
+* **Workpackages (`workpackages`):**
+  * Pflichtfelder: `id` (Slug, z. B. `wp1-management`), `title`, `status` (Enum: `active`, `completed`, `planned`, `paused`).
+  * Felder: `number` (positive Zahl), `lead`, `boku_role`, `aliases`, `keywords`, `contacts`, `tasks`, `deliverables`.
+  * `tasks`: `id`, `title`, `lead`, `keywords`.
+  * `deliverables`: `id`, `title`, `lead`, `type`, `due_month`.
+* **Milestones (`milestones`):**
+  * Pflichtfelder: `id`, `title`.
+  * Felder: `lead`, `due_month`, `related_wps` (müssen existierende Workpackage-IDs referenzieren), `prerequisites`.
+
+
+### 3.2 Themenkatalog (`topic-catalog-entry`)
+Hierarchisches Wissensregister über Themengebiete, Technologien und Domänen.
+
+* **Dateipfad:** `memory/references/topics/topics.json`
+* **Schema-Kern:**
+  * `topics`: Array von Topic-Objekten:
+    * `id`: Eindeutiger Identifier
+    * `name`: Fachbegriff
+    * `aliases`: Array von alternativen Bezeichnungen / Schreibweisen
+    * `subtopics`: Hierarchische Unterthemen
+    * `tags`: Semantische Schlagworte zur Klassifikation
+
+---
+
+## 4. Sub-Skill-spezifische Objektwelten (Verweise)
+
+Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezialisierte L2-Objektkarten:
+
+### 4.1 Mail-Desk Objekte → [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md)
+* **`attachment-quarantine-index.json`**: Schema 1, 16 Pflichtfelder, deterministische 64-Hex-`attachment_id`, Drift-Erkennung (`AttachmentIndexDriftError`).
+* **`.quarantine-inventory.json`**: Physisches SHA-256-Abbild der extrahierten Binärdateien auf Disk.
+* **`final-location-index.json`**: Mapping von normalisierter `message_id` auf die Ablageposition.
+* **Dossier- & Envelope-Modelle**: Strukturierte Fallakten und Handlungs-Empfehlungen.
+
+### 4.2 Cloud-Atlas Objekte → [`../../skills/cloud-atlas/docs/system-map/objects.md`](../../skills/cloud-atlas/docs/system-map/objects.md)
+* **`filemap.json`**: Vollständiges Verzeichnisabbild der Cloud-Speicher inklusive Metadaten und Hashes.
+* **`filemap-curation.json`**: Kuratierungs-Overlay zur manuellen Steuerung von Konvertierungsregeln.
+* **Markdown-Derivate**: Konvertierte Office-Dokumente und OCR-Ergebnisse.

@@ -52,3 +52,11 @@ beispielsweise `fireflies-api` oder `zoom-api` für Meeting-Intake, `todoist-api
 Aufgaben-Synchronisation sowie passende Mailbox-Adapter für Transport und
 Mailbox-Aktionen. Der jeweilige Fach-Desk definiert, wann diese Adapter einzubeziehen
 sind.
+
+## Entwicklungs- und Architektur-Navigation (System Map)
+
+Für Coding- und Maintenance-Agenten (wie Daedalus oder Antigravity), Refactorings,
+Schemas und Invarianten steht die föderierte System Map (ICM Form 6) bereit:
+- [Paket System Map (Ebene 1)](docs/system-map/README.md): Gesamtarchitektur, Router-Topologie, gemeinsame Datenzonen und Bundle-Invarianten.
+- [Mail-Desk System Map (Ebene 2A)](skills/mail-desk/docs/system-map/README.md): Quarantäne Schema 1, Himalaya-Adapter, Dossier-Modi, 16 Pflichtfelder.
+- [Cloud-Atlas System Map (Ebene 2B)](skills/cloud-atlas/docs/system-map/README.md): Filemap-Engine, Dokumentkonvertierung, OCR-Policies, Frontmatter-Schemas.

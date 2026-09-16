@@ -51,3 +51,11 @@ Die Katalog-Desks arbeiten mit `memory/references/projects/projects.json` und
 Projekt- und Topic-Unterordnern; operative Nachweise bleiben von diesen Referenzen
 getrennt. Konkrete Pfade, Formate und Schreibregeln sind absichtlich nur in den
 zuständigen Sub-Skills beschrieben.
+
+## Architektur und System Map
+
+Für Entwickler, Refactorings und Coding-Agenten (wie Daedalus) existiert eine vollständige,
+föderierte System Map nach ICM Form 6:
+- [Paket System Map (L1)](docs/system-map/README.md): Router, Zusammenspiel der 7 Desks, Data Zones, Bundle-Invarianten.
+- [Mail-Desk System Map (L2)](skills/mail-desk/docs/system-map/README.md): Quarantäne-Engine, Himalaya-Adapter, Dossier-Modi.
+- [Cloud-Atlas System Map (L2)](skills/cloud-atlas/docs/system-map/README.md): Filemap-Generierung, Dokumentkonvertierung, OCR-Verzweigung.
