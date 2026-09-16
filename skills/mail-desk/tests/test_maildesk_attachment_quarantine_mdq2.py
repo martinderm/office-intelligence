@@ -1018,6 +1018,156 @@ class TestMailDeskAttachmentQuarantineMDQ2(unittest.TestCase):
                         verify_physical=False,
                     )
 
+    # --------------------------------------------------------------------------
+    # 19. Adversarial disposition_ref: Forbidden Content & Strict Bounded String
+    # --------------------------------------------------------------------------
+    def test_adversarial_disposition_ref_forbidden_content_and_strict_format(self) -> None:
+        """disposition_ref must reject arbitrary dictionaries, nested forbidden keys, and invalid formats."""
+        entry = self._create_sample_quarantine_run(
+            "run_disp_01", "<disp_01@example.org>", "disp.pdf", b"%PDF-1.4 disposition test"
+        )
+
+        # 1. Dictionaries containing forbidden content keys raise ForbiddenContentError
+        forbidden_payloads = [
+            {"prompt": "secret prompt"},
+            {"credentials": "secret credentials"},
+            {"body": "email body content"},
+            {"extracted_text": "ocr text"},
+            {"tokens": "jwt.tokens.xyz"},
+            {"api_key": "sk-123456"},
+            {"meta": {"prompt": "nested secret prompt"}},
+            {"auth": {"credentials": "nested password"}},
+            {"deep": {"level": {"text": "forbidden text"}}},
+        ]
+        for bad_disp in forbidden_payloads:
+            bad_entry = dict(entry)
+            bad_entry["disposition_ref"] = bad_disp
+            with self.assertRaises(ForbiddenContentError, msg=f"Failed to reject forbidden disposition_ref: {bad_disp}"):
+                validate_quarantine_index_entry(bad_entry)
+
+        # 2. Arbitrary dictionaries without forbidden keys raise AttachmentIndexSchemaError
+        benign_dicts = [
+            {"status": "promoted"},
+            {"ref": "123"},
+            {"nested": {"foo": "bar"}},
+        ]
+        for bad_dict in benign_dicts:
+            bad_entry = dict(entry)
+            bad_entry["disposition_ref"] = bad_dict
+            with self.assertRaises(AttachmentIndexSchemaError, msg=f"Failed to reject dictionary disposition_ref: {bad_dict}"):
+                validate_quarantine_index_entry(bad_entry)
+
+        # 3. Non-string types (lists, integers, booleans) raise AttachmentIndexSchemaError
+        invalid_types = [
+            ["disp_01"],
+            12345,
+            True,
+            {"a", "b"},
+        ]
+        for bad_type in invalid_types:
+            bad_entry = dict(entry)
+            bad_entry["disposition_ref"] = bad_type
+            with self.assertRaises(AttachmentIndexSchemaError, msg=f"Failed to reject non-string disposition_ref: {bad_type}"):
+                validate_quarantine_index_entry(bad_entry)
+
+        # 4. Strings exceeding max length (128) or with illegal characters raise AttachmentIndexSchemaError
+        bad_strings = [
+            "",  # empty string
+            "   ",  # whitespace only
+            "a" * 129,  # exceeds 128
+            "disp with spaces",  # contains spaces
+            "disp;rm -rf /",  # shell meta
+            "disp\nnewline",  # control character
+            "disp<script>",  # angle brackets
+        ]
+        for bad_str in bad_strings:
+            bad_entry = dict(entry)
+            bad_entry["disposition_ref"] = bad_str
+            with self.assertRaises(AttachmentIndexSchemaError, msg=f"Failed to reject invalid string disposition_ref: {bad_str!r}"):
+                validate_quarantine_index_entry(bad_entry)
+
+        # 5. Valid bounded strings succeed
+        valid_strings = [
+            "disp-2026-09-16-001",
+            "promotion_run_123.pdf",
+            "urn:disp:promotion:uuid-456",
+            "a" * 128,
+        ]
+        for good_str in valid_strings:
+            good_entry = dict(entry)
+            good_entry["disposition_ref"] = good_str
+            val = validate_quarantine_index_entry(good_entry)
+            self.assertEqual(val["disposition_ref"], good_str)
+
+    # --------------------------------------------------------------------------
+    # 20. Adversarial Contradictory Alias Fields Detection
+    # --------------------------------------------------------------------------
+    def test_adversarial_contradictory_alias_fields_drift(self) -> None:
+        """Contradictory alias fields must fail-closed as AttachmentIndexDriftError."""
+        entry = self._create_sample_quarantine_run(
+            "run_alias_01", "<alias_01@example.org>", "alias.pdf", b"%PDF-1.4 alias test"
+        )
+
+        # 1. folder vs original_folder
+        bad_folder = dict(entry)
+        bad_folder["folder"] = "INBOX"
+        bad_folder["original_folder"] = "Archive"
+        with self.assertRaises(AttachmentIndexDriftError):
+            validate_quarantine_index_entry(bad_folder)
+
+        # Matching folder aliases succeed
+        good_folder = dict(entry)
+        good_folder["folder"] = "INBOX"
+        good_folder["original_folder"] = "INBOX"
+        val_f = validate_quarantine_index_entry(good_folder)
+        self.assertEqual(val_f["folder"], "INBOX")
+        self.assertEqual(val_f["original_folder"], "INBOX")
+
+        # 2. clean_filename vs filename
+        bad_fn = dict(entry)
+        bad_fn["clean_filename"] = "alias.pdf"
+        bad_fn["filename"] = "contradictory.pdf"
+        with self.assertRaises(AttachmentIndexDriftError):
+            validate_quarantine_index_entry(bad_fn)
+
+        # Matching filename aliases succeed
+        good_fn = dict(entry)
+        good_fn["clean_filename"] = "alias.pdf"
+        good_fn["filename"] = "alias.pdf"
+        val_fn = validate_quarantine_index_entry(good_fn)
+        self.assertEqual(val_fn["clean_filename"], "alias.pdf")
+        self.assertEqual(val_fn["filename"], "alias.pdf")
+
+        # 3. mime_type vs effective_mime_type
+        bad_mime = dict(entry)
+        bad_mime["mime_type"] = "application/pdf"
+        bad_mime["effective_mime_type"] = "text/plain"
+        with self.assertRaises(AttachmentIndexDriftError):
+            validate_quarantine_index_entry(bad_mime)
+
+        # Matching MIME aliases succeed (case-insensitive)
+        good_mime = dict(entry)
+        good_mime["mime_type"] = "application/pdf"
+        good_mime["effective_mime_type"] = "APPLICATION/PDF"
+        val_m = validate_quarantine_index_entry(good_mime)
+        self.assertEqual(val_m["mime_type"], "application/pdf")
+        self.assertEqual(val_m["effective_mime_type"], "application/pdf")
+
+        # 4. contract_version vs contract_hash
+        bad_cv = dict(entry)
+        bad_cv["contract_version"] = "1"
+        bad_cv["contract_hash"] = "2"
+        with self.assertRaises(AttachmentIndexDriftError):
+            validate_quarantine_index_entry(bad_cv)
+
+        # Matching contract version aliases succeed
+        good_cv = dict(entry)
+        good_cv["contract_version"] = "1"
+        good_cv["contract_hash"] = "1"
+        val_cv = validate_quarantine_index_entry(good_cv)
+        self.assertEqual(val_cv["contract_version"], "1")
+        self.assertEqual(val_cv["contract_hash"], "1")
+
 
 if __name__ == "__main__":
     unittest.main()

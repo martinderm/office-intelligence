@@ -83,6 +83,9 @@ RFC3339_REGEX = re.compile(
     r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$"
 )
 
+MAX_DISPOSITION_REF_LENGTH = 128
+DISPOSITION_REF_REGEX = re.compile(r"^[a-zA-Z0-9_.:/-]{1,128}$")
+
 ALLOWED_ENTRY_FIELDS = {
     "attachment_id",
     "message_id",
@@ -144,6 +147,20 @@ FORBIDDEN_ENTRY_FIELDS = {
     "envelope_id",
     "himalaya_id",
 }
+
+
+def _find_forbidden_content_keys(obj: Any) -> set[str]:
+    """Recursively find any forbidden content keys in nested dictionaries or iterables."""
+    found: set[str] = set()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() in FORBIDDEN_ENTRY_FIELDS:
+                found.add(str(k))
+            found.update(_find_forbidden_content_keys(v))
+    elif isinstance(obj, (list, tuple, set)):
+        for item in obj:
+            found.update(_find_forbidden_content_keys(item))
+    return found
 
 
 # ==============================================================================
@@ -311,8 +328,8 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(entry, dict):
         raise AttachmentIndexSchemaError("Index entry must be a dictionary")
 
-    # 1. Reject forbidden content fields
-    forbidden_present = set(entry.keys()) & FORBIDDEN_ENTRY_FIELDS
+    # 1. Reject forbidden content fields (top-level and nested anywhere)
+    forbidden_present = _find_forbidden_content_keys(entry)
     if forbidden_present:
         raise ForbiddenContentError(
             f"Forbidden content keys detected in index entry: {sorted(forbidden_present)}"
@@ -336,9 +353,29 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
     if not account:
         raise AttachmentIndexSchemaError("Missing required 'account'")
 
-    # 5. Folder (original folder)
-    folder = str(entry.get("folder") or entry.get("original_folder") or "").strip()
-    if not folder:
+    # 5. Folder (fail-closed against contradictory aliases)
+    raw_f = entry.get("folder")
+    raw_orig_f = entry.get("original_folder")
+
+    if raw_f is not None and raw_orig_f is not None:
+        f1 = str(raw_f).strip()
+        f2 = str(raw_orig_f).strip()
+        if not f1 or not f2:
+            raise AttachmentIndexSchemaError("Missing or empty 'folder'")
+        if f1 != f2:
+            raise AttachmentIndexDriftError(
+                f"Contradictory folder alias fields: 'folder' ({f1!r}) != 'original_folder' ({f2!r})"
+            )
+        folder = f1
+    elif raw_f is not None:
+        folder = str(raw_f).strip()
+        if not folder:
+            raise AttachmentIndexSchemaError("Missing or empty 'folder'")
+    elif raw_orig_f is not None:
+        folder = str(raw_orig_f).strip()
+        if not folder:
+            raise AttachmentIndexSchemaError("Missing or empty 'original_folder'")
+    else:
         raise AttachmentIndexSchemaError("Missing required 'folder'")
 
     # 6. Part locator
@@ -346,17 +383,62 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
     if not raw_loc or not PART_LOCATOR_REGEX.fullmatch(raw_loc):
         raise AttachmentIndexSchemaError(f"Missing or invalid 'part_locator': {raw_loc!r}")
 
-    # 7. Clean filename
-    raw_fn = str(entry.get("clean_filename") or entry.get("filename") or "").strip()
-    if not raw_fn:
-        raise AttachmentIndexSchemaError("Missing required 'clean_filename'")
-    clean_fn = validate_attachment_filename(raw_fn)
+    # 7. Clean filename (fail-closed against contradictory aliases)
+    raw_clean_fn = entry.get("clean_filename")
+    raw_fn = entry.get("filename")
 
-    # 8. Normalized MIME type
-    raw_mime = str(entry.get("mime_type") or entry.get("effective_mime_type") or "").strip()
-    if not raw_mime or not MIME_TYPE_REGEX.fullmatch(raw_mime):
-        raise AttachmentIndexSchemaError(f"Missing or invalid 'mime_type': {raw_mime!r}")
-    norm_mime = raw_mime.lower()
+    if raw_clean_fn is not None and raw_fn is not None:
+        try:
+            c1 = validate_attachment_filename(raw_clean_fn)
+            c2 = validate_attachment_filename(raw_fn)
+        except ValueError as err:
+            raise AttachmentIndexSchemaError(f"Invalid filename: {err}") from err
+        if c1 != c2:
+            raise AttachmentIndexDriftError(
+                f"Contradictory filename alias fields: 'clean_filename' ({c1!r}) != 'filename' ({c2!r})"
+            )
+        clean_fn = c1
+    elif raw_clean_fn is not None:
+        try:
+            clean_fn = validate_attachment_filename(raw_clean_fn)
+        except ValueError as err:
+            raise AttachmentIndexSchemaError(f"Invalid 'clean_filename': {err}") from err
+    elif raw_fn is not None:
+        try:
+            clean_fn = validate_attachment_filename(raw_fn)
+        except ValueError as err:
+            raise AttachmentIndexSchemaError(f"Invalid 'filename': {err}") from err
+    else:
+        raise AttachmentIndexSchemaError("Missing required 'clean_filename'")
+
+    # 8. Normalized MIME type (fail-closed against contradictory aliases)
+    raw_mime = entry.get("mime_type")
+    raw_eff_mime = entry.get("effective_mime_type")
+
+    if raw_mime is not None and raw_eff_mime is not None:
+        m1 = str(raw_mime).strip().lower()
+        m2 = str(raw_eff_mime).strip().lower()
+        if not m1 or not MIME_TYPE_REGEX.fullmatch(m1):
+            raise AttachmentIndexSchemaError(f"Missing or invalid 'mime_type': {raw_mime!r}")
+        if not m2 or not MIME_TYPE_REGEX.fullmatch(m2):
+            raise AttachmentIndexSchemaError(f"Missing or invalid 'effective_mime_type': {raw_eff_mime!r}")
+        if m1 != m2:
+            raise AttachmentIndexDriftError(
+                f"Contradictory MIME type alias fields: 'mime_type' ({m1!r}) != 'effective_mime_type' ({m2!r})"
+            )
+        norm_mime = m1
+    elif raw_mime is not None:
+        m1 = str(raw_mime).strip().lower()
+        if not m1 or not MIME_TYPE_REGEX.fullmatch(m1):
+            raise AttachmentIndexSchemaError(f"Missing or invalid 'mime_type': {raw_mime!r}")
+        norm_mime = m1
+    elif raw_eff_mime is not None:
+        m2 = str(raw_eff_mime).strip().lower()
+        if not m2 or not MIME_TYPE_REGEX.fullmatch(m2):
+            raise AttachmentIndexSchemaError(f"Missing or invalid 'effective_mime_type': {raw_eff_mime!r}")
+        norm_mime = m2
+    else:
+        raise AttachmentIndexSchemaError("Missing required 'mime_type'")
 
     # 9. SHA-256
     raw_sha = str(entry.get("sha256") or "").strip()
@@ -410,9 +492,33 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
             f"analyzed_at must be a valid RFC-3339 timestamp with timezone offset: {analyzed_at!r}"
         )
 
-    # 15. Contract version / hash
-    contract_ver = str(entry.get("contract_version") or entry.get("contract_hash") or "").strip()
-    if not contract_ver:
+    # 15. Contract version / hash (fail-closed against contradictory aliases)
+    raw_cv = entry.get("contract_version")
+    raw_ch = entry.get("contract_hash")
+
+    if raw_cv is not None and raw_ch is not None:
+        cv_str = str(raw_cv).strip()
+        ch_str = str(raw_ch).strip()
+        if not cv_str:
+            raise AttachmentIndexSchemaError("Missing or empty 'contract_version'")
+        if not ch_str:
+            raise AttachmentIndexSchemaError("Missing or empty 'contract_hash'")
+        if cv_str != ch_str:
+            raise AttachmentIndexDriftError(
+                f"Contradictory contract version alias fields: 'contract_version' ({cv_str!r}) != 'contract_hash' ({ch_str!r})"
+            )
+        contract_ver = cv_str
+    elif raw_cv is not None:
+        cv_str = str(raw_cv).strip()
+        if not cv_str:
+            raise AttachmentIndexSchemaError("Missing or empty 'contract_version'")
+        contract_ver = cv_str
+    elif raw_ch is not None:
+        ch_str = str(raw_ch).strip()
+        if not ch_str:
+            raise AttachmentIndexSchemaError("Missing or empty 'contract_hash'")
+        contract_ver = ch_str
+    else:
         raise AttachmentIndexSchemaError("Missing required 'contract_version'")
 
     # 16. Lifecycle state
@@ -422,10 +528,29 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
             f"lifecycle_state must be 'quarantined', got: {lifecycle_st!r}"
         )
 
-    # 17. Optional disposition ref
+    # 17. Optional disposition ref (strictly null or bounded reference ID string)
     disposition_ref = entry.get("disposition_ref")
-    if disposition_ref is not None and not isinstance(disposition_ref, (str, dict)):
-        raise AttachmentIndexSchemaError("'disposition_ref' must be null, string, or object")
+    if disposition_ref is not None:
+        if isinstance(disposition_ref, dict):
+            # Check for forbidden content inside dict before schema error
+            forbidden_in_disp = _find_forbidden_content_keys(disposition_ref)
+            if forbidden_in_disp:
+                raise ForbiddenContentError(
+                    f"Forbidden content keys detected in disposition_ref dictionary: {sorted(forbidden_in_disp)}"
+                )
+            raise AttachmentIndexSchemaError(
+                f"'disposition_ref' must be null or string, arbitrary dictionary is forbidden: {type(disposition_ref).__name__}"
+            )
+        if not isinstance(disposition_ref, str):
+            raise AttachmentIndexSchemaError(
+                f"'disposition_ref' must be null or string, got {type(disposition_ref).__name__}"
+            )
+        disp_str = disposition_ref.strip()
+        if not disp_str or len(disp_str) > MAX_DISPOSITION_REF_LENGTH or not DISPOSITION_REF_REGEX.fullmatch(disp_str):
+            raise AttachmentIndexSchemaError(
+                f"Invalid 'disposition_ref': must match {DISPOSITION_REF_REGEX.pattern} (max {MAX_DISPOSITION_REF_LENGTH} chars), got {disposition_ref!r}"
+            )
+        disposition_ref = disp_str
 
     # 18. Deterministic attachment_id derivation & drift verification
     computed_id = compute_attachment_id(norm_mid, raw_loc, norm_sha)
@@ -455,6 +580,7 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
         "analysis_status": ANALYSIS_STATUS_COMPLETED,
         "analyzed_at": analyzed_at,
         "contract_version": contract_ver,
+        "contract_hash": contract_ver,
         "lifecycle_state": LIFECYCLE_STATE_QUARANTINED,
         "disposition_ref": disposition_ref,
     }
