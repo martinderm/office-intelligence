@@ -7,7 +7,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 
 ## Aktueller Stand
 
-- `FR-11 / MD-Q2` — Versionierter Quarantäneindex ist zur Review bereit:
+- `FR-11 / MD-Q2` — Versionierter Quarantäneindex ist abgenommen:
   - Implementierung des Datenzugriffs und der Schema-1-Verifikation in
     `skills/mail-desk/scripts/core/attachment_quarantine_index.py` sowie der CLI-
     Fassade `skills/mail-desk/scripts/mail_desk_attachment_quarantine_index.py` für
@@ -28,7 +28,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
     - Verbotene Inhalte (`text`, `extracted_text`, `body`, `prompt`, `credentials`, `envelope_id`) und unbekannte Felder werden abgewiesen.
     - Read-only `reconcile` meldet `consistent`, `missing_review` und `drift` ohne Mutation von Index oder Disk.
     - Byte-Identität von `data/mail-desk/final-location-index.json` garantiert.
-  - Review-Verifikation: 21 fokussierte MD-Q2-Tests (inklusive umfassender adversarieller Testsuiten), vollständige Mail-Desk-Suite (489 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
+  - Unabhängige Review-Verifikation: 21 fokussierte MD-Q2-Tests (inklusive umfassender adversarieller Testsuiten), vollständige Mail-Desk-Suite (490 Tests), Compileall, Skill-Catalog-Validierung und `git diff --check` sauber.
   - Grenzen: Noch keine Disposition oder physische Löschung (MD-Q3); Quarantäne-Binärdateien und Inventare bleiben unversioniert.
 - `FR-11 / MD-Q1` — Git-Hygiene und Vertragsabsicherung ist abgenommen:
   - `skills/mail-desk/references/cli-operations.md` dokumentiert einen getesteten

@@ -22,7 +22,7 @@ verbindliche Paketkarten.
 | --- | --- | --- | --- |
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
-| `FR-11` | 🟨 in Umsetzung | Quarantäne-Inventar und Cleanup-Funktionen aus FR-08; `MD-Q1` abgenommen | `MD-Q2` |
+| `FR-11` | 🟨 in Umsetzung | Quarantäne-Inventar und Cleanup-Funktionen aus FR-08; `MD-Q1` und `MD-Q2` abgenommen | `MD-Q3` |
 
 ```text
 Human Gate → MD-P1 → MD-P2 → MD-P3
@@ -408,7 +408,7 @@ bleibt.
 
 ## FR-11: Attachment-Quarantäne-Hygiene und Lebenszyklus
 
-**Status:** 🟨 In Umsetzung. `MD-Q1` ist abgenommen; nächstes Paket ist `MD-Q2`.
+**Status:** 🟨 In Umsetzung. `MD-Q1` und `MD-Q2` sind abgenommen; nächstes Paket ist `MD-Q3`.
 FR-08 legt abgerufene Anhänge und das zugehörige
 `.quarantine-inventory.json` unter `data/mail-desk/attachments/<run_id>/` ab. Diese
 Dateien sind lokale Laufzeit-/Quarantänedaten und dürfen weder gestaged noch
