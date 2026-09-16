@@ -471,7 +471,9 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         journal = load_discard_journal(self.journal_path)
         entries = list(journal["entries"].values())
         self.assertTrue(len(entries) > 0)
-        self.assertEqual(entries[0]["state"], JOURNAL_STATE_FAILED)
+        self.assertEqual(entries[0]["status"], "failed")
+        self.assertEqual(entries[0]["last_successful_state"], JOURNAL_STATE_FILE_DELETED)
+        self.assertEqual(entries[0]["failure_stage"], "inventory_update")
 
     def test_retry_after_file_deleted_recovers_cleanly(self) -> None:
         """When an operation was interrupted after file_deleted, a retry with valid receipt recovers."""
@@ -500,6 +502,19 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         target_file.unlink()
 
         from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=apply_rcpt_hash,
+            apply_request_hash=canonical_apply_request_sha256(apply_req),
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
         record_journal_state(
             self.journal_path,
             attachment_id=self.att_id_01,
@@ -563,6 +578,32 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         update_quarantine_inventory_atomic(run_dir, self.sample_entry["message_id"], self.sample_entry["clean_filename"])
 
         from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=apply_rcpt_hash,
+            apply_request_hash=canonical_apply_request_sha256(apply_req),
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=apply_rcpt_hash,
+            apply_request_hash=canonical_apply_request_sha256(apply_req),
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_FILE_DELETED,
+        )
         record_journal_state(
             self.journal_path,
             attachment_id=self.att_id_01,
@@ -639,15 +680,42 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         )
         apply_rcpt = self._make_apply_receipt(apply_req)
 
-        # Plant corrupted journal with wrong prior index hash
+        # Plant foreign journal entry with wrong prior index hash and matching valid request hash
         from core.attachment_disposition_log import record_journal_state
+        wrong_idx_hash = "0" * 64
+        wrong_apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=wrong_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        wrong_rcpt = self._make_apply_receipt(wrong_apply_req)
+        wrong_rcpt_hash = canonical_receipt_sha256(wrong_rcpt)
+        wrong_req_hash = canonical_apply_request_sha256(wrong_apply_req)
+
         record_journal_state(
             self.journal_path,
             attachment_id=self.att_id_01,
             decision_id=dec_id,
-            apply_receipt_hash="b" * 64,  # different receipt hash
-            apply_request_hash="c" * 64,
-            previous_index_entry_sha256="0" * 64,  # wrong index hash
+            apply_receipt_hash=wrong_rcpt_hash,
+            apply_request_hash=wrong_req_hash,
+            previous_index_entry_sha256=wrong_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=wrong_rcpt_hash,
+            apply_request_hash=wrong_req_hash,
+            previous_index_entry_sha256=wrong_idx_hash,
             quarantine_path=self.sample_entry["quarantine_path"],
             sha256=self.sample_entry["sha256"],
             size_bytes=self.sample_entry["size_bytes"],
@@ -982,6 +1050,485 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         apply_json = json.loads(proc_apply.stdout)
         self.assertTrue(apply_json["success"])
         self.assertEqual(apply_json["data"]["deleted_count"], 1)
+
+    # --------------------------------------------------------------------------
+    # 7. Recovery Journal Hardening & Adversarial Tests
+    # --------------------------------------------------------------------------
+    def test_real_inventory_update_error_e2e_and_retry(self) -> None:
+        """Partial failure at inventory update leaves file deleted, records failure in journal, and subsequent retry succeeds."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test partial inventory failure and recovery",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test partial inventory failure and recovery",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        # 1. Trigger failure during atomic inventory update
+        with patch(
+            "core.attachment_disposition_log.update_quarantine_inventory_atomic",
+            side_effect=InventoryUpdateError("simulated inventory disk error"),
+        ):
+            with self.assertRaises(DispositionApplyError):
+                apply_discard(
+                    attachment_id=self.att_id_01,
+                    apply_receipt=apply_rcpt,
+                    workspace_root=self.ws_root,
+                    lease_id=self.lease_id,
+                    conversation_id=self.conv_id,
+                )
+
+        # Verify physical file was unlinked
+        target_file = self.ws_root / PurePosixPath(self.sample_entry["quarantine_path"])
+        self.assertFalse(target_file.exists())
+
+        # Verify index was not touched
+        disk_idx = load_quarantine_index(self.index_path)
+        self.assertIn(self.att_id_01, disk_idx["items"])
+
+        # Verify journal status is failed, last_successful_state is file_deleted
+        jdata = load_discard_journal(self.journal_path)
+        entry = list(jdata["entries"].values())[0]
+        self.assertEqual(entry["status"], "failed")
+        self.assertEqual(entry["last_successful_state"], JOURNAL_STATE_FILE_DELETED)
+        self.assertEqual(entry["state"], JOURNAL_STATE_FILE_DELETED)
+        self.assertEqual(entry["failure_stage"], "inventory_update")
+
+        # 2. Retry apply_discard with the SAME receipt without error -> must resume and complete
+        retry_res = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(retry_res["status"], "completed")
+        self.assertTrue(retry_res.get("recovered"))
+
+        # Target file still does not exist
+        self.assertFalse(target_file.exists())
+
+        # Index item removed
+        disk_idx = load_quarantine_index(self.index_path)
+        self.assertNotIn(self.att_id_01, disk_idx["items"])
+
+        # Inventory updated
+        inv_file = self.attachments_root / self.sample_entry["run_id"] / ".quarantine-inventory.json"
+        inv = json.loads(inv_file.read_text(encoding="utf-8"))
+        msg_files = inv.get("messages", {}).get(self.sample_entry["message_id"], {}).get("files", {})
+        self.assertNotIn(self.sample_entry["clean_filename"], msg_files)
+
+        # Journal completed
+        jdata_final = load_discard_journal(self.journal_path)
+        entry_final = list(jdata_final["entries"].values())[0]
+        self.assertEqual(entry_final["status"], "completed")
+        self.assertEqual(entry_final["state"], JOURNAL_STATE_COMPLETED)
+        self.assertEqual(entry_final["last_successful_state"], JOURNAL_STATE_COMPLETED)
+        self.assertIsNone(entry_final["failure_stage"])
+
+    def test_tampered_state_with_matching_key_rejected(self) -> None:
+        """A journal entry with state tampered to file_deleted without matching monotonic history fails validation."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        rcpt = self._make_apply_receipt(req)
+        rcpt_hash = canonical_receipt_sha256(rcpt)
+        req_hash = canonical_apply_request_sha256(req)
+
+        from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+
+        # Tamper directly on disk: alter state to 'file_deleted' without corresponding history
+        raw_j = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        j_key = list(raw_j["entries"].keys())[0]
+        raw_j["entries"][j_key]["state"] = JOURNAL_STATE_FILE_DELETED
+        raw_j["entries"][j_key]["last_successful_state"] = JOURNAL_STATE_FILE_DELETED
+        self.journal_path.write_text(json.dumps(raw_j), encoding="utf-8")
+
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("does not match history-derived", str(ctx.exception))
+
+    def test_tampered_scope_fields_rejected(self) -> None:
+        """Tampering with immutable scope fields (quarantine_path, sha256, size_bytes, run_id) breaks apply_request_hash binding."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        rcpt = self._make_apply_receipt(req)
+        rcpt_hash = canonical_receipt_sha256(rcpt)
+        req_hash = canonical_apply_request_sha256(req)
+
+        from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+
+        raw_j = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        j_key = list(raw_j["entries"].keys())[0]
+
+        # Case 1: Tamper size_bytes
+        raw_j_tampered = json.loads(json.dumps(raw_j))
+        raw_j_tampered["entries"][j_key]["size_bytes"] = 999999
+        self.journal_path.write_text(json.dumps(raw_j_tampered), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("apply_request_hash drift", str(ctx.exception))
+
+        # Case 2: Tamper quarantine_path
+        raw_j_tampered = json.loads(json.dumps(raw_j))
+        raw_j_tampered["entries"][j_key]["quarantine_path"] = "data/mail-desk/attachments/run_mdq3_01/evil.pdf"
+        self.journal_path.write_text(json.dumps(raw_j_tampered), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("apply_request_hash drift", str(ctx.exception))
+
+        # Case 3: Tamper sha256
+        raw_j_tampered = json.loads(json.dumps(raw_j))
+        raw_j_tampered["entries"][j_key]["sha256"] = "f" * 64
+        self.journal_path.write_text(json.dumps(raw_j_tampered), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("apply_request_hash drift", str(ctx.exception))
+
+    def test_unknown_journal_fields_rejected(self) -> None:
+        """Root or entry unknown fields in discard journal are rejected fail-closed."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        rcpt = self._make_apply_receipt(req)
+        rcpt_hash = canonical_receipt_sha256(rcpt)
+        req_hash = canonical_apply_request_sha256(req)
+
+        from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+
+        raw_j = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        j_key = list(raw_j["entries"].keys())[0]
+
+        # Case 1: Unknown root field
+        raw_j_bad_root = json.loads(json.dumps(raw_j))
+        raw_j_bad_root["extra_root_prop"] = True
+        self.journal_path.write_text(json.dumps(raw_j_bad_root), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("Unknown root field", str(ctx.exception))
+
+        # Case 2: Unknown entry field
+        raw_j_bad_entry = json.loads(json.dumps(raw_j))
+        raw_j_bad_entry["entries"][j_key]["malicious_injected_key"] = "payload"
+        self.journal_path.write_text(json.dumps(raw_j_bad_entry), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("Unknown field(s) in journal entry", str(ctx.exception))
+
+    def test_invalid_and_backward_transitions_rejected(self) -> None:
+        """Backward transitions (e.g. completed -> prepared or file_deleted) are rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        rcpt = self._make_apply_receipt(req)
+        rcpt_hash = canonical_receipt_sha256(rcpt)
+        req_hash = canonical_apply_request_sha256(req)
+
+        from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_FILE_DELETED,
+        )
+
+        # Attempt backward transition file_deleted -> prepared
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            record_journal_state(
+                self.journal_path,
+                attachment_id=self.att_id_01,
+                decision_id="d" * 64,
+                apply_receipt_hash=rcpt_hash,
+                apply_request_hash=req_hash,
+                previous_index_entry_sha256=self.sample_idx_hash,
+                quarantine_path=self.sample_entry["quarantine_path"],
+                sha256=self.sample_entry["sha256"],
+                size_bytes=self.sample_entry["size_bytes"],
+                run_id=self.sample_entry["run_id"],
+                state=JOURNAL_STATE_PREPARED,
+            )
+        self.assertIn("Invalid backward transition", str(ctx.exception))
+
+    def test_skipped_transitions_rejected(self) -> None:
+        """Skipped transitions (e.g. prepared -> completed or prepared -> inventory_updated) are rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        rcpt = self._make_apply_receipt(req)
+        rcpt_hash = canonical_receipt_sha256(rcpt)
+        req_hash = canonical_apply_request_sha256(req)
+
+        from core.attachment_disposition_log import record_journal_state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id="d" * 64,
+            apply_receipt_hash=rcpt_hash,
+            apply_request_hash=req_hash,
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+
+        # Attempt skipped transition prepared -> completed (skipping file_deleted, inventory_updated, index_updated)
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            record_journal_state(
+                self.journal_path,
+                attachment_id=self.att_id_01,
+                decision_id="d" * 64,
+                apply_receipt_hash=rcpt_hash,
+                apply_request_hash=req_hash,
+                previous_index_entry_sha256=self.sample_idx_hash,
+                quarantine_path=self.sample_entry["quarantine_path"],
+                sha256=self.sample_entry["sha256"],
+                size_bytes=self.sample_entry["size_bytes"],
+                run_id=self.sample_entry["run_id"],
+                state=JOURNAL_STATE_COMPLETED,
+            )
+        self.assertIn("Invalid skipped transition", str(ctx.exception))
+
+    def test_already_missing_index_with_wrong_receipt_rejected(self) -> None:
+        """When quarantine index entry is already missing, passing a wrong/drifted receipt is rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test already missing index with wrong receipt",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test already missing index with wrong receipt",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        # Complete discard first so file and index item are gone and journal is completed
+        res1 = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res1["status"], "completed")
+
+        # Now pass a forged/wrong receipt for the already-missing item
+        forged_rcpt = dict(apply_rcpt)
+        forged_rcpt["request_hash"] = "0" * 64
+
+        with self.assertRaises((ReceiptDriftError, DispositionApplyError)):
+            apply_discard(
+                attachment_id=self.att_id_01,
+                apply_receipt=forged_rcpt,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
+
+    def test_idempotent_retry_after_index_updated_or_completed(self) -> None:
+        """Calling apply_discard after index_updated or completed returns completed idempotently."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test idempotency after completion",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test idempotency after completion",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        # 1. Complete discard
+        res1 = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res1["status"], "completed")
+
+        # 2. Retry while completed -> returns completed idempotently
+        res2 = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res2["status"], "completed")
+        self.assertEqual(res2.get("deleted_count"), 0)
 
 
 if __name__ == "__main__":

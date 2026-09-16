@@ -128,6 +128,10 @@ from .attachment_disposition_log import (
     canonical_apply_request_sha256,
     build_apply_receipt,
     verify_apply_receipt,
+    record_journal_state,
+    record_journal_failure,
+    DISCARD_JOURNAL_ENTRY_ALLOWED_KEYS,
+    STATE_ORDER,
     update_quarantine_inventory_atomic,
 )
 
@@ -242,5 +246,9 @@ __all__ = [
     "canonical_apply_request_sha256",
     "build_apply_receipt",
     "verify_apply_receipt",
+    "record_journal_state",
+    "record_journal_failure",
+    "DISCARD_JOURNAL_ENTRY_ALLOWED_KEYS",
+    "STATE_ORDER",
     "update_quarantine_inventory_atomic",
 ]
