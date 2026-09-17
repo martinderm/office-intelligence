@@ -22,6 +22,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
 
-## Nächstes Paket nach Freigabe
+## Nächste Pakete nach Freigabe
 
+- **FR-14:** `MD-C1` — Analysevollständigkeit und Truncation-Provenienz vom bestehenden Extraktions-/Handoff-Vertrag bis zum Quarantäneindex Schema 2. Kein Human Gate erforderlich.
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
