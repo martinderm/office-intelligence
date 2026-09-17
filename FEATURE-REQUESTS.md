@@ -24,7 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
-| `FR-14` | ⬜ geplant | Truncation-Evidenz existiert bereits in Extraktion und LLM-Handoff, fehlt aber im Quarantäneindex | `MD-C1` |
+| `FR-14` | 🟨 in Umsetzung | Vorhandene Coverage-Ableitung wird auf eine additive Schema-1-Statusweitergabe reduziert | `MD-C1` |
 
 
 ```text
@@ -519,82 +519,67 @@ abgegrenzt.
 
 ---
 
-## FR-14: Analysevollständigkeit und Truncation-Provenienz für Anhänge
+## FR-14: Sichtbarer Truncation-Status analysierter Anhänge
 
-**Status:** ⬜ Geplant. Kleines fachübergreifendes Follow-up zu FR-08 und FR-11;
-FR-11 bleibt abgeschlossen. Nächstes Paket ist `MD-C1`.
+**Status:** 🟨 In Umsetzung. Kleine additive Korrektur zu FR-08/FR-11; FR-11 bleibt
+abgeschlossen. Nächstes Paket ist `MD-C1`.
 
 ### Problem und Zielbild
 
-Extraktion und LLM-Handoff führen bereits `truncated`, `truncation_reason`,
-Zeichenbudgets und Handoff-Zeichenzahlen. Der versionierte Quarantäneindex hält
-dagegen nur `analysis_status: "completed"`. Dieser Status belegt den technisch
-abgeschlossenen Analyselauf, kann aber fälschlich als vollständige inhaltliche
-Abdeckung gelesen werden.
+Extraktion und LLM-Handoff kennen bereits `truncated`, `truncation_reason` und die
+Zeichenbudgets. Im Quarantäneindex steht dagegen nur
+`analysis_status: "completed"`. Das bezeichnet zwar korrekt den technisch
+abgeschlossenen Lauf, lässt aber nicht erkennen, ob der Inhalt vollständig oder nur
+innerhalb eines Budgets analysiert wurde.
 
-Der Index muss deshalb technischen Abschluss und inhaltliche Abdeckung getrennt
-ausweisen. Eine durch Zeichen-, Seiten-, OCR-, Tabellen-, Folien- oder Timeout-
-Grenzen eingeschränkte Analyse darf niemals als vollständig erscheinen. Bereits
-indexierte Schema-1-Einträge dürfen nicht rückwirkend ohne Evidenz als vollständig
-klassifiziert werden.
+MD-C1 reicht den vorhandenen Status deshalb additiv bis zum Filing-Candidate und
+Quarantäneindex weiter. Es entsteht keine neue Analyse-, Trust-, Migrations- oder
+Promotion-Architektur.
 
-### MD-C1 — Coverage-Vertrag vom Handoff bis zum Quarantäneindex
+### MD-C1 — Additive Coverage-Felder
 
-**Scope:** ein isoliertes Paket in einer frischen Coding-Session. Vor Änderungen
-`skills/mail-desk/SKILL.md`, `references/batch-runner.md`,
-`scripts/core/attachment_extract.py`, `attachment_handoff.py`,
-`attachment_filing.py`, `attachment_quarantine_index.py` sowie die MD-A3-, MD-A4-,
-MD-A5- und MD-Q2-Tests lesen. Workspace-Lock setzen; keine Quarantäne-Binärdateien
-öffnen, verschieben, löschen oder versionieren.
+**Behalten aus dem begonnenen Arbeitsstand:**
 
-1. **Kanonische Coverage-Evidenz erweitern:** Nutze die bestehende
-   `ALLOWED_TRUNCATION_REASONS`-Taxonomie; keine parallelen Reason-Strings erfinden.
-   Ergänze pro Handoff-Item mindestens:
-   - `analysis_completeness`: `full | truncated | partial | unavailable | unknown_legacy`;
-   - `truncation_reason`: bestehender kanonischer Wert oder `null`;
-   - `truncation_stage`: `none | extraction | handoff_per_attachment | handoff_cumulative_mail`;
-   - `handoff_character_count` und das tatsächlich angewandte
-     `analysis_character_budget` als nichtnegative Integer;
-   - `source_character_count` nur, wenn er aus vertrauenswürdiger
-     Extraktionsevidenz deterministisch bekannt ist, sonst `null`.
-   `analysis_completeness: full` ist nur zulässig, wenn keine Extraktions- oder
-   Handoff-Truncation, kein partieller/unverfügbarer Extraktionsstatus und keine
-   offene erforderliche Materialitätslücke vorliegt. `unknown_legacy` ist nur für
-   gelesene oder explizit migrierte Schema-1-Einträge zulässig, niemals für neue
-   Analyseläufe.
-2. **Handoff-Hash und Filing-Candidate binden:** Die Coverage-Felder werden
-   kanonisch in den bestehenden Handoff-Hash und in den read-only
-   `attachment_filing_candidate` aufgenommen. Ein Candidate mit anderer oder
-   fehlender Coverage-Evidenz ist Drift und stoppt fail-closed. Bei `truncated`,
-   `partial` oder `unavailable` muss die menschenlesbare Ausgabe die Grenze nennen
-   und darf keine vollständige Inhaltsauswertung behaupten; `needs_reply` bleibt
-   davon unabhängig.
-3. **Quarantäneindex Schema 2:** Erweitere den versionierten Index um die
-   kanonischen Coverage-Felder. `analysis_status: "completed"` bleibt ausschließlich
-   technischer Laufstatus. Schema-2-Neueinträge müssen Coverage-Evidenz aus dem
-   verifizierten Handoff/Candidate übernehmen; freie Caller-Werte oder nachträgliche
-   Hochstufung auf `full` sind verboten. Coverage-Felder enthalten weder Text,
-   Prompts noch Modellantworten.
-4. **Legacy-Grenze:** Schema-1-Indizes bleiben lesbar, aber ihre Einträge werden
-   ausschließlich als `analysis_completeness: unknown_legacy` gemeldet. Eine
-   Migration auf Schema 2 erfolgt nur über eine explizite, lockgebundene und atomare
-   Operation. Ohne noch vorhandene verifizierbare Handoff-Evidenz bleibt
-   `unknown_legacy`; niemals `full` inferieren. Dry-run und Drift-/Rollback-Verhalten
-   sind deterministisch zu testen.
-5. **Downstream-Semantik:** Reporting, Reconcile und Disposition bewahren die
-   Coverage-Felder unverändert. `retain` und `discard` bleiben möglich. `promote`
-   darf eingeschränkte Coverage nur sichtbar und receiptgebunden an FR-09 übergeben;
-   die Promotion selbst bleibt außerhalb von FR-14.
+- die korrekte Ermittlung von `source_character_count`, soweit sie ohne zusätzliche
+  Volltextverarbeitung bekannt ist;
+- die Ableitung von `analysis_completeness`, `truncation_reason` und
+  `truncation_stage` im bestehenden Handoff;
+- `handoff_character_count` und `analysis_character_budget`;
+- Bindung dieser Werte an den bestehenden Handoff- und Filing-Candidate-Hash;
+- ein sichtbarer Hinweis im Filing-Candidate bei eingeschränkter Analyse.
 
-**Pflichttests:** vollständige und auf Zeichenbudget gekürzte PDF; Seitenlimit,
-OCR-Limit und kumulatives Mailbudget; partial/unavailable; ungültige Kombinationen
-wie `full` plus Truncation; Hash-/Coverage-Drift; Caller-Spoofing; Schema-1-Lesen als
-`unknown_legacy`; explizite atomare Schema-2-Migration mit und ohne belegbare
-Handoff-Evidenz; idempotente Wiederholung; Reporting/Reconcile/Disposition ohne
-Coverage-Verlust; keine Inhalte oder absoluten Pfade im Index. Bestehende MD-A3–A5-
-und MD-Q2/Q3-Tests bleiben grün.
+**Gezielter Indexvertrag:** Der bestehende Quarantäneindex bleibt **Schema 1** und
+erhält ausschließlich additive, optionale Coverage-Felder:
 
-**Abnahme:** fokussierte MD-C1-Tests, alle Attachment- und Quarantäne-Tests,
-vollständige Mail-Desk-Suite, `python -m compileall -q skills/mail-desk`,
-Quick-Validate, Skill-Katalogvalidierung und `git diff --check` grün.
-`final-location-index.json` bleibt byte-identisch; keine Mailbox- oder Cloud-Mutation.
+- `analysis_completeness`: `full | truncated | partial | unavailable`;
+- `truncation_reason`: vorhandener Wert aus `ALLOWED_TRUNCATION_REASONS` oder `null`;
+- `truncation_stage`: `none | extraction | handoff_per_attachment | handoff_cumulative_mail`;
+- `handoff_character_count`, `analysis_character_budget` und optional
+  `source_character_count` als nichtnegative Integer.
+
+Für bestehende Indexeinträge ohne diese Felder meldet die Lese-/Anzeigeebene
+`analysis_completeness: unknown`; die Datei wird nicht migriert oder automatisch
+umgeschrieben. Neue reguläre Analyseläufe übernehmen die Werte aus dem bereits
+validierten Handoff/Filing-Candidate. `analysis_status: "completed"` bleibt der
+technische Laufstatus. `full` ist zusammen mit Truncation-Grund oder einer anderen
+Truncation-Stufe als `none` unzulässig.
+
+**Explizit außerhalb des Pakets:**
+
+- kein Schema 2 und kein Migrations-CLI;
+- keine neue Receipt-, Provenienz- oder Trust-Infrastruktur;
+- keine Änderungen an Disposition, Recovery-Journal, FR-09 oder Cloud-Promotion;
+- keine neuen Statistiken oder System-Map-Ausweitung über eine knappe Anpassung des
+  bestehenden Objektvertrags hinaus;
+- keine Mutation bestehender Indexeinträge.
+
+**Pflichttests:** vollständige und zeichenlimitierte PDF, bestehender Eintrag ohne
+Coverage-Felder (`unknown`), neuer Eintrag mit vollständiger beziehungsweise
+gekürzter Coverage, widersprüchliches `full` plus Truncation, Handoff-/Candidate-
+Hashänderung bei Coverage-Drift sowie unveränderte MD-A3–A5- und MD-Q2/Q3-Tests.
+`final-location-index.json` bleibt byte-identisch.
+
+**Abnahme:** fokussierte MD-C1-Tests, Attachment-/Quarantäne-Regressionen,
+vollständige Mail-Desk-Suite, Compileall, Quick-Validate,
+Skill-Katalogvalidierung und `git diff --check` grün. Keine Mailbox-, Cloud- oder
+Quarantäne-Binärmutation.
