@@ -1768,6 +1768,157 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
                 conversation_id=self.conv_id,
             )
 
+    def test_toplevel_failed_without_failure_history_rejected(self) -> None:
+        """P1: A journal entry with top-level status=failed but whose last history item is not a failure entry must be rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test top-level failed without failure history",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test top-level failed without failure history",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        # Initialize journal in prepared state
+        record_journal_state(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=canonical_receipt_sha256(apply_rcpt),
+            apply_request_hash=canonical_apply_request_sha256(apply_req),
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            state=JOURNAL_STATE_PREPARED,
+        )
+
+        # Tamper on disk: set top-level status=failed, failure_stage, and error,
+        # but keep history as only [prepared]
+        raw_j = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        j_key = list(raw_j["entries"].keys())[0]
+        raw_j["entries"][j_key]["status"] = "failed"
+        raw_j["entries"][j_key]["failure_stage"] = "preparation"
+        raw_j["entries"][j_key]["error"] = {"stage": "preparation", "error": "adversarial failure"}
+        self.journal_path.write_text(json.dumps(raw_j, indent=2), encoding="utf-8")
+
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("requires last history item to be a failure entry", str(ctx.exception))
+
+    def test_toplevel_failed_stage_or_error_drift_rejected(self) -> None:
+        """P1: Drift between top-level failure_stage/error and history[-1] failure details must be rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test failure stage and error drift",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test failure stage and error drift",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        # Record a legitimate failure in journal
+        record_journal_failure(
+            self.journal_path,
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            apply_receipt_hash=canonical_receipt_sha256(apply_rcpt),
+            apply_request_hash=canonical_apply_request_sha256(apply_req),
+            previous_index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+            stage="inventory_update",
+            error={"stage": "inventory_update", "error": "disk failure"},
+        )
+
+        # Verify it loads cleanly as-is
+        valid_loaded = load_discard_journal(self.journal_path)
+        self.assertEqual(list(valid_loaded["entries"].values())[0]["status"], "failed")
+
+        raw_j = json.loads(self.journal_path.read_text(encoding="utf-8"))
+        j_key = list(raw_j["entries"].keys())[0]
+
+        # Case 1: Tamper top-level failure_stage so it drifts from history[-1].stage
+        tampered_stage = json.loads(json.dumps(raw_j))
+        tampered_stage["entries"][j_key]["failure_stage"] = "index_update"
+        self.journal_path.write_text(json.dumps(tampered_stage, indent=2), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("failure_stage drift", str(ctx.exception))
+
+        # Case 2: Tamper top-level error so it drifts from history[-1].error
+        tampered_err = json.loads(json.dumps(raw_j))
+        tampered_err["entries"][j_key]["error"] = {"stage": "inventory_update", "error": "tampered different error"}
+        self.journal_path.write_text(json.dumps(tampered_err, indent=2), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("error drift", str(ctx.exception))
+
+        # Case 3: Tamper status to in_progress while last history item is still a failure entry
+        tampered_status = json.loads(json.dumps(raw_j))
+        tampered_status["entries"][j_key]["status"] = "in_progress"
+        tampered_status["entries"][j_key]["failure_stage"] = None
+        tampered_status["entries"][j_key]["error"] = None
+        self.journal_path.write_text(json.dumps(tampered_status, indent=2), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("cannot have unhandled failure as last history item", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

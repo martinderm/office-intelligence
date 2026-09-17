@@ -1279,6 +1279,59 @@ def load_discard_journal(journal_path: Path) -> dict[str, Any]:
                 f"Journal entry '{entry_key}' state/last_successful_state '{expected_last_state}' does not match history-derived '{derived_successful_state}'"
             )
 
+        # Validate that top-level status is consistent with the latest history item
+        last_h_item = history[-1]
+        if status == "failed":
+            if (
+                last_h_item.get("transition") != "failed"
+                or last_h_item.get("status") != "failed"
+            ):
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' requires last history item to be a failure entry, "
+                    f"got status={last_h_item.get('status')!r}, transition={last_h_item.get('transition')!r}"
+                )
+            h_stage = last_h_item.get("stage")
+            if not h_stage or not str(h_stage).strip():
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' last history failure item missing stage"
+                )
+            if str(h_stage).strip() != str(failure_stage).strip():
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' failure_stage drift: top-level '{failure_stage}' != history '{h_stage}'"
+                )
+            hist_err = last_h_item.get("error")
+            if hist_err is None:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' last history failure item missing error"
+                )
+
+            # Canonical comparison of top-level error dict and last history error
+            canon_top_err = json.dumps(err_obj, sort_keys=True)
+            if isinstance(hist_err, (dict, list)):
+                canon_hist_err = json.dumps(hist_err, sort_keys=True)
+            elif isinstance(hist_err, str):
+                try:
+                    parsed = json.loads(hist_err)
+                    if isinstance(parsed, (dict, list)):
+                        canon_hist_err = json.dumps(parsed, sort_keys=True)
+                    else:
+                        canon_hist_err = hist_err
+                except Exception:
+                    canon_hist_err = hist_err
+            else:
+                canon_hist_err = str(hist_err)
+
+            if canon_top_err != canon_hist_err and hist_err != err_obj:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' error drift: top-level error does not match last history error"
+                )
+        else:
+            # status is in_progress or completed
+            if last_h_item.get("status") == "failed" or last_h_item.get("transition") == "failed":
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status '{status}' cannot have unhandled failure as last history item"
+                )
+
     return data
 
 
@@ -1500,7 +1553,7 @@ def record_journal_failure(
             "updated_at": now_iso,
             "history": [
                 {"state": JOURNAL_STATE_PREPARED, "status": "success", "timestamp": now_iso},
-                {"transition": "failed", "stage": stage, "status": "failed", "error": str(err_dict), "timestamp": now_iso},
+                {"transition": "failed", "stage": stage, "status": "failed", "error": err_dict, "timestamp": now_iso},
             ],
             "failure_stage": stage,
             "error": err_dict,
@@ -1533,7 +1586,7 @@ def record_journal_failure(
             "transition": "failed",
             "stage": stage,
             "status": "failed",
-            "error": str(err_dict),
+            "error": err_dict,
             "timestamp": now_iso,
         })
 
