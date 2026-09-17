@@ -98,7 +98,7 @@ def run_reconcile_mode(
         folder_verified: bool | None = None
         final_env: str | None = None
         if check_folders and action_type != "delete" and message_id:
-            verified = verify_folder(final_folder, message_id, subject=str(record.get("subject", "")), from_addr=str(record.get("from", "")), date_str=str(record.get("date", "")), account=account)
+            verified = verify_folder(final_folder, message_id, subject=str(record.get("subject", "")), from_addr=str(record.get("from", "")), date_str=str(record.get("date", "")), account=account, candidate_env_id=str(record.get("final_envelope_id") or record.get("envelope_id") or ""))
             folder_verified = verified is not None
             final_env = str(verified) if verified is not None else None
         elif check_folders and action_type == "delete":

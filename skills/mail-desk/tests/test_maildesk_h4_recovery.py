@@ -11,6 +11,7 @@ SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from core.modes import execute, pipeline, reconcile  # noqa: E402
+from core.recovery import BatchRecoveryJournal  # noqa: E402
 import mail_desk_batch_runner as runner  # noqa: E402
 
 
@@ -45,6 +46,53 @@ class RecoveryJournalTests(unittest.TestCase):
         if fault:
             deps["fault_inject"] = fault
         return deps
+
+    def test_reconcile_verifies_retained_keep_in_folder_via_journal_locator(self):
+        # A retained keep_in_folder item ages out of the newest-150 listing
+        # window; only the journal-recorded locator can re-verify it.
+        def retained_verify(folder, message_id, **kwargs):
+            return "7" if kwargs.get("candidate_env_id") == "7" else None
+
+        for final_envelope_id in ("7", None):
+            with self.subTest(final_envelope_id=final_envelope_id), tempfile.TemporaryDirectory() as tmp:
+                data_dir = Path(tmp) / "data" / "mail-desk"
+                data_dir.mkdir(parents=True)
+                message_id = "retained@example.test"
+                journal = BatchRecoveryJournal(data_dir, "keep-in-folder")
+                record = journal.ensure_item(
+                    {
+                        "envelope_id": "7",
+                        "message_id": message_id,
+                        "subject": "Retained subject",
+                        "source_folder": "INBOX",
+                        "action": {"type": "keep_in_folder", "target_folder": "INBOX"},
+                        "decision": {"kind": "project", "id": "test"},
+                        "synthesis_targets": [],
+                    }
+                )
+                journal.transition(record, "complete", final_folder="INBOX", final_envelope_id=final_envelope_id)
+                (data_dir / "final-location-index.json").write_text(
+                    json.dumps({"items": {message_id: {"final_folder": "INBOX", "envelope_id": "7"}}}),
+                    encoding="utf-8",
+                )
+                (data_dir / "action-log.jsonl").write_text(
+                    json.dumps({"message_id": message_id}) + "\n", encoding="utf-8"
+                )
+                verify = Mock(side_effect=retained_verify)
+
+                report = reconcile.run_reconcile_mode(
+                    {"run_id": "keep-in-folder", "check_folders": True},
+                    data_dir=data_dir,
+                    index_path=data_dir / "final-location-index.json",
+                    dependencies={"verify_in_target_folder": verify},
+                )
+
+                self.assertEqual("7", verify.call_args.kwargs.get("candidate_env_id"))
+                self.assertEqual("completed", report["status"])
+                self.assertFalse(report["recovery_required"])
+                self.assertTrue(report["results"][0]["folder_verified"])
+                self.assertTrue(report["completion_report"]["handoff_released"])
+                self.assertEqual("pending", report["synthesis_handoff"]["status"])
 
     def test_timeout_after_copy_is_aborted_and_retry_does_not_copy_again(self):
         def fault(phase, _item):
