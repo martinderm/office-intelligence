@@ -76,6 +76,44 @@ ANALYSIS_STATUS_COMPLETED = "completed"
 ALLOWED_LIFECYCLE_STATES = {LIFECYCLE_STATE_QUARANTINED}
 ALLOWED_ANALYSIS_STATUSES = {ANALYSIS_STATUS_COMPLETED}
 
+ANALYSIS_COMPLETENESS_FULL = "full"
+ANALYSIS_COMPLETENESS_TRUNCATED = "truncated"
+ANALYSIS_COMPLETENESS_PARTIAL = "partial"
+ANALYSIS_COMPLETENESS_UNAVAILABLE = "unavailable"
+ANALYSIS_COMPLETENESS_UNKNOWN = "unknown"
+
+ALLOWED_ANALYSIS_COMPLETENESS = {
+    ANALYSIS_COMPLETENESS_FULL,
+    ANALYSIS_COMPLETENESS_TRUNCATED,
+    ANALYSIS_COMPLETENESS_PARTIAL,
+    ANALYSIS_COMPLETENESS_UNAVAILABLE,
+}
+
+TRUNCATION_STAGE_NONE = "none"
+TRUNCATION_STAGE_EXTRACTION = "extraction"
+TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT = "handoff_per_attachment"
+TRUNCATION_STAGE_HANDOFF_CUMULATIVE_MAIL = "handoff_cumulative_mail"
+
+ALLOWED_TRUNCATION_STAGES = {
+    TRUNCATION_STAGE_NONE,
+    TRUNCATION_STAGE_EXTRACTION,
+    TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT,
+    TRUNCATION_STAGE_HANDOFF_CUMULATIVE_MAIL,
+}
+
+ALLOWED_TRUNCATION_REASONS = {
+    None,
+    "",
+    "max_chars_exceeded",
+    "max_pages_exceeded",
+    "ocr_page_limit_exceeded",
+    "ocr_unavailable",
+    "max_paragraphs_exceeded",
+    "grid_limit_exceeded",
+    "max_slides_exceeded",
+    "timeout_exceeded",
+}
+
 PART_LOCATOR_REGEX = re.compile(r"^\d+(?:\.\d+)*$")
 MIME_TYPE_REGEX = re.compile(r"^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$")
 SHA256_HEX_REGEX = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -87,7 +125,7 @@ CONTRACT_VERSION_REGEX = re.compile(r"^[a-zA-Z0-9_.-]{1,64}$")
 MAX_DISPOSITION_REF_LENGTH = 128
 DISPOSITION_REF_REGEX = re.compile(r"^[a-zA-Z0-9_.:/-]{1,128}$")
 
-ALLOWED_ENTRY_FIELDS = {
+BASE_ENTRY_FIELDS = {
     "attachment_id",
     "message_id",
     "account",
@@ -110,6 +148,18 @@ ALLOWED_ENTRY_FIELDS = {
     "disposition_ref",
 }
 
+CORE_COVERAGE_FIELDS = {
+    "analysis_completeness",
+    "truncation_reason",
+    "truncation_stage",
+    "handoff_character_count",
+    "analysis_character_budget",
+}
+
+COVERAGE_FIELDS = CORE_COVERAGE_FIELDS | {"source_character_count"}
+
+ALLOWED_ENTRY_FIELDS = BASE_ENTRY_FIELDS | COVERAGE_FIELDS
+
 ALLOWED_ROOT_FIELDS = {"schema_version", "updated_at", "items"}
 
 CANONICAL_ENTRY_FIELDS = (
@@ -130,6 +180,12 @@ CANONICAL_ENTRY_FIELDS = (
     "contract_hash",
     "lifecycle_state",
     "disposition_ref",
+    "analysis_completeness",
+    "truncation_reason",
+    "truncation_stage",
+    "handoff_character_count",
+    "analysis_character_budget",
+    "source_character_count",
 )
 
 FORBIDDEN_ENTRY_FIELDS = {
@@ -273,13 +329,16 @@ def load_quarantine_index(index_path: Path) -> dict[str, Any]:
         validated_items[key] = validated_entry
 
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": schema_ver,
         "updated_at": updated_at,
         "items": validated_items,
     }
 
 
-def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None:
+def save_quarantine_index_atomic(
+    index_path: Path,
+    data: dict[str, Any],
+) -> None:
     """Save quarantine index atomically via temporary file replacement."""
     if not isinstance(data, dict):
         raise QuarantineIndexError("Cannot save invalid quarantine index data: root must be a dict")
@@ -290,8 +349,26 @@ def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None
             f"Unknown root field(s) when saving quarantine index: {sorted(unknown_root)}"
         )
 
-    if data.get("schema_version") != SCHEMA_VERSION or not isinstance(data.get("items"), dict):
-        raise QuarantineIndexError("Cannot save invalid or non-Schema 1 quarantine index data")
+    schema_ver = data.get("schema_version", SCHEMA_VERSION)
+    if schema_ver != SCHEMA_VERSION or not isinstance(data.get("items"), dict):
+        raise QuarantineIndexError(f"Cannot save invalid or unsupported schema_version: {schema_ver}")
+
+    serializable_items: dict[str, Any] = {}
+    for k, item in data.get("items", {}).items():
+        if not isinstance(item, dict):
+            raise AttachmentIndexSchemaError(f"Index item {k!r} must be a dictionary")
+        validated_item = validate_quarantine_index_entry(item)
+        if k != validated_item["attachment_id"]:
+            raise AttachmentIndexDriftError(
+                f"Quarantine index key drift: dictionary key '{k}' does not match entry attachment_id '{validated_item['attachment_id']}'"
+            )
+        serializable_items[k] = validated_item
+
+    data_to_save = {
+        "schema_version": SCHEMA_VERSION,
+        "updated_at": data.get("updated_at"),
+        "items": serializable_items,
+    }
 
     index_path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -303,7 +380,7 @@ def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None
         suffix=".tmp",
         delete=False,
     ) as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(data_to_save, f, ensure_ascii=False, indent=2)
         f.write("\n")
         temp_path = Path(f.name)
 
@@ -314,7 +391,9 @@ def save_quarantine_index_atomic(index_path: Path, data: dict[str, Any]) -> None
 # Entry Validation & Canonical Binding
 # ==============================================================================
 
-def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
+def validate_quarantine_index_entry(
+    entry: dict[str, Any],
+) -> dict[str, Any]:
     """Strictly validate and normalize a candidate quarantine index entry fail-closed against Schema 1.
 
     Rejects:
@@ -325,6 +404,7 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
     - Invalid analysis_status (must be 'completed')
     - Invalid lifecycle_state (must be 'quarantined')
     - Missing required fields
+    - Invalid or contradictory coverage fields
     - attachment_id drift if provided
     """
     if not isinstance(entry, dict):
@@ -584,6 +664,87 @@ def validate_quarantine_index_entry(entry: dict[str, Any]) -> dict[str, Any]:
     }
     if contract_hash is not None:
         ret["contract_hash"] = contract_hash
+
+    # 19. Groupwise optional additive coverage fields (Schema 1)
+    coverage_present = {k for k in COVERAGE_FIELDS if k in entry}
+    if coverage_present:
+        missing_core = CORE_COVERAGE_FIELDS - set(entry.keys())
+        if missing_core:
+            raise AttachmentIndexSchemaError(
+                f"Incomplete coverage block: missing core coverage field(s) {sorted(missing_core)}"
+            )
+
+        raw_comp = entry.get("analysis_completeness")
+        if not raw_comp or not isinstance(raw_comp, str):
+            raise AttachmentIndexSchemaError("Missing or invalid 'analysis_completeness'")
+        comp_str = raw_comp.strip().lower()
+        if comp_str not in ALLOWED_ANALYSIS_COMPLETENESS:
+            raise AttachmentIndexSchemaError(f"Invalid 'analysis_completeness': {raw_comp!r}")
+
+        raw_trunc_r = entry.get("truncation_reason")
+        trunc_reason = None
+        if raw_trunc_r is not None and str(raw_trunc_r).strip() != "":
+            trunc_reason = str(raw_trunc_r).strip()
+            if trunc_reason not in ALLOWED_TRUNCATION_REASONS:
+                raise AttachmentIndexSchemaError(f"Invalid 'truncation_reason': {raw_trunc_r!r}")
+
+        raw_t_stage = entry.get("truncation_stage")
+        if raw_t_stage is None or not isinstance(raw_t_stage, str):
+            raise AttachmentIndexSchemaError(f"Missing or invalid 'truncation_stage': {raw_t_stage!r}")
+        t_stage = raw_t_stage.strip()
+        if t_stage not in ALLOWED_TRUNCATION_STAGES:
+            raise AttachmentIndexSchemaError(f"Invalid 'truncation_stage': {raw_t_stage!r}")
+
+        raw_h_chars = entry.get("handoff_character_count")
+        if raw_h_chars is None or isinstance(raw_h_chars, bool):
+            raise AttachmentIndexSchemaError(f"Invalid 'handoff_character_count': {raw_h_chars!r}")
+        try:
+            h_chars = int(raw_h_chars)
+            if h_chars < 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise AttachmentIndexSchemaError(f"Invalid 'handoff_character_count': {raw_h_chars!r}")
+
+        raw_budget = entry.get("analysis_character_budget")
+        if raw_budget is None or isinstance(raw_budget, bool):
+            raise AttachmentIndexSchemaError(f"Invalid 'analysis_character_budget': {raw_budget!r}")
+        try:
+            budget = int(raw_budget)
+            if budget < 0:
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise AttachmentIndexSchemaError(f"Invalid 'analysis_character_budget': {raw_budget!r}")
+
+        raw_s_chars = entry.get("source_character_count")
+        s_chars = None
+        if raw_s_chars is not None:
+            if isinstance(raw_s_chars, bool):
+                raise AttachmentIndexSchemaError(f"Invalid 'source_character_count': {raw_s_chars!r}")
+            try:
+                s_chars = int(raw_s_chars)
+                if s_chars < 0:
+                    raise ValueError()
+            except (ValueError, TypeError):
+                raise AttachmentIndexSchemaError(f"Invalid 'source_character_count': {raw_s_chars!r}")
+
+        if comp_str == ANALYSIS_COMPLETENESS_FULL:
+            if trunc_reason is not None:
+                raise AttachmentIndexSchemaError("analysis_completeness 'full' prohibited with truncation_reason")
+            if t_stage != TRUNCATION_STAGE_NONE:
+                raise AttachmentIndexSchemaError(f"analysis_completeness 'full' prohibited with truncation_stage '{t_stage}'")
+        elif comp_str == ANALYSIS_COMPLETENESS_TRUNCATED:
+            if not trunc_reason:
+                raise AttachmentIndexSchemaError("analysis_completeness 'truncated' requires truncation_reason")
+            if t_stage == TRUNCATION_STAGE_NONE:
+                raise AttachmentIndexSchemaError("analysis_completeness 'truncated' requires truncation_stage other than 'none'")
+
+        ret["analysis_completeness"] = comp_str
+        ret["truncation_reason"] = trunc_reason
+        ret["truncation_stage"] = t_stage
+        ret["handoff_character_count"] = h_chars
+        ret["analysis_character_budget"] = budget
+        ret["source_character_count"] = s_chars
+
     return ret
 
 
@@ -657,7 +818,7 @@ def record_quarantine_entry(
     - Verifies physical file existence, size, SHA-256, and .quarantine-inventory.json integrity.
     - Inspects symlink and Windows reparse point safety fail-closed.
     - Pure idempotent repetition for identical entries (no-op).
-    - Fail-closed drift abort across all 17 canonical fields.
+    - Fail-closed drift abort across all canonical fields.
     - Atomically replaces attachment-quarantine-index.json.
     """
     ws = Path(workspace_root or Path.cwd()).resolve()
@@ -676,7 +837,9 @@ def record_quarantine_entry(
             f"Quarantine index mutation requires an active, owned workspace lock: {err}"
         ) from err
 
-    # 2. Schema 1 entry validation & normalization
+    index_data = load_quarantine_index(idx_path)
+
+    # 2. Entry validation & normalization
     canonical_entry = validate_quarantine_index_entry(payload)
     att_id = canonical_entry["attachment_id"]
     run_id = canonical_entry["run_id"]
@@ -734,11 +897,8 @@ def record_quarantine_entry(
             clean_filename=clean_fn,
         )
 
-    # 4. Load current index
-    index_data = load_quarantine_index(idx_path)
+    # 4. Idempotency & Drift Detection
     items = index_data.setdefault("items", {})
-
-    # 5. Idempotency & Drift Detection across all 17 canonical fields
     existing = items.get(att_id)
     if existing is not None:
         for field in CANONICAL_ENTRY_FIELDS:
@@ -756,7 +916,7 @@ def record_quarantine_entry(
             "item": existing,
         }
 
-    # 6. Insert new entry & save atomically
+    # 5. Insert new entry & save atomically
     items[att_id] = canonical_entry
     index_data["updated_at"] = utc_now_iso()
     save_quarantine_index_atomic(idx_path, index_data)
@@ -768,8 +928,10 @@ def record_quarantine_entry(
     }
 
 
-def canonical_index_entry_sha256(entry: dict[str, Any]) -> str:
-    """Compute deterministic SHA-256 hash over canonical MD-Q2 index entry."""
+def canonical_index_entry_sha256(
+    entry: dict[str, Any],
+) -> str:
+    """Compute deterministic SHA-256 hash over canonical MD-Q2 or MD-C1 index entry."""
     canon = validate_quarantine_index_entry(entry)
     serialized = json.dumps(canon, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
@@ -928,6 +1090,17 @@ def reconcile_quarantine_index(
         mid = entry.get("message_id", "")
         clean_fn = entry.get("clean_filename") or entry.get("filename") or ""
 
+        coverage_data: dict[str, Any] = {}
+        if "analysis_completeness" in entry:
+            coverage_data = {
+                "analysis_completeness": entry.get("analysis_completeness"),
+                "truncation_reason": entry.get("truncation_reason"),
+                "truncation_stage": entry.get("truncation_stage", TRUNCATION_STAGE_NONE),
+                "handoff_character_count": entry.get("handoff_character_count", 0),
+                "analysis_character_budget": entry.get("analysis_character_budget", 0),
+                "source_character_count": entry.get("source_character_count"),
+            }
+
         # Containment & Security Checks BEFORE any file access
         if not is_valid_run_id(run_id):
             drift_count += 1
@@ -939,6 +1112,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Invalid run_id: {run_id!r}",
+                **coverage_data,
             })
             continue
 
@@ -959,6 +1133,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Absolute quarantine_path rejected: {rel_path!r}",
+                **coverage_data,
             })
             continue
 
@@ -973,6 +1148,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Directory traversal rejected: {rel_path!r}",
+                **coverage_data,
             })
             continue
 
@@ -989,6 +1165,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"quarantine_path '{rel_path}' does not reside under expected run prefix '{expected_run_prefix}'",
+                **coverage_data,
             })
             continue
 
@@ -1007,6 +1184,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Path security violation: {err}",
+                **coverage_data,
             })
             continue
 
@@ -1020,6 +1198,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Physical file does not exist at '{target_file}'",
+                **coverage_data,
             })
             continue
 
@@ -1033,6 +1212,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": "Target is not a regular file or is a symlink",
+                **coverage_data,
             })
             continue
 
@@ -1049,6 +1229,7 @@ def reconcile_quarantine_index(
                         "run_id": run_id,
                         "quarantine_path": rel_path,
                         "details": "Windows reparse point detected",
+                        **coverage_data,
                     })
                     continue
             except OSError:
@@ -1069,6 +1250,7 @@ def reconcile_quarantine_index(
                     "run_id": run_id,
                     "quarantine_path": rel_path,
                     "details": f"Hash or size drift: disk ({actual_sha}, {actual_size}) != index ({exp_sha}, {exp_size})",
+                    **coverage_data,
                 })
                 continue
 
@@ -1092,6 +1274,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": "Physical file and inventory match quarantine index",
+                **coverage_data,
             })
         except Exception as err:
             drift_count += 1
@@ -1103,6 +1286,7 @@ def reconcile_quarantine_index(
                 "run_id": run_id,
                 "quarantine_path": rel_path,
                 "details": f"Physical or inventory verification error: {err}",
+                **coverage_data,
             })
 
     overall_status = "consistent" if (missing_count == 0 and drift_count == 0) else ("drift" if drift_count > 0 else "missing_review")
@@ -1126,22 +1310,34 @@ def lookup_quarantine_entry(
     attachment_id: str | None = None,
     message_id: str | None = None,
 ) -> dict[str, Any] | None:
-    """Lookup a quarantine index entry by deterministic attachment_id or normalized message_id."""
+    """Lookup a quarantine index entry by deterministic attachment_id or normalized message_id.
+
+    For existing index entries without coverage fields, reports analysis_completeness: "unknown"
+    at the read/display level without mutating the on-disk file.
+    """
     data = load_quarantine_index(index_path)
     items = data.get("items", {})
 
+    target_entry = None
     if attachment_id is not None:
         norm_id = str(attachment_id).strip().lower()
         if norm_id in items:
-            return items[norm_id]
+            target_entry = items[norm_id]
 
-    if message_id is not None:
+    if target_entry is None and message_id is not None:
         norm_mid = normalize_message_id(message_id)
         for entry in items.values():
             if entry.get("message_id") == norm_mid:
-                return entry
+                target_entry = entry
+                break
 
-    return None
+    if target_entry is None:
+        return None
+
+    result = dict(target_entry)
+    if "analysis_completeness" not in result:
+        result["analysis_completeness"] = ANALYSIS_COMPLETENESS_UNKNOWN
+    return result
 
 
 def get_quarantine_index_stats(index_path: Path) -> dict[str, Any]:

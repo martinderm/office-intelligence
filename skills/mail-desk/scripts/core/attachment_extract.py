@@ -894,6 +894,7 @@ def _extract_content_internal(
     tool_version = _get_tool_version("built_in")
     quality = "high"
     truncation_reason: str | None = None
+    source_character_count: int | None = None
     extracted_text = ""
     derivative_sha256: str | None = None
     derivative_relative_path: str | None = None
@@ -916,6 +917,7 @@ def _extract_content_internal(
             except UnicodeDecodeError:
                 continue
 
+        source_character_count = len(decoded_str)
         if len(decoded_str) > max_chars:
             extracted_text = decoded_str[:max_chars]
             truncation_reason = "max_chars_exceeded"
@@ -988,6 +990,10 @@ def _extract_content_internal(
                 lines.append(p_txt)
                 cur_chars += len(p_txt)
             extracted_text = "\n".join(lines)
+            if total_pages <= max_pdf_pages:
+                source_character_count = len("\n".join(p_txt for _, _, p_txt, _ in digital_pages))
+            else:
+                source_character_count = None
 
         # Case 2b: Pure Image / Scanned PDF
         elif len(digital_pages) == 0:
@@ -1455,6 +1461,9 @@ def _extract_content_internal(
                 "error": f"No extraction converter available for format '{ext}' ({eff_mime})",
             }
 
+    if source_character_count is None and status == "extracted" and truncation_reason is None:
+        source_character_count = len(extracted_text)
+
     return {
         "status": status,
         "source_sha256": actual_sha,
@@ -1467,6 +1476,7 @@ def _extract_content_internal(
         "scope": scope,
         "truncation_reason": truncation_reason,
         "character_count": len(extracted_text),
+        "source_character_count": source_character_count,
         "text": extracted_text,
         "error": None,
     }

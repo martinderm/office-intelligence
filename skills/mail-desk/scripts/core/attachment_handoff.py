@@ -61,6 +61,31 @@ ALLOWED_TRUNCATION_REASONS = {
     "timeout_exceeded",
 }
 
+ANALYSIS_COMPLETENESS_FULL = "full"
+ANALYSIS_COMPLETENESS_TRUNCATED = "truncated"
+ANALYSIS_COMPLETENESS_PARTIAL = "partial"
+ANALYSIS_COMPLETENESS_UNAVAILABLE = "unavailable"
+ANALYSIS_COMPLETENESS_UNKNOWN = "unknown"
+
+ALLOWED_ANALYSIS_COMPLETENESS = {
+    ANALYSIS_COMPLETENESS_FULL,
+    ANALYSIS_COMPLETENESS_TRUNCATED,
+    ANALYSIS_COMPLETENESS_PARTIAL,
+    ANALYSIS_COMPLETENESS_UNAVAILABLE,
+}
+
+TRUNCATION_STAGE_NONE = "none"
+TRUNCATION_STAGE_EXTRACTION = "extraction"
+TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT = "handoff_per_attachment"
+TRUNCATION_STAGE_HANDOFF_CUMULATIVE_MAIL = "handoff_cumulative_mail"
+
+ALLOWED_TRUNCATION_STAGES = {
+    TRUNCATION_STAGE_NONE,
+    TRUNCATION_STAGE_EXTRACTION,
+    TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT,
+    TRUNCATION_STAGE_HANDOFF_CUMULATIVE_MAIL,
+}
+
 # Pattern to detect closing or opening tag breakouts in untrusted text
 CLOSING_TAG_PATTERN = re.compile(
     r"<\s*/?\s*untrusted_attachment_content\b[^>]*>",
@@ -179,27 +204,94 @@ def compute_handoff_hash(
     }
     norm_decision = normalize_decision_snapshot(decision)
 
+    canonical_items: list[dict[str, Any]] = []
+    for it in items:
+        raw_comp = it.get("analysis_completeness")
+        is_trunc = bool(it.get("truncated", False))
+        raw_trunc_r = it.get("truncation_reason")
+        trunc_r_str = str(raw_trunc_r).strip() if raw_trunc_r is not None and str(raw_trunc_r).strip() != "" else None
+        st = str(it.get("status") or "").strip()
+        q = str(it.get("quality") or "").strip().lower()
+        raw_t = str(it.get("raw_text") or "")
+
+        if raw_comp is not None:
+            comp_str = str(raw_comp).strip().lower()
+            if comp_str not in ALLOWED_ANALYSIS_COMPLETENESS:
+                raise AttachmentHandoffError(f"Invalid analysis_completeness: '{comp_str}'")
+
+            raw_stage = it.get("truncation_stage")
+            t_stage = str(raw_stage or TRUNCATION_STAGE_NONE).strip()
+            if t_stage not in ALLOWED_TRUNCATION_STAGES:
+                raise AttachmentHandoffError(f"Invalid truncation_stage: '{t_stage}'")
+
+            if comp_str == ANALYSIS_COMPLETENESS_FULL:
+                if is_trunc:
+                    raise AttachmentHandoffError("analysis_completeness 'full' prohibited when truncated is True")
+                if trunc_r_str:
+                    raise AttachmentHandoffError(f"analysis_completeness 'full' prohibited with truncation_reason '{trunc_r_str}'")
+                if t_stage != TRUNCATION_STAGE_NONE:
+                    raise AttachmentHandoffError(f"analysis_completeness 'full' prohibited with truncation_stage '{t_stage}'")
+                if st != "extracted":
+                    raise AttachmentHandoffError(f"analysis_completeness 'full' prohibited with status '{st}'")
+                if q == "partial":
+                    raise AttachmentHandoffError("analysis_completeness 'full' prohibited with partial quality")
+                if q == "low" and not raw_t.strip():
+                    raise AttachmentHandoffError("analysis_completeness 'full' prohibited with low quality and empty text")
+        else:
+            # Backwards-compatibility default for items without coverage fields
+            if is_trunc or trunc_r_str:
+                comp_str = ANALYSIS_COMPLETENESS_TRUNCATED
+                t_stage = TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT if int(it.get("char_count", 0)) >= MAX_CHARS_PER_ATTACHMENT else TRUNCATION_STAGE_EXTRACTION
+            elif st != "extracted":
+                comp_str = ANALYSIS_COMPLETENESS_UNAVAILABLE
+                t_stage = TRUNCATION_STAGE_NONE
+            elif q == "partial":
+                comp_str = ANALYSIS_COMPLETENESS_PARTIAL
+                t_stage = TRUNCATION_STAGE_NONE
+            else:
+                comp_str = ANALYSIS_COMPLETENESS_FULL
+                t_stage = TRUNCATION_STAGE_NONE
+
+        h_chars = it.get("handoff_character_count")
+        h_chars_int = int(h_chars) if h_chars is not None else int(it.get("char_count", 0))
+        if h_chars_int < 0:
+            raise AttachmentHandoffError(f"Invalid handoff_character_count: {h_chars_int}")
+
+        b_chars = it.get("analysis_character_budget")
+        b_chars_int = int(b_chars) if b_chars is not None else MAX_CHARS_PER_ATTACHMENT
+        if b_chars_int < 0:
+            raise AttachmentHandoffError(f"Invalid analysis_character_budget: {b_chars_int}")
+
+        s_chars = it.get("source_character_count")
+        s_chars_int = int(s_chars) if s_chars is not None else None
+        if s_chars_int is not None and s_chars_int < 0:
+            raise AttachmentHandoffError(f"Invalid source_character_count: {s_chars_int}")
+
+        canonical_items.append({
+            "part_locator": str(it.get("part_locator") or "").strip(),
+            "filename": str(it.get("filename") or "").strip(),
+            "source_sha256": str(it.get("source_sha256") or it.get("sha256") or "").strip().lower(),
+            "mime_type": str(it.get("mime_type") or "").strip().lower(),
+            "materiality": str(it.get("materiality") or "").strip(),
+            "status": str(it.get("status") or "").strip(),
+            "quality": str(it.get("quality") or "").strip().lower(),
+            "char_count": int(it.get("char_count", 0)),
+            "truncated": bool(it.get("truncated", False)),
+            "truncation_reason": str(it.get("truncation_reason") or "").strip(),
+            "content_hash": str(it.get("content_hash") or "").strip().lower(),
+            "error": str(it.get("error") or "").strip(),
+            "analysis_completeness": comp_str,
+            "truncation_stage": t_stage,
+            "handoff_character_count": h_chars_int,
+            "analysis_character_budget": b_chars_int,
+            "source_character_count": s_chars_int,
+        })
+
     canonical_dict = {
         "schema_version": 1,
         "mail_identity": norm_identity,
         "decision": norm_decision,
-        "items": [
-            {
-                "part_locator": str(it.get("part_locator") or "").strip(),
-                "filename": str(it.get("filename") or "").strip(),
-                "source_sha256": str(it.get("source_sha256") or it.get("sha256") or "").strip().lower(),
-                "mime_type": str(it.get("mime_type") or "").strip().lower(),
-                "materiality": str(it.get("materiality") or "").strip(),
-                "status": str(it.get("status") or "").strip(),
-                "quality": str(it.get("quality") or "").strip().lower(),
-                "char_count": int(it.get("char_count", 0)),
-                "truncated": bool(it.get("truncated", False)),
-                "truncation_reason": str(it.get("truncation_reason") or "").strip(),
-                "content_hash": str(it.get("content_hash") or "").strip().lower(),
-                "error": str(it.get("error") or "").strip(),
-            }
-            for it in items
-        ],
+        "items": canonical_items,
     }
     encoded = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded, usedforsecurity=False).hexdigest()
@@ -485,7 +577,11 @@ def validate_mda3_extraction_envelope(
     # 6. Raw Text & Character Count Validation
     raw_text = att.get("text")
     if raw_text is None:
-        raw_text = att.get("extracted_text") or ""
+        raw_text = att.get("extracted_text")
+    if raw_text is None:
+        raw_text = att.get("raw_text")
+    if raw_text is None:
+        raw_text = ""
     else:
         raw_text = str(raw_text)
 
@@ -509,6 +605,18 @@ def validate_mda3_extraction_envelope(
     if error_msg is not None:
         error_msg = str(error_msg).strip() or None
 
+    source_character_count = att.get("source_character_count")
+    if source_character_count is not None:
+        try:
+            source_character_count_int = int(source_character_count)
+            if source_character_count_int < 0:
+                raise ValueError()
+            source_character_count = source_character_count_int
+        except (ValueError, TypeError):
+            raise AttachmentHandoffError(
+                f"Attachment '{filename}' has invalid source_character_count: {source_character_count}"
+            )
+
     item_dict = {
         "part_locator": part_loc,
         "filename": filename,
@@ -523,6 +631,7 @@ def validate_mda3_extraction_envelope(
         "error": error_msg,
         "raw_text": raw_text,
         "truncated": bool(att.get("truncated", False)),
+        "source_character_count": source_character_count,
     }
 
     # 7. Explicit Canonical Part Binding (if external canonical_parts provided by caller)
@@ -585,7 +694,7 @@ def build_attachment_analysis_handoff(
     - Tracks failure status: supplementary failures are recorded but do not block;
       required_for_decision failures trigger blocked_on_required_attachment status
       independently of any residual text.
-    - Binds canonical mail identity, decision snapshot, and items to handoff_hash.
+    - Binds canonical mail identity, decision snapshot, items, and coverage fields to handoff_hash.
     - Does NOT invoke LLMs, tools, or external services.
     """
     if not isinstance(mail_identity, Mapping):
@@ -667,6 +776,7 @@ def build_attachment_analysis_handoff(
         quality = norm_att["quality"]
         trunc_reason = norm_att["truncation_reason"]
         error_msg = norm_att["error"]
+        source_char_count = norm_att.get("source_character_count")
 
         # Evaluate complete usability of extraction
         is_usable, failure_reason = is_usable_extraction(norm_att)
@@ -682,6 +792,10 @@ def build_attachment_analysis_handoff(
         safe_text = escape_untrusted_content(norm_att["raw_text"])
         is_truncated = norm_att["truncated"]
         item_trunc_reason = trunc_reason
+        truncation_stage = TRUNCATION_STAGE_EXTRACTION if is_truncated else TRUNCATION_STAGE_NONE
+
+        # Effective character budget allocated to this file at start
+        current_file_budget = min(max_chars_per_attachment, max(0, remaining_mail_budget))
 
         # 1. Enforce per-attachment limit INCLUDING visible marker
         file_marker = f"\n[... Truncated at {max_chars_per_attachment} characters ...]"
@@ -690,6 +804,7 @@ def build_attachment_analysis_handoff(
             safe_text = safe_text[:allowed_len] + file_marker
             is_truncated = True
             item_trunc_reason = "max_chars_exceeded"
+            truncation_stage = TRUNCATION_STAGE_HANDOFF_PER_ATTACHMENT
 
         # 2. Enforce cumulative mail limit INCLUDING visible marker
         mail_marker = f"\n[... Truncated at cumulative {max_chars_per_mail} characters limit for mail ...]"
@@ -697,6 +812,7 @@ def build_attachment_analysis_handoff(
             is_truncated = True
             is_cumulative_truncated = True
             item_trunc_reason = item_trunc_reason or "max_chars_exceeded"
+            truncation_stage = TRUNCATION_STAGE_HANDOFF_CUMULATIVE_MAIL
             if remaining_mail_budget <= 0:
                 safe_text = ""
             elif remaining_mail_budget >= len(mail_marker):
@@ -711,6 +827,21 @@ def build_attachment_analysis_handoff(
 
         char_count = len(safe_text)
         cumulative_chars += char_count
+
+        if source_char_count is None and status == "extracted" and not norm_att["truncated"]:
+            source_char_count = len(norm_att["raw_text"])
+
+        # Determine analysis_completeness:
+        if status != "extracted":
+            analysis_completeness = ANALYSIS_COMPLETENESS_UNAVAILABLE
+        elif is_truncated or truncation_stage != TRUNCATION_STAGE_NONE or item_trunc_reason:
+            analysis_completeness = ANALYSIS_COMPLETENESS_TRUNCATED
+        elif quality == "partial":
+            analysis_completeness = ANALYSIS_COMPLETENESS_PARTIAL
+        elif quality == "low" and not safe_text.strip():
+            analysis_completeness = ANALYSIS_COMPLETENESS_UNAVAILABLE
+        else:
+            analysis_completeness = ANALYSIS_COMPLETENESS_FULL
 
         content_hash = hashlib.sha256(safe_text.encode("utf-8"), usedforsecurity=False).hexdigest()
 
@@ -744,6 +875,11 @@ def build_attachment_analysis_handoff(
             "content_hash": content_hash,
             "error": error_msg,
             "xml_block": xml_block,
+            "analysis_completeness": analysis_completeness,
+            "truncation_stage": truncation_stage,
+            "handoff_character_count": char_count,
+            "analysis_character_budget": current_file_budget,
+            "source_character_count": source_char_count,
         })
 
     handoff_hash = compute_handoff_hash(norm_identity, handoff_items, decision=norm_decision)
@@ -993,6 +1129,82 @@ def validate_attachment_handoff(
                 f"Item char_count {char_count} exceeds limit of {MAX_CHARS_PER_ATTACHMENT}"
             )
         cumulative_chars += char_count
+
+        # Validate coverage fields
+        handoff_cov_fields = {
+            "analysis_completeness",
+            "truncation_stage",
+            "handoff_character_count",
+            "analysis_character_budget",
+            "source_character_count",
+        }
+        cov_present = {k for k in handoff_cov_fields if k in it}
+        if cov_present:
+            if "analysis_completeness" not in it:
+                raise AttachmentHandoffError(
+                    f"Handoff item '{filename}' has orphan coverage field(s) without 'analysis_completeness': {sorted(cov_present)}"
+                )
+
+        comp = it.get("analysis_completeness")
+        if comp is not None:
+            comp_str = str(comp).strip().lower()
+            if comp_str not in ALLOWED_ANALYSIS_COMPLETENESS:
+                raise AttachmentHandoffError(f"Handoff item '{filename}' has invalid analysis_completeness: '{comp_str}'")
+
+            t_stage = str(it.get("truncation_stage") or "").strip()
+            if t_stage not in ALLOWED_TRUNCATION_STAGES:
+                raise AttachmentHandoffError(f"Handoff item '{filename}' has invalid truncation_stage: '{t_stage}'")
+
+            is_item_trunc = bool(it.get("truncated", False))
+            if comp_str == ANALYSIS_COMPLETENESS_FULL:
+                if is_item_trunc:
+                    raise AttachmentHandoffError(f"Handoff item '{filename}' claims 'full' but is truncated")
+                if trunc_reason:
+                    raise AttachmentHandoffError(f"Handoff item '{filename}' claims 'full' but has truncation_reason '{trunc_reason}'")
+                if t_stage != TRUNCATION_STAGE_NONE:
+                    raise AttachmentHandoffError(f"Handoff item '{filename}' claims 'full' but has truncation_stage '{t_stage}'")
+                if status != "extracted":
+                    raise AttachmentHandoffError(f"Handoff item '{filename}' claims 'full' but status is '{status}'")
+                if quality == "partial":
+                    raise AttachmentHandoffError(f"Handoff item '{filename}' claims 'full' but quality is 'partial'")
+
+            h_chars = it.get("handoff_character_count")
+            if h_chars is not None:
+                try:
+                    h_chars_int = int(h_chars)
+                    if h_chars_int < 0:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    raise AttachmentHandoffError(
+                        f"Handoff item '{filename}' has invalid handoff_character_count: {h_chars}"
+                    )
+                if h_chars_int != char_count:
+                    raise HandoffDriftError(
+                        f"Character count mismatch for item '{filename}': "
+                        f"handoff_character_count {h_chars_int} != char_count {char_count}"
+                    )
+
+            b_chars = it.get("analysis_character_budget")
+            if b_chars is not None:
+                try:
+                    b_chars_int = int(b_chars)
+                    if b_chars_int < 0:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    raise AttachmentHandoffError(
+                        f"Handoff item '{filename}' has invalid analysis_character_budget: {b_chars}"
+                    )
+
+            s_chars = it.get("source_character_count")
+            if s_chars is not None:
+                try:
+                    s_chars_int = int(s_chars)
+                    if s_chars_int < 0:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    raise AttachmentHandoffError(
+                        f"Handoff item '{filename}' has invalid source_character_count: {s_chars}"
+                    )
 
         # Validate content_hash
         claimed_content_hash = str(it.get("content_hash") or "").strip().lower()

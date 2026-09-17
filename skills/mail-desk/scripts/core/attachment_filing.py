@@ -508,6 +508,7 @@ def compute_candidate_hash(candidate: Mapping[str, Any]) -> str:
         "filemap_evidence": candidate.get("filemap_evidence"),
         "handoff_hash": candidate.get("handoff_hash"),
         "dedupe": candidate.get("dedupe"),
+        "coverage_evidence": candidate.get("coverage_evidence"),
     }
     dumped = json.dumps(canon, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
@@ -955,6 +956,25 @@ def propose_attachment_filing(
             "items_count": len(validated_handoff.get("items", [])),
         }
 
+        matching_item = None
+        for it in validated_handoff.get("items", []):
+            if (
+                str(it.get("part_locator") or "").strip() == str(norm_att.get("part_locator") or "").strip()
+                and str(it.get("source_sha256") or it.get("sha256") or "").strip().lower() == str(norm_att.get("sha256") or "").strip().lower()
+            ):
+                matching_item = it
+                break
+
+        if matching_item is not None:
+            base_candidate["coverage_evidence"] = {
+                "analysis_completeness": matching_item.get("analysis_completeness"),
+                "truncation_reason": matching_item.get("truncation_reason"),
+                "truncation_stage": matching_item.get("truncation_stage"),
+                "handoff_character_count": matching_item.get("handoff_character_count"),
+                "analysis_character_budget": matching_item.get("analysis_character_budget"),
+                "source_character_count": matching_item.get("source_character_count"),
+            }
+
     # 2. Resolve storage from catalogs
     cloud_sync, err_reason, err_status = resolve_catalog_storage(decision, catalogs)
     if not cloud_sync:
@@ -1189,6 +1209,12 @@ def propose_attachment_filing(
 
     # 9. All preconditions satisfied: propose filing!
     base_candidate["status"] = STATUS_PROPOSED
-    base_candidate["reason"] = f"Filing candidate proposed for storage '{storage_id}' at '{target_relative_path}'"
+    reason_str = f"Filing candidate proposed for storage '{storage_id}' at '{target_relative_path}'"
+    cov = base_candidate.get("coverage_evidence")
+    if cov and cov.get("analysis_completeness") in ("truncated", "partial", "unavailable"):
+        comp = cov.get("analysis_completeness")
+        t_reason = cov.get("truncation_reason") or "unspecified"
+        reason_str = f"{reason_str} [Coverage: {comp} ({t_reason})]"
+    base_candidate["reason"] = reason_str
     base_candidate["candidate_hash"] = compute_candidate_hash(base_candidate)
     return base_candidate

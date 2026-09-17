@@ -12,7 +12,7 @@
 Der Quarantäneindex ist die zentrale Buchführung über alle isolierten Dateianhänge.
 
 * **Dateipfad:** `data/mail-desk/attachment-quarantine-index.json`
-* **Implementierungsdatei:** [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L70-L135)
+* **Implementierungsdatei:** [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py)
 * **CLI-Fassade:** [`scripts/mail_desk_attachment_quarantine_index.py`](../scripts/mail_desk_attachment_quarantine_index.py)
 * **Aktuelle Schema-Version:** `1`
 
@@ -21,16 +21,17 @@ Das Wurzelelement erlaubt ausschließlich drei Felder (`ALLOWED_ROOT_FIELDS`):
 ```json
 {
   "schema_version": 1,
-  "updated_at": "2026-09-16T14:00:00Z",
+  "updated_at": "2026-09-17T10:00:00Z",
   "items": {
     "<attachment_id>": { "..." : "..." }
   }
 }
 ```
 
-### 1.2 Die 17 kanonischen Eintragsfelder (`CANONICAL_ENTRY_FIELDS`)
-Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 17 Schlüssel:
+### 1.2 Die kanonischen Eintragsfelder
+Schema 1 erzwingt 17 Pflichtschlüssel (`CANONICAL_ENTRY_FIELDS`). Optional können als konsistenter Gesamtblock bis zu 6 Coverage-Felder vorhanden sein:
 
+#### 1.2.1 Basisfelder (Schema 1)
 | Feldname | Typ / Regex | Beschreibung |
 | :--- | :--- | :--- |
 | `attachment_id` | `^[0-9a-fA-F]{64}$` | Deterministischer 64-Hex SHA-256 Hash (siehe unten). |
@@ -44,15 +45,30 @@ Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 17 Schlüssel:
 | `size_bytes` | Integer (`> 0`) | Exakte Dateigröße in Bytes (strikt positiv). |
 | `run_id` | String | Eindeutige Kennung des Extraktionslaufs. |
 | `quarantine_path` | String | Workspace-relativer Pfad: `data/mail-desk/attachments/<run_id>/<file>`. |
-| `analysis_status` | Enum | Fest auf `"completed"` (`ALLOWED_ANALYSIS_STATUSES`). |
+| `analysis_status` | Enum | Fest auf `"completed"` (`ALLOWED_ANALYSIS_STATUSES`). Bezeichnet rein den technischen Durchlauf! |
 | `analyzed_at` | RFC 3339 String | Zeitstempel der Extraktion und Analyse. |
 | `contract_version` | String | Version des Extraktionsvertrags (z. B. `"1.0"`). |
 | `contract_hash` | String / Hex | Hash des bindenden Prüfvertrags (optionaler 64-Hex-SHA-256). |
 | `lifecycle_state` | Enum | Fest auf `"quarantined"` (`ALLOWED_LIFECYCLE_STATES`). |
 | `disposition_ref` | String / `null` | Max. 128 Zeichen (`DISPOSITION_REF_REGEX`) oder `null`. |
 
-### 1.3 Ableitung der deterministischen `attachment_id`
-Definiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L172-L196):
+#### 1.2.2 Additive Coverage-Felder (Schema 1 optional, nur als vollständiger konsistenter Block)
+| Feldname | Typ / Wertebereich | Beschreibung |
+| :--- | :--- | :--- |
+| `analysis_completeness` | Enum: `full`, `truncated`, `partial`, `unavailable` | Fachliche Abdeckung der Anhangsanalyse (in-memory `unknown` bei unannotierten Altdaten). |
+| `truncation_reason` | String / `null` (`ALLOWED_TRUNCATION_REASONS`) | Grund bei Kürzung (z. B. `max_chars_exceeded`, `ocr_page_limit_exceeded`, `timeout_exceeded`). |
+| `truncation_stage` | Enum: `none`, `extraction`, `handoff_per_attachment`, `handoff_cumulative_mail` | Verarbeitungsstufe, auf der die Kürzung eintrat. |
+| `handoff_character_count` | Integer (`>= 0`) | Tatsächlich im Handoff bereitgestellte Textlänge. |
+| `analysis_character_budget` | Integer (`>= 0`) | Wirksames Zeichenbudget für diesen Anhang. |
+| `source_character_count` | Integer (`>= 0`) / `null` | Vor der Kürzung ermittelte Gesamtzeichenzahl (oder `null`, wenn vor Zählung geboundet). |
+
+### 1.3 Schema-1-Integrität & In-Memory-Darstellung
+* **Single-Schema-Design:** Der Quarantäneindex verbleibt strikt auf `SCHEMA_VERSION = 1`. Es gibt kein Schema 2 und keine Migrationsbefehle.
+* **In-Memory-Legacy-Darstellung:** Beim Lesen von Schema-1-Einträgen ohne Coverage-Felder liefert `lookup_quarantine_entry()` in-memory standardmäßig `analysis_completeness: "unknown"`. Die Datei auf Disk bleibt vollständig unberührt und byte-identisch.
+* **Fail-Closed-Invariante:** Ein Status `analysis_completeness: "full"` darf niemals mit einem gesetzten `truncation_reason` oder `truncation_stage != "none"` kombiniert werden (`AttachmentIndexSchemaError`).
+
+### 1.4 Ableitung der deterministischen `attachment_id`
+Definiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py):
 ```python
 canonical_dict = {
     "inventory_sha256": norm_sha,
@@ -209,8 +225,15 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `DispositionRequest` (`build_disposition_request`): Bindet kanonisch `attachment_id`, `index_entry_sha256`, `decision`, `review_after`, `rationale`, `candidate_review_hash`, `promotion_id`, `promotion_status`.
   * `ApplyRequest` (`build_apply_request`): Bindet den exakten, unteilbaren Löschumfang (`action: "discard"`, `attachment_id`, `decision_id`, `index_entry_sha256`, `quarantine_path`, `sha256`, `size_bytes`, `run_id`, `schema_version: 1`). Bulk-Apply ist strikt verboten (`attachment_id` zwingend).
   * `canonical_apply_request_sha256()`: Deterministischer SHA-256 Hash des serialisierten JSON-Objekts zur kryptographischen Bindung des Apply-Receipts.
-* **Attachment Filing Candidate (MD-A5)** ([`scripts/core/attachment_filing.py`](../scripts/core/attachment_filing.py)):
+* **Attachment Analysis Handoff (MD-A4 / MD-C1)** ([`scripts/core/attachment_handoff.py`](../scripts/core/attachment_handoff.py)):
+  * Bereinigtes Übergabe-Envelope für Downstream-Analysen (LLM-Dossier-Synthese).
+  * Trennt strikt technischen Abschluss (`analysis_status: "completed"`) von inhaltlicher Abdeckung (`analysis_completeness: "full" | "truncated" | "partial" | "unavailable"`).
+  * Bindet alle 6 Coverage-Felder (`analysis_completeness`, `truncation_reason`, `truncation_stage`, `handoff_character_count`, `analysis_character_budget`, `source_character_count`) kanonisch in `compute_handoff_hash()`.
+  * Verhindert Drift über `HandoffDriftError` (`handoff_character_count != len(text)`).
+* **Attachment Filing Candidate (MD-A5 / MD-C1)** ([`scripts/core/attachment_filing.py`](../scripts/core/attachment_filing.py)):
   * Vorschlag für Cloud-Ablage mit `promotion_status: "pending_human_review"`. Rein lesend; führt keine unautorisierten Cloud-Mutationen aus.
+  * Bindet `coverage_evidence` deterministisch in `compute_candidate_hash()` ein.
+  * Ergänzt bei eingeschränkter Abdeckung (`analysis_completeness != "full"`) einen transparenten Hinweistext im `reason`-Feld.
 * **`Dossier`** ([`scripts/core/modes/dossier.py`](../scripts/core/modes/dossier.py)): Strukturierte Fallakte mit klassifizierten Workpackages (`WP...`), Aufgaben und Signalstärken.
 * **`SynthesisHandoff`** ([`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py)): Bereinigtes Übergabepaket für identifizierte Action Items zur Weitergabe an `task-desk`.
 
