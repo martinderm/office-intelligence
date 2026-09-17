@@ -17,6 +17,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-06` | ✅ | Zweistufiger Post-Batch-Synthesevertrag mit Telemetrie, Targets und verifiziertem Handoff | U-1–U-5, manueller Pilot und Synthese-Handoff-Tests |
 | `FR-07` | ✅ | Kontrollierter Batch-Einstieg, Workspace-Bindung, Readiness, Recovery und Completion-Gate | H0-Recovery, MD-H1–H5, Fault-Injection und BOKU-Pilot |
 | `FR-08` | ✅ | Manifestgebundener Anhangsfluss vom RFC-822-Inventar bis zum read-only Ablagevorschlag | MD-A1–MD-A5, 449 Mail-Desk-Gesamttests und unabhängige Reviews |
+| `FR-11` | ✅ | Git-schlanke, indexierte Attachment-Quarantäne mit kontrolliertem Retain-, Promote- und Discard-Lebenszyklus | MD-Q1–MD-Q3, 519 Mail-Desk-Gesamttests und unabhängige Reviews |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -104,6 +105,25 @@ weder Cloud-Uploads noch Ordner-, Filemap- oder Katalogänderungen.
 Die finale Abnahme umfasste 41 fokussierte MD-A5-Tests und 449 grüne
 Mail-Desk-Gesamttests. Die eigentliche Cloud-Promotion bleibt ausschließlich
 Gegenstand von FR-09 und dessen separatem Human Gate.
+
+## FR-11 — Attachment-Quarantäne-Hygiene und Lebenszyklus
+
+FR-11 hält Binärdateien und run-lokale Inventare als ignorierte Laufzeitdaten aus
+Git heraus, führt aber alle erfolgreich analysierten und weiterhin lokal
+quarantänisierten Anhänge in einem kleinen versionierten Index. Der Final Location
+Index bleibt ausschließlich der Nachweis der verifizierten Mailboxposition und
+enthält keine lokalen Attachment-Pfade.
+
+- `MD-Q1` dokumentiert und testet die Git-Ignore-Grenze für Consumer-Workspaces.
+- `MD-Q2` stellt den atomaren, lockgebundenen Quarantäneindex mit physischer
+  Re-Verifikation, Drift-Erkennung und read-only Reconcile bereit.
+- `MD-Q3` dokumentiert Entscheidungen append-only und trennt `retain`, die reine
+  FR-09-Promotion-Übergabe und receiptgebundenes `discard` mit atomarem
+  Recovery-Journal.
+
+Die Abschlussabnahme umfasste 29 fokussierte MD-Q3-Tests, 55 Quarantäne-Tests und
+519 grüne Mail-Desk-Gesamttests. Quarantäne-Binärdateien bleiben unversioniert;
+eine tatsächliche Cloud-Promotion bleibt ausschließlich FR-09 vorbehalten.
 
 ## Archivierungsregel
 
