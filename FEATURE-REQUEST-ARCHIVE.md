@@ -18,6 +18,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-07` | ✅ | Kontrollierter Batch-Einstieg, Workspace-Bindung, Readiness, Recovery und Completion-Gate | H0-Recovery, MD-H1–H5, Fault-Injection und BOKU-Pilot |
 | `FR-08` | ✅ | Manifestgebundener Anhangsfluss vom RFC-822-Inventar bis zum read-only Ablagevorschlag | MD-A1–MD-A5, 449 Mail-Desk-Gesamttests und unabhängige Reviews |
 | `FR-11` | ✅ | Git-schlanke, indexierte Attachment-Quarantäne mit kontrolliertem Retain-, Promote- und Discard-Lebenszyklus | MD-Q1–MD-Q3, 519 Mail-Desk-Gesamttests und unabhängige Reviews |
+| `FR-14` | ✅ | Sichtbarer, hashgebundener Vollständigkeits- und Truncation-Status analysierter Mail-Anhänge | MD-C1, 15 fokussierte und 534 Mail-Desk-Gesamttests |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -124,6 +125,19 @@ enthält keine lokalen Attachment-Pfade.
 Die Abschlussabnahme umfasste 29 fokussierte MD-Q3-Tests, 55 Quarantäne-Tests und
 519 grüne Mail-Desk-Gesamttests. Quarantäne-Binärdateien bleiben unversioniert;
 eine tatsächliche Cloud-Promotion bleibt ausschließlich FR-09 vorbehalten.
+
+## FR-14 — Sichtbarer Truncation-Status analysierter Anhänge
+
+FR-14 macht sichtbar und hashgebunden, ob ein technisch abgeschlossen analysierter
+Mail-Anhang vollständig, gekürzt, teilweise oder gar nicht inhaltlich ausgewertet
+wurde. `MD-C1` reicht die additive Coverage-Evidenz vom Extraktions- und Handoff-
+Vertrag über den Filing-Candidate bis zum Quarantäneindex Schema 1 weiter; bestehende
+Einträge bleiben unverändert und erscheinen beim Lesen als `unknown`.
+
+Die Abschlussabnahme umfasste 15 fokussierte MD-C1-Tests und 534 grüne Mail-Desk-
+Gesamttests. Die Implementierung wurde mit `494f2fc` abgeschlossen; FR-14 führt
+weder ein neues Schema noch Migration, Promotion oder zusätzliche Trust-
+Infrastruktur ein.
 
 ## Archivierungsregel
 
