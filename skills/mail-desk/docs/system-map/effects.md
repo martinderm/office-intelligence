@@ -28,30 +28,41 @@ Himalaya interpretiert Doppelpunkte (`:`) in `-c <config>` auf Windows fälschli
 
 ## 2. Geheimnisschutz & Filterung verbotener Inhalte
 
-Um zu verhindern, dass vertrauliche Mail-Inhalte, Tokens oder Prompts unbemerkt in maschinelle Indizes sickern:
+Um zu verhindern, dass vertrauliche Mail-Inhalte, Tokens oder Prompts unbemerkt in maschinelle Indizes oder Logs sickern:
 
-* **Rekursiver Filter:** `_find_forbidden_content_keys()` in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L154-L165).
+* **Rekursiver Filter:** `_find_forbidden_content_keys()` in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L154-L165) und [`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py).
 * **Verbotene Schlüssel:**
   `text`, `extracted_text`, `content`, `body`, `prompt`, `llm_prompt`, `response`, `model_response`, `credentials`, `password`, `token`, `tokens`, `api_key`, `envelope_id`, `himalaya_id`.
-* **Effekt:** Taucht einer dieser Schlüssel in Metadaten oder Dispositions-Referenzen auf, bricht die Indizierung sofort mit `ForbiddenContentError` ab.
+* **Geltungsbereich:** Gilt für Metadaten, `disposition_ref`, `ApprovalReceipt`, `DispositionRequest`, `ApplyRequest`, Disposition-Logs und Discard-Journaleinträge.
+* **Effekt:** Taucht einer dieser Schlüssel auf (auch tief geschachtelt), bricht die Operation sofort mit `ForbiddenContentError` ab.
 
 ---
 
 ## 3. Concurrency & Lock-Ownership
 
-* **Voraussetzung:** Jede schreibende Skriptausführung (`execute`, `save_quarantine_index_atomic`) verlangt eine verifizierte Lease via `require_workspace_lock()`.
-* **Kein Legacy-Bypass:** `--allow-legacy` wurde in den MD-Q2-Modulen vollständig entfernt; die Umgebungsvariable `WORKSPACE_LOCK_ALLOW_LEGACY` wird ignoriert.
-* **Effekt:** Ohne gültige Lease bricht der Prozess mit `WorkspaceLockRequiredError` ab.
+Der Schutz vor Race Conditions und parallelen Mutationen erfolgt zweistufig:
+
+* **Workspace-Lease (Ebene 1):** Jede schreibende Skriptausführung (`execute`, `save_quarantine_index_atomic`, `apply_attachment_disposition`) verlangt eine verifizierte Workspace-Lease via `require_workspace_lock()`.
+  * **Kein Legacy-Bypass:** `--allow-legacy` wurde in allen Quarantäne- und Dispositions-Modulen vollständig entfernt; `WORKSPACE_LOCK_ALLOW_LEGACY` wird ignoriert.
+  * **Effekt:** Ohne gültige Lease bricht der Prozess mit `WorkspaceLockRequiredError` ab.
+* **Inventar-File-Lock (Ebene 2):** Zur Absicherung gleichzeitiger Zugriffe auf Quarantäne-Dateien und `.quarantine-inventory.json` verwendet der Mail-Desk den `_QuarantineInventoryLock` (`.quarantine-inventory.json.lock`).
+  * **Mechanismus:** Lock-Directory mit PID-Binding, Timeout (30s) und Prüfung veralteter Locks (Stale-Detection >300s).
+  * **Effekt:** Verhindert parallele Teilmutationen von Ingest, Reconcile und Discard-Cleanup.
 
 ---
 
-## 4. Fail-Closed Drift-Erkennung
+## 4. Fail-Closed Drift- & Integritäts-Erkennung
 
 Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 
-* **Geltungsbereich:** Alle 16 Pflichtfelder im `attachment-quarantine-index.json`.
-* **Widersprüchliche Alias-Felder:** Weichen `folder` vs. `original_folder` oder `clean_filename` vs. `filename` voneinander ab, wird dies als Manipulation gewertet.
-* **Effekt:** Es wird sofort `AttachmentIndexDriftError` geworfen. Der Lauf stoppt ohne Schreiboperationen; der menschliche Operator muss den Zustand manuell auditieren.
+* **Quarantine-Index-Drift:** Alle 16 Pflichtfelder im `attachment-quarantine-index.json` werden streng typisiert. Widersprüchliche Alias-Felder (z. B. `folder` vs. `original_folder` oder `clean_filename` vs. `filename`) werden als Manipulation gewertet → `AttachmentIndexDriftError`.
+* **Bereinigungs-Scope-Drift:** Beim Ausführen einer Discard-Bereinigung (`apply_attachment_disposition`) muss der tatsächliche Kandidaten-Scope deterministisch mit dem `apply_request_hash` des `ApplyRequest` und `ApprovalReceipt` übereinstimmen. Jede Abweichung im Scope bricht die Bereinigung vor dem Unlink ab → `AttachmentDispositionError`.
+* **Recovery-Journal-Integrität:**
+  * Das `attachment-discard-journal.json` verlangt eine lückenlos monotone State Machine (`prepared → file_deleted → inventory_updated → index_updated → completed`).
+  * Die History muss zwingend mit `prepared` beginnen.
+  * Top-Level-`status` (`in_progress`, `completed`, `failed`), `last_successful_state`, `failure_stage` und `error` müssen exakt mit dem letzten History-Eintrag (`history[-1]`) übereinstimmen. Verkürzte oder manipulierte Journale werden strikt abgelehnt.
+* **Physische Integrität:** `size_bytes <= 0` in `.quarantine-inventory.json` oder im Index wird als korrupte Datei/Manifest gewertet und abgelehnt.
+* **Effekt:** Tritt eine Integritätsverletzung auf, bricht die Engine sofort fail-closed ab (`AttachmentIndexDriftError` bzw. `AttachmentDispositionError`). Es finden keine Schreib- oder Löschoperationen statt; der Zustand verharrt zur menschlichen Begutachtung.
 
 ---
 

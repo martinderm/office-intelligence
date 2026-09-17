@@ -33,7 +33,7 @@ Die Bearbeitung von E-Mails und die Erfassung von Aufgaben sind strikt getrennt:
 
 1. **Intake & Triage (`mail-desk`):**
    - E-Mail wird eingelesen, klassifiziert und fachlich bewertet.
-   - Falls Dateianhänge existieren: Durchlaufen der Quarantäne-Pipeline (MD-Q1 / MD-Q2).
+   - Falls Dateianhänge existieren: Durchlaufen der Quarantäne- und Dispositions-Pipeline (MD-Q1/MD-Q2/MD-Q3: Extraktion, Indizierung, Entscheidung/Promotion-Link/Discard).
    - `mail-desk` erstellt eine Fallakte (Dossier) und markiert identifizierte Handlungsbedarfe.
 2. **Handoff an `task-desk`:**
    - Der Agent übergibt die identifizierten Punkte an `task-desk`.
@@ -91,6 +91,6 @@ Für Änderungen an den zentralen Registern (`projects.json`, `topics.json`) gil
 Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweiligen L2-Prozesskarten dokumentiert:
 
 * **Mail-Desk Deep Dive:** [`../../skills/mail-desk/docs/system-map/processes.md`](../../skills/mail-desk/docs/system-map/processes.md)  
-  *(Himalaya-Client-Flow, Mailbox-Preflight, Quarantäne-Engine MD-Q1/MD-Q2, Read-only Reconcile, Dossier-Synthese)*
+  *(Himalaya-Client-Flow, Mailbox-Preflight, Quarantäne-Engine MD-Q1/MD-Q2, Disposition, Verifiable Receipts & Discard Recovery Journal MD-Q3, Read-only Reconcile, Dossier-Synthese)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, Mirror-Sync)*

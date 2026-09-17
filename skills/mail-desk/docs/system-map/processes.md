@@ -101,37 +101,56 @@ Implementiert in [`scripts/core/attachment_disposition_log.py`](../scripts/core/
 └───────────────┬────────────────┘
                 │
                 ▼
-┌────────────────────────────────┐       Lock-Prüfung &
-│  Record Disposition (append)   │──────► Index-Hash-Bindung (canonical_index_entry_sha256)
+┌────────────────────────────────┐       Lock-Prüfung & Verifizierbares Receipt
+│  Record Disposition (append)   │──────► Request-Hash-Bindung (canonical_disposition_request_sha256)
 └───────────────┬────────────────┘       Audit-Trail in attachment-disposition-log.jsonl
                 │
        ┌────────┴────────┐
        ▼                 ▼
-[Read-Only Report]   [Apply Discard (mutierend)]
-  - eligible           10 Vorbedingungen (Lock, Inventar, Disk-SHA, kein aktiver Run)
-  - protected       ──► Physisches Unlink
-  - invalid         ──► Konsistentes .quarantine-inventory.json Update
-                    ──► Atomares Entfernen aus attachment-quarantine-index.json
+[Read-Only Report]   [Apply Discard (mutierend & zweiphasig)]
+  - eligible           Verifizierbares Apply-Receipt (exakter Scope-Hash)
+  - protected       ──► 1. Journal-Initialisierung (state: prepared)
+  - invalid         ──► 2. Synchroner 10-Vorbedingungen-Pre-Unlink-Check
+                    ──► 3. Physisches os.unlink (state: file_deleted)
+                    ──► 4. Atomares .quarantine-inventory.json Update (state: inventory_updated)
+                    ──► 5. Atomare Quarantäneindex-Entfernung (state: index_updated)
+                    ──► 6. Journal-Finalisierung (state: completed)
 ```
 
-1. **Entscheidungserfassung (`record_disposition_entry`):**
-   - Prüft Workspace-Lock (`require_workspace_lock`).
-   - Lädt Quarantäneindex-Eintrag und validiert Identität des kanonischen Eintrags-Hashs (`canonical_index_entry_sha256`).
-   - Schreibt deterministisch gebildeten Eintrag (`decision_id`) append-only mit `flush` und `os.fsync` in `attachment-disposition-log.jsonl`.
-   - Der Quarantäneindex wird in dieser Phase bewusst nicht verändert, um den kanonischen Hash für Folgeschritte stabil zu halten.
-2. **Read-Only Reporting (`report_dispositions`):**
-   - Rein lesende Inspektion von Index, Dispositionslog, physischer Disk und Inventaren.
-   - Klassifiziert jedes Quarantäne-Item disjunkt in:
-     - `eligible`: Berechtigt für physische Löschung (gültige `discard`-Entscheidung, alle 10 Vorbedingungen erfüllt).
-     - `protected`: Vor Löschung geschützt (Entscheidung `retain`, unvollständige `promote`-Ablage, fehlende Freigabe, aktive Sperre/Run).
-     - `invalid`: Schemadefekt, Pfadtraversierung, Symlink/Reparse-Point oder Integritätsdrift.
-3. **Sichere Physische Bereinigung (`apply_discard`):**
-   - Erfordert verbindlichen Workspace-Lock und explizite Autorisierung (`apply_receipt_hash`).
-   - Verifiziert 10 Vorbedingungen vor jeder physischen Dateioperation.
-   - Löscht physische Binärdatei via `os.unlink`.
-   - Aktualisiert `.quarantine-inventory.json` unter Lock.
-   - Aktualisiert `attachment-quarantine-index.json` atomar (entfernt bereinigte Einträge).
-   - Bei Teilausfällen stoppt der Prozess transaktionssicher (keine unvollständige Statusmeldung).
+### 4.1 Entscheidungserfassung (`record_disposition_entry`)
+1. **Lock- & Schema-Prüfung:** Prüft Workspace-Lock (`require_workspace_lock`).
+2. **Kanonische Request-Bindung:** Baut `build_disposition_request()` und verifiziert das übergebene `approval_receipt` gegen `canonical_disposition_request_sha256()`. Rohe Hashes ohne verifizierten Contract werden fail-closed abgewiesen.
+3. **Index-Hash-Bindung:** Lädt den Quarantäneindex-Eintrag und validiert Identität des kanonischen Eintrags-Hashs (`canonical_index_entry_sha256`).
+4. **Append-Only Write:** Schreibt deterministisch gebildeten Eintrag (`decision_id`) append-only mit `flush` und `os.fsync` in `attachment-disposition-log.jsonl`.
+5. Der Quarantäneindex wird in dieser Phase bewusst nicht verändert, um den kanonischen Hash für Folgeschritte stabil zu halten.
+
+### 4.2 Read-Only Reporting (`report_dispositions`)
+* Rein lesende Inspektion von Index, Dispositionslog, physischer Disk und Inventaren.
+* Klassifiziert jedes Quarantäne-Item disjunkt in:
+  * `eligible`: Berechtigt für physische Löschung (gültige `discard`-Entscheidung, alle 10 Vorbedingungen erfüllt).
+  * `protected`: Vor Löschung geschützt (Entscheidung `retain`, unvollständige `promote`-Ablage, fehlende Freigabe, aktive Sperre/Run).
+  * `invalid`: Schemadefekt, Pfadtraversierung, Symlink/Reparse-Point oder Integritätsdrift.
+
+### 4.3 Sichere Physische Bereinigung & Recovery Journal (`apply_discard`)
+1. **Exklusiver Lock & Einzel-Scope:** Erfordert verbindlichen Workspace-Lock und explizite `attachment_id` (Bulk-Apply ist strikt verboten).
+2. **Verifizierbares Apply-Receipt:** Rekonstruiert den exakten `ApplyRequest` und verifiziert das übergebene `apply_receipt` gegen `canonical_apply_request_sha256()`.
+3. **Lineare monotone Zustandsmaschine im Discard-Journal:**
+   $$\text{prepared (1)} \longrightarrow \text{file\_deleted (2)} \longrightarrow \text{inventory\_updated (3)} \longrightarrow \text{index\_updated (4)} \longrightarrow \text{completed (5)}$$
+   - `prepared`: Etabliert den unveränderlichen Bindungseintrag im Journal (`attachment-discard-journal.json`) vor jeder Disk-Mutation.
+   - `file_deleted`: Physisches `os.unlink` der Datei nach 10 Vorprüfungen (Pfad-Containment, Symlink-/0x400-Check, SHA-256, etc.).
+   - `inventory_updated`: Aktualisiert `.quarantine-inventory.json` unter Verzeichnis-Lock (`_QuarantineInventoryLock`) via atomarem Sibling-Tempfile.
+   - `index_updated`: Entfernt das Item atomar aus `attachment-quarantine-index.json`.
+   - `completed`: Markiert den Eintrag im Journal als erfolgreich abgeschlossen (`status: "completed"`).
+4. **Fehler-Resumability (Wiederanlauf bei Teilausfall):**
+   - Tritt nach physischem `unlink` ein Fehler auf (z. B. Inventar-Disk-Fehler), wird `last_successful_state` **nicht** überschrieben, sondern bleibt auf `file_deleted`.
+   - `record_journal_failure()` erfasst `status: "failed"`, `failure_stage: "inventory_update"` und strukturiertes `error` in Journal und History.
+   - Der Quarantäneindex bleibt unberührt, damit die Item-Metadaten für die spätere Recovery erhalten bleiben.
+   - Ein nachfolgender Aufruf von `apply_discard` mit demselben Receipt erkennt die fehlende Festplattendatei, verifiziert das Journal (`last_successful_state == "file_deleted"`), setzt an Stufe 3 an, aktualisiert das Inventar, entfernt den Indexeintrag und schließt den Vorgang sauber ab (`recovered: True`).
+5. **Bereinigung bei bereits bereinigtem Index:**
+   - Fehlt der Anhang im Quarantäneindex, wird der Vorgang gegen das Journal geprüft.
+   - Ein Teilerfolgszustand (`last_successful_state == "index_updated"`) wird im Journal atomar zu `completed` weitergeführt.
+   - Ein bereits abgeschlossener Eintrag wird idempotent bestätigt (`deleted_count: 0`).
+   - Widersprüchliche Einträge (`state == "completed"` bei `status == "failed"`) werden fail-closed abgewiesen.
 
 ---
 

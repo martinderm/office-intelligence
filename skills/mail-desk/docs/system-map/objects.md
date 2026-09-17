@@ -41,7 +41,7 @@ Jeder Eintrag unter `items` erzwingt die exakte Einhaltung dieser 17 Schlüssel:
 | `clean_filename` | String | Bereinigter Dateiname ohne Sonderzeichen/Steuerzeichen. |
 | `mime_type` | `^[a-zA-Z0-9!#$&^_.+-]+/[a-zA-Z0-9!#$&^_.+-]+$` | Normalisierter MIME-Typ. |
 | `sha256` | `^[0-9a-fA-F]{64}$` | Physischer SHA-256 Hash der Binärdatei auf Disk. |
-| `size_bytes` | Integer (`>= 0`) | Exakte Dateigröße in Bytes. |
+| `size_bytes` | Integer (`> 0`) | Exakte Dateigröße in Bytes (strikt positiv). |
 | `run_id` | String | Eindeutige Kennung des Extraktionslaufs. |
 | `quarantine_path` | String | Workspace-relativer Pfad: `data/mail-desk/attachments/<run_id>/<file>`. |
 | `analysis_status` | Enum | Fest auf `"completed"` (`ALLOWED_ANALYSIS_STATUSES`). |
@@ -98,18 +98,82 @@ Jede Zeile im JSONL-Format repräsentiert eine Disposition und erzwingt:
 
 ---
 
-## 3. Quarantäne-Inventar (`.quarantine-inventory.json`)
+## 3. Versioniertes Discard-Recovery-Journal (`attachment-discard-journal.json`)
+
+Das Discard-Recovery-Journal sichert den zweiphasigen Bereinigungsprozess (`apply_discard`) transaktions- und wiederanlaufsicher ab.
+
+* **Dateipfad:** `data/mail-desk/attachment-discard-journal.json`
+* **Implementierungsdatei:** [`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)
+* **Aktuelle Schema-Version:** `1`
+
+### 3.1 Root-Struktur
+Das Wurzelelement erzwingt ausschließlich drei Root-Schlüssel (`ALLOWED_JOURNAL_ROOT_KEYS`):
+```json
+{
+  "schema_version": 1,
+  "updated_at": "2026-09-17T09:00:00Z",
+  "entries": {
+    "<journal_entry_id>": { "..." : "..." }
+  }
+}
+```
+
+### 3.2 Deterministische `journal_entry_id`
+Der Dictionary-Key und das Feld `journal_entry_id` werden deterministisch berechnet:
+```python
+journal_entry_id = hashlib.sha256(
+    f"{norm_att_id}:{norm_dec_id}:{norm_rcpt_hash}:{norm_prev_hash}".encode("utf-8")
+).hexdigest()
+```
+
+### 3.3 Eintragsfelder (`DISCARD_JOURNAL_ENTRY_ALLOWED_KEYS`)
+Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
+
+| Feldname | Typ / Format | Beschreibung |
+| :--- | :--- | :--- |
+| `journal_entry_id` | `^[0-9a-fA-F]{64}$` | Deterministischer SHA-256 Bindungshash. |
+| `attachment_id` | `^[0-9a-fA-F]{64}$` | Referenzierte Quarantäne-Attachment-ID. |
+| `decision_id` | `^[0-9a-fA-F]{64}$` | Gebundene Dispositionsentscheidung. |
+| `apply_receipt_hash` | `^[0-9a-fA-F]{64}$` | SHA-256 Hash des autorisierenden Apply-Receipts. |
+| `apply_request_hash` | `^[0-9a-fA-F]{64}$` | Re-berechneter Hash des kanonischen Apply-Requests über alle Scope-Felder. |
+| `previous_index_entry_sha256` | `^[0-9a-fA-F]{64}$` | Kanonischer Hash des Quarantäneindex-Eintrags vor Löschung. |
+| `quarantine_path` | String | Workspace-relativer Quarantänepfad unter `data/mail-desk/attachments/<run_id>/`. |
+| `sha256` | `^[0-9a-fA-F]{64}$` | Physischer SHA-256 Hash der gelöschten Datei. |
+| `size_bytes` | Integer (`> 0`) | Physische Dateigröße (strikt positiv). |
+| `run_id` | String | Eindeutige Kennung des Quarantänelaufs. |
+| `state` | Enum | Aktueller Zustand (`prepared`, `file_deleted`, `inventory_updated`, `index_updated`, `completed`). |
+| `last_successful_state` | Enum | Letzter nachweislich erfolgreicher Schritt (bleibt auch bei Fehlern stabil für Recovery). |
+| `status` | Enum | `"in_progress"`, `"completed"`, `"failed"`. |
+| `created_at` | RFC 3339 String | Erstellungszeitpunkt des Eintrags. |
+| `updated_at` | RFC 3339 String | Letzter Aktualisierungszeitpunkt. |
+| `history` | Array von Dicts | Lückenlose, monotone History aller Zustandsübergänge und Fehler. |
+| `failure_stage` | String / `null` | Bei `status == "failed"`: Name der fehlgeschlagenen Phase (z. B. `"inventory_update"`). |
+| `error` | Dict / `null` | Bei `status == "failed"`: Strukturiertes Fehler-Dictionary (ohne verbotene Inhalte). |
+
+### 3.4 History-Integrität & Konsistenzregeln
+* **Erlaubte History-Felder:** Ausschließlich `state`, `status`, `timestamp`, `transition`, `stage`, `error` (`DISCARD_JOURNAL_HISTORY_ALLOWED_KEYS`).
+* **Startzustand:** Der erste Eintrag muss zwingend `state == "prepared"` (`rank == 1`) sein; verkürzte Historien werden fail-closed abgewiesen.
+* **Monotone Schrittfolge:** Jeder erfolgreiche Folgeschritt muss exakt `rank == last_rank + 1` entsprechen (kein Überspringen von Zwischenstufen, keine Rückwärtssprünge).
+* **Kopplung von Status und History:**
+  * `status == "completed"`: Verlangt `state == "completed"`, `last_successful_state == "completed"`, `failure_stage == null`, `error == null` und `history[-1]` muss ein Erfolgs-Eintrag sein.
+  * `status == "in_progress"`: Verlangt Zwischenzustand (`state == last_successful_state != "completed"`), keine Fehlerfelder und `history[-1]` darf kein unbehandelter Failure-Eintrag sein.
+  * `status == "failed"`: Verlangt nicht-leere `failure_stage`, strukturiertes `error`-Dict, verbietet `state == "completed"`, und `history[-1]` muss zwingend ein Failure-Eintrag sein, dessen `stage` und kanonischer Fehler exakt mit den Top-Level-Feldern übereinstimmen.
+
+---
+
+## 4. Quarantäne-Inventar (`.quarantine-inventory.json`)
 
 * **Speicherort:** `data/mail-desk/attachments/<run_id>/.quarantine-inventory.json`
-* **Implementierungsdatei:** [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py)
+* **Implementierungsdatei:** [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py) und [`attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)
 * **Zweck:** Dient als physischer Bindungsnachweis zwischen extrahierter Datei auf Disk und Index. Bevor ein Eintrag in den Quarantäneindex geschrieben wird, prüft `verify_quarantine_attachment_artifact()` physisch, ob:
   1. Die Datei auf Disk existiert.
   2. Sie weder Symlink noch Windows-Reparse-Point ist (`os.lstat().st_file_attributes & 0x400`).
   3. Ihr physischer SHA-256 Hash exakt mit dem Inventar übereinstimmt.
+* **Atomare Mutation bei Löschung:** Während `apply_discard` wird das Inventar unter exklusiver Verzeichnis-Sperre (`_QuarantineInventoryLock`) über ein Sibling-Tempfile atomar aktualisiert (`update_quarantine_inventory_atomic`). Schlägt die Inventar-Mutation fehl, bleibt der Quarantäne-Index unberührt für die spätere Recovery.
 
 ---
 
-## 4. Begleitende Indizes & Control-Plane-Objekte
+## 5. Begleitende Indizes & Control-Plane-Objekte
 
 ### 4.1 Final Location Index (`final-location-index.json`)
 * **Dateipfad:** `data/mail-desk/final-location-index.json`
@@ -119,7 +183,7 @@ Jede Zeile im JSONL-Format repräsentiert eine Disposition und erzwingt:
 * **Erlaubte Eintragsfelder (`ALLOWED_FIELDS`):**
   `message_id`, `mailbox`, `backend`, `final_folder`, `final_label`, `envelope_id`, `gmail_message_id`, `gmail_thread_id`, `in_reply_to`, `references`, `subject`, `from`, `date`, `updated_at`.
 
-### 3.2 Sent Items Index (`sent-index.jsonl`)
+### 5.2 Sent Items Index (`sent-index.jsonl`)
 * **Dateipfad:** `data/mail-desk/sent-index.jsonl` (JSON-Lines-Format)
 * **Implementierungsdatei:** [`scripts/core/sent_indexer.py`](../scripts/core/sent_indexer.py#L25-L43)
 * **Zweck:** Hält gesendete E-Mails nach, um Antwortzustände (`check_if_replied()`) für eingehende Mails präzise zu ermitteln.
@@ -129,17 +193,22 @@ Jede Zeile im JSONL-Format repräsentiert eine Disposition und erzwingt:
   * `by_reference`: Zuordnung über `References`-Ketten
   * `by_subject_clean`: Zuordnung über normalisierten Betreff (`clean_subject()`, befreit von Re/Aw/Wg/Fwd)
 
-### 3.3 Backend-Konfiguration (`mail-desk-backend.json`)
+### 5.3 Backend-Konfiguration (`mail-desk-backend.json`)
 * **Dateipfad:** `.agents/mail-desk-backend.json` (im Ziel-Workspace)
 * **Zweck:** Credentials-freie Deklaration des Mailbox-Backends (`"himalaya"` / `"gmail"`), des Standard-Accounts und Quellordners.
 
 ---
 
-## 4. DTOs, Verträge und In-Memory-Strukturen
+## 6. DTOs, Verträge und In-Memory-Strukturen
 
 * **`DraftManifest` & Review Contract** ([`scripts/core/batch_contract.py`](../scripts/core/batch_contract.py)):
   * Bindende Parameter: `expected_count`, `allow_fewer`, `candidate_count`, `source_folder`, `account`, `skip_known`, `review`.
   * `canonical_execute_request_sha256()`: Berechnet Hash über das Request-Objekt unter bewusstem Ausschluss des Feldes `review`.
+* **Verifizierbare Receipt-Contracts & Scope-Requests (MD-Q3)** ([`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)):
+  * `ApprovalReceipt`: Pflichtfelder `receipt_id`, `request_hash`, `approved_at`, `approved_by`. Unbekannte Felder, verbotene Inhalte oder abweichende Hashes werden fail-closed abgewiesen (`ReceiptMalformedError`, `ReceiptDriftError`).
+  * `DispositionRequest` (`build_disposition_request`): Bindet kanonisch `attachment_id`, `index_entry_sha256`, `decision`, `review_after`, `rationale`, `candidate_review_hash`, `promotion_id`, `promotion_status`.
+  * `ApplyRequest` (`build_apply_request`): Bindet den exakten, unteilbaren Löschumfang (`action: "discard"`, `attachment_id`, `decision_id`, `index_entry_sha256`, `quarantine_path`, `sha256`, `size_bytes`, `run_id`, `schema_version: 1`). Bulk-Apply ist strikt verboten (`attachment_id` zwingend).
+  * `canonical_apply_request_sha256()`: Deterministischer SHA-256 Hash des serialisierten JSON-Objekts zur kryptographischen Bindung des Apply-Receipts.
 * **Attachment Filing Candidate (MD-A5)** ([`scripts/core/attachment_filing.py`](../scripts/core/attachment_filing.py)):
   * Vorschlag für Cloud-Ablage mit `promotion_status: "pending_human_review"`. Rein lesend; führt keine unautorisierten Cloud-Mutationen aus.
 * **`Dossier`** ([`scripts/core/modes/dossier.py`](../scripts/core/modes/dossier.py)): Strukturierte Fallakte mit klassifizierten Workpackages (`WP...`), Aufgaben und Signalstärken.

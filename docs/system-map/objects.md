@@ -117,7 +117,10 @@ Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezial
 
 ### 4.1 Mail-Desk Objekte → [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md)
 * **`attachment-quarantine-index.json`**: Schema 1, 16 Pflichtfelder, deterministische 64-Hex-`attachment_id`, Drift-Erkennung (`AttachmentIndexDriftError`).
-* **`.quarantine-inventory.json`**: Physisches SHA-256-Abbild der extrahierten Binärdateien auf Disk.
+* **`.quarantine-inventory.json`**: Physisches SHA-256-Abbild der extrahierten Binärdateien auf Disk mit `size_bytes > 0` und Concurrency-Lock (`_QuarantineInventoryLock`).
+* **`attachment-disposition-log.jsonl`**: Revisionssicheres, zeilenbasiertes Append-Only-Auditlog für alle Dispositionsentscheidungen, Promotion-Links und Discard-Löschungen.
+* **`attachment-discard-journal.json`**: Transaktionales 5-Stufen-Recovery-Journal (`prepared → file_deleted → inventory_updated → index_updated → completed`) mit lückenloser History-Integrität und Resumability.
+* **Verifiable Receipts**: `ApprovalReceipt`, `DispositionRequest`, `ApplyRequest` mit kanonischem Request-Hashing und Drift-Prüfung.
 * **`final-location-index.json`**: Mapping von normalisierter `message_id` auf die Ablageposition.
 * **Dossier- & Envelope-Modelle**: Strukturierte Fallakten und Handlungs-Empfehlungen.
 
