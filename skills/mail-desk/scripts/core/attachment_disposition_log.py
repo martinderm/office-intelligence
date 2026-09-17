@@ -181,6 +181,15 @@ DISCARD_JOURNAL_ENTRY_ALLOWED_KEYS = frozenset({
     "error",
 })
 
+DISCARD_JOURNAL_HISTORY_ALLOWED_KEYS = frozenset({
+    "state",
+    "status",
+    "timestamp",
+    "transition",
+    "stage",
+    "error",
+})
+
 ALLOWED_DISPOSITION_ENTRY_FIELDS = {
     "decision_id",
     "attachment_id",
@@ -501,6 +510,8 @@ def build_apply_request(
         raise DispositionApplyError(f"Invalid sha256: {sha256!r}")
     if not is_valid_run_id(norm_run):
         raise DispositionApplyError(f"Invalid run_id: {run_id!r}")
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
+        raise DispositionApplyError(f"Invalid size_bytes: {size_bytes!r} (must be positive integer > 0)")
 
     return {
         "action": "discard",
@@ -1058,8 +1069,10 @@ def load_discard_journal(journal_path: Path) -> dict[str, Any]:
 
         # Validate size_bytes
         size_bytes = entry.get("size_bytes")
-        if not isinstance(size_bytes, int) or size_bytes < 0:
-            raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' invalid size_bytes: {size_bytes!r}")
+        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
+            raise RecoveryJournalCorruptedError(
+                f"Journal entry '{entry_key}' invalid size_bytes: {size_bytes!r} (must be positive integer > 0)"
+            )
 
         # Validate quarantine_path
         qpath = str(entry["quarantine_path"]).strip()
@@ -1106,30 +1119,85 @@ def load_discard_journal(journal_path: Path) -> dict[str, Any]:
                 f"Journal entry '{entry_key}' apply_request_hash drift: computed {computed_apply_hash}, stored {entry['apply_request_hash']}"
             )
 
-        # Validate status
+        # Validate status, state, last_successful_state, failure_stage, and error consistency
         status = entry.get("status")
-        if status is not None and status not in ("in_progress", "completed", "failed"):
+        if status not in ("in_progress", "completed", "failed"):
             raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' invalid status: {status!r}")
 
-        # Validate state and last_successful_state
         state = str(entry["state"]).strip().lower()
         if state not in ALLOWED_JOURNAL_STATES:
             raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' invalid state: {state!r}")
-        last_succ = entry.get("last_successful_state")
-        if last_succ is not None:
-            last_succ = str(last_succ).strip().lower()
-            if last_succ not in ALLOWED_JOURNAL_STATES:
-                raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' invalid last_successful_state: {last_succ!r}")
-        else:
-            last_succ = state
 
-        # Validate error object if present
-        if entry.get("error") is not None:
-            if not isinstance(entry["error"], dict):
-                raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' error field must be dict, got {type(entry['error']).__name__}")
-            forbidden_err = _find_forbidden_content_keys(entry["error"])
+        last_succ = entry.get("last_successful_state")
+        if last_succ is None:
+            raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' missing last_successful_state")
+        last_succ = str(last_succ).strip().lower()
+        if last_succ not in STATE_ORDER:
+            raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' invalid last_successful_state: {last_succ!r}")
+
+        failure_stage = entry.get("failure_stage")
+        err_obj = entry.get("error")
+
+        if status == "completed":
+            if state != JOURNAL_STATE_COMPLETED:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'completed' requires state '{JOURNAL_STATE_COMPLETED}', got '{state}'"
+                )
+            if last_succ != JOURNAL_STATE_COMPLETED:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'completed' requires last_successful_state '{JOURNAL_STATE_COMPLETED}', got '{last_succ}'"
+                )
+            if failure_stage is not None:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'completed' requires failure_stage=None, got {failure_stage!r}"
+                )
+            if err_obj is not None:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'completed' requires error=None, got {err_obj!r}"
+                )
+
+        elif status == "in_progress":
+            if state == JOURNAL_STATE_COMPLETED or last_succ == JOURNAL_STATE_COMPLETED:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'in_progress' cannot have completed state"
+                )
+            if state not in (JOURNAL_STATE_PREPARED, JOURNAL_STATE_FILE_DELETED, JOURNAL_STATE_INVENTORY_UPDATED, JOURNAL_STATE_INDEX_UPDATED):
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'in_progress' invalid with state '{state}'"
+                )
+            if state != last_succ:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'in_progress' state '{state}' must match last_successful_state '{last_succ}'"
+                )
+            if failure_stage is not None:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'in_progress' requires failure_stage=None, got {failure_stage!r}"
+                )
+            if err_obj is not None:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'in_progress' requires error=None, got {err_obj!r}"
+                )
+
+        elif status == "failed":
+            if state == JOURNAL_STATE_COMPLETED:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' cannot have state '{JOURNAL_STATE_COMPLETED}'"
+                )
+            if failure_stage is None or not str(failure_stage).strip():
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' requires non-empty failure_stage"
+                )
+            if err_obj is None or not isinstance(err_obj, dict):
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' requires error dict"
+                )
+            forbidden_err = _find_forbidden_content_keys(err_obj)
             if forbidden_err:
                 raise ForbiddenContentError(f"Forbidden content in journal error field: {sorted(forbidden_err)}")
+            if last_succ not in (JOURNAL_STATE_PREPARED, JOURNAL_STATE_FILE_DELETED, JOURNAL_STATE_INVENTORY_UPDATED, JOURNAL_STATE_INDEX_UPDATED):
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' status 'failed' has invalid last_successful_state '{last_succ}'"
+                )
 
         # Validate history
         history = entry.get("history")
@@ -1142,27 +1210,63 @@ def load_discard_journal(journal_path: Path) -> dict[str, Any]:
         for i, h_item in enumerate(history):
             if not isinstance(h_item, dict):
                 raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' history item {i} must be dict")
+
+            extra_h_keys = set(h_item.keys()) - DISCARD_JOURNAL_HISTORY_ALLOWED_KEYS
+            if extra_h_keys:
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' history item {i} has unknown field(s): {sorted(extra_h_keys)}"
+                )
+
             forbidden_h = _find_forbidden_content_keys(h_item)
             if forbidden_h:
                 raise ForbiddenContentError(f"Forbidden content in history item {i}: {sorted(forbidden_h)}")
+
             h_ts = h_item.get("timestamp")
             if not h_ts or not RFC3339_REGEX.fullmatch(str(h_ts).strip()):
                 raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' history item {i} invalid timestamp: {h_ts!r}")
+
             h_status = h_item.get("status")
-            if h_status == "failed" or h_item.get("transition") == "failed":
+            h_trans = h_item.get("transition")
+
+            if h_status == "failed" or h_trans == "failed":
+                if last_rank == 0:
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' history item {i} failure entry cannot precede '{JOURNAL_STATE_PREPARED}'"
+                    )
+                if h_status != "failed" or h_trans != "failed":
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' history item {i} failure item must have transition='failed' and status='failed'"
+                    )
+                if not h_item.get("stage") or not str(h_item.get("stage")).strip():
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' history item {i} failure item missing stage"
+                    )
+                if h_item.get("error") is None:
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' history item {i} failure item missing error"
+                    )
                 continue
+
+            if h_status != "success":
+                raise RecoveryJournalCorruptedError(
+                    f"Journal entry '{entry_key}' history item {i} non-failure item must have status='success', got {h_status!r}"
+                )
             h_state = h_item.get("state")
             if h_state not in STATE_ORDER:
                 raise RecoveryJournalCorruptedError(f"Journal entry '{entry_key}' history item {i} invalid state: {h_state!r}")
+
             rank = STATE_ORDER[h_state]
-            if rank < last_rank:
-                raise RecoveryJournalCorruptedError(
-                    f"Journal entry '{entry_key}' backward transition in history from rank {last_rank} to {rank}"
-                )
-            if rank > last_rank + 1 and last_rank != 0:
-                raise RecoveryJournalCorruptedError(
-                    f"Journal entry '{entry_key}' skipped transition in history from rank {last_rank} to {rank}"
-                )
+            if last_rank == 0:
+                if rank != 1 or h_state != JOURNAL_STATE_PREPARED:
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' first history state must be '{JOURNAL_STATE_PREPARED}', got '{h_state}'"
+                    )
+            else:
+                if rank != last_rank + 1:
+                    raise RecoveryJournalCorruptedError(
+                        f"Journal entry '{entry_key}' invalid transition in history from rank {last_rank} to {rank} ('{h_state}')"
+                    )
+
             last_rank = rank
             derived_successful_state = h_state
 
@@ -1223,6 +1327,9 @@ def record_journal_state(
     norm_sha = str(sha256).strip().lower()
     norm_run = str(run_id).strip()
     norm_state = str(state).strip().lower()
+
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
+        raise ValueError(f"Invalid size_bytes: {size_bytes!r} (must be positive integer > 0)")
 
     if norm_state == JOURNAL_STATE_FAILED:
         return record_journal_failure(
@@ -1358,6 +1465,9 @@ def record_journal_failure(
     norm_prev_hash = str(previous_index_entry_sha256).strip().lower()
     norm_sha = str(sha256).strip().lower()
     norm_run = str(run_id).strip()
+
+    if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes <= 0:
+        raise ValueError(f"Invalid size_bytes: {size_bytes!r} (must be positive integer > 0)")
 
     journal = load_discard_journal(journal_path)
     entries = journal.setdefault("entries", {})
@@ -2011,16 +2121,23 @@ def apply_discard(
 
         found_valid_match = False
         for candidate_je in matching_entries:
-            reconstructed_req = build_apply_request(
-                attachment_id=candidate_je["attachment_id"],
-                decision_id=candidate_je["decision_id"],
-                index_entry_sha256=candidate_je["previous_index_entry_sha256"],
-                quarantine_path=candidate_je["quarantine_path"],
-                sha256=candidate_je["sha256"],
-                size_bytes=candidate_je["size_bytes"],
-                run_id=candidate_je["run_id"],
-                schema_version=1,
-            )
+            cand_size = candidate_je.get("size_bytes")
+            if not isinstance(cand_size, int) or isinstance(cand_size, bool) or cand_size <= 0:
+                continue
+
+            try:
+                reconstructed_req = build_apply_request(
+                    attachment_id=candidate_je["attachment_id"],
+                    decision_id=candidate_je["decision_id"],
+                    index_entry_sha256=candidate_je["previous_index_entry_sha256"],
+                    quarantine_path=candidate_je["quarantine_path"],
+                    sha256=candidate_je["sha256"],
+                    size_bytes=cand_size,
+                    run_id=candidate_je["run_id"],
+                    schema_version=1,
+                )
+            except (DispositionApplyError, DispositionSchemaError):
+                continue
             req_hash = canonical_apply_request_sha256(reconstructed_req)
             if req_hash != candidate_je.get("apply_request_hash"):
                 continue
@@ -2039,8 +2156,36 @@ def apply_discard(
             if candidate_je.get("journal_entry_id") != expected_jid:
                 continue
 
-            je_state = candidate_je.get("last_successful_state") or candidate_je.get("state")
-            if je_state in (JOURNAL_STATE_COMPLETED, JOURNAL_STATE_INDEX_UPDATED):
+            cand_status = candidate_je.get("status")
+            cand_state = candidate_je.get("state")
+            cand_last_succ = candidate_je.get("last_successful_state")
+            cand_fail_stage = candidate_je.get("failure_stage")
+            cand_err = candidate_je.get("error")
+
+            if cand_status == "completed":
+                if (
+                    cand_state == JOURNAL_STATE_COMPLETED
+                    and cand_last_succ == JOURNAL_STATE_COMPLETED
+                    and cand_fail_stage is None
+                    and cand_err is None
+                ):
+                    found_valid_match = True
+                    break
+            elif cand_last_succ == JOURNAL_STATE_INDEX_UPDATED:
+                # Advance partial success (index_updated) to completed
+                record_journal_state(
+                    jp,
+                    attachment_id=candidate_je["attachment_id"],
+                    decision_id=candidate_je["decision_id"],
+                    apply_receipt_hash=candidate_je["apply_receipt_hash"],
+                    apply_request_hash=candidate_je["apply_request_hash"],
+                    previous_index_entry_sha256=candidate_je["previous_index_entry_sha256"],
+                    quarantine_path=candidate_je["quarantine_path"],
+                    sha256=candidate_je["sha256"],
+                    size_bytes=cand_size,
+                    run_id=candidate_je["run_id"],
+                    state=JOURNAL_STATE_COMPLETED,
+                )
                 found_valid_match = True
                 break
 
@@ -2060,7 +2205,11 @@ def apply_discard(
     rel_path = entry["quarantine_path"]
     run_id = entry["run_id"]
     exp_sha = entry["sha256"]
-    exp_size = entry["size_bytes"]
+    exp_size = entry.get("size_bytes")
+    if not isinstance(exp_size, int) or isinstance(exp_size, bool) or exp_size <= 0:
+        raise DispositionSchemaError(
+            f"Attachment '{norm_att_id}' index entry invalid size_bytes: {exp_size!r} (must be positive integer > 0)"
+        )
     mid = entry["message_id"]
     clean_fn = entry.get("clean_filename") or entry.get("filename")
     expected_idx_hash = canonical_index_entry_sha256(entry)

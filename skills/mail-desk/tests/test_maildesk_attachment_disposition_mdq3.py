@@ -38,6 +38,7 @@ from core import (
     JOURNAL_STATE_INDEX_UPDATED,
     JOURNAL_STATE_COMPLETED,
     JOURNAL_STATE_FAILED,
+    AttachmentIndexSchemaError,
     DispositionError,
     DispositionSchemaError,
     DispositionDriftError,
@@ -70,6 +71,8 @@ from core import (
     canonical_apply_request_sha256,
     build_apply_receipt,
     verify_apply_receipt,
+    record_journal_state,
+    record_journal_failure,
     update_quarantine_inventory_atomic,
     load_quarantine_index,
     record_quarantine_entry,
@@ -1529,6 +1532,241 @@ class TestMailDeskAttachmentDispositionMDQ3(unittest.TestCase):
         )
         self.assertEqual(res2["status"], "completed")
         self.assertEqual(res2.get("deleted_count"), 0)
+
+    def test_truncated_history_only_completed_rejected(self) -> None:
+        """P1: A discard journal whose history starts with completed (truncated) must be rejected."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test truncated history",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test truncated history",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        res = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res["status"], "completed")
+
+        # Corrupt journal history: truncate to only the last completed step
+        journal = load_discard_journal(self.journal_path)
+        for entry in journal["entries"].values():
+            entry["history"] = [
+                {"state": JOURNAL_STATE_COMPLETED, "status": "success", "timestamp": utc_now_iso()}
+            ]
+        self.journal_path.write_text(json.dumps(journal, indent=2), encoding="utf-8")
+
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("first history state must be 'prepared'", str(ctx.exception))
+
+    def test_completed_state_with_failed_status_rejected(self) -> None:
+        """P1: A journal entry with state=completed and status=failed must fail closed on load and candidate match."""
+        self._write_lock_file(self.lease_id, self.conv_id)
+        disp_req = build_disposition_request(
+            attachment_id=self.att_id_01,
+            index_entry_sha256=self.sample_idx_hash,
+            decision=DECISION_DISCARD,
+            rationale="Test contradictory state and status",
+        )
+        disp_rcpt = self._make_disposition_receipt(disp_req)
+        record_disposition_entry(
+            self.log_path,
+            payload={
+                "attachment_id": self.att_id_01,
+                "decision": DECISION_DISCARD,
+                "rationale": "Test contradictory state and status",
+                "approval_receipt": disp_rcpt,
+            },
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+
+        log_data = load_disposition_log(self.log_path)
+        dec_id = log_data["latest_by_attachment_id"][self.att_id_01]["decision_id"]
+
+        apply_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id=dec_id,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=self.sample_entry["size_bytes"],
+            run_id=self.sample_entry["run_id"],
+        )
+        apply_rcpt = self._make_apply_receipt(apply_req)
+
+        res = apply_discard(
+            attachment_id=self.att_id_01,
+            apply_receipt=apply_rcpt,
+            workspace_root=self.ws_root,
+            lease_id=self.lease_id,
+            conversation_id=self.conv_id,
+        )
+        self.assertEqual(res["status"], "completed")
+
+        # Modify journal on disk to have state=completed but status=failed
+        journal = load_discard_journal(self.journal_path)
+        for entry in journal["entries"].values():
+            entry["status"] = "failed"
+            entry["failure_stage"] = "completion"
+            entry["error"] = {"stage": "completion", "error": "simulated contradictory failure"}
+        self.journal_path.write_text(json.dumps(journal, indent=2), encoding="utf-8")
+
+        # 1. load_discard_journal fails closed
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("cannot have state 'completed'", str(ctx.exception))
+
+        # 2. apply_discard rejects it and does not treat it as idempotent completed
+        with self.assertRaises((RecoveryJournalCorruptedError, DispositionApplyError)):
+            apply_discard(
+                attachment_id=self.att_id_01,
+                apply_receipt=apply_rcpt,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
+
+    def test_zero_or_negative_size_bytes_rejected(self) -> None:
+        """P2: size_bytes must be strictly positive integer > 0 across requests, journal, and index."""
+        # 1. build_apply_request rejects 0, -1, bool
+        for bad_size in (0, -1, True, False):
+            with self.assertRaises(DispositionApplyError):
+                build_apply_request(
+                    attachment_id=self.att_id_01,
+                    decision_id="a" * 64,
+                    index_entry_sha256=self.sample_idx_hash,
+                    quarantine_path=self.sample_entry["quarantine_path"],
+                    sha256=self.sample_entry["sha256"],
+                    size_bytes=bad_size,
+                    run_id=self.sample_entry["run_id"],
+                )
+
+        # 2. record_journal_state rejects 0 and negative
+        req_hash = "b" * 64
+        rcpt_hash = "c" * 64
+        with self.assertRaises(ValueError):
+            record_journal_state(
+                self.journal_path,
+                attachment_id=self.att_id_01,
+                decision_id="a" * 64,
+                apply_receipt_hash=rcpt_hash,
+                apply_request_hash=req_hash,
+                previous_index_entry_sha256=self.sample_idx_hash,
+                quarantine_path=self.sample_entry["quarantine_path"],
+                sha256=self.sample_entry["sha256"],
+                size_bytes=0,
+                run_id=self.sample_entry["run_id"],
+                state=JOURNAL_STATE_PREPARED,
+            )
+
+        # 3. record_journal_failure rejects 0 and negative
+        with self.assertRaises(ValueError):
+            record_journal_failure(
+                self.journal_path,
+                attachment_id=self.att_id_01,
+                decision_id="a" * 64,
+                apply_receipt_hash=rcpt_hash,
+                apply_request_hash=req_hash,
+                previous_index_entry_sha256=self.sample_idx_hash,
+                quarantine_path=self.sample_entry["quarantine_path"],
+                sha256=self.sample_entry["sha256"],
+                size_bytes=0,
+                run_id=self.sample_entry["run_id"],
+                stage="preparation",
+                error={"stage": "preparation", "error": "test"},
+            )
+
+        # 4. load_discard_journal rejects size_bytes <= 0
+        jid = hashlib.sha256(
+            f"{self.att_id_01}:{'a' * 64}:{rcpt_hash}:{self.sample_idx_hash}".encode("utf-8")
+        ).hexdigest()
+        valid_entry = {
+            "journal_entry_id": jid,
+            "attachment_id": self.att_id_01,
+            "decision_id": "a" * 64,
+            "apply_receipt_hash": rcpt_hash,
+            "apply_request_hash": req_hash,
+            "previous_index_entry_sha256": self.sample_idx_hash,
+            "quarantine_path": self.sample_entry["quarantine_path"],
+            "sha256": self.sample_entry["sha256"],
+            "size_bytes": 0,
+            "run_id": self.sample_entry["run_id"],
+            "state": JOURNAL_STATE_PREPARED,
+            "last_successful_state": JOURNAL_STATE_PREPARED,
+            "status": "in_progress",
+            "created_at": utc_now_iso(),
+            "updated_at": utc_now_iso(),
+            "history": [{"state": JOURNAL_STATE_PREPARED, "status": "success", "timestamp": utc_now_iso()}],
+            "failure_stage": None,
+            "error": None,
+        }
+        test_j_data = {
+            "schema_version": 1,
+            "updated_at": utc_now_iso(),
+            "entries": {jid: valid_entry},
+        }
+        self.journal_path.write_text(json.dumps(test_j_data, indent=2), encoding="utf-8")
+        with self.assertRaises(RecoveryJournalCorruptedError) as ctx:
+            load_discard_journal(self.journal_path)
+        self.assertIn("invalid size_bytes", str(ctx.exception))
+
+        # 5. apply_discard rejects size_bytes <= 0 in quarantine index
+        self._write_lock_file(self.lease_id, self.conv_id)
+        bad_idx = load_quarantine_index(self.index_path)
+        bad_idx["items"][self.att_id_01]["size_bytes"] = 0
+        self.index_path.write_text(json.dumps(bad_idx, indent=2), encoding="utf-8")
+        dummy_req = build_apply_request(
+            attachment_id=self.att_id_01,
+            decision_id="a" * 64,
+            index_entry_sha256=self.sample_idx_hash,
+            quarantine_path=self.sample_entry["quarantine_path"],
+            sha256=self.sample_entry["sha256"],
+            size_bytes=100,
+            run_id=self.sample_entry["run_id"],
+        )
+        dummy_rcpt = self._make_apply_receipt(dummy_req)
+        with self.assertRaises((DispositionSchemaError, DispositionApplyError, AttachmentIndexSchemaError)):
+            apply_discard(
+                attachment_id=self.att_id_01,
+                apply_receipt=dummy_rcpt,
+                workspace_root=self.ws_root,
+                lease_id=self.lease_id,
+                conversation_id=self.conv_id,
+            )
 
 
 if __name__ == "__main__":
