@@ -24,6 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
+| `FR-15` | ⬜ geplant; Autorisierungsvertrag zu implementieren | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage | `MD-E1` |
 
 
 ```text
@@ -515,3 +516,182 @@ abgegrenzt.
 
 **Abnahme:** Vollständige Mail-Desk-Suite (>489 Tests) grün, Compileall,
 `validate-skills-catalog.py` und `git diff --check` sauber.
+
+---
+
+## FR-15: Automatische Anhang-Auswertung bei unklaren Mails
+
+**Status:** ⬜ Geplant. Keine Implementierung begonnen. FR-08, FR-11 und FR-14
+stellen die erforderlichen MIME-, Quarantäne-, Extraktions-, Handoff- und
+Coverage-Verträge bereit; deren Sicherheitsgrenzen bleiben unverändert. FR-15
+orchestriert diese bestehenden Bausteine im Draft-Pfad und baut keine zweite
+Fetch-, Extraktions- oder Klassifikationslogik.
+
+### Problem und Ziel
+
+Der aktuelle Draft-/Classify-Pfad wertet Header und Body aus, orchestriert aber
+die bereits vorhandene Anhangspipeline nicht automatisch. Dadurch bleiben Mails
+mit schwachem Body trotz routing-relevanter realer Anhänge als `unknown` /
+`unclassified`, mit niedriger Confidence oder `review_required` in `INBOX`. Reale
+Beispiele sind eine Mail mit generischem Betreff und Arbeitsplatzbeschreibung
+sowie eine Alumni-/LLL-Mail, deren Office-Anhänge erst den fachlichen Kontext
+eindeutig machen.
+
+FR-15 wertet bei unklaren Mails ausschließlich policykonforme, aus der echten
+RFC-822-MIME-Struktur gebundene Anhänge innerhalb fester Quoten aus und führt den
+begrenzt extrahierten Inhalt als `untrusted_external` einer zweiten
+Klassifikation zu. Ein weiterhin unklares oder nicht sicher auswertbares Item
+bleibt fail-closed in Review/`INBOX`. Die Auswertung verändert keine Mailbox,
+promotet oder exportiert keine Datei und autorisiert keine Disposition.
+
+### Verbindlicher Trigger
+
+Eine automatische Auswertung ist nur zulässig, wenn nach der bestehenden
+Body-/Full-Read-Klassifikation mindestens eines gilt:
+
+- `decision.kind == "unknown"` oder `decision.id == "unclassified"`;
+- `decision.confidence == "low"`;
+- `decision.review_required == true`;
+- eine dokumentierte `read_escalation` konnte keine eindeutige Zuordnung erzeugen;
+
+und mindestens ein kanonisch revalidierter MIME-Part `fetch_status: "available"`
+sowie `policy_status: "allowed"` besitzt und innerhalb aller Einzel- und
+Gesamtquoten liegt. Caller-seitig behauptete Policy-, Fetch- oder Part-Werte sind
+keine Autorität. Unklare Mails ohne geeigneten Anhang verhalten sich unverändert.
+
+### Autorisierungs- und Sicherheitsvertrag
+
+Der vorgeschlagene maschinelle Receipt-Pfad ist eine bewusste neue
+Autorisierungsform und darf den generischen MD-A2-Review-Gate nicht in eine frei
+aufrufbare Selbstfreigabe verwandeln:
+
+- Die Evaluierungsautorisierung wird ausschließlich intern aus der
+  vertrauenswürdigen Draft-Control-Plane erzeugt, nie aus Mailinhalt,
+  Eingabemanifest oder einem vom Caller gelieferten Receipt übernommen.
+- Sie bindet mindestens `receipt_type: "attachment_auto_evaluation"`,
+  `receipt_id`, `request_hash` gleich dem kanonischen MD-A2-`review_hash`,
+  `approved_at`, `approved_by: "mail_desk_auto_evaluator"`, Policy-Revision,
+  Account, Message-ID, Folder, Envelope-ID, Part-Locator und Inventar-Hash.
+  Ausgabe und Auditstatus kennzeichnen sie ausdrücklich als `auto_evaluated`.
+- `op_attachment_fetch()` behält seinen bestehenden expliziten Receipt- und
+  Drift-Vertrag. Der neue Orchestrator darf ihn nur nach aktiver, zum ausführenden
+  Harness gehörender Workspace-Lock-Prüfung aufrufen. Fehlender oder fremder Lock
+  stoppt vor jedem Quarantäne-Write.
+- Promotion, Export, Filing und Disposition akzeptieren diese
+  Evaluierungsautorisierung niemals als Human Approval. Ihre bestehenden Human
+  Gates bleiben unverändert.
+- `detect_mime_and_active_content`, Extension-/MIME-Konsistenz, 15 MB je Datei,
+  25 MB je Mail, maximal fünf Dateien, Pfad-Containment, Symlink-/Reparse-Schutz,
+  SHA-256-Revalidierung und atomare No-Clobber-Writes bleiben fail-closed bindend.
+- Extraktion und Handoff verwenden die bestehenden Limits von maximal 15.000
+  Zeichen je Anhang und 30.000 Zeichen je Mail einschließlich sichtbarer
+  Truncation-Marker. Der Classifier erhält nur den validierten, gekapselten
+  `attachment_analysis_handoff`, nie freie Extraktionsergebnisse.
+- `data/mail-desk/attachments/` bleibt flüchtig und git-ignoriert. Ein bereits
+  getrackter Quarantänepfad ist eine Stop-Bedingung; FR-15 verändert keine
+  Consumer-`.gitignore`-Datei autonom.
+
+### Manifest-Vertrag
+
+Jedes Draft-Item erhält genau ein additives Feld:
+
+```json
+{
+  "attachment_evaluation": {
+    "status": "completed|not_needed|skipped|failed",
+    "reason": "bounded_machine_code",
+    "authorization": "auto_evaluated|not_applicable",
+    "files": [
+      {
+        "filename": "source.docx",
+        "sha256": "<64-hex>",
+        "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "chars": 15000,
+        "coverage": "full|truncated",
+        "run_id": "<safe-run-id>"
+      }
+    ],
+    "used_for_classification": true,
+    "classifier_revision": "<64-hex>"
+  }
+}
+```
+
+`reason` verwendet eine begrenzte, dokumentierte Wertemenge, mindestens
+`classification_clear`, `no_attachments`, `no_allowed_attachments`,
+`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`,
+`extraction_failed`, `handoff_invalid` und `still_ambiguous`. Langlebige Outputs
+enthalten keine absoluten Pfade oder Rohinhalte. `classifier_revision` bindet die
+kanonischen Klassifikationsregeln und tatsächlich verwendeten Input-Hashes; eine
+freie Versionszeichenfolge genügt nicht.
+
+### MD-E1 — Policygebundener Evaluierungs-Orchestrator
+
+**Ziel:** Einen schmalen, separat testbaren `attachment_evaluate`-Orchestrator
+bereitstellen, der reale MIME-Kandidaten revalidiert, die interne
+Evaluierungsautorisierung deterministisch erzeugt und die bestehenden MD-A2/A3/A4-
+Bausteine linear ausführt.
+
+**Scope:** Bestehende öffentliche Funktionen aus `attachment_fetch.py`,
+`attachment_policy.py`, `attachments.py`, `attachment_extract.py` und
+`attachment_handoff.py` wiederverwenden. Kein eigener Downloader, MIME-Parser,
+Office-Konverter, OCR-Pfad oder Receipt-Validator. Der Orchestrator liefert das
+kanonische `attachment_evaluation` und den validierten
+`attachment_analysis_handoff`; er klassifiziert noch nicht und führt keine
+Mailbox-, Evidence-, Katalog-, Cloud- oder Dispositionsmutation aus.
+
+**Pflichttests:** Trigger-Matrix; echte Part-Bindung; caller-seitig gefälschte
+Policy-/Receipt-Werte; fehlender/fremder Lock; aktiver Inhalt; disallowed Extension;
+MIME-/Extension-Drift; Einzel-/Gesamtgröße und Anzahl; idempotentes
+`already_fetched`; Hash-/Inventar-/Identity-Drift; `.docx`, `.doc`, `.pdf`, `.xlsx`
+und `.pptx`; Extraktions-Timeout; 15.000-/30.000-Zeichenbudgets und `truncated`;
+keine Mailbox-, Promotion-, Export- oder Dispositionsoperation.
+
+### MD-E2 — Draft-Integration und Neuklassifikation
+
+**Ziel:** Nach der bestehenden Body-/Full-Read-Klassifikation nur unklare Items
+über MD-E1 anreichern und exakt einmal mit dem validierten Anhangs-Handoff erneut
+klassifizieren.
+
+**Scope:** `draft` erhält die Auswertung standardmäßig aktiviert; eine explizite
+CLI-Option `--evaluate-attachments` und ihr sicherer Deaktivierungsgegenpart werden
+im Paket spezifiziert, ohne bestehende autonome `pipeline`-Freigaben auszuweiten.
+`inspect` darf die gleiche Auswertung optional anbieten. Die zweite Klassifikation
+darf `kind`, `id`, kataloggebundene Unterentscheidungen und `needs_reply` nur über
+die bestehenden Classifier-Regeln neu bestimmen. Sie erfindet keine Ziele. Bei
+Fehler, Teildeckung ohne ausreichende Evidenz oder fortbestehender Mehrdeutigkeit
+bleiben `keep_in_folder`, `review_required: true` und niedrige Confidence erhalten.
+Eine eindeutige Entscheidung erzeugt Evidence erst im bestehenden nachgelagerten,
+quellengebundenen Flow; die Evaluierung selbst schreibt keine Evidence.
+
+**Pflichttests:** Routing-relevanter Anhang macht ein unklares Item eindeutig;
+unklare Mail ohne Anhang bleibt unverändert in Review; blockierter, zu großer oder
+aktiver Anhang bleibt fail-closed; kein Mailbox-Write; zweiter Lauf erzeugt keinen
+Doppel-Fetch; Truncation bleibt sichtbar; Anhangstext bleibt gekapseltes
+`untrusted_external`; manipuliertes Handoff stoppt; Batch-Mischfall isoliert Fehler
+auf das betroffene Item; bestehender klarer Draft wird nicht ausgewertet.
+
+### Dokumentation und Abnahme
+
+Mit der Implementierung, nicht vorgezogen in diesem Backlog-Commit, werden synchron
+aktualisiert:
+
+- `skills/mail-desk/SKILL.md`: Auswertungsstufe in Kernfluss Schritt 2/3;
+- `skills/mail-desk/references/batch-runner.md`: Modus/Option,
+  `attachment_evaluation`-Schema und Beispiel;
+- `skills/mail-desk/references/cli-operations.md`: kanonischer Ablauf
+  Inspect → policygebundener Fetch → begrenzte Extraktion → Handoff → Reclassify;
+- `skills/mail-desk/references/backends/himalaya.md`: Fetch-, Timeout- und
+  Retry-Grenzen;
+- `skills/mail-desk/docs/system-map/README.md` sowie betroffene Nomen-/Prozess-/
+  Effektkarten: automatische Evaluierung und neue Autorisierungsgrenze;
+- diese Statuszeile und die jeweilige Paketkarte.
+
+**Gesamtabnahme:** Alle oben genannten Verhaltens- und Sicherheitstests,
+vollständige Mail-Desk-Suite, Compileall, Skill-/Workspace-Validierung und
+`git diff --check` sind grün. Ein hermetischer End-to-End-Test beweist
+Inspect → Fetch → Extract → Handoff → Reclassify für einen klarstellenden Anhang
+und zugleich null Mailbox-, Promotion-, Export- und Dispositionswrites. FR-15 und
+FR-13 verändern dieselben Classifier-/Attachment-Grenzen und dürfen nicht parallel
+umgesetzt werden; FR-15 wird entweder vor `MD-M1` abgeschlossen oder nach komplett
+grünem FR-13 gegen dessen neue Modulstruktur neu geplant.
