@@ -224,6 +224,36 @@ class HimalayaBootstrapTests(unittest.TestCase):
             c_index = cmd.index("-c")
             self.assertEqual(str(expected_unc), cmd[c_index + 1])
 
+    def test_default_appdata_config_path_is_normalized_before_validation_and_command(self) -> None:
+        """The Windows default ``%APPDATA%`` path must be normalized like an explicit override.
+
+        When ``HIMALAYA_CONFIG`` is absent, ``_default_himalaya_config_path()``
+        yields a drive-colon path on Windows. That default must pass through the
+        same ``normalize_himalaya_config_path()`` behavior as an explicit
+        override *before* existence validation and before the ``-c`` command
+        token is built; otherwise Himalaya 1.2.0 misreads the colon as a path
+        list separator.
+        """
+        appdata = r"C:\Users\demo\AppData\Roaming"
+        expected_unc = Path(r"\\localhost\C$\Users\demo\AppData\Roaming\himalaya\config.toml")
+        with patch.dict("os.environ", {"APPDATA": appdata}, clear=False):
+            os.environ.pop("HIMALAYA_CONFIG", None)
+            with patch.object(himalaya.shutil, "which", return_value="C:/tools/himalaya.exe"), patch(
+                "pathlib.Path.is_file", autospec=True
+            ) as mock_is_file:
+                mock_is_file.return_value = True
+                exe, resolved_path = himalaya.resolve_himalaya_invocation()
+                validated_paths = [str(call.args[0]) for call in mock_is_file.call_args_list]
+
+                cmd = himalaya.build_himalaya_command(["folder", "list"])
+
+        self.assertEqual("C:/tools/himalaya.exe", exe)
+        self.assertEqual(expected_unc, resolved_path)
+        self.assertEqual(str(expected_unc), str(resolved_path))
+        self.assertTrue(validated_paths, "existence validation must run on the resolved config path")
+        self.assertEqual({str(expected_unc)}, set(validated_paths))
+        self.assertEqual(["C:/tools/himalaya.exe", "-c", str(expected_unc), "folder", "list"], cmd)
+
     def test_fresh_process_windows_regression(self) -> None:
         """Hermetic regression test executing resolve_himalaya_invocation in a separate python process."""
         import os

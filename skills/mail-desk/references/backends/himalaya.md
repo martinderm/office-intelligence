@@ -23,12 +23,20 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 ### Non-interactive bootstrap
 
 - The adapter resolves only the `himalaya` executable and the config file. Set
-  `HIMALAYA_CONFIG` to an absolute, readable `config.toml` path when the
-  installation does not use the platform default (`%APPDATA%\\himalaya\\config.toml`
-  on Windows). The adapter supplies it as `-c <path>`.
+  `HIMALAYA_CONFIG` to an absolute, readable `config.toml` path to override the
+  platform default (`%APPDATA%\\himalaya\\config.toml` on Windows,
+  `~/.config/himalaya/config.toml` elsewhere). The adapter supplies it as
+  `-c <path>`. The explicit override and the platform default both pass through the
+  same `normalize_himalaya_config_path()` step before existence validation and
+  before the `-c` token is built.
   Himalaya 1.2.0 interpretiert Windows-Drive-Doppelpunkte in `-c` als Pfadlistentrenner;
   der Adapter konvertiert deshalb lokale Windows-Drive-Pfade deterministisch auf
   `\\localhost\<drive>$\...`.
+- UNC conversion depends on the local administrative share `\\localhost\<drive>$`
+  being reachable. If it is disabled or unreachable, the existence validation fails
+  and the adapter stops before any process start as a missing configuration
+  (`himalaya_config_missing`); no end-to-end support is claimed without a reachable
+  admin share.
 - `HIMALAYA_COMMAND` is deliberately unsupported. Command strings, shells and
   interactive setup are never configuration interfaces for this adapter.
 - Before starting a mailbox process, the adapter verifies executable and config.

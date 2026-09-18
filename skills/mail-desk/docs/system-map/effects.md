@@ -22,7 +22,9 @@ if hasattr(stat_res, "st_file_attributes") and (stat_res.st_file_attributes & 0x
 ### 1.2 Windows Drive Colon Bug Workaround (Himalaya 1.2.0)
 Himalaya interpretiert Doppelpunkte (`:`) in `-c <config>` auf Windows fälschlich als Pfadlistentrenner.
 * **Funktion:** `normalize_himalaya_config_path()` in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py#L33-L51)
-* **Effekt:** Lokale Laufwerkspfade (z. B. `C:\Users\...` oder `D:/...`) werden deterministisch in lokale UNC-Admin-Share-Pfade umgewandelt (`\\localhost\C$\...` bzw. `\\localhost\D$\...`).
+* **Geltungsbereich:** `resolve_himalaya_invocation()` normalisiert **beide** Pfadquellen vor jeder Existenzprüfung (`is_file`) und vor der `-c`-Tokenerzeugung identisch: einen expliziten `HIMALAYA_CONFIG`-Override ebenso wie den plattformspezifischen Default aus `_default_himalaya_config_path()` (`%APPDATA%\himalaya\config.toml` unter Windows, sonst `~/.config/himalaya/config.toml`).
+* **Effekt:** Lokale Laufwerkspfade (z. B. `C:\Users\...` oder `D:/...`) werden deterministisch in lokale UNC-Admin-Share-Pfade umgewandelt (`\\localhost\C$\...` bzw. `\\localhost\D$\...`). Relative Overrides bleiben unverändert und stoppen fail-closed als `himalaya_config_invalid`.
+* **Betriebliche Voraussetzung (Caveat):** Die Konvertierung setzt voraus, dass die lokale administrative Freigabe `\\localhost\<drive>$` erreichbar ist. Ist sie deaktiviert oder nicht erreichbar, liefert `is_file()` auf dem konvertierten Pfad `False`; der Bootstrap stoppt dann vor jedem Prozessstart fail-closed als nicht verfügbare Konfiguration (`himalaya_config_missing`). Eine Ende-zu-Ende-Unterstützung ohne erreichbare Admin-Freigabe wird nicht behauptet.
 
 ---
 

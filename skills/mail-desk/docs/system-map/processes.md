@@ -171,9 +171,9 @@ Implementiert in [`scripts/core/modes/reconcile.py`](../scripts/core/modes/recon
 Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
 
 1. **Fail-Fast Bootstrap (`resolve_himalaya_invocation`):**
-   - Liest `HIMALAYA_CONFIG` aus der Umgebung (oder Default).
-   - Wandelt Windows-Laufwerkspfade zu UNC um (`normalize_himalaya_config_path`: `C:\...` → `\\localhost\C$\...`).
-   - Fehlt die Konfigurationsdatei → Sofortiger Abbruch mit Stopcode `himalaya_config_missing` (verhindert den interaktiven Setup-Wizard).
+   - Wählt den Konfigurationspfad: expliziter `HIMALAYA_CONFIG`-Override (mit `expanduser`) oder, wenn nicht gesetzt, der plattformspezifische Default (`%APPDATA%\himalaya\config.toml` unter Windows, sonst `~/.config/himalaya/config.toml`).
+   - Normalisiert **beide** Pfadquellen über `normalize_himalaya_config_path()` **vor** der Existenzprüfung und der Kommando-Konstruktion; Windows-Laufwerkspfade werden zu UNC (`C:\...` → `\\localhost\C$\...`). Relative Overrides bleiben unverändert.
+   - Fehlt die Konfigurationsdatei → Sofortiger Abbruch mit Stopcode `himalaya_config_missing` (verhindert den interaktiven Setup-Wizard). Das umfasst auch den Fall, dass die vorausgesetzte lokale Admin-Freigabe `\\localhost\<drive>$` nicht erreichbar ist.
    - Fehlt die Binärdatei → Abbruch mit `himalaya_unavailable`.
 2. **Kommando-Konstruktion (`build_himalaya_command`):**
    - Erzeugt tokenisierte Argumentliste ohne Shell (`shell=False`).

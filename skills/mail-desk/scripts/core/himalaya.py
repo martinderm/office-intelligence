@@ -68,10 +68,10 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
     """
     configured = os.environ.get("HIMALAYA_CONFIG")
     if configured:
-        expanded = Path(configured).expanduser()
-        config_path = normalize_himalaya_config_path(expanded)
+        candidate = Path(configured).expanduser()
     else:
-        config_path = _default_himalaya_config_path()
+        candidate = _default_himalaya_config_path()
+    config_path = normalize_himalaya_config_path(candidate)
     if not config_path.is_absolute():
         raise HimalayaInvocationError(
             "himalaya_config_invalid", "HIMALAYA_CONFIG must be an absolute configuration file path."
