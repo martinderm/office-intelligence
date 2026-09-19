@@ -1350,18 +1350,19 @@ class MailDeskAttachmentEvaluationMDE1CallsiteTests(unittest.TestCase):
 
 
 # ======================================================================
-# T04: `attachment_evaluate` orchestrator skeleton
+# T04 no-op contract + T05 positive evaluation path
 # ======================================================================
 
 _T04_MESSAGE_ID = "mde1-t04-orchestrator@example.org"
+_T05_MESSAGE_ID = "mde1-t05-orchestrator@example.org"
+_T05_LEASE = "lease-mde1-t05"
+_T05_CONV = "conv-mde1-t05"
 
-#: T05 fetch/extract/handoff and every downstream mutation seam.  The T04 orchestrator must
-#: neither import nor call any of these.
-_T04_FORBIDDEN_CALLABLES = frozenset(
+#: T05 wires the canonical fetch/extract/handoff composition, so those seams are allowed.
+#: Every downstream mutation seam stays forbidden, as does the direct quarantine preflight
+#: import (the orchestrator relies on `op_attachment_fetch`'s own preflight).
+_T05_FORBIDDEN_CALLABLES = frozenset(
     {
-        "op_attachment_fetch",
-        "extract_attachment_content",
-        "build_attachment_analysis_handoff",
         "apply_attachment_handoff_to_item",
         "propose_attachment_filing",
         "record_disposition_entry",
@@ -1371,16 +1372,26 @@ _T04_FORBIDDEN_CALLABLES = frozenset(
         "update_quarantine_inventory_atomic",
     }
 )
-_T04_FORBIDDEN_MODULES = frozenset(
+_T05_FORBIDDEN_MODULES = frozenset(
     {
-        "attachment_extract",
-        "attachment_handoff",
         "attachment_disposition_log",
         "attachment_filing",
         "attachment_quarantine_index",
         "quarantine_preflight",
     }
 )
+
+
+def _t05_pdf_bytes(text: str = "MDE1 T05 evaluation content") -> bytes:
+    """Build a small, genuinely parseable digital PDF for the positive evaluation path."""
+    import pymupdf
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), text)
+    data = doc.tobytes()
+    doc.close()
+    return data
 
 
 def _t04_pdf_payload(marker: str = "MDE1-T04-PDF-CONTENT") -> bytes:
@@ -1401,6 +1412,23 @@ def _t04_attachment_part(
         "filename": filename,
         "mime_type": mime_type,
         "data": _t04_pdf_payload() if data is None else data,
+    }
+
+
+def _t05_pdf_attachment(
+    filename: str = "report.pdf",
+    *,
+    text: str = "MDE1 T05 evaluation content",
+) -> dict[str, Any]:
+    return {"filename": filename, "mime_type": "application/pdf", "data": _t05_pdf_bytes(text)}
+
+
+def _t05_text_attachment(filename: str, *, chars: int, filler: str = "x") -> dict[str, Any]:
+    """Build a plain-text attachment of an exact character count (no OCR path)."""
+    return {
+        "filename": filename,
+        "mime_type": "text/plain",
+        "data": (filler * chars).encode("utf-8"),
     }
 
 
@@ -1449,14 +1477,55 @@ def _t04_custom_policy(version: str) -> dict[str, Any]:
 
 
 class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
-    """T04: public `attachment_evaluate` seam — trigger matrix and bounded stage outcomes."""
+    """T04 no-op contract plus the T05 positive fetch/extract/handoff composition."""
 
     def setUp(self) -> None:
         self.maxDiff = None
+        # A real owned lock in a throwaway workspace lets the T05 eligible path perform its
+        # canonical quarantine fetch/extract writes hermetically.  The tracked-quarantine
+        # preflight is isolated so no live Git checkout is required.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workspace_root = self._tmp.name
+        guard = afetch._load_workspace_lock_guard()
+        guard.acquire_workspace_lock(
+            self.workspace_root,
+            harness="mde1-t05-test",
+            lease_id=_T05_LEASE,
+            conversation_id=_T05_CONV,
+        )
+        self._preflight_patcher = patch.object(
+            afetch, "verify_no_tracked_quarantine", return_value=None, create=True
+        )
+        self._preflight_patcher.start()
+        self.addCleanup(self._preflight_patcher.stop)
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+    def _control_plane(self, **overrides: Any) -> dict[str, Any]:
+        """Trusted fetch/extract control-plane bindings for the T05 composition."""
+        cp: dict[str, Any] = {
+            "workspace_root": self.workspace_root,
+            "data_dir": Path(self.workspace_root) / "data" / "mail-desk",
+            "lease_id": _T05_LEASE,
+            "conversation_id": _T05_CONV,
+        }
+        cp.update(overrides)
+        return cp
+
+    def _t05_raw_eml(
+        self,
+        attachments_list: list[dict[str, Any]] | None = None,
+        *,
+        body_text: str = "Body",
+        message_id: str = _T05_MESSAGE_ID,
+    ) -> bytes:
+        return _t04_raw_eml(
+            attachments_list=attachments_list,
+            body_text=body_text,
+            message_id=f"<{message_id}>",
+        )
     def _evaluate(
         self,
         *,
@@ -1468,6 +1537,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         account: str = _ACCOUNT,
         folder: str = _FOLDER,
         envelope_id: str | int = _ENVELOPE_ID,
+        **control_plane: Any,
     ) -> dict[str, Any]:
         return aevaluate.attachment_evaluate(
             raw_eml=raw_eml,
@@ -1478,6 +1548,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             decision=decision,
             read_escalation=read_escalation,
             policy=policy,
+            **control_plane,
         )
 
     @staticmethod
@@ -1507,7 +1578,6 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         self.assertEqual(status, staged["status"])
         self.assertEqual(reason, staged["reason"])
         self.assertEqual(authorization, staged["authorization"])
-        self.assertEqual([], staged["files"])
         self.assertIs(False, staged["used_for_classification"])
         self.assertIsNone(staged["classifier_revision"])
         self.assertIn(staged["status"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_STATUSES)
@@ -1559,7 +1629,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
     # Trigger predicates, each exercised independently
     # ------------------------------------------------------------------
     def test_each_trigger_predicate_triggers_evaluation(self) -> None:
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         cases = {
             "kind_unknown": {
                 "kind": "unknown",
@@ -1589,11 +1659,16 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         }
         for name, decision in cases.items():
             with self.subTest(predicate=name):
-                result = self._evaluate(decision=decision, raw_eml=raw_eml)
+                result = self._evaluate(
+                    decision=decision,
+                    raw_eml=raw_eml,
+                    message_id=_T05_MESSAGE_ID,
+                    **self._control_plane(),
+                )
                 self._assert_staged_contract(
                     self._staged(result),
-                    status="skipped",
-                    reason="evaluation_pending",
+                    status="completed",
+                    reason="handoff_ready",
                     authorization="auto_evaluated",
                 )
 
@@ -1639,7 +1714,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         minted.assert_not_called()
 
     def test_read_escalation_with_ambiguous_decision_triggers(self) -> None:
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         escalations = {
             "failed": {
                 "level": "full_body",
@@ -1659,24 +1734,31 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                     decision=_t04_ambiguous_decision(),
                     raw_eml=raw_eml,
                     read_escalation=escalation,
+                    message_id=_T05_MESSAGE_ID,
+                    **self._control_plane(),
                 )
                 self._assert_staged_contract(
                     self._staged(result),
-                    status="skipped",
-                    reason="evaluation_pending",
+                    status="completed",
+                    reason="handoff_ready",
                     authorization="auto_evaluated",
                 )
 
     def test_read_escalation_nested_inside_decision_triggers(self) -> None:
         # Production also emits the escalation as an item sibling nested under the decision.
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         decision = _t04_ambiguous_decision(
             read_escalation={"level": "full_body", "status": "failed", "triggers": ["x"]}
         )
 
-        result = self._evaluate(decision=decision, raw_eml=raw_eml)
+        result = self._evaluate(
+            decision=decision,
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
 
-        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertEqual("handoff_ready", self._staged(result)["reason"])
 
     def test_malformed_nested_read_escalation_fails_closed(self) -> None:
         """A present-but-non-mapping nested `read_escalation` is a contract violation.
@@ -1698,22 +1780,33 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
 
     def test_explicit_read_escalation_takes_precedence_over_malformed_nested(self) -> None:
         """An explicitly supplied valid escalation wins; the nested value is never examined."""
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         explicit = {"level": "full_body", "status": "failed", "triggers": ["x"]}
         decision = _t04_ambiguous_decision(read_escalation="not-a-mapping")
 
-        result = self._evaluate(decision=decision, raw_eml=raw_eml, read_escalation=explicit)
+        result = self._evaluate(
+            decision=decision,
+            raw_eml=raw_eml,
+            read_escalation=explicit,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
 
-        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertEqual("handoff_ready", self._staged(result)["reason"])
 
     def test_nested_read_escalation_none_is_treated_as_absent(self) -> None:
         """A nested `read_escalation` of `None` is the documented absent form, not malformed."""
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         decision = _t04_ambiguous_decision(read_escalation=None)
 
-        result = self._evaluate(decision=decision, raw_eml=raw_eml)
+        result = self._evaluate(
+            decision=decision,
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
 
-        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertEqual("handoff_ready", self._staged(result)["reason"])
 
     def test_read_escalation_does_not_retrigger_an_otherwise_clear_decision(self) -> None:
         raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
@@ -1782,22 +1875,181 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         minted.assert_not_called()
 
     # ------------------------------------------------------------------
-    # Eligible path: bounded pre-T05 staged outcome
+    # Eligible path: T05 positive composition
     # ------------------------------------------------------------------
-    def test_ambiguous_with_allowed_attachment_is_skipped_evaluation_pending(self) -> None:
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+    def test_ambiguous_with_allowed_attachment_completes_handoff_ready(self) -> None:
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
 
-        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
-
-        self._assert_staged_contract(
-            self._staged(result),
-            status="skipped",
-            reason="evaluation_pending",
-            authorization="auto_evaluated",
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
         )
 
-    def test_all_outcomes_pin_false_and_null_and_empty_files(self) -> None:
-        allowed = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        self.assertEqual({"attachment_evaluation", "attachment_analysis_handoff"}, set(result))
+        staged = self._staged(result)
+        self._assert_staged_contract(
+            staged,
+            status="completed",
+            reason="handoff_ready",
+            authorization="auto_evaluated",
+        )
+        self.assertEqual(1, len(staged["files"]))
+        entry = staged["files"][0]
+        self.assertEqual(
+            {"filename", "sha256", "mime_type", "chars", "coverage", "run_id"},
+            set(entry),
+            "A files entry must expose exactly the canonical six safe metadata fields.",
+        )
+        self.assertEqual("report.pdf", entry["filename"])
+        self.assertEqual("application/pdf", entry["mime_type"])
+        self.assertIn(entry["coverage"], {"full", "truncated"})
+        self.assertGreater(entry["chars"], 0)
+        self.assertTrue(str(entry["run_id"]).strip())
+        self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+        # The validated handoff is returned alongside the staged object.
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual("ready", handoff["status"])
+        self.assertEqual(1, handoff["total_attachments"])
+
+    def test_t05_runtime_no_longer_emits_evaluation_pending(self) -> None:
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        self.assertNotEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertNotEqual("skipped", self._staged(result)["status"])
+
+    def test_already_fetched_proceeds_through_extraction_and_preserves_run_id(self) -> None:
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+        control = self._control_plane()
+        first = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **control,
+        )
+        first_run_id = self._staged(first)["files"][0]["run_id"]
+
+        # Second call with the same run_id: the canonical fetch is idempotent (`already_fetched`)
+        # and extraction/handoff still run on the same run.
+        real_fetch = aevaluate.op_attachment_fetch
+        fetch_statuses: list[str] = []
+
+        def _recording_fetch(*args: Any, **kwargs: Any) -> Any:
+            result = real_fetch(*args, **kwargs)
+            fetch_statuses.append(result["status"])
+            return result
+
+        with patch.object(aevaluate, "op_attachment_fetch", side_effect=_recording_fetch):
+            second = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                run_id=first_run_id,
+                **control,
+            )
+
+        self.assertEqual(["already_fetched"], fetch_statuses)
+        staged = self._staged(second)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        self.assertEqual(first_run_id, staged["files"][0]["run_id"])
+
+    def test_multiple_eligible_attachments_share_one_run_id_and_one_handoff(self) -> None:
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[
+                _t05_text_attachment("one.txt", chars=40),
+                _t05_text_attachment("two.txt", chars=50),
+            ]
+        )
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged = self._staged(result)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        self.assertEqual(2, len(staged["files"]))
+        run_ids = {entry["run_id"] for entry in staged["files"]}
+        self.assertEqual(1, len(run_ids), "All attachments of one message must share one run_id.")
+        self.assertEqual(2, result["attachment_analysis_handoff"]["total_attachments"])
+
+    def test_canonical_budget_logic_is_exercised_with_visible_markers(self) -> None:
+        """The 15k/30k budgets and their visible markers are reused, never re-implemented.
+
+        Three 20,000-char attachments are each capped at 15,000 by the canonical extractor, so the
+        canonical handoff builder exhausts the 30,000-char cumulative mail budget on the third
+        attachment and emits its visible cumulative truncation marker.
+        """
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[
+                _t05_text_attachment("one.txt", chars=1_000),
+                _t05_text_attachment("two.txt", chars=20_000),
+                _t05_text_attachment("three.txt", chars=20_000),
+            ]
+        )
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged = self._staged(result)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        self.assertEqual(3, len(staged["files"]))
+        coverages = {entry["filename"]: entry["coverage"] for entry in staged["files"]}
+        self.assertEqual("full", coverages["one.txt"])
+        self.assertEqual("truncated", coverages["two.txt"])
+        self.assertEqual("truncated", coverages["three.txt"])
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual(30_000, handoff["total_chars"])
+        self.assertTrue(handoff["is_cumulative_truncated"])
+        self.assertIn("Truncated at cumulative", handoff["prompt_content"])
+
+    def test_unusable_required_extraction_yields_blocked_still_ambiguous(self) -> None:
+        """A required attachment that extracts nothing usable is blocked, never supplementary.
+
+        A PDF that passes the canonical MIME/active-content sniff but cannot be parsed yields a
+        valid MD-A3 ``corrupt_attachment`` envelope with empty text; because the orchestrator binds
+        every evaluated attachment as ``required_for_decision`` the handoff is blocked.
+        """
+        raw_eml = self._t05_raw_eml(attachments_list=[_t04_attachment_part("scan.pdf")])
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged = self._staged(result)
+        self._assert_staged_contract(
+            staged,
+            status="completed",
+            reason="still_ambiguous",
+            authorization="auto_evaluated",
+        )
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual("blocked_on_required_attachment", handoff["status"])
+        self.assertTrue(handoff["blocked_required_attachments"])
+        self.assertEqual("required_for_decision", handoff["items"][0]["materiality"])
+        self.assertNotEqual("supplementary", handoff["items"][0]["materiality"])
+
+    def test_all_outcomes_pin_false_and_null(self) -> None:
         no_attachment = _t04_raw_eml(attachments_list=[])
         disallowed = _t04_raw_eml(
             attachments_list=[
@@ -1807,15 +2059,11 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             ]
         )
         matrix = [
-            (self._evaluate(decision=_t04_clear_decision(), raw_eml=allowed), "classification_clear"),
+            (self._evaluate(decision=_t04_clear_decision(), raw_eml=_t04_raw_eml(attachments_list=[_t04_attachment_part()])), "classification_clear"),
             (self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=no_attachment), "no_attachments"),
             (
                 self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=disallowed),
                 "no_allowed_attachments",
-            ),
-            (
-                self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=allowed),
-                "evaluation_pending",
             ),
         ]
         for result, reason in matrix:
@@ -1853,6 +2101,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                 decision=_t04_ambiguous_decision(),
                 raw_eml=raw_eml,
                 message_id=_T04_MESSAGE_ID,
+                **self._control_plane(),
             )
 
         self.assertEqual(1, minted.call_count)
@@ -1877,24 +2126,18 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         json.dumps(result)
 
     def test_each_eligible_part_gets_its_own_authorization(self) -> None:
-        pdf_payload = _t04_pdf_payload()
-        docx_payload = _t04_docx_payload()
-        raw_eml = _t04_raw_eml(
+        pdf_payload = _t05_pdf_bytes("First part content")
+        docx_payload = _t05_pdf_bytes("Second part content")
+        raw_eml = self._t05_raw_eml(
             attachments_list=[
-                _t04_attachment_part("report.pdf", data=pdf_payload),
-                _t04_attachment_part(
-                    "notes.docx",
-                    mime_type=(
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                    ),
-                    data=docx_payload,
-                ),
+                {"filename": "report.pdf", "mime_type": "application/pdf", "data": pdf_payload},
+                {"filename": "notes.pdf", "mime_type": "application/pdf", "data": docx_payload},
             ]
         )
         expected_hashes = {
             afetch.compute_review_hash(
                 account=_ACCOUNT,
-                message_id=_T04_MESSAGE_ID,
+                message_id=_T05_MESSAGE_ID,
                 folder=_FOLDER,
                 envelope_id=_ENVELOPE_ID,
                 part_locator="2",
@@ -1902,7 +2145,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             ),
             afetch.compute_review_hash(
                 account=_ACCOUNT,
-                message_id=_T04_MESSAGE_ID,
+                message_id=_T05_MESSAGE_ID,
                 folder=_FOLDER,
                 envelope_id=_ENVELOPE_ID,
                 part_locator="3",
@@ -1917,7 +2160,12 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         ) as minted, patch.object(
             aevaluate, "guard_context_authorization", side_effect=real_guard
         ) as guarded:
-            result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
 
         self.assertEqual(2, minted.call_count)
         self.assertEqual(2, guarded.call_count)
@@ -1925,11 +2173,10 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             expected_hashes,
             {call.kwargs["request_hash"] for call in minted.call_args_list},
         )
-        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
         self.assertEqual("auto_evaluated", self._staged(result)["authorization"])
 
     def test_policy_revision_is_derived_from_the_effective_trusted_policy(self) -> None:
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         real_create = aevaluate.create_machine_authorization
         real_guard = aevaluate.guard_context_authorization
 
@@ -1942,6 +2189,8 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                 decision=_t04_ambiguous_decision(),
                 raw_eml=raw_eml,
                 policy=_t04_custom_policy("2.3.4"),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
             )
 
         self.assertEqual("2.3.4", minted.call_args.kwargs["policy_revision"])
@@ -1984,15 +2233,20 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             {"policy_status": "allowed"},
             {"fetch_status": "available"},
             {"machine_receipt": {"receipt_id": "rec"}},
+            {"approval_receipt": {"receipt_id": "rec"}},
             {"authorization": "auto_evaluated"},
             {"staged_status": "skipped"},
             {"status": "skipped"},
             {"reason": "evaluation_pending"},
+            {"reason": "handoff_ready"},
             {"files": [{"filename": "x.pdf"}]},
             {"used_for_classification": True},
             {"classifier_revision": "a" * 64},
             {"expected_policy_revision": "9.9.9"},
             {"expected_request_hash": "a" * 64},
+            {"materiality": "required_for_decision"},
+            {"handoff": {"status": "ready"}},
+            {"attachment_analysis_handoff": {"status": "ready"}},
         ]
         for forged in forged_inputs:
             with self.subTest(forged=sorted(forged)):
@@ -2036,7 +2290,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             body_text=f"{secret} {windows_path}",
         )
 
-        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+        result = self._evaluate(decision=_t04_clear_decision(), raw_eml=raw_eml)
         serialized = json.dumps(result)
 
         self.assertNotIn(secret, serialized)
@@ -2044,10 +2298,29 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         self.assertNotIn("report.pdf", serialized)
         self.assertNotRegex(serialized, r"[A-Za-z]:\\\\")
 
+    def test_staged_output_contains_no_raw_extraction_text_or_absolute_paths(self) -> None:
+        """Only the encapsulated handoff may carry bounded content, never the staged object."""
+        secret = "TOPSECRET-ATTACHMENT-BODY-MDE1-T05"
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment(text=secret)])
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged_serialized = json.dumps(result["attachment_evaluation"])
+        self.assertNotIn(secret, staged_serialized)
+        self.assertNotRegex(staged_serialized, r"[A-Za-z]:\\\\")
+        # The bounded content lives only inside the encapsulated untrusted handoff.
+        self.assertIn(secret, result["attachment_analysis_handoff"]["prompt_content"])
+        self.assertIn("<untrusted_attachment_content", result["attachment_analysis_handoff"]["prompt_content"])
+
     # ------------------------------------------------------------------
-    # No T05 / mutation seam may be imported or called
+    # No forbidden mutation / classifier / cleanup seam may be imported or called
     # ------------------------------------------------------------------
-    def test_no_forbidden_t05_or_mutation_seam_is_imported(self) -> None:
+    def test_no_forbidden_mutation_seam_is_imported(self) -> None:
         module_path = MAIL_DESK_ROOT / "scripts" / "core" / "attachment_evaluation.py"
         tree = ast.parse(module_path.read_text(encoding="utf-8"))
 
@@ -2068,27 +2341,18 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                 referenced_names.add(node.id)
 
         self.assertFalse(
-            _T04_FORBIDDEN_CALLABLES & referenced_names,
-            f"T04 imported/referenced forbidden callable(s): "
-            f"{sorted(_T04_FORBIDDEN_CALLABLES & referenced_names)}",
+            _T05_FORBIDDEN_CALLABLES & referenced_names,
+            f"T05 imported/referenced forbidden callable(s): "
+            f"{sorted(_T05_FORBIDDEN_CALLABLES & referenced_names)}",
         )
         self.assertFalse(
-            _T04_FORBIDDEN_MODULES & imported_modules,
-            f"T04 imported forbidden module(s): {sorted(_T04_FORBIDDEN_MODULES & imported_modules)}",
+            _T05_FORBIDDEN_MODULES & imported_modules,
+            f"T05 imported forbidden module(s): {sorted(_T05_FORBIDDEN_MODULES & imported_modules)}",
         )
 
-    def test_no_forbidden_t05_or_mutation_seam_is_called(self) -> None:
-        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+    def test_no_forbidden_mutation_or_classifier_seam_is_called(self) -> None:
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         blockers = [
-            patch.object(afetch, "op_attachment_fetch", side_effect=AssertionError("T05 fetch ran")),
-            patch.object(
-                aextract, "extract_attachment_content", side_effect=AssertionError("T05 extract ran")
-            ),
-            patch.object(
-                ahandoff,
-                "build_attachment_analysis_handoff",
-                side_effect=AssertionError("T05 handoff ran"),
-            ),
             patch.object(
                 ahandoff,
                 "apply_attachment_handoff_to_item",
@@ -2101,17 +2365,144 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                 adisp, "record_disposition_entry", side_effect=AssertionError("disposition ran")
             ),
             patch.object(adisp, "apply_discard", side_effect=AssertionError("discard ran")),
+            patch.object(
+                afetch, "cleanup_run_quarantine", side_effect=AssertionError("cleanup ran")
+            ),
+            patch.object(
+                aevaluate,
+                "classify_email",
+                side_effect=AssertionError("classifier ran"),
+                create=True,
+            ),
         ]
         started = [blocker.start() for blocker in blockers]
         try:
-            result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
         finally:
             for blocker in blockers:
                 blocker.stop()
 
         for mock in started:
             mock.assert_not_called()
-        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertEqual("handoff_ready", self._staged(result)["reason"])
+
+    # ------------------------------------------------------------------
+    # Upfront lock guard: no I/O before an owned lock
+    # ------------------------------------------------------------------
+    def test_upfront_lock_guard_blocks_fetch_before_any_write(self) -> None:
+        """A missing/foreign lock stops the composition before the first quarantine write."""
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+        data_dir = Path(self.workspace_root) / "data" / "mail-desk"
+        # A wrong lease cannot own the active lock in this workspace.
+        with patch.object(
+            afetch,
+            "verify_workspace_lock",
+            side_effect=afetch.WorkspaceLockError("foreign lock"),
+        ) as guarded:
+            with self.assertRaises(afetch.WorkspaceLockError):
+                self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=raw_eml,
+                    message_id=_T05_MESSAGE_ID,
+                    **self._control_plane(lease_id="foreign-lease"),
+                )
+
+        guarded.assert_called()
+        self.assertFalse(
+            (data_dir / "attachments").exists(),
+            "No quarantine write may occur before the upfront lock guard passes.",
+        )
+
+    def test_real_lock_guard_rejects_fully_foreign_identity_before_any_write(self) -> None:
+        """A real, unpatched shared guard rejects a fully foreign identity before fetch/write.
+
+        Unlike the patched guard test above, this acquires a genuine workspace lock through the
+        shared lock helper and calls the public seam with both a foreign ``lease_id`` and a foreign
+        ``conversation_id``.  Shared ownership intentionally uses OR semantics, so supplying *both*
+        wrong credentials is the strongest proof that a fully foreign identity is rejected by the
+        canonical guard itself -- before any fetch/extract call and before any quarantine write.
+        """
+        guard = afetch._load_workspace_lock_guard()
+        owner_lease = "owner-lease-mde1-t05"
+        owner_conv = "owner-conv-mde1-t05"
+
+        # A dedicated throwaway workspace with its own real lock.  Cleanups run LIFO: the release
+        # is registered after the directory cleanup, so it runs first while the directory exists.
+        tmp = tempfile.TemporaryDirectory()
+        foreign_ws = tmp.name
+        self.addCleanup(tmp.cleanup)
+        guard.acquire_workspace_lock(
+            foreign_ws,
+            harness="mde1-t05-foreign-test",
+            lease_id=owner_lease,
+            conversation_id=owner_conv,
+        )
+
+        def _release_owned_lock() -> None:
+            guard._invoke(
+                guard._command("release", Path(foreign_ws), "--lease-id", owner_lease),
+                None,
+            )
+
+        self.addCleanup(_release_owned_lock)
+
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+        data_dir = Path(foreign_ws) / "data" / "mail-desk"
+
+        with patch.object(
+            aevaluate, "op_attachment_fetch", side_effect=AssertionError("fetch must not run")
+        ) as fetch_mock, patch.object(
+            aevaluate,
+            "extract_attachment_content",
+            side_effect=AssertionError("extract must not run"),
+        ) as extract_mock:
+            with self.assertRaises(afetch.WorkspaceLockError) as ctx:
+                self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=raw_eml,
+                    message_id=_T05_MESSAGE_ID,
+                    workspace_root=foreign_ws,
+                    data_dir=data_dir,
+                    lease_id="foreign-lease-mde1-t05",
+                    conversation_id="foreign-conv-mde1-t05",
+                )
+
+        # The real, active lock exists; the failure is the ownership branch, not a missing lock.
+        self.assertIn("not owned", str(ctx.exception).lower())
+
+        fetch_mock.assert_not_called()
+        extract_mock.assert_not_called()
+        self.assertFalse(
+            (data_dir / "attachments").exists(),
+            "No quarantine directory may be created for a fully foreign identity.",
+        )
+        self.assertFalse(
+            (data_dir / "attachments").is_dir(),
+            "No quarantine artefact may be created for a fully foreign identity.",
+        )
+
+    def test_drift_stops_before_extraction(self) -> None:
+        """A hash/candidate drift raised by the canonical fetch stops before extraction."""
+        raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+        with patch.object(
+            aevaluate, "extract_attachment_content", side_effect=AssertionError("extract ran")
+        ) as extract_mock, patch.object(
+            aevaluate, "op_attachment_fetch", side_effect=afetch.HashDriftError("drift")
+        ):
+            with self.assertRaises(afetch.HashDriftError):
+                self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=raw_eml,
+                    message_id=_T05_MESSAGE_ID,
+                    **self._control_plane(),
+                )
+
+        extract_mock.assert_not_called()
 
     def test_non_bytes_or_str_raw_eml_fails_closed(self) -> None:
         """`raw_eml` accepts only bytes or str; any other type fails closed before parsing."""

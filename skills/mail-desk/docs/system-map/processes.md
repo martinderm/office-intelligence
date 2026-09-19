@@ -91,9 +91,9 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 6. **Atomarer Index-Eintrag:**
    - `save_quarantine_index_atomic()` lädt den bestehenden Index, validiert Schema 1, prüft auf Drift (`AttachmentIndexDriftError`), fügt das Item ein und speichert atomar via `tempfile` + `os.replace`.
 
-### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04)
+### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04/T05)
 
-Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator ist in T04 bewusst ein **Skeleton** und führt noch keinen Fetch, keine Extraktion und keinen Handoff aus.
+Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern und komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear; die `DraftManifest`-Installation bleibt MD-E2.
 
 ```
 [Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
@@ -105,16 +105,23 @@ Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attac
         [canonicalize_and_bind_attachments] ──► kein allowed+available ──► not_needed/no_allowed_attachments
                                    │ ≥1 zulässiger Part
                                    ▼
+   [verify_workspace_lock (upfront, kein I/O davor)] ──► je Part:
    [verify_attachment_drift] ──► [compute_review_hash] ──► [create_machine_authorization]
                                    ──► [guard_context_authorization(CONTEXT_EVALUATION)]
-                                   ──► staged: skipped/evaluation_pending/auto_evaluated/files:[]
+                                   ──► [op_attachment_fetch] ──► [extract_attachment_content]
+                                   ▼ (eine run_id je Mail)
+   [build_attachment_analysis_handoff(default_materiality="required_for_decision")]
+                                   ──► [validate_attachment_handoff]
+                                   ──► staged: completed/handoff_ready bzw. completed/still_ambiguous
 ```
 
 1. **Trigger:** `decision.kind == "unknown"`, `decision.id == "unclassified"`, `decision.confidence == "low"`, `decision.review_required == true` oder eine dokumentierte `read_escalation` (`status` `failed`/`completed`) ohne eindeutige Zuordnung. Ein klarer Entscheid wird durch eine frühere Eskalation nicht erneut ausgewertet.
 2. **Revalidierung:** `inspect_mime_tree` und `canonicalize_and_bind_attachments` (inkl. `check_attachment_policy` mit kumulativen Quoten) binden die echten MIME-Parts; `verify_attachment_drift` prüft Account, Folder, Message-ID, Envelope-ID, Part-Locator und Hash gegen die aktuellen Parts.
 3. **Autorisierung:** Für jeden zulässigen (`fetch_status: "available"`, `policy_status: "allowed"`) Part wird der kanonische `review_hash` berechnet, die interne Maschinen-Autorisierung gemint und sofort im `evaluation`-Kontext geprüft. Die effektive `policy_revision` stammt ausschließlich aus dem `version`-Feld der effektiven Policy.
-4. **Bounded Ausgang:** klarer Entscheid → `not_needed`/`classification_clear`; unklar ohne Anhang → `no_attachments`; unklar ohne zulässigen Anhang → `no_allowed_attachments`; unklar mit zulässigem Anhang → `skipped`/`evaluation_pending`/`auto_evaluated`/`files: []`. Das staged Objekt trägt immer `used_for_classification: false` und `classifier_revision: null`.
-5. **T05-Grenze:** Fetch (`op_attachment_fetch`), Extraktion (`extract_attachment_content`), Handoff (`build_attachment_analysis_handoff`) und jede `DraftManifest`-Installation folgen erst in **MD-E1-T05** und sind in T04 nicht implementiert.
+4. **Upfront-Lock & Fetch:** Vor der Fetch-Schleife läuft der kanonische `attachment_fetch.verify_workspace_lock`; kein I/O davor. `op_attachment_fetch` behält seinen eigenen Lock-/Preflight-/Drift-Check und erhält erst nach bestandenem Guard den nicht-autoritativen `capability.to_dict()`-Snapshot als `approval_receipt`. Alle Anhänge einer Mail teilen eine `run_id`.
+5. **Extraktion & Handoff:** `fetched` und `already_fetched` laufen identisch durch `extract_attachment_content`; aus den angereicherten Envelopes und den kanonisch gebundenen Parts entsteht ein `build_attachment_analysis_handoff(default_materiality="required_for_decision")`, das mit `validate_attachment_handoff` validiert wird. Die 15k/30k-Budgets samt sichtbaren Markern stammen unverändert aus dem Builder.
+6. **Bounded Ausgang:** klarer Entscheid → `not_needed`/`classification_clear`; unklar ohne Anhang → `no_attachments`; unklar ohne zulässigen Anhang → `no_allowed_attachments`; unklar mit zulässigem Anhang und validiertem `ready`-Handoff → `completed`/`handoff_ready`/`auto_evaluated` mit sicheren `files[]`; validierter `blocked_on_required_attachment`-Handoff → `completed`/`still_ambiguous` (nie `supplementary`). Das staged Objekt trägt immer `used_for_classification: false` und `classifier_revision: null`.
+7. **T06-Grenze:** Die negative Fehler-/Reason-Matrix (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`, `handoff_invalid`) sowie jede `DraftManifest`-Installation (MD-E2) folgen erst in **MD-E1-T06** und sind in T05 nicht implementiert.
 
 
 ---

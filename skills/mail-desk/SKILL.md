@@ -142,16 +142,22 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    `decision.review_required: true` oder eine dokumentierte `read_escalation` ohne
    eindeutige Zuordnung) und liegt mindestens ein kanonisch erlaubter, verfügbarer
    MIME-Anhang vor, stößt `attachment_evaluate` die policygebundene Auswertung an.
-   Der Aufruf revalidiert ausschließlich die echte MIME-Struktur und erzeugt die
-   interne Maschinen-Autorisierung (FR-15/MD-E1-T03); Caller-seitige
-   Kandidaten-, Policy-, Fetch- oder Receipt-Werte sind keine Autorität. Das
-   Ergebnis ist ausschließlich das staged Zwischenergebnis `attachment_evaluation`
-   mit `used_for_classification: false` und `classifier_revision: null`. In
-   MD-E1-T04 ist der Orchestrator bewusst ein Skeleton: der bounded Ausgang für
-   einen zulässigen Anhang lautet `status: "skipped"`,
-   `reason: "evaluation_pending"`, `authorization: "auto_evaluated"`, `files: []`;
-   Fetch, Extraktion und Handoff folgen erst in MD-E1-T05. Ein klarer Entscheid wird
-   durch eine frühere Eskalation nicht erneut ausgewertet. Details stehen in
+   Der Aufruf revalidiert ausschließlich die echte MIME-Struktur, prüft vorab den
+   Workspace-Lock und erzeugt die interne Maschinen-Autorisierung
+   (FR-15/MD-E1-T03); Caller-seitige Kandidaten-, Policy-, Fetch-Status-, Receipt-,
+   Materiality- oder Handoff-Werte sind keine Autorität. Mit **FR-15/MD-E1-T05**
+   komponiert der Orchestrator die bestehenden kanonischen Seams linear
+   (`op_attachment_fetch` → `extract_attachment_content` →
+   `build_attachment_analysis_handoff` → `validate_attachment_handoff`) unter einer
+   `run_id` je Mail und gibt das staged Zwischenergebnis `attachment_evaluation`
+   (`used_for_classification: false`, `classifier_revision: null`) plus den
+   validierten `attachment_analysis_handoff` zurück. Der erfolgreiche Pfad endet
+   `status: "completed"`, `reason: "handoff_ready"`, `authorization:
+   "auto_evaluated"` mit befüllten sicheren `files[]`; ein validierter
+   `blocked_on_required_attachment`-Handoff bleibt `completed`/`still_ambiguous`
+   (nie `supplementary`). Die negative Fehler-/Reason-Matrix bleibt MD-E1-T06, die
+   `DraftManifest`-Installation MD-E2. Ein klarer Entscheid wird durch eine frühere
+   Eskalation nicht erneut ausgewertet. Details stehen in
    [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.

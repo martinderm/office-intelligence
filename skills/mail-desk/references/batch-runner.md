@@ -1287,22 +1287,24 @@ Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarati
 
 ---
 
-## FR-15 / MD-E1-T04: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
+## FR-15 / MD-E1-T04 + T05: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
 
 Das Modul `scripts/core/attachment_evaluation.py` stellt den einzigen, separat testbaren
 `attachment_evaluate`-Seam bereit. Er qualifiziert den automatischen Auswertungs-Trigger,
-revalidiert die echte RFC-822-MIME-Struktur gegen die vertrauenswürdige Policy und erzeugt das
-kanonische staged Zwischenergebnis `attachment_evaluation`.
+revalidiert die echte RFC-822-MIME-Struktur gegen die vertrauenswürdige Policy, autorisiert jeden
+zulässigen Part intern und komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams
+linear zu einem validierten Übergabe-Handoff.
 
-> **Implementierungsstand (T04 = Skeleton):** T04 lädt keinen Anhang, extrahiert keinen Inhalt,
-> baut/validiert keinen `attachment_analysis_handoff` und installiert kein Feld in ein
-> persistiertes `DraftManifest`. Diese Schritte gehören zu **MD-E1-T05** und werden dort direkt
-> in denselben Orchestrator verdrahtet. Der ehrliche Pre-T05-Ausgang für eine unklare Mail mit
-> mindestens einem zulässigen Anhang lautet daher `status: "skipped"`,
-> `reason: "evaluation_pending"`, `authorization: "auto_evaluated"`, `files: []` — niemals eine
-> Behauptung abgeschlossener Extraktion oder Übergabe. `completed` und die übrigen bounded
-> Reasons (`fetch_failed`, `extraction_failed`, `handoff_invalid`, `still_ambiguous`, …) folgen
-> erst in MD-E1-T05/T06.
+> **Implementierungsstand (T04 = Skeleton, T05 = positive Auswertungsstrecke):** T04 lieferte
+> ausschließlich das staged Zwischenergebnis. T05 verdrahtet nun die lineare Komposition
+> `op_attachment_fetch` → `extract_attachment_content` → `build_attachment_analysis_handoff`
+> → `validate_attachment_handoff` direkt in denselben Orchestrator. Der Erfolgspfad endet
+> `status: "completed"`, `reason: "handoff_ready"`, `authorization: "auto_evaluated"` mit
+> befüllten sicheren `files[]`; ein validierter `blocked_on_required_attachment`-Handoff bleibt
+> `completed` / `still_ambiguous` (nie `supplementary`). Die negative Fehler-/Reason-Matrix
+> (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`,
+> `handoff_invalid`) sowie jede `DraftManifest`-Installation (**MD-E2**) sind **noch nicht**
+> implementiert und bleiben **MD-E1-T06** bzw. MD-E2.
 
 1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
    ```python
@@ -1316,13 +1318,19 @@ kanonische staged Zwischenergebnis `attachment_evaluation`.
        decision: Mapping[str, Any],   # bestehende Body-/Full-Read-Klassifikation
        read_escalation: Mapping[str, Any] | None = None,  # Item-Sibling des Classifiers
        policy: Mapping[str, Any] | None = None,           # effektive vertrauenswürdige Policy
+       run_id: str | None = None,        # eine run_id je Mail (sonst vom ersten Fetch allokiert)
+       data_dir: Path | None = None,     # vertrauenswürdige Control-Plane-Bindung
+       workspace_root: str | Path | None = None,
+       lease_id: str | None = None,
+       conversation_id: str | None = None,
    ) -> dict[str, Any]
    ```
    Der Aufruf akzeptiert **keine** caller-seitigen Kandidaten, `policy_status`, `fetch_status`,
-   Maschinen-Receipts, Autorisierungs-Labels, staged `status`/`reason` oder `files`. Die effektive
-   `policy_revision` wird ausschließlich aus dem nicht-leeren `version`-Feld der effektiven Policy
-   abgeleitet (Default `DEFAULT_ATTACHMENT_POLICY["version"]`); eine fehlende oder malformte
-   Revision stoppt fail-closed (`AttachmentEvaluationError`).
+   Maschinen-/Approval-Receipts, Autorisierungs-Labels, staged `status`/`reason`, `files`,
+   Materiality, Klassifikation oder Handoff. Die effektive `policy_revision` wird ausschließlich
+   aus dem nicht-leeren `version`-Feld der effektiven Policy abgeleitet (Default
+   `DEFAULT_ATTACHMENT_POLICY["version"]`); eine fehlende oder malformte Revision stoppt
+   fail-closed (`AttachmentEvaluationError`).
 
 2. **Verbindlicher Trigger (OR):** `decision.kind == "unknown"`; `decision.id ==
    "unclassified"`; `decision.confidence == "low"`; `decision.review_required is True`; oder eine
@@ -1338,35 +1346,65 @@ kanonische staged Zwischenergebnis `attachment_evaluation`.
    Part-Locator, Hash gegen die aktuellen MIME-Parts). Für jeden zulässigen Part wird der
    kanonische `review_hash` (`compute_review_hash`) berechnet, die interne Maschinen-Autorisierung
    mit `create_machine_authorization` gemint und sofort über
-   `guard_context_authorization(context=CONTEXT_EVALUATION, …)` geprüft. Die opake Autorisierung
-   wird nie serialisiert oder im Envelope exponiert. `inventory_sha256` ist der revalidierte
-   SHA-256 des MIME-Kandidaten (identisch zur bestehenden MD-A2-Fetch-Semantik).
+   `guard_context_authorization(context=CONTEXT_EVALUATION, …)` geprüft. Erst nach bestandenem
+   Guard wird der **nicht-autoritative** `capability.to_dict()`-Snapshot als struktureller
+   `approval_receipt` an `op_attachment_fetch` übergeben; die opake Autorisierung selbst wird nie
+   serialisiert oder im Envelope exponiert. `inventory_sha256` ist der revalidierte SHA-256 des
+   MIME-Kandidaten (identisch zur bestehenden MD-A2-Fetch-Semantik).
 
-4. **Kanonischer staged Envelope (`{"attachment_evaluation": {…}}`):**
+4. **T05 lineare Komposition:** Vor der Fetch-Schleife läuft explizit der kanonische
+   `attachment_fetch.verify_workspace_lock` mit den vertrauenswürdigen Control-Plane-Bindungen;
+   kein I/O geschieht vor diesem Guard. Danach läuft pro zulässigem Part das unveränderte
+   `op_attachment_fetch` (eigener Lock-/Preflight-/Drift-Check bleibt bestehen), gefolgt von
+   `extract_attachment_content`; `fetched` und `already_fetched` laufen identisch. Alle Anhänge
+   einer Mail teilen **eine** `run_id` (ohne Vorgabe allokiert der erste Fetch sie und die
+   Rückgabe-`run_id` wird wiederverwendet), damit kumulative Count-/Size-Quoten nicht umgangen
+   werden. Office-/PDF-Formate nutzen ausschließlich diesen Extraktor; kein zweiter Converter,
+   Parser oder OCR-Pfad. Die 15.000-/30.000-Zeichen-Budgets samt sichtbaren Truncation-Markern
+   stammen unverändert aus `build_attachment_analysis_handoff` und werden nicht dupliziert.
+
+5. **Handoff-Bindung & Validierung:** Aus den angereicherten Extraktions-Envelopes und den
+   kanonisch gebundenen Parts entsteht **ein** `build_attachment_analysis_handoff(
+   default_materiality="required_for_decision")`, das vor der Rückgabe mit
+   `validate_attachment_handoff` validiert wird. `apply_attachment_handoff_to_item` wird nie
+   aufgerufen; es erfolgt keine `DraftManifest`-Installation.
+
+6. **Kanonischer Rückgabe-Envelope:**
    ```json
    {
      "attachment_evaluation": {
-       "status": "not_needed|skipped|completed|failed",
+       "status": "not_needed|completed|skipped|failed",
        "reason": "bounded_machine_code",
        "authorization": "auto_evaluated|not_applicable",
-       "files": [],
+       "files": [
+         {"filename": "report.pdf", "sha256": "<64-hex>",
+          "mime_type": "application/pdf", "chars": 1234,
+          "coverage": "full|truncated", "run_id": "<safe-run-id>"}
+       ],
        "used_for_classification": false,
        "classifier_revision": null
-     }
+     },
+     "attachment_analysis_handoff": {"...": "validierter, gekapselter Handoff"}
    }
    ```
-   `files[]` bleibt in T04 immer leer; `used_for_classification` ist **immer** `false` und
-   `classifier_revision` **immer** `null`.
+   Jeder `files[]`-Eintrag trägt genau die sechs sicheren Metadatenfelder; das staged Objekt
+   enthält nie einen absoluten Pfad oder Rohtext. Nur der validierte, gekapselte Handoff trägt
+   begrenzten Inhalt. `used_for_classification` ist **immer** `false` und `classifier_revision`
+   **immer** `null`.
 
-5. **T04-Ausgangsmatrix (bounded, ohne Rohinhalt oder absolute Pfade):**
+7. **T05-Ausgangsmatrix (bounded, ohne Rohinhalt oder absolute Pfade):**
    - klarer Entscheid → `not_needed` / `classification_clear` / `not_applicable` / `files: []`.
    - unklar, keine MIME-Anhänge → `not_needed` / `no_attachments` / `not_applicable` / `files: []`.
    - unklar, aber kein kanonisch erlaubter+verfügbarer Anhang → `not_needed` /
      `no_allowed_attachments` / `not_applicable` / `files: []`.
-   - unklar mit mindestens einem erlaubten+verfügbaren gebundenen Anhang → `skipped` /
-     `evaluation_pending` / `auto_evaluated` / `files: []` (bounded Pre-T05-Zustand).
+   - unklar mit zulässigem Anhang und validiertem `ready`-Handoff → `completed` /
+     `handoff_ready` / `auto_evaluated` / sichere `files[]`.
+   - unklar mit validiertem `blocked_on_required_attachment`-Handoff → `completed` /
+     `still_ambiguous` / `auto_evaluated` / sichere `files[]` (bleibt `required_for_decision`,
+     nie `supplementary`).
 
-6. **Abgrenzung:** T04 ruft kein `op_attachment_fetch`, `extract_attachment_content`,
-   `build_attachment_analysis_handoff`, `apply_attachment_handoff_to_item` und keine Mailbox-,
-   Dispositions-, Promotions-, Export-, Evidence-, Katalog- oder Cloud-Mutation auf. Es gibt
-   keine Platzhalter-Callables für T05.
+8. **Abgrenzung:** T05 ruft kein `apply_attachment_handoff_to_item` und keine Mailbox-,
+   Dispositions-, Promotions-, Export-, Filing-, Evidence-, Katalog-, Cloud-, Classifier- oder
+   Cleanup-/GC-Mutation auf. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
+   erhalten. Die negative Fehler-/Reason-Matrix und jede `DraftManifest`-Installation folgen in
+   MD-E1-T06 bzw. MD-E2.
