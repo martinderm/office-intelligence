@@ -2532,7 +2532,6 @@ class MailDeskAttachmentsMDA2Tests(unittest.TestCase):
                         raw_eml=b"fake",
                         data_dir=data_dir,
                         workspace_root=tmpdir,
-                        allow_legacy=False,
                     )
 
                 self.assertIn("workspace lock", str(ctx.exception).lower())

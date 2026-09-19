@@ -129,10 +129,14 @@ def verify_workspace_lock(
     *,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
     data_dir: Path | None = None,
 ) -> Any:
-    """Verify invocation-owned workspace lock before any local filesystem mutation."""
+    """Verify invocation-owned workspace lock before any local filesystem mutation.
+
+    Lock ownership is unconditional: there is no env, parameter or manifest legacy
+    bypass. The shared guard is always called with ``allow_legacy=False``. Only the
+    trusted lease/conversation ID from the harness control plane is honoured.
+    """
     ws: Path
     if workspace_root is not None:
         ws = Path(workspace_root).resolve()
@@ -159,14 +163,13 @@ def verify_workspace_lock(
 
     eff_lease_id = lease_id if lease_id is not None else os.environ.get("WORKSPACE_LOCK_LEASE_ID") or None
     eff_conv_id = conversation_id if conversation_id is not None else os.environ.get("WORKSPACE_LOCK_CONVERSATION_ID") or None
-    eff_allow_legacy = allow_legacy or (os.environ.get("WORKSPACE_LOCK_ALLOW_LEGACY", "").lower() in ("1", "true", "yes"))
 
     guard = _load_workspace_lock_guard()
     return guard.require_workspace_lock(
         ws,
         lease_id=eff_lease_id,
         conversation_id=eff_conv_id,
-        allow_legacy=eff_allow_legacy,
+        allow_legacy=False,
     )
 
 
@@ -1020,7 +1023,6 @@ def op_attachment_fetch(
     workspace_root: str | Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
 ) -> dict[str, Any]:
     """Execute review-bound attachment fetch into temporary run quarantine."""
     pol = policy or DEFAULT_ATTACHMENT_POLICY
@@ -1093,7 +1095,6 @@ def op_attachment_fetch(
         workspace_root=workspace_root,
         lease_id=lease_id,
         conversation_id=conversation_id,
-        allow_legacy=allow_legacy,
         data_dir=base_data_dir,
     )
 
@@ -1284,7 +1285,6 @@ def cleanup_run_quarantine(
     workspace_root: str | Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
 ) -> None:
     """Safely remove a validated quarantine run directory."""
     if not is_valid_run_id(run_id):
@@ -1295,7 +1295,6 @@ def cleanup_run_quarantine(
         workspace_root=workspace_root,
         lease_id=lease_id,
         conversation_id=conversation_id,
-        allow_legacy=allow_legacy,
         data_dir=base_data_dir,
     )
     attachments_root = base_data_dir / "attachments"

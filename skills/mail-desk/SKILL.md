@@ -65,6 +65,12 @@ braucht Human Approval. Senden und jede Mailbox-Schreibaktion brauchen außerdem
 explizite Freigabe. Der sichtbare Single-Session-Legacy-Modus ist nur eine
 ausdrückliche Ausnahme, nie ein stiller Fallback.
 
+Für die Attachment-Fetch-, Extraktions- und Quarantäne-Pfade ist Lock-Ownership
+unbedingt (FR-15/MD-E1-T01): der shared Guard wird ausnahmslos mit
+`allow_legacy=False` aufgerufen, und weder `WORKSPACE_LOCK_ALLOW_LEGACY` noch ein
+`allow_legacy`-Parameter oder Manifest-Wert öffnen dort einen Schreibpfad. Zulässig
+bleibt ausschließlich die eigene Lease-/Conversation-ID der Harness-Control-Plane.
+
 Der Lock schützt lokale gemeinsame Writer, nicht andere Mailbox-Clients; er ersetzt
 die adapterseitigen Preconditions und Zielverifikation gegen externe
 Zustandsänderungen nicht. Beides bleibt nötig.

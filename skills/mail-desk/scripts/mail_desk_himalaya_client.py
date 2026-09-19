@@ -484,7 +484,6 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     approval_receipt=op.get("approval_receipt"),
                     review_hash=op.get("review_hash"),
                     run_id=op.get("run_id"),
-                    allow_legacy=False,
                 )
             else:
                 raise ValueError(f"Unknown operation action: {action}")

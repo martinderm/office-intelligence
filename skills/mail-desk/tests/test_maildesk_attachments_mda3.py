@@ -168,6 +168,15 @@ def _flaky_lock_verifier(*args: Any, **kwargs: Any) -> None:
     raise afetch.WorkspaceLockError("Lock expired during long OCR execution!")
 
 
+def _noop_lock_verifier(*args: Any, **kwargs: Any) -> None:
+    """Injected, hermetic lock verifier representing an owned harness lease.
+
+    The legacy `allow_legacy` bypass is gone, so derivative-writing OCR tests inject
+    this verified-ownership seam instead of opting out of lock enforcement.
+    """
+    return None
+
+
 def _tree_spawning_writer_target(write_path_str: str, pid_path_str: str) -> str:
     grandchild_code = f"""
 import time, os, sys
@@ -580,7 +589,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_result,
                 expected_sha256=original_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_pdf_2pages,
             )
 
@@ -637,7 +646,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_result,
                 expected_sha256=original_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_mixed_3pages,
             )
 
@@ -689,7 +698,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_result,
                 expected_sha256=original_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_mixed_budget_5pages,
             )
 
@@ -1014,7 +1023,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 expected_sha256=pdf_sha,
                 data_dir=data_dir,
                 policy=policy_ocr_short,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_slow,
             )
             elapsed = time.time() - t0
@@ -1062,7 +1071,6 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                     fetch_res,
                     expected_sha256=pdf_sha,
                     data_dir=data_dir,
-                    allow_legacy=False,
                 )
 
             # Zero derivatives created
@@ -1138,7 +1146,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_res,
                 expected_sha256=pdf_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_crashing,
             )
 
@@ -1189,7 +1197,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                     fetch_res,
                     expected_sha256=pdf_sha,
                     data_dir=data_dir,
-                    allow_legacy=True,
+                    _lock_verifier=_noop_lock_verifier,
                     _ocr_runner=_mock_ocr_new_content,
                 )
 
@@ -1231,7 +1239,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_res,
                 expected_sha256=pdf_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_same_content,
             )
 
@@ -1275,7 +1283,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                     fetch_res,
                     expected_sha256=pdf_sha,
                     data_dir=data_dir,
-                    allow_legacy=True,
+                    _lock_verifier=_noop_lock_verifier,
                     _ocr_runner=_mock_ocr_tampering,
                 )
             self.assertIn("mutated during OCR", str(ctx.exception))
@@ -1379,7 +1387,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_result,
                 expected_sha256=original_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_mixed_p3,
             )
 
@@ -1431,7 +1439,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_res,
                 expected_sha256=original_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_failing,
             )
 
@@ -1567,7 +1575,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 expected_sha256=pdf_sha,
                 data_dir=data_dir,
                 policy=policy_short,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_partially_writing_hanging_ocr,
             )
 
@@ -1692,7 +1700,7 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 fetch_res,
                 expected_sha256=pdf_sha,
                 data_dir=data_dir,
-                allow_legacy=True,
+                _lock_verifier=_noop_lock_verifier,
                 _ocr_runner=_mock_ocr_crashing,
             )
             self.assertEqual("attachment_conversion_unavailable", res["status"])

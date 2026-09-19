@@ -876,7 +876,6 @@ def _extract_content_internal(
     workspace_root: str | Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
     temp_deriv_path: Path | None = None,
     ocr_runner: Callable[..., Any] | None = None,
     lock_verifier: Callable[..., Any] | None = None,
@@ -1003,7 +1002,6 @@ def _extract_content_internal(
                 workspace_root=workspace_root,
                 lease_id=lease_id,
                 conversation_id=conversation_id,
-                allow_legacy=allow_legacy,
                 data_dir=base_data_dir,
             )
 
@@ -1057,7 +1055,6 @@ def _extract_content_internal(
                     workspace_root=workspace_root,
                     lease_id=lease_id,
                     conversation_id=conversation_id,
-                    allow_legacy=allow_legacy,
                     data_dir=base_data_dir,
                 )
                 check_quarantine_path_security(temp_deriv, raw_attachments_root)
@@ -1118,7 +1115,6 @@ def _extract_content_internal(
                 workspace_root=workspace_root,
                 lease_id=lease_id,
                 conversation_id=conversation_id,
-                allow_legacy=allow_legacy,
                 data_dir=base_data_dir,
             )
 
@@ -1175,7 +1171,6 @@ def _extract_content_internal(
                     workspace_root=workspace_root,
                     lease_id=lease_id,
                     conversation_id=conversation_id,
-                    allow_legacy=allow_legacy,
                     data_dir=base_data_dir,
                 )
                 check_quarantine_path_security(temp_deriv, raw_attachments_root)
@@ -1490,7 +1485,6 @@ def extract_attachment_content(
     workspace_root: str | Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
-    allow_legacy: bool = False,
     _ocr_runner: Callable[..., Any] | None = None,
     _lock_verifier: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
@@ -1587,7 +1581,6 @@ def extract_attachment_content(
                 workspace_root,
                 lease_id,
                 conversation_id,
-                allow_legacy,
                 known_temp_deriv_path,
                 _ocr_runner,
                 _lock_verifier,
