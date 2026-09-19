@@ -45,8 +45,10 @@ Um zu verhindern, dass vertrauliche Mail-Inhalte, Tokens oder Prompts unbemerkt 
 Der Schutz vor Race Conditions und parallelen Mutationen erfolgt zweistufig:
 
 * **Workspace-Lease (Ebene 1):** Jede schreibende Skriptausführung (`execute`, `save_quarantine_index_atomic`, `apply_attachment_disposition`) verlangt eine verifizierte Workspace-Lease via `require_workspace_lock()`.
-  * **Kein Legacy-Bypass:** `--allow-legacy` wurde in allen Quarantäne- und Dispositions-Modulen vollständig entfernt; `WORKSPACE_LOCK_ALLOW_LEGACY` wird ignoriert.
-  * **Effekt:** Ohne gültige Lease bricht der Prozess mit `WorkspaceLockRequiredError` ab.
+  * **Kein Legacy-Bypass (normative Invariante):** Für keinen Attachment-/Quarantäne-Schreibpfad darf `--allow-legacy` oder `WORKSPACE_LOCK_ALLOW_LEGACY` eine Lease ersetzen.
+  * **Bekannter Drift (MD-E1-Blocker):** Entgegen der früheren Aussage dieser Karte wertet `verify_workspace_lock()` in [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py#L127-L170) `WORKSPACE_LOCK_ALLOW_LEGACY` derzeit noch aus und reicht `allow_legacy` an den Guard weiter; [`attachment_extract.py`](../scripts/core/attachment_extract.py) führt denselben Parameter. Die Quarantäne-Index-Mutation ([`attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py#L755-L800)) erzwingt dagegen bereits `allow_legacy=False`.
+  * **Geplante Schließung (FR-15/MD-E1):** Der env-basierte Legacy-Bypass wird aus Attachment-Fetch-/Quarantäne-Pfaden entfernt; Tests weisen nach, dass weder Env noch Parameter-/Manifest-Werte einen Schreibpfad öffnen. Zulässig bleibt nur die vertrauenswürdige Lease-/Conversation-ID aus der Harness-Control-Plane.
+  * **Effekt:** Ohne gültige Lease bricht der Prozess mit `WorkspaceLockRequiredError` ab (nach Schließung des Drifts ausnahmslos).
 * **Inventar-File-Lock (Ebene 2):** Zur Absicherung gleichzeitiger Zugriffe auf Quarantäne-Dateien und `.quarantine-inventory.json` verwendet der Mail-Desk den `_QuarantineInventoryLock` (`.quarantine-inventory.json.lock`).
   * **Mechanismus:** Lock-Directory mit PID-Binding, Timeout (30s) und Prüfung veralteter Locks (Stale-Detection >300s).
   * **Effekt:** Verhindert parallele Teilmutationen von Ingest, Reconcile und Discard-Cleanup.

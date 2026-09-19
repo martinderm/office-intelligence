@@ -24,7 +24,7 @@ Um Race Conditions zwischen parallelen Agenten-Sitzungen (z. B. Codex, Antigravi
 * **Fail-Closed Guard:** Skripte rufen `require_workspace_lock()` auf:
   * Fehlt die Lease oder ist sie abgelaufen → Sofortiger Abbruch (`WorkspaceLockRequiredError`, Stopcode `WORKSPACE_LOCK_REQUIRED`).
   * Aktiver fremder Lock vorhanden → Sofortiger Abbruch; kein stilles Überschreiben.
-* **Kein Legacy-Bypass:** `--allow-legacy` und Umgebungs-Overrides wie `WORKSPACE_LOCK_ALLOW_LEGACY` sind für neue schreibende Pfade strikt deaktiviert bzw. entfernt.
+* **Kein Legacy-Bypass (normativ):** `--allow-legacy` (`allow_legacy=True`) und Umgebungs-Overrides wie `WORKSPACE_LOCK_ALLOW_LEGACY` dürfen keine Lease ersetzen. **Aktueller Ist-Stand (bekannter Drift):** Die Attachment-Fetch-/Extraktionspfade im `mail-desk` werten `allow_legacy` und den Env-Override derzeit noch aus; die Schließung dieses Bypasses ist blockierende Voraussetzung für FR-15/MD-E1. Detailstand inklusive Quellbezügen steht in der L2-Karte [`skills/mail-desk/docs/system-map/effects.md`](../../skills/mail-desk/docs/system-map/effects.md) §3. Die geplante MD-E1-Laufzeit wird hier nicht als bereits implementiert behauptet.
 
 ---
 

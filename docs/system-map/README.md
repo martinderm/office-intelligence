@@ -70,7 +70,7 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 ## 4. Die 5 fundamentalen Bundle-Invarianten
 
 1. **Zero Runtime Mutation im Bundle-Root:** Das Repository `office-intelligence` mutiert sich zur Laufzeit niemals selbst. Skripte schreiben ausschließlich in den deklarierten Ziel-Workspace.
-2. **Workspace-Lock Ownership:** Jede schreibende Operation (Ersetzen, Erstellen, Löschen) in einem Ziel-Workspace erfordert eine gültige, lease-gebundene `workspace-lock`-Autorisierung. Legacy-Bypässe (`allow_legacy=True`) sind verboten.
+2. **Workspace-Lock Ownership:** Jede schreibende Operation (Ersetzen, Erstellen, Löschen) in einem Ziel-Workspace erfordert eine gültige, lease-gebundene `workspace-lock`-Autorisierung. Legacy-Bypässe (`allow_legacy=True`/`WORKSPACE_LOCK_ALLOW_LEGACY`) sind normativ verboten. **Bekannter Drift:** Attachment-Fetch-/Extraktionspfade im `mail-desk` werten den Env-/Parameter-Bypass derzeit noch aus; die Schließung ist blockierende MD-E1-Voraussetzung. Details: [`effects.md`](effects.md) §2 und die L2-Karte [`skills/mail-desk/docs/system-map/effects.md`](../../skills/mail-desk/docs/system-map/effects.md) §3.
 3. **Strikte Data-Zone-Konformität:** Erzeugte Artefakte dürfen nur in den 4 kanonischen Zonen des Ziel-Workspaces abgelegt werden:
    - `memory/references/`: Dauerhafte Wissens- und Katalogstrukturen
    - `memory/evidence/`: Feste Nachweise und Sitzungsprotokolle

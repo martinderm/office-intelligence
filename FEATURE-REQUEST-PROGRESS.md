@@ -34,7 +34,17 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   getestet und committed. Der Abschluss ist archiviert.
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
+- `FR-15` — Spezifikationsklärung und System-Map-Driftbereinigung sind
+  abgeschlossen und review-ready: Der staged `attachment_evaluation`-Vertrag für
+  `MD-E1`/`MD-E2`, die Receipt-Klassen-Grenze (typenlose Human-MD-A2-Receipts
+  bleiben gültig), die Lock-Legacy-Schließung, der Tracked-Quarantäne-Preflight,
+  die Materialität `required_for_decision` und die Aufräum-Verantwortung sind in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) verbindlich beschrieben. Die drei
+  Sicherheitsvoraussetzungen sind blockierender Teil der `MD-E1`-Abnahme. Es wurde
+  **kein** Produktionscode und **kein** Test geschrieben; die `MD-E1`-Umsetzung ist
+  nicht gestartet und bleibt hinter einem frischen, ausdrücklichen Human Gate.
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-15:** `MD-E1` — policygebundener Evaluierungs-Orchestrator inklusive der drei blockierenden Sicherheitsvoraussetzungen (nach frischem, ausdrücklichem Human Gate). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).

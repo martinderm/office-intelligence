@@ -186,6 +186,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   2. Sie weder Symlink noch Windows-Reparse-Point ist (`os.lstat().st_file_attributes & 0x400`).
   3. Ihr physischer SHA-256 Hash exakt mit dem Inventar übereinstimmt.
 * **Atomare Mutation bei Löschung:** Während `apply_discard` wird das Inventar unter exklusiver Verzeichnis-Sperre (`_QuarantineInventoryLock`) über ein Sibling-Tempfile atomar aktualisiert (`update_quarantine_inventory_atomic`). Schlägt die Inventar-Mutation fehl, bleibt der Quarantäne-Index unberührt für die spätere Recovery.
+* **Bekannter Drift (MD-E1-Blocker):** Eine Prüfung auf bereits im Git-Index getrackte Quarantänedateien existiert derzeit nur in der Testsuite (`test_maildesk_attachment_quarantine_mdq1.py`: `find_tracked_quarantine_files`/`assert_no_tracked_quarantine_files`), nicht als Produktions-Preflight. FR-15/MD-E1 verlangt einen Preflight am vertrauenswürdigen `workspace_root` vor dem ersten Quarantäne-Write: jede getrackte Datei unter `data/mail-desk/attachments/` ist ein begrenzter fail-closed Stop; `.gitignore` wird dabei nicht autonom verändert.
 
 ---
 
@@ -222,6 +223,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `canonical_execute_request_sha256()`: Berechnet Hash über das Request-Objekt unter bewusstem Ausschluss des Feldes `review`.
 * **Verifizierbare Receipt-Contracts & Scope-Requests (MD-Q3)** ([`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)):
   * `ApprovalReceipt`: Pflichtfelder `receipt_id`, `request_hash`, `approved_at`, `approved_by`. Unbekannte Felder, verbotene Inhalte oder abweichende Hashes werden fail-closed abgewiesen (`ReceiptMalformedError`, `ReceiptDriftError`).
+  * **Bekannte Autorisierungsgrenze (FR-15/MD-E1):** Die bestehenden Receipts sind typenlos (kein `receipt_type`) und bleiben gültig. MD-E1 plant eine schmale, kontext-/receipt-klassenbewusste Grenze: Eine interne Maschinen-Autorisierung (`receipt_class: "machine"`, `receipt_type: "attachment_auto_evaluation"`) darf ausschließlich den begrenzten MD-E1-Fetch/Evaluate-Flow autorisieren und ist von Filing, Promotion, Export, Disposition und direkten/unrelated Fetch-Pfaden fail-closed abzulehnen. Der Guard ist Teil von MD-E1, nicht dieses Ist-Stands.
   * `DispositionRequest` (`build_disposition_request`): Bindet kanonisch `attachment_id`, `index_entry_sha256`, `decision`, `review_after`, `rationale`, `candidate_review_hash`, `promotion_id`, `promotion_status`.
   * `ApplyRequest` (`build_apply_request`): Bindet den exakten, unteilbaren Löschumfang (`action: "discard"`, `attachment_id`, `decision_id`, `index_entry_sha256`, `quarantine_path`, `sha256`, `size_bytes`, `run_id`, `schema_version: 1`). Bulk-Apply ist strikt verboten (`attachment_id` zwingend).
   * `canonical_apply_request_sha256()`: Deterministischer SHA-256 Hash des serialisierten JSON-Objekts zur kryptographischen Bindung des Apply-Receipts.

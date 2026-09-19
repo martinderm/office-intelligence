@@ -24,7 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
-| `FR-15` | ⬜ geplant; Autorisierungsvertrag zu implementieren | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage | `MD-E1` |
+| `FR-15` | 🟨 Spec geklärt, review-ready; Implementierung nicht gestartet, Human Gate offen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; staged `attachment_evaluation`-Vertrag, Receipt-Klassen-Grenze und blockierende Sicherheitsvoraussetzungen spezifiziert | `MD-E1` (erst nach frischem, ausdrücklichem Human Gate) |
 
 
 ```text
@@ -521,11 +521,21 @@ abgegrenzt.
 
 ## FR-15: Automatische Anhang-Auswertung bei unklaren Mails
 
-**Status:** ⬜ Geplant. Keine Implementierung begonnen. FR-08, FR-11 und FR-14
-stellen die erforderlichen MIME-, Quarantäne-, Extraktions-, Handoff- und
-Coverage-Verträge bereit; deren Sicherheitsgrenzen bleiben unverändert. FR-15
-orchestriert diese bestehenden Bausteine im Draft-Pfad und baut keine zweite
-Fetch-, Extraktions- oder Klassifikationslogik.
+**Status:** 🟨 Spec geklärt, review-ready. Keine Implementierung begonnen; nach
+diesem Spezifikations-Commit bleibt die Umsetzung hinter einem frischen,
+ausdrücklichen Human Gate. FR-08, FR-11 und FR-14 stellen die erforderlichen
+MIME-, Quarantäne-, Extraktions-, Handoff- und Coverage-Verträge bereit; deren
+Sicherheitsgrenzen bleiben unverändert. FR-15 orchestriert diese bestehenden
+Bausteine im Draft-Pfad und baut keine zweite Fetch-, Extraktions- oder
+Klassifikationslogik.
+
+**Spezifikationsstand dieses Commits:** Der staged `attachment_evaluation`-Vertrag
+(`MD-E1` → `MD-E2`), die Receipt-Klassen-Grenze, die Lock-Legacy-Schließung, der
+Tracked-Quarantäne-Preflight, die Materialitätsbindung und die
+Aufräum-Verantwortung sind unten verbindlich beschrieben. Die unter
+„Blockierende Sicherheitsvoraussetzungen für MD-E1" genannten Punkte sind
+Bestandteil der MD-E1-Abnahme und keine separaten, aufschiebbaren Tickets.
+Produktionscode und Tests sind **nicht** Teil dieses Commits.
 
 ### Problem und Ziel
 
@@ -567,12 +577,36 @@ aufrufbare Selbstfreigabe verwandeln:
 
 - Die Evaluierungsautorisierung wird ausschließlich intern aus der
   vertrauenswürdigen Draft-Control-Plane erzeugt, nie aus Mailinhalt,
-  Eingabemanifest oder einem vom Caller gelieferten Receipt übernommen.
-- Sie bindet mindestens `receipt_type: "attachment_auto_evaluation"`,
-  `receipt_id`, `request_hash` gleich dem kanonischen MD-A2-`review_hash`,
-  `approved_at`, `approved_by: "mail_desk_auto_evaluator"`, Policy-Revision,
-  Account, Message-ID, Folder, Envelope-ID, Part-Locator und Inventar-Hash.
-  Ausgabe und Auditstatus kennzeichnen sie ausdrücklich als `auto_evaluated`.
+  Eingabemanifest oder einem vom Caller gelieferten Receipt übernommen. Caller,
+  Mail und Manifest können die maschinelle Evaluierungsautorisierung weder liefern
+  noch auswählen; ein vom Caller übergebenes Receipt wird vom MD-E1-Pfad nicht als
+  Autorität akzeptiert.
+- Die maschinelle Autorisierung trägt `receipt_class: "machine"` und
+  `receipt_type: "attachment_auto_evaluation"` und bindet mindestens `receipt_id`,
+  `request_hash` gleich dem kanonischen MD-A2-`review_hash`, `approved_at`,
+  `approved_by: "mail_desk_auto_evaluator"`, Policy-Revision, Account,
+  Message-ID, Folder, Envelope-ID, Part-Locator und Inventar-Hash. Ausgabe und
+  Auditstatus kennzeichnen sie ausdrücklich als `auto_evaluated`.
+- **Receipt-Klassen-Grenze (schmal, nicht pauschal):**
+  `attachment_auto_evaluation` ist ausschließlich eine interne
+  Maschinen-Autorisierung für den begrenzten MD-E1-Fetch/Evaluate-Flow. Sie ist
+  als Human Approval fail-closed abzulehnen von Filing, Promotion, Export,
+  Disposition und jedem nicht zum MD-E1-Flow gehörenden direkten Fetch-Pfad.
+- **Keine pauschale Bruch-Migration für Human-Receipts:** Die seit FR-08
+  ausgelieferte und persistierte Form typenloser menschlicher MD-A2-Receipts (ohne
+  `receipt_type`) bleibt gültig und wird durch MD-E1 nicht stillschweigend
+  invalidiert. MD-E1 führt daher keine pauschale Schema-Migration ein, sondern nur
+  eine schmale, kontext- bzw. receipt-klassenbewusste Validierungsänderung: Der
+  erwartete Receipt-Typ wird je Aufrufkontext explizit festgelegt.
+  Human-Approval-Aufrufstellen weisen jede maschinelle Receipt-Klasse ab, während
+  der MD-E1-Fetch/Evaluate-Pfad ausschließlich die intern erzeugte Maschinenklasse
+  akzeptiert.
+- **Kein Duplikat des Hash-Validators, aber Pflicht zum Klassen-Guard:** MD-E1
+  implementiert keinen zweiten Hash-/Request-Validator, sondern verwendet die
+  bestehenden Hash-/Struktur-Validatoren weiter. Der MD-E1-Scope meint damit „kein
+  Duplikat des Hash-Validators", nicht „kein Receipt-Guard". Der schmale
+  Receipt-Klassen-/Issuer-/Policy-Guard zur Durchsetzung obiger Grenze ist
+  ausdrücklich Teil der MD-E1-Implementierung.
 - `op_attachment_fetch()` behält seinen bestehenden expliziten Receipt- und
   Drift-Vertrag. Der neue Orchestrator darf ihn nur nach aktiver, zum ausführenden
   Harness gehörender Workspace-Lock-Prüfung aufrufen. Fehlender oder fremder Lock
@@ -583,6 +617,13 @@ aufrufbare Selbstfreigabe verwandeln:
 - `detect_mime_and_active_content`, Extension-/MIME-Konsistenz, 15 MB je Datei,
   25 MB je Mail, maximal fünf Dateien, Pfad-Containment, Symlink-/Reparse-Schutz,
   SHA-256-Revalidierung und atomare No-Clobber-Writes bleiben fail-closed bindend.
+- **Materialität:** Jeder MD-E1-Anhang, der ausgewertet wird, um die initiale
+  Mehrdeutigkeit einer unklaren Mail aufzulösen, wird über die MD-A4-Materialität
+  `required_for_decision` gebunden (Handoff-Erzeugung mit
+  `default_materiality: "required_for_decision"`). Teilweise oder nicht verfügbare
+  erforderliche Evidenz bleibt fail-closed/Review (`blocked_on_required_attachment`)
+  und wird niemals stillschweigend als bloß ergänzend (`supplementary`)
+  herabgestuft.
 - Extraktion und Handoff verwenden die bestehenden Limits von maximal 15.000
   Zeichen je Anhang und 30.000 Zeichen je Mail einschließlich sichtbarer
   Truncation-Marker. Der Classifier erhält nur den validierten, gekapselten
@@ -591,9 +632,77 @@ aufrufbare Selbstfreigabe verwandeln:
   getrackter Quarantänepfad ist eine Stop-Bedingung; FR-15 verändert keine
   Consumer-`.gitignore`-Datei autonom.
 
-### Manifest-Vertrag
+#### Blockierende Sicherheitsvoraussetzungen für MD-E1 (Teil der MD-E1-Abnahme)
 
-Jedes Draft-Item erhält genau ein additives Feld:
+Diese Punkte sind keine separaten, aufschiebbaren Tickets; MD-E1 gilt erst als
+abgenommen, wenn sie implementiert, getestet und mit der System Map synchronisiert
+sind.
+
+1. **Lock-Legacy-Bypass schließen:** `attachment_fetch.verify_workspace_lock()`
+   wertet derzeit `WORKSPACE_LOCK_ALLOW_LEGACY` aus und reicht `allow_legacy` an
+   den Guard weiter; `attachment_extract.py` führt denselben Parameter — entgegen
+   der bisherigen System-Map-Aussage, der Env-Bypass werde ignoriert (bekannter
+   Drift). MD-E1 kann Lock-Ownership nicht garantieren, solange dieser Bypass
+   offen ist. Der env-basierte Legacy-Bypass ist aus Attachment-Fetch-/Quarantäne-
+   Pfaden zu entfernen; Runtime, Caller und Manifest dürfen Legacy nicht
+   aktivieren. Zulässig bleibt ausschließlich die vertrauenswürdige
+   Lease-/Conversation-ID aus der Harness-Control-Plane. Erforderlich sind Tests,
+   die belegen, dass weder Env noch Parameter-/Manifest-Bypass einen Schreibpfad
+   öffnen.
+2. **Produktions-Preflight gegen getrackte Quarantäne:** Die Prüfung auf getrackte
+   Quarantänedateien existiert derzeit nur in Tests. Vor dem ersten
+   Quarantäne-Write ist ein Produktions-Preflight erforderlich, der am
+   vertrauenswürdigen `workspace_root` wurzelt und jede getrackte Datei unter
+   `data/mail-desk/attachments/` als begrenzten Stop (fail-closed) behandelt. Der
+   Preflight darf `.gitignore` nicht autonom verändern und muss ein testbares,
+   begrenztes Fail-Closed-Verhalten definieren, ohne eine unsichere Shell
+   vorzuschreiben.
+3. **Receipt-Klassen-Guard:** Die unter „Receipt-Klassen-Grenze" beschriebene
+   schmale, kontextbewusste Validierung ist Bestandteil von MD-E1 und mit Tests für
+   jeden Human-Approval-Pfad sowie den direkten/unrelated Fetch-Pfad nachzuweisen.
+
+#### Lebenszyklus und Aufräum-Verantwortung
+
+- MD-E1 bewahrt verifizierte Quarantäne-Artefakte und das Inventar für MD-E2 auf.
+  Weder MD-E1 noch MD-E2 löschen sie stillschweigend.
+- Nach erfolgreicher Neuklassifikation oder terminalem Fehler bleibt das Aufräumen
+  eine ausdrückliche Aktion der integrierenden Control-Plane unter aktivem Lock
+  und dem bestehenden, validierten Quarantäne-/Dispositions-Lebenszyklus. FR-15
+  führt keine automatische Garbage Collection ein.
+
+### Staged Manifest-Vertrag (MD-E1 → MD-E2)
+
+MD-E1 gibt ein kanonisches **Zwischenergebnis** `attachment_evaluation` zurück und
+schreibt/behauptet **kein** final klassifiziertes Draft-Item. Im Zwischenergebnis
+sind `used_for_classification` immer `false` und `classifier_revision` immer
+`null`. Das Feld `status` beschreibt ausschließlich die Auswertungsstufe, niemals
+das Klassifikationsergebnis. MD-E1 installiert das Zwischenergebnis nicht in ein
+persistiertes `DraftManifest`-Item.
+
+MD-E2 installiert das Feld als genau **ein additives Feld je Draft-Item** in das
+`DraftManifest`, sobald der einmalige Reklassifikationsversuch einen terminalen
+Ausgang erreicht hat; MD-E1 installiert es nicht. MD-E2 ist nicht Teil des
+MD-E1-Implementierungsumfangs.
+
+`used_for_classification: true` zusammen mit einem 64-Hex-`classifier_revision`
+wird **nur** gesetzt, wenn kumulativ gilt: genau **eine** tatsächliche
+Neuklassifikation mit dem validierten `attachment_analysis_handoff` wurde
+ausgeführt **und** ihr Ergebnis ist erfolgreich und nicht mehrdeutig **und** sie
+hat die gebundenen Anhangs-Eingaben tatsächlich verwendet. Das
+`classifier_revision` bindet die kanonischen Klassifikationsregeln und die
+tatsächlich verwendeten Input-Hashes. In allen anderen Fällen bleiben
+`used_for_classification: false` und `classifier_revision: null` — auch dann, wenn
+ein Reklassifikationsversuch tatsächlich stattgefunden hat. Das umfasst
+ausdrücklich `not_needed`, `skipped`, `failed`, `still_ambiguous` und „kein
+Versuch". Ein ausgeführter Klassifikationsaufruf allein führt niemals zu `true`.
+
+MD-E1-Zwischenergebnis (staged, `used_for_classification` immer `false`):
+
+> **Notation:** Pipe-getrennte Werte wie `completed|not_needed|skipped|failed`,
+> `auto_evaluated|not_applicable` oder `full|truncated` sind Notation für sich
+> gegenseitig ausschließende Alternativen und **niemals** literale Laufzeitwerte.
+> In spitzen Klammern gesetzte Werte wie `<64-hex>` oder `<safe-run-id>` sind
+> Platzhalter, keine Literale.
 
 ```json
 {
@@ -611,6 +720,21 @@ Jedes Draft-Item erhält genau ein additives Feld:
         "run_id": "<safe-run-id>"
       }
     ],
+    "used_for_classification": false,
+    "classifier_revision": null
+  }
+}
+```
+
+MD-E2-finales Draft-Item (illustrativ, nur bei erfolgreicher, nicht mehrdeutiger Neuklassifikation nach genau einem Versuch):
+
+```json
+{
+  "attachment_evaluation": {
+    "status": "completed",
+    "reason": "classification_clear",
+    "authorization": "auto_evaluated",
+    "files": ["... unverändert aus dem MD-E1-Zwischenergebnis ..."],
     "used_for_classification": true,
     "classifier_revision": "<64-hex>"
   }
@@ -625,6 +749,12 @@ enthalten keine absoluten Pfade oder Rohinhalte. `classifier_revision` bindet di
 kanonischen Klassifikationsregeln und tatsächlich verwendeten Input-Hashes; eine
 freie Versionszeichenfolge genügt nicht.
 
+**Status für fortbestehende Mehrdeutigkeit (verbindlich):** Die Paketkarte
+definiert keinen eigenen Status für `still_ambiguous`. Es wird kein neuer Status
+eingeführt; `still_ambiguous` verwendet den bestehenden Status `completed`
+(`status: "completed"`, `reason: "still_ambiguous"`). `used_for_classification`
+bleibt dabei `false` und `classifier_revision` `null`.
+
 ### MD-E1 — Policygebundener Evaluierungs-Orchestrator
 
 **Ziel:** Einen schmalen, separat testbaren `attachment_evaluate`-Orchestrator
@@ -635,23 +765,73 @@ Bausteine linear ausführt.
 **Scope:** Bestehende öffentliche Funktionen aus `attachment_fetch.py`,
 `attachment_policy.py`, `attachments.py`, `attachment_extract.py` und
 `attachment_handoff.py` wiederverwenden. Kein eigener Downloader, MIME-Parser,
-Office-Konverter, OCR-Pfad oder Receipt-Validator. Der Orchestrator liefert das
-kanonische `attachment_evaluation` und den validierten
-`attachment_analysis_handoff`; er klassifiziert noch nicht und führt keine
-Mailbox-, Evidence-, Katalog-, Cloud- oder Dispositionsmutation aus.
+Office-Konverter, OCR-Pfad und kein zweiter Hash-/Request-Validator (Duplikat der
+bestehenden Validierung). Ein schmaler, kontext-/receipt-klassenbewusster
+Receipt-Guard ist dagegen ausdrücklich Teil des Scopes, weil er die unter
+„Receipt-Klassen-Grenze" geforderte Autorisierungsgrenze durchsetzt. Der
+Orchestrator liefert das kanonische, staged `attachment_evaluation`
+(`used_for_classification: false`, `classifier_revision: null`) und den validierten
+`attachment_analysis_handoff`; er klassifiziert noch nicht, installiert das Feld
+nicht in ein persistiertes Draft-Item und führt keine Mailbox-, Evidence-,
+Katalog-, Cloud- oder Dispositionsmutation aus.
+
+**Blockierende Sicherheitsvoraussetzungen (Teil der MD-E1-Abnahme):** Die drei
+unter „Blockierende Sicherheitsvoraussetzungen für MD-E1" genannten Punkte —
+Lock-Legacy-Bypass-Schließung, Produktions-Preflight gegen getrackte Quarantäne und
+der Receipt-Klassen-Guard — sind zwingend in MD-E1 zu implementieren und zu testen,
+bevor MD-E1 als abgenommen gilt. Sie sind keine separaten, aufschiebbaren Tickets.
 
 **Pflichttests:** Trigger-Matrix; echte Part-Bindung; caller-seitig gefälschte
 Policy-/Receipt-Werte; fehlender/fremder Lock; aktiver Inhalt; disallowed Extension;
 MIME-/Extension-Drift; Einzel-/Gesamtgröße und Anzahl; idempotentes
 `already_fetched`; Hash-/Inventar-/Identity-Drift; `.docx`, `.doc`, `.pdf`, `.xlsx`
 und `.pptx`; Extraktions-Timeout; 15.000-/30.000-Zeichenbudgets und `truncated`;
-keine Mailbox-, Promotion-, Export- oder Dispositionsoperation.
+keine Mailbox-, Promotion-, Export- oder Dispositionsoperation. Zusätzlich:
+
+- Env- und Parameter-/Manifest-Legacy-Bypass öffnen keinen Schreibpfad;
+- der Produktions-Preflight stoppt bei einer getrackten Datei unter
+  `data/mail-desk/attachments/` vor dem ersten Quarantäne-Write und verändert
+  `.gitignore` nicht;
+- Human-Approval-Pfade (Filing, Promotion, Export, Disposition) lehnen die
+  maschinelle Receipt-Klasse fail-closed ab, während typenlose menschliche
+  MD-A2-Receipts unverändert funktionieren;
+- der MD-E1-Pfad akzeptiert kein vom Caller/Mail/Manifest geliefertes maschinelles
+  Receipt;
+- das staged `attachment_evaluation` hat immer `used_for_classification: false`
+  und `classifier_revision: null`;
+- ausgewertete Anhänge sind über Materialität `required_for_decision` gebunden,
+  und teilweise/nicht verfügbare erforderliche Evidenz bleibt fail-closed/Review.
+
+**Abnahme:** Fokussierte MD-E1-Tests, vollständige Mail-Desk-Suite, Compileall,
+Skill-/Workspace-Validierung und `git diff --check` grün. Nachweis, dass
+(a) der staged Contract eingehalten wird, (b) die drei
+Sicherheitsvoraussetzungen implementiert und getestet sind und (c) MD-E1 null
+Mailbox-, Promotion-, Export- und Dispositionswrites ausführt. Paket, Progress-
+und System-Map-Update werden gemeinsam committed.
 
 ### MD-E2 — Draft-Integration und Neuklassifikation
 
 **Ziel:** Nach der bestehenden Body-/Full-Read-Klassifikation nur unklare Items
 über MD-E1 anreichern und exakt einmal mit dem validierten Anhangs-Handoff erneut
 klassifizieren.
+
+**Staged Übergang aus MD-E1:** MD-E2 übernimmt das staged `attachment_evaluation`
+aus MD-E1 und installiert es als genau ein additives Feld je Draft-Item in das
+`DraftManifest`. `used_for_classification: true` und ein 64-Hex-`classifier_revision`
+setzt MD-E2 **nur** unter den oben im staged Manifest-Vertrag definierten
+kumulativen Bedingungen: genau eine tatsächliche Neuklassifikation mit validiertem
+Handoff, erfolgreiches und nicht mehrdeutiges Ergebnis und tatsächliche Verwendung
+der gebundenen Eingaben. Für `not_needed`, `skipped`, `failed`, `still_ambiguous`,
+„keine Neuklassifikation" und jeden erfolglosen oder mehrdeutigen Versuch bleiben
+beide Felder `false`/`null`. MD-E2 ist **nicht** Teil des
+MD-E1-Implementierungsumfangs; die Umsetzung erfolgt in einem eigenen, frisch
+freigegebenen Paket nach grünem MD-E1.
+
+**Aufräum-Verantwortung:** MD-E2 bewahrt verifizierte Quarantäne-Artefakte und
+Inventar für einen späteren expliziten Cleanup auf. Ein Aufräumen ist eine
+ausdrückliche Aktion der integrierenden Control-Plane unter aktivem Lock und folgt
+dem bestehenden validierten Quarantäne-/Dispositions-Lebenszyklus. Weder MD-E1 noch
+MD-E2 führen eine automatische Garbage Collection ein.
 
 **Scope:** `draft` erhält die Auswertung standardmäßig aktiviert; eine explizite
 CLI-Option `--evaluate-attachments` und ihr sicherer Deaktivierungsgegenpart werden
@@ -672,6 +852,12 @@ Doppel-Fetch; Truncation bleibt sichtbar; Anhangstext bleibt gekapseltes
 auf das betroffene Item; bestehender klarer Draft wird nicht ausgewertet.
 
 ### Dokumentation und Abnahme
+
+Dieser Spezifikations-Commit hat ausschließlich den **aktuellen**
+Implementierungsdrift in der Mail-Desk-Subsystem-System-Map bereinigt und den
+bekannten MD-E1-Blocker markiert; er dokumentiert **keine** geplante MD-E1-Laufzeit
+als bereits implementiert. Die normativen Invarianten bleiben von der
+Ist-Implementierung und ihrer geplanten Schließung in MD-E1 klar getrennt.
 
 Mit der Implementierung, nicht vorgezogen in diesem Backlog-Commit, werden synchron
 aktualisiert:
