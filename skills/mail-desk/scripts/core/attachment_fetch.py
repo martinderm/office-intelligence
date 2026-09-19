@@ -22,11 +22,15 @@ import re
 import shutil
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 import uuid
 import zipfile
 
 from core.common import normalize_message_id, resolve_data_dir
+from core.quarantine_preflight import (
+    resolve_workspace_root,
+    verify_no_tracked_quarantine,
+)
 from core.attachment_policy import (
     DEFAULT_ATTACHMENT_POLICY,
     sanitize_attachment_filename,
@@ -137,29 +141,7 @@ def verify_workspace_lock(
     bypass. The shared guard is always called with ``allow_legacy=False``. Only the
     trusted lease/conversation ID from the harness control plane is honoured.
     """
-    ws: Path
-    if workspace_root is not None:
-        ws = Path(workspace_root).resolve()
-    else:
-        env_ws = os.environ.get("WORKSPACE_ROOT", "").strip()
-        if env_ws:
-            ws = Path(env_ws).resolve()
-        elif data_dir is not None:
-            cand = Path(data_dir).resolve()
-            found_ws = None
-            for p in [cand, *cand.parents]:
-                if (p / ".agents").is_dir() or (p / ".git").is_dir():
-                    found_ws = p
-                    break
-            ws = found_ws if found_ws is not None else Path.cwd().resolve()
-        else:
-            cand = Path.cwd().resolve()
-            found_ws = None
-            for p in [cand, *cand.parents]:
-                if (p / ".agents").is_dir() or (p / ".git").is_dir():
-                    found_ws = p
-                    break
-            ws = found_ws if found_ws is not None else Path.cwd().resolve()
+    ws = resolve_workspace_root(workspace_root, data_dir=data_dir)
 
     eff_lease_id = lease_id if lease_id is not None else os.environ.get("WORKSPACE_LOCK_LEASE_ID") or None
     eff_conv_id = conversation_id if conversation_id is not None else os.environ.get("WORKSPACE_LOCK_CONVERSATION_ID") or None
@@ -1023,6 +1005,7 @@ def op_attachment_fetch(
     workspace_root: str | Path | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
+    _preflight_runner: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Execute review-bound attachment fetch into temporary run quarantine."""
     pol = policy or DEFAULT_ATTACHMENT_POLICY
@@ -1096,6 +1079,15 @@ def op_attachment_fetch(
         lease_id=lease_id,
         conversation_id=conversation_id,
         data_dir=base_data_dir,
+    )
+
+    # 4b. Tracked-quarantine preflight (fail-closed before the first quarantine write).
+    # Ownership was verified above; this bounded, read-only Git check stops the run
+    # before any run directory, inventory or lock file is created.
+    verify_no_tracked_quarantine(
+        workspace_root=workspace_root,
+        data_dir=base_data_dir,
+        runner=_preflight_runner,
     )
 
     # 5. Idempotency Check (Pre-existing Target File)

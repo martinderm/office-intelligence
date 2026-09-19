@@ -52,6 +52,10 @@ Der Schutz vor Race Conditions und parallelen Mutationen erfolgt zweistufig:
 * **Inventar-File-Lock (Ebene 2):** Zur Absicherung gleichzeitiger Zugriffe auf Quarantäne-Dateien und `.quarantine-inventory.json` verwendet der Mail-Desk den `_QuarantineInventoryLock` (`.quarantine-inventory.json.lock`).
   * **Mechanismus:** Lock-Directory mit PID-Binding, Timeout (30s) und Prüfung veralteter Locks (Stale-Detection >300s).
   * **Effekt:** Verhindert parallele Teilmutationen von Ingest, Reconcile und Discard-Cleanup.
+* **Tracked-Quarantäne-Preflight (Ebene 3, FR-15/MD-E1-T02):** Nach der Lock-Ownership-Prüfung und vor dem ersten Quarantäne-Write (`op_attachment_fetch`) bzw. vor dem ersten mutierenden OCR-Derivat-Write (`extract_attachment_content`/`_extract_content_internal`) prüft [`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py) den Git-Index des vertrauenswürdigen `workspace_root` (`git ls-files`, ohne Shell, mit Timeout).
+  * **Getrackte Quarantäne:** Jede getrackte Datei unter `data/mail-desk/attachments/` sowie jede getrackte `**/.quarantine-inventory.json`/`.quarantine-inventory.lock` stoppt fail-closed mit `TrackedQuarantineError`.
+  * **Bounded & fail-closed:** Non-Zero-Exit, Timeout oder unlesbarer Git-Output stoppen fail-closed mit `QuarantinePreflightError` — niemals stiller Pass.
+  * **Read-only:** Der Preflight verändert weder `.gitignore` noch staged/committet/entfernt er Dateien oder Repository-Konfiguration; die Detection-Semantik ist mit dem MD-Q1-Test-Helper single-sourced.
 
 ---
 
@@ -66,6 +70,7 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   * Die History muss zwingend mit `prepared` beginnen.
   * Top-Level-`status` (`in_progress`, `completed`, `failed`), `last_successful_state`, `failure_stage` und `error` müssen exakt mit dem letzten History-Eintrag (`history[-1]`) übereinstimmen. Verkürzte oder manipulierte Journale werden strikt abgelehnt.
 * **Physische Integrität:** `size_bytes <= 0` in `.quarantine-inventory.json` oder im Index wird als korrupte Datei/Manifest gewertet und abgelehnt.
+* **Tracked-Quarantäne-Preflight:** Ein versehentlich im Git-Index getrackter Quarantänepfad ist ein begrenzter fail-closed Stop vor dem ersten Write (§3). Ebenso stoppen Non-Zero-Exit, Timeout oder unlesbarer Git-Output fail-closed; der Preflight repariert nichts und entfernt keine getrackten Dateien.
 * **Effekt:** Tritt eine Integritätsverletzung auf, bricht die Engine sofort fail-closed ab (`AttachmentIndexDriftError` bzw. `AttachmentDispositionError`). Es finden keine Schreib- oder Löschoperationen statt; der Zustand verharrt zur menschlichen Begutachtung.
 
 ---

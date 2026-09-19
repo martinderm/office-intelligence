@@ -171,7 +171,10 @@ in den temporären Quarantäneordner `data/mail-desk/attachments/<run-id>/` ab.
 Erfordert zwingend eine gültige `approval_receipt` mit passendem `request_hash` gegen
 den deterministischen `review_hash`. Erzwingt Preflight-Drift-Prüfung, Quoten (15 MB einzeln,
 25 MB kumulativ, max. 5 Dateien), Re-Hashing, Re-Typing, aktiven Inhalts-Blocker,
-idempotente Retrys und atomare Sibling-Temp-Promotion.
+idempotente Retrys und atomare Sibling-Temp-Promotion. Nach der Lock-Prüfung und vor
+dem ersten Quarantäne-Write stoppt ein bounded read-only Git-Preflight fail-closed,
+falls unter `data/mail-desk/attachments/` bereits etwas getrackt ist (siehe
+Stop-Bedingung unten).
 
 ## Workspace-Integration: Attachment-Quarantäne (Integrationsempfehlung)
 
@@ -207,7 +210,7 @@ direkt nach der bestehenden Negation `!data/mail-desk/**` anzufügen, statt best
 - **Empfehlung für Consumer-Workspaces:** Die obigen Blöcke sind Integrationsvorschläge zur Übernahme in den jeweiligen Consumer-Workspace. Der Skill verändert Consumer-`.gitignore`-Dateien nie autonom. Vor Übernahme bestehende Regeln prüfen; keine vorhandenen Regeln ersetzen.
 - **Flüchtige Laufzeitdaten:** Der gesamte Unterbaum `data/mail-desk/attachments/<run_id>/` inklusive Binärdateien (z. B. PDF, Bilder, Office-Dokumente), run-lokalen Inventaren (`.quarantine-inventory.json`), Lock-Dateien (`.quarantine-inventory.lock`), temporären Sibling-Dateien (`.*.tmp`) und Extraktions-Derivaten (`derivatives/`) sind rein lokale Laufzeitdaten und bleiben strikt ignoriert. Sie werden weder als Evidence noch als Final-Index-Inhalt behandelt.
 - **Versionierbare Metadaten:** Sämtliche Mail-Desk-Metadaten außerhalb des `attachments/`-Unterbaums — insbesondere `action-log.jsonl`, `replies-needed.jsonl`, `pending-review.jsonl`, `final-location-index.json`, Batch-Manifeste, `batch-recovery-journal.json`, `runner-progress.json` sowie der geplante versionierte `data/mail-desk/attachment-quarantine-index.json` (MD-Q2) — bleiben versionierbar und trackbar.
-- **Stop-Bedingung bei getrackten Quarantänedateien:** Bereits versehentlich getrackte Quarantänedateien im Git-Index sind eine strikte Fail-Closed-Stop-Bedingung. Der Skill entfernt solche Dateien nicht autonom aus dem Git-Index; sie erfordern manuelle Klärung vor der weiteren Ausführung.
+- **Stop-Bedingung bei getrackten Quarantänedateien:** Bereits versehentlich getrackte Quarantänedateien im Git-Index sind eine strikte Fail-Closed-Stop-Bedingung. Ein bounded, strikt read-only Produktions-Preflight (`quarantine_preflight.py`: `git ls-files` ohne Shell, mit Timeout) prüft dies am vertrauenswürdigen `workspace_root` nach der Lock-Ownership-Prüfung und vor dem ersten Quarantäne-Write bzw. vor dem ersten mutierenden OCR-Derivat-Write; jede getrackte Datei unter `data/mail-desk/attachments/` (inklusive `**/.quarantine-inventory.json`/`.lock`) sowie Non-Zero-Exit, Timeout oder unlesbarer Index stoppen fail-closed. Der Skill entfernt solche Dateien nie autonom aus dem Git-Index und verändert `.gitignore` nie autonom; sie erfordern manuelle Klärung vor der weiteren Ausführung.
 
 Clientzweck und Aufrufregel stehen im
 [Himalaya-/IMAP-Adapter](backends/himalaya.md); Batch-Lebenszyklus in

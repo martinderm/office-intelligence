@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -13,6 +14,10 @@ import unittest
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 CLI_OPERATIONS_DOC = MAIL_DESK_ROOT / "references" / "cli-operations.md"
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
+
+from core import quarantine_preflight  # noqa: E402
 
 
 def extract_documented_gitignore_blocks(doc_path: Path | str | None = None) -> list[str]:
@@ -28,37 +33,20 @@ def extract_documented_gitignore_blocks(doc_path: Path | str | None = None) -> l
 
 
 def find_tracked_quarantine_files(repo_path: Path | str) -> list[str]:
-    """Check git index for any accidentally tracked quarantine files under data/mail-desk/attachments/."""
-    cmd = ["git", "ls-files", "data/mail-desk/attachments/", "data/mail-desk/attachments/**", "**/attachments/**", "**/.quarantine-inventory.json"]
-    proc = subprocess.run(
-        cmd,
-        cwd=str(repo_path),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"git ls-files failed in {repo_path}: {proc.stderr}")
-    tracked = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
-    quarantine_tracked = [
-        f for f in tracked
-        if (
-            f.startswith("data/mail-desk/attachments/")
-            or f.endswith(".quarantine-inventory.json")
-            or f.endswith(".quarantine-inventory.lock")
-        )
-    ]
-    return quarantine_tracked
+    """Return tracked quarantine files under repo_path.
+
+    Single-sourced with the production preflight (FR-15/MD-E1-T02) so the detection
+    semantics are authoritative in production code and not duplicated in tests.
+    """
+    return quarantine_preflight.find_tracked_quarantine_files(repo_path)
 
 
 def assert_no_tracked_quarantine_files(repo_path: Path | str) -> None:
-    """Fail-closed stop condition: raise RuntimeError if any quarantine files are tracked in git index."""
-    tracked = find_tracked_quarantine_files(repo_path)
-    if tracked:
-        raise RuntimeError(
-            f"STOP CONDITION: accidentally tracked quarantine files found in git index: {tracked}. "
-            "These must never be committed and require human resolution."
-        )
+    """Fail-closed stop condition if any quarantine files are tracked in the git index.
+
+    Delegates to the production preflight implementation (FR-15/MD-E1-T02).
+    """
+    quarantine_preflight.assert_no_tracked_quarantine_files(repo_path)
 
 
 class MailDeskAttachmentQuarantineMDQ1Tests(unittest.TestCase):

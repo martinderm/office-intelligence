@@ -74,6 +74,8 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 [Atomarer Index-Write] ◄── [SHA-256 Re-Verifikation] ◄── [Inventar .quarantine-inventory.json]
 ```
 
+**Tracked-Quarantäne-Preflight (FR-15/MD-E1-T02):** Nach der Lock-Ownership-Prüfung und vor dem ersten Write prüft [`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py) den Git-Index am vertrauenswürdigen `workspace_root` (`git ls-files`, read-only, ohne Shell, mit Timeout). Jede getrackte Datei unter `data/mail-desk/attachments/` (inklusive `**/.quarantine-inventory.json`/`.lock`) stoppt fail-closed (`TrackedQuarantineError`); Non-Zero-Exit, Timeout oder unlesbarer Index stoppen fail-closed (`QuarantinePreflightError`). Der Preflight verändert `.gitignore` nie autonom. Derselbe Preflight läuft vor dem ersten mutierenden OCR-Derivat-Write der Extraktionsstufe.
+
 1. **MIME-Inspektion (`inspect_mime_tree`):**
    - Traversiert die MIME-Struktur der Mail und identifiziert Binäranhänge.
 2. **Containment- & Sicherheitsprüfung:**

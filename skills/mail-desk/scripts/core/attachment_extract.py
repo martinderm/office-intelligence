@@ -118,6 +118,7 @@ from core.attachment_fetch import (
     validate_mime_and_extension,
     verify_workspace_lock,
 )
+from core.quarantine_preflight import verify_no_tracked_quarantine
 
 
 # Default Fallback Limits
@@ -879,6 +880,7 @@ def _extract_content_internal(
     temp_deriv_path: Path | None = None,
     ocr_runner: Callable[..., Any] | None = None,
     lock_verifier: Callable[..., Any] | None = None,
+    preflight_runner: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Perform bounded extraction under isolation."""
     file_bytes = target_file.read_bytes()
@@ -1004,6 +1006,13 @@ def _extract_content_internal(
                 conversation_id=conversation_id,
                 data_dir=base_data_dir,
             )
+            # Tracked-quarantine preflight: bounded, read-only, after ownership
+            # verification and before the first mutating derivative write.
+            verify_no_tracked_quarantine(
+                workspace_root=workspace_root,
+                data_dir=base_data_dir,
+                runner=preflight_runner,
+            )
 
             raw_derivatives_dir = run_dir / "derivatives"
             check_quarantine_path_security(raw_derivatives_dir, raw_attachments_root)
@@ -1116,6 +1125,13 @@ def _extract_content_internal(
                 lease_id=lease_id,
                 conversation_id=conversation_id,
                 data_dir=base_data_dir,
+            )
+            # Tracked-quarantine preflight: bounded, read-only, after ownership
+            # verification and before the first mutating derivative write.
+            verify_no_tracked_quarantine(
+                workspace_root=workspace_root,
+                data_dir=base_data_dir,
+                runner=preflight_runner,
             )
 
             raw_derivatives_dir = run_dir / "derivatives"
@@ -1487,6 +1503,7 @@ def extract_attachment_content(
     conversation_id: str | None = None,
     _ocr_runner: Callable[..., Any] | None = None,
     _lock_verifier: Callable[..., Any] | None = None,
+    _preflight_runner: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Extract bounded textual content from a verified MD-A2 quarantine attachment.
 
@@ -1584,6 +1601,7 @@ def extract_attachment_content(
                 known_temp_deriv_path,
                 _ocr_runner,
                 _lock_verifier,
+                _preflight_runner,
             ),
             timeout_seconds=process_timeout,
             allow_thread_fallback=False,

@@ -1,10 +1,17 @@
-"""TDD tests for FR-15 / MD-E1 — T01: unconditional attachment lock ownership.
+"""TDD tests for FR-15 / MD-E1 — T01 lock ownership and T02 tracked-quarantine preflight.
 
 This focused suite is written before the production change (Red → Green → Refactor).
-It proves that the legacy lock bypass (`WORKSPACE_LOCK_ALLOW_LEGACY` env knob and the
+
+T01 proves that the legacy lock bypass (`WORKSPACE_LOCK_ALLOW_LEGACY` env knob and the
 `allow_legacy` parameter) opens no write path across the attachment fetch / extract /
 cleanup seams, while the trusted lease/conversation IDs from the harness control plane
 remain honoured.
+
+T02 proves that the bounded, fail-closed tracked-quarantine preflight stops
+`op_attachment_fetch` before the first quarantine write and stops the mutating OCR
+derivative write in `extract_attachment_content`, without ever touching `.gitignore`,
+and that a clean Git index lets the write proceed. The Git invocation is injected
+hermetically through a fake command runner, so no live Git checkout is required.
 """
 
 from __future__ import annotations
@@ -12,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -26,6 +34,7 @@ from core import himalaya  # noqa: E402
 from core import attachments  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_extract as aextract  # noqa: E402
+from core import quarantine_preflight as qpf  # noqa: E402
 
 
 _ACCOUNT = "BOKU-MARTIN"
@@ -71,6 +80,66 @@ def _mock_ocr_derivative(
     deriv.parent.mkdir(parents=True, exist_ok=True)
     deriv.write_bytes(data)
     return data, "MDE1 OCR Derivative", 1
+
+
+def _noop_lock_verifier(*args: Any, **kwargs: Any) -> None:
+    """Module-level picklable lock-verifier stub representing an owned harness lease.
+
+    T02's preflight is injected separately; this stub only isolates the workspace lock
+    so the derivative-write assertions exercise the preflight guard in isolation.
+    """
+    return None
+
+
+# Module-level picklable Git-preflight runners (safe to cross the OCR process boundary).
+_PREFLIGHT_CALLS: list[tuple[list[str], str, float]] = []
+
+
+def _clean_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Fake `git ls-files` runner reporting a clean index."""
+    return qpf.GitIndexQueryResult(returncode=0, stdout="", stderr="")
+
+
+def _recording_clean_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Clean runner that records the bounded invocation for assertions (in-process only)."""
+    _PREFLIGHT_CALLS.append((list(argv), str(cwd), float(timeout_seconds)))
+    return qpf.GitIndexQueryResult(returncode=0, stdout="", stderr="")
+
+
+def _tracked_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Fake runner that reports a tracked quarantine artefact."""
+    return qpf.GitIndexQueryResult(
+        returncode=0,
+        stdout="data/mail-desk/attachments/run_tracked/leak.pdf\0",
+        stderr="",
+    )
+
+
+def _failing_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Fake runner emulating a non-zero `git ls-files` exit (e.g. not a repository)."""
+    return qpf.GitIndexQueryResult(
+        returncode=128,
+        stdout="",
+        stderr="fatal: not a git repository",
+    )
+
+
+def _timeout_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Fake runner emulating a bounded Git timeout."""
+    raise subprocess.TimeoutExpired(cmd=list(argv), timeout=timeout_seconds)
+
+
+def _unreadable_git_runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+    """Fake runner returning a result object with unreadable (non-string) output."""
+    return qpf.GitIndexQueryResult(returncode=0, stdout=None, stderr="")  # type: ignore[arg-type]
+
+
+def _runner_with_output(payload: str) -> Any:
+    """Build an in-process runner returning the given NUL-terminated payload."""
+    def _runner(argv: Any, cwd: str, timeout_seconds: float) -> Any:
+        return qpf.GitIndexQueryResult(returncode=0, stdout=payload, stderr="")
+
+    return _runner
 
 
 def _build_fetch_args(tmp_dir: str, run_id: str) -> dict[str, Any]:
@@ -149,8 +218,15 @@ class MailDeskAttachmentEvaluationMDE1LockTests(unittest.TestCase):
                 "WORKSPACE_ROOT",
             )
         }
+        # T02: isolate the tracked-quarantine preflight so the T01 lock tests stay
+        # hermetic (the production default runner would query this host's repository).
+        self._preflight_patcher = patch.object(
+            afetch, "verify_no_tracked_quarantine", return_value=None, create=True
+        )
+        self._preflight_patcher.start()
 
     def tearDown(self) -> None:
+        self._preflight_patcher.stop()
         for key, value in self._env_backup.items():
             if value is not None:
                 os.environ[key] = value
@@ -337,6 +413,283 @@ class MailDeskAttachmentEvaluationMDE1LockTests(unittest.TestCase):
 
             self.assertEqual("fetched", res["status"])
             self.assertTrue((Path(args["data_dir"]) / "attachments" / run_id / "probe.pdf").is_file())
+
+
+_GITIGNORE_BYTES = (
+    b"data/*\n"
+    b"!data/mail-desk/\n"
+    b"!data/mail-desk/**\n"
+    b"/data/mail-desk/attachments/\n"
+)
+
+
+class MailDeskAttachmentEvaluationMDE1PreflightTests(unittest.TestCase):
+    """T02: bounded, fail-closed tracked-quarantine preflight before the first write."""
+
+    def setUp(self) -> None:
+        self.maxDiff = None
+        self._himalaya_blocker = patch.object(
+            himalaya,
+            "run_himalaya",
+            side_effect=RuntimeError("Real Himalaya process execution is forbidden in hermetic unit tests!"),
+        )
+        self._himalaya_blocker.start()
+        self._env_backup = {
+            key: os.environ.pop(key, None)
+            for key in (
+                "WORKSPACE_ROOT",
+                "WORKSPACE_LOCK_ALLOW_LEGACY",
+                "WORKSPACE_LOCK_LEASE_ID",
+                "WORKSPACE_LOCK_CONVERSATION_ID",
+            )
+        }
+        _PREFLIGHT_CALLS.clear()
+
+    def tearDown(self) -> None:
+        for key, value in self._env_backup.items():
+            if value is not None:
+                os.environ[key] = value
+        self._himalaya_blocker.stop()
+
+    @staticmethod
+    def _acquire(workspace_root: str) -> None:
+        guard = afetch._load_workspace_lock_guard()
+        guard.acquire_workspace_lock(
+            workspace_root,
+            harness="mde1-t02-test",
+            lease_id="lease-t02",
+            conversation_id="conv-t02",
+        )
+
+    # ------------------------------------------------------------------
+    # Unit: detection semantics reuse the MD-Q1 helper contract
+    # ------------------------------------------------------------------
+    def test_preflight_detects_attachment_inventory_and_lock_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for artifact in (
+                "data/mail-desk/attachments/run_x/a.pdf\0",
+                "data/mail-desk/attachments/run_x/.quarantine-inventory.json\0",
+                "data/mail-desk/attachments/run_x/.quarantine-inventory.lock\0",
+                "elsewhere/.quarantine-inventory.json\0",
+                "elsewhere/.quarantine-inventory.lock\0",
+            ):
+                with self.assertRaises(qpf.TrackedQuarantineError) as ctx:
+                    qpf.assert_no_tracked_quarantine_files(tmp_dir, runner=_runner_with_output(artifact))
+                self.assertIn("STOP CONDITION", str(ctx.exception))
+
+            # Unrelated tracked paths are not a quarantine stop condition.
+            qpf.assert_no_tracked_quarantine_files(
+                tmp_dir, runner=_runner_with_output("other/tracked.txt\0")
+            )
+
+    def test_preflight_is_bounded_and_invokes_git_without_shell(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            qpf.assert_no_tracked_quarantine_files(tmp_dir, runner=_recording_clean_git_runner)
+
+        self.assertEqual(1, len(_PREFLIGHT_CALLS))
+        argv, cwd, timeout_seconds = _PREFLIGHT_CALLS[0]
+        self.assertIsInstance(argv, list)
+        self.assertEqual("git", argv[0])
+        self.assertIn("ls-files", argv)
+        self.assertNotIn("-c", argv)
+        self.assertEqual(str(Path(tmp_dir)), cwd)
+        self.assertGreater(timeout_seconds, 0)
+
+    def test_preflight_git_failure_timeout_and_unreadable_output_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            for runner in (
+                _failing_git_runner,
+                _timeout_git_runner,
+                _unreadable_git_runner,
+            ):
+                with self.assertRaises(qpf.QuarantinePreflightError):
+                    qpf.assert_no_tracked_quarantine_files(tmp_dir, runner=runner)
+
+    def test_preflight_detects_tracked_inventory_lock_end_to_end_with_real_git(self) -> None:
+        """A tracked `**/.quarantine-inventory.lock` must be detected by the real runner.
+
+        Exercises the production default runner through the public
+        `assert_no_tracked_quarantine_files()` so the fixed lock pathspec is proven
+        end-to-end (the injected-output unit test bypasses the pathspec entirely).
+        All Git state is confined to a throwaway temporary repo; no Git command is
+        run against the target checkout, and the preflight is proven read-only.
+        """
+        target_root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            # Isolation: the temporary repo is never part of the target checkout.
+            self.assertFalse(
+                str(repo.resolve()).lower().startswith(str(target_root.resolve()).lower())
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.name", "MDE1 T02"], cwd=repo, check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "mde1-t02@example.org"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            elsewhere = repo / "elsewhere"
+            elsewhere.mkdir(parents=True)
+            (elsewhere / ".quarantine-inventory.lock").write_text("lock", encoding="utf-8")
+            (elsewhere / "notes.txt").write_text("tracked non-quarantine", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "-f", "elsewhere/.quarantine-inventory.lock", "elsewhere/notes.txt"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+            tracked_before = subprocess.run(
+                ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
+            ).stdout
+
+            # Real default runner (no injection): the fixed pathspec must surface the lock.
+            with self.assertRaises(qpf.TrackedQuarantineError) as ctx:
+                qpf.assert_no_tracked_quarantine_files(repo)
+
+            message = str(ctx.exception)
+            self.assertIn(".quarantine-inventory.lock", message)
+            self.assertNotIn("notes.txt", message)
+
+            # Read-only preflight: index/working tree untouched, no .gitignore fabricated.
+            tracked_after = subprocess.run(
+                ["git", "ls-files"], cwd=repo, capture_output=True, text=True, check=True
+            ).stdout
+            self.assertEqual(tracked_before, tracked_after)
+            porcelain = subprocess.run(
+                ["git", "status", "--porcelain", "-uall"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            self.assertNotIn("??", porcelain)
+            self.assertFalse((repo / ".gitignore").exists())
+
+        # No repo artifacts leaked into the target checkout.
+        self.assertFalse((target_root / "elsewhere" / ".quarantine-inventory.lock").exists())
+
+    # ------------------------------------------------------------------
+    # Integration: fetch leg stops before the first quarantine write
+    # ------------------------------------------------------------------
+    def test_fetch_tracked_quarantine_stops_before_first_write_and_keeps_gitignore(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            gitignore = Path(tmp_dir) / ".gitignore"
+            gitignore.write_bytes(_GITIGNORE_BYTES)
+
+            run_id = "run_mde1_t02_tracked"
+            args = _build_fetch_args(tmp_dir, run_id)
+            args["lease_id"] = "lease-t02"
+            args["conversation_id"] = "conv-t02"
+            args["_preflight_runner"] = _tracked_git_runner
+            self._acquire(tmp_dir)
+
+            with self.assertRaises(qpf.TrackedQuarantineError):
+                afetch.op_attachment_fetch(**args)
+
+            self.assertFalse(
+                (Path(args["data_dir"]) / "attachments").exists(),
+                "Tracked quarantine must stop the run before the first quarantine write!",
+            )
+            self.assertFalse((Path(args["data_dir"]) / "attachments" / run_id).exists())
+            self.assertEqual(_GITIGNORE_BYTES, gitignore.read_bytes())
+
+    def test_fetch_git_failure_fails_closed_before_first_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_id = "run_mde1_t02_gitfail"
+            args = _build_fetch_args(tmp_dir, run_id)
+            args["lease_id"] = "lease-t02"
+            args["conversation_id"] = "conv-t02"
+            args["_preflight_runner"] = _failing_git_runner
+            self._acquire(tmp_dir)
+
+            with self.assertRaises(qpf.QuarantinePreflightError):
+                afetch.op_attachment_fetch(**args)
+
+            self.assertFalse((Path(args["data_dir"]) / "attachments").exists())
+
+    def test_fetch_clean_preflight_proceeds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            run_id = "run_mde1_t02_clean"
+            args = _build_fetch_args(tmp_dir, run_id)
+            args["lease_id"] = "lease-t02"
+            args["conversation_id"] = "conv-t02"
+            args["_preflight_runner"] = _clean_git_runner
+            self._acquire(tmp_dir)
+
+            res = afetch.op_attachment_fetch(**args)
+
+            self.assertEqual("fetched", res["status"])
+            self.assertTrue((Path(args["data_dir"]) / "attachments" / run_id / "probe.pdf").is_file())
+
+    # ------------------------------------------------------------------
+    # Integration: extraction leg stops before the mutating derivative write
+    # ------------------------------------------------------------------
+    def _image_only_extract_args(self, tmp_dir: str) -> dict[str, Any]:
+        pdf_bytes = _image_only_pdf(num_pages=2)
+        pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+        data_dir = Path(tmp_dir) / "data" / "mail-desk"
+        run_dir = data_dir / "attachments" / "run_mde1_t02_extract"
+        run_dir.mkdir(parents=True)
+        (run_dir / "scanned.pdf").write_bytes(pdf_bytes)
+        fetch_result = {
+            "status": "fetched",
+            "run_id": "run_mde1_t02_extract",
+            "relative_path": "data/mail-desk/attachments/run_mde1_t02_extract/scanned.pdf",
+            "filename": "scanned.pdf",
+            "fetch_sha256": pdf_sha,
+            "inventory_sha256": pdf_sha,
+            "effective_mime_type": "application/pdf",
+        }
+        return {
+            "fetch_result": fetch_result,
+            "data_dir": data_dir,
+            "pdf_sha": pdf_sha,
+            "run_dir": run_dir,
+        }
+
+    def test_extract_tracked_quarantine_stops_before_derivative_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            gitignore = Path(tmp_dir) / ".gitignore"
+            gitignore.write_bytes(_GITIGNORE_BYTES)
+            ctx = self._image_only_extract_args(tmp_dir)
+
+            with self.assertRaises(qpf.TrackedQuarantineError):
+                aextract.extract_attachment_content(
+                    ctx["fetch_result"],
+                    expected_sha256=ctx["pdf_sha"],
+                    data_dir=ctx["data_dir"],
+                    workspace_root=tmp_dir,
+                    _lock_verifier=_noop_lock_verifier,
+                    _ocr_runner=_mock_ocr_derivative,
+                    _preflight_runner=_tracked_git_runner,
+                )
+
+            self.assertFalse(
+                (ctx["run_dir"] / "derivatives").exists(),
+                "Tracked quarantine must stop the extraction before the derivative write!",
+            )
+            self.assertEqual(_GITIGNORE_BYTES, gitignore.read_bytes())
+
+    def test_extract_clean_preflight_proceeds_to_derivative_write(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ctx = self._image_only_extract_args(tmp_dir)
+
+            res = aextract.extract_attachment_content(
+                ctx["fetch_result"],
+                expected_sha256=ctx["pdf_sha"],
+                data_dir=ctx["data_dir"],
+                workspace_root=tmp_dir,
+                _lock_verifier=_noop_lock_verifier,
+                _ocr_runner=_mock_ocr_derivative,
+                _preflight_runner=_clean_git_runner,
+            )
+
+            self.assertEqual("extracted", res["status"])
+            self.assertTrue((ctx["run_dir"] / "derivatives" / "scanned.ocr.pdf").is_file())
 
 
 if __name__ == "__main__":

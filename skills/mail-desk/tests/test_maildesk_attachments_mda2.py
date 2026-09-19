@@ -38,8 +38,18 @@ class MailDeskAttachmentsMDA2Tests(unittest.TestCase):
             return_value=None,
         )
         self._workspace_lock_patcher.start()
+        # FR-15/MD-E1-T02: isolate the bounded tracked-quarantine preflight so these
+        # MD-A2 fetch-contract tests stay hermetic (no live Git checkout required).
+        self._preflight_patcher = patch.object(
+            afetch,
+            "verify_no_tracked_quarantine",
+            return_value=None,
+            create=True,
+        )
+        self._preflight_patcher.start()
 
     def tearDown(self) -> None:
+        self._preflight_patcher.stop()
         self._workspace_lock_patcher.stop()
         self._himalaya_blocker.stop()
 
