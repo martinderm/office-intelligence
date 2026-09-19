@@ -137,6 +137,22 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    `structural → selective → full` eskalieren, nie aus Bequemlichkeit zurück. Nach
    jeder Inhaltslektüre sofort Kernaussage, Aktion, Reply, Todo, Referenzwert und
    Frist/Risiko verdichten; danach mit dieser Verdichtung statt dem Rohbody arbeiten.
+   Bleibt die Body-/Full-Read-Entscheidung unklar (`decision.kind: "unknown"`,
+   `decision.id: "unclassified"`, `decision.confidence: "low"`,
+   `decision.review_required: true` oder eine dokumentierte `read_escalation` ohne
+   eindeutige Zuordnung) und liegt mindestens ein kanonisch erlaubter, verfügbarer
+   MIME-Anhang vor, stößt `attachment_evaluate` die policygebundene Auswertung an.
+   Der Aufruf revalidiert ausschließlich die echte MIME-Struktur und erzeugt die
+   interne Maschinen-Autorisierung (FR-15/MD-E1-T03); Caller-seitige
+   Kandidaten-, Policy-, Fetch- oder Receipt-Werte sind keine Autorität. Das
+   Ergebnis ist ausschließlich das staged Zwischenergebnis `attachment_evaluation`
+   mit `used_for_classification: false` und `classifier_revision: null`. In
+   MD-E1-T04 ist der Orchestrator bewusst ein Skeleton: der bounded Ausgang für
+   einen zulässigen Anhang lautet `status: "skipped"`,
+   `reason: "evaluation_pending"`, `authorization: "auto_evaluated"`, `files: []`;
+   Fetch, Extraktion und Handoff folgen erst in MD-E1-T05. Ein klarer Entscheid wird
+   durch eine frühere Eskalation nicht erneut ausgewertet. Details stehen in
+   [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.
 5. Spam-Quarantäne-Benachrichtigungen mit systemischem Absender und passendem Betreff

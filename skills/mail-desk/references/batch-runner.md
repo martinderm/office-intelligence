@@ -1284,3 +1284,89 @@ Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarati
    - `proposed`: Eindeutiger, kollisionsfreier und katalogbelegter Zielpfad ermittelt.
 9. **Deterministische Hash-Bindung:**
    - `candidate_hash` bindet Quelle (inkl. Originalname und Quarantäne-Evidenz), Destination, Filemap-Evidenz, Handoff-Hash und Matrix-Status deterministisch an einen 64-stelligen SHA-256.
+
+---
+
+## FR-15 / MD-E1-T04: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
+
+Das Modul `scripts/core/attachment_evaluation.py` stellt den einzigen, separat testbaren
+`attachment_evaluate`-Seam bereit. Er qualifiziert den automatischen Auswertungs-Trigger,
+revalidiert die echte RFC-822-MIME-Struktur gegen die vertrauenswürdige Policy und erzeugt das
+kanonische staged Zwischenergebnis `attachment_evaluation`.
+
+> **Implementierungsstand (T04 = Skeleton):** T04 lädt keinen Anhang, extrahiert keinen Inhalt,
+> baut/validiert keinen `attachment_analysis_handoff` und installiert kein Feld in ein
+> persistiertes `DraftManifest`. Diese Schritte gehören zu **MD-E1-T05** und werden dort direkt
+> in denselben Orchestrator verdrahtet. Der ehrliche Pre-T05-Ausgang für eine unklare Mail mit
+> mindestens einem zulässigen Anhang lautet daher `status: "skipped"`,
+> `reason: "evaluation_pending"`, `authorization: "auto_evaluated"`, `files: []` — niemals eine
+> Behauptung abgeschlossener Extraktion oder Übergabe. `completed` und die übrigen bounded
+> Reasons (`fetch_failed`, `extraction_failed`, `handoff_invalid`, `still_ambiguous`, …) folgen
+> erst in MD-E1-T05/T06.
+
+1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
+   ```python
+   attachment_evaluate(
+       *,
+       raw_eml: bytes | str,          # roher RFC-822-MIME-Byte-Stream
+       account: str,                  # vertrauenswürdige Message-/Binding-Identität
+       folder: str,
+       envelope_id: str | int,
+       message_id: str,
+       decision: Mapping[str, Any],   # bestehende Body-/Full-Read-Klassifikation
+       read_escalation: Mapping[str, Any] | None = None,  # Item-Sibling des Classifiers
+       policy: Mapping[str, Any] | None = None,           # effektive vertrauenswürdige Policy
+   ) -> dict[str, Any]
+   ```
+   Der Aufruf akzeptiert **keine** caller-seitigen Kandidaten, `policy_status`, `fetch_status`,
+   Maschinen-Receipts, Autorisierungs-Labels, staged `status`/`reason` oder `files`. Die effektive
+   `policy_revision` wird ausschließlich aus dem nicht-leeren `version`-Feld der effektiven Policy
+   abgeleitet (Default `DEFAULT_ATTACHMENT_POLICY["version"]`); eine fehlende oder malformte
+   Revision stoppt fail-closed (`AttachmentEvaluationError`).
+
+2. **Verbindlicher Trigger (OR):** `decision.kind == "unknown"`; `decision.id ==
+   "unclassified"`; `decision.confidence == "low"`; `decision.review_required is True`; oder eine
+   dokumentierte `read_escalation` (`status` `failed`/`completed`), die keine eindeutige Zuordnung
+   erzeugt hat. Ein fehlendes `review_required` zählt als `false`. Eine Eskalation überschreibt
+   einen ansonsten klaren Entscheid nicht allein dadurch, dass sie stattfand. Zusätzlich muss
+   mindestens ein kanonisch revalidierter MIME-Part `fetch_status: "available"` und
+   `policy_status: "allowed"` besitzen.
+
+3. **Revalidierung & Autorität:** `inspect_mime_tree`, `canonicalize_and_bind_attachments`
+   (führt `check_attachment_policy` inklusive kumulativer Quoten intern erneut aus; daher kein
+   zweiter Validator) und `verify_attachment_drift` (Account, Folder, Message-ID, Envelope-ID,
+   Part-Locator, Hash gegen die aktuellen MIME-Parts). Für jeden zulässigen Part wird der
+   kanonische `review_hash` (`compute_review_hash`) berechnet, die interne Maschinen-Autorisierung
+   mit `create_machine_authorization` gemint und sofort über
+   `guard_context_authorization(context=CONTEXT_EVALUATION, …)` geprüft. Die opake Autorisierung
+   wird nie serialisiert oder im Envelope exponiert. `inventory_sha256` ist der revalidierte
+   SHA-256 des MIME-Kandidaten (identisch zur bestehenden MD-A2-Fetch-Semantik).
+
+4. **Kanonischer staged Envelope (`{"attachment_evaluation": {…}}`):**
+   ```json
+   {
+     "attachment_evaluation": {
+       "status": "not_needed|skipped|completed|failed",
+       "reason": "bounded_machine_code",
+       "authorization": "auto_evaluated|not_applicable",
+       "files": [],
+       "used_for_classification": false,
+       "classifier_revision": null
+     }
+   }
+   ```
+   `files[]` bleibt in T04 immer leer; `used_for_classification` ist **immer** `false` und
+   `classifier_revision` **immer** `null`.
+
+5. **T04-Ausgangsmatrix (bounded, ohne Rohinhalt oder absolute Pfade):**
+   - klarer Entscheid → `not_needed` / `classification_clear` / `not_applicable` / `files: []`.
+   - unklar, keine MIME-Anhänge → `not_needed` / `no_attachments` / `not_applicable` / `files: []`.
+   - unklar, aber kein kanonisch erlaubter+verfügbarer Anhang → `not_needed` /
+     `no_allowed_attachments` / `not_applicable` / `files: []`.
+   - unklar mit mindestens einem erlaubten+verfügbaren gebundenen Anhang → `skipped` /
+     `evaluation_pending` / `auto_evaluated` / `files: []` (bounded Pre-T05-Zustand).
+
+6. **Abgrenzung:** T04 ruft kein `op_attachment_fetch`, `extract_attachment_content`,
+   `build_attachment_analysis_handoff`, `apply_attachment_handoff_to_item` und keine Mailbox-,
+   Dispositions-, Promotions-, Export-, Evidence-, Katalog- oder Cloud-Mutation auf. Es gibt
+   keine Platzhalter-Callables für T05.

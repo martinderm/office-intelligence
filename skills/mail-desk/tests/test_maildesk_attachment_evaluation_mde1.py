@@ -24,6 +24,7 @@ while the existing typeless human MD-A2 receipts keep working unchanged.
 
 from __future__ import annotations
 
+import ast
 import copy
 from collections.abc import Mapping
 import gc
@@ -49,9 +50,12 @@ from core import attachments  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_extract as aextract  # noqa: E402
 from core import attachment_authorization as authz  # noqa: E402
+from core import attachment_handoff as ahandoff  # noqa: E402
 from core import attachment_disposition_log as adisp  # noqa: E402
 from core import attachment_filing as afiling  # noqa: E402
 from core import quarantine_preflight as qpf  # noqa: E402
+from core import attachment_evaluation as aevaluate  # noqa: E402
+from core.attachment_policy import DEFAULT_ATTACHMENT_POLICY  # noqa: E402
 import mail_desk_himalaya_client as mclient  # noqa: E402
 
 
@@ -1343,6 +1347,819 @@ class MailDeskAttachmentEvaluationMDE1CallsiteTests(unittest.TestCase):
 
         self.assertTrue(mocked_fetch.called, "A typeless human receipt must pass the direct-fetch guard.")
         self.assertTrue(result["all_succeeded"])
+
+
+# ======================================================================
+# T04: `attachment_evaluate` orchestrator skeleton
+# ======================================================================
+
+_T04_MESSAGE_ID = "mde1-t04-orchestrator@example.org"
+
+#: T05 fetch/extract/handoff and every downstream mutation seam.  The T04 orchestrator must
+#: neither import nor call any of these.
+_T04_FORBIDDEN_CALLABLES = frozenset(
+    {
+        "op_attachment_fetch",
+        "extract_attachment_content",
+        "build_attachment_analysis_handoff",
+        "apply_attachment_handoff_to_item",
+        "propose_attachment_filing",
+        "record_disposition_entry",
+        "apply_discard",
+        "record_quarantine_entry",
+        "save_quarantine_index_atomic",
+        "update_quarantine_inventory_atomic",
+    }
+)
+_T04_FORBIDDEN_MODULES = frozenset(
+    {
+        "attachment_extract",
+        "attachment_handoff",
+        "attachment_disposition_log",
+        "attachment_filing",
+        "attachment_quarantine_index",
+        "quarantine_preflight",
+    }
+)
+
+
+def _t04_pdf_payload(marker: str = "MDE1-T04-PDF-CONTENT") -> bytes:
+    return b"%PDF-1.4\n% " + marker.encode("utf-8") + b"\n"
+
+
+def _t04_docx_payload(marker: str = "MDE1-T04-DOCX-CONTENT") -> bytes:
+    return b"PK\x03\x04" + marker.encode("utf-8")
+
+
+def _t04_attachment_part(
+    filename: str = "report.pdf",
+    *,
+    mime_type: str = "application/pdf",
+    data: bytes | None = None,
+) -> dict[str, Any]:
+    return {
+        "filename": filename,
+        "mime_type": mime_type,
+        "data": _t04_pdf_payload() if data is None else data,
+    }
+
+
+def _t04_raw_eml(
+    *,
+    attachments_list: list[dict[str, Any]] | None = None,
+    body_text: str = "Body",
+    message_id: str = f"<{_T04_MESSAGE_ID}>",
+) -> bytes:
+    return attachments.build_test_eml(
+        subject="MDE1 T04",
+        message_id=message_id,
+        body_text=body_text,
+        attachments=attachments_list or [],
+    )
+
+
+def _t04_clear_decision(**overrides: Any) -> dict[str, Any]:
+    """A concrete, assigned final decision: nothing in the trigger contract fires."""
+    decision: dict[str, Any] = {
+        "kind": "project",
+        "id": "boku-lll",
+        "confidence": "high",
+        "needs_reply": False,
+    }
+    decision.update(overrides)
+    return decision
+
+
+def _t04_ambiguous_decision(**overrides: Any) -> dict[str, Any]:
+    """The classifier's canonical ambiguous fallback decision."""
+    decision: dict[str, Any] = {
+        "kind": "unknown",
+        "id": "unclassified",
+        "confidence": "low",
+        "review_required": True,
+    }
+    decision.update(overrides)
+    return decision
+
+
+def _t04_custom_policy(version: str) -> dict[str, Any]:
+    policy = json.loads(json.dumps(DEFAULT_ATTACHMENT_POLICY))
+    policy["version"] = version
+    return policy
+
+
+class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
+    """T04: public `attachment_evaluate` seam — trigger matrix and bounded stage outcomes."""
+
+    def setUp(self) -> None:
+        self.maxDiff = None
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _evaluate(
+        self,
+        *,
+        decision: dict[str, Any],
+        raw_eml: bytes,
+        read_escalation: Any = None,
+        policy: Any = None,
+        message_id: str = _T04_MESSAGE_ID,
+        account: str = _ACCOUNT,
+        folder: str = _FOLDER,
+        envelope_id: str | int = _ENVELOPE_ID,
+    ) -> dict[str, Any]:
+        return aevaluate.attachment_evaluate(
+            raw_eml=raw_eml,
+            account=account,
+            folder=folder,
+            envelope_id=envelope_id,
+            message_id=message_id,
+            decision=decision,
+            read_escalation=read_escalation,
+            policy=policy,
+        )
+
+    @staticmethod
+    def _staged(result: dict[str, Any]) -> dict[str, Any]:
+        return result["attachment_evaluation"]
+
+    def _assert_staged_contract(
+        self,
+        staged: dict[str, Any],
+        *,
+        status: str,
+        reason: str,
+        authorization: str,
+    ) -> None:
+        self.assertEqual(
+            {
+                "status",
+                "reason",
+                "authorization",
+                "files",
+                "used_for_classification",
+                "classifier_revision",
+            },
+            set(staged),
+            "The staged object must expose exactly the canonical six fields.",
+        )
+        self.assertEqual(status, staged["status"])
+        self.assertEqual(reason, staged["reason"])
+        self.assertEqual(authorization, staged["authorization"])
+        self.assertEqual([], staged["files"])
+        self.assertIs(False, staged["used_for_classification"])
+        self.assertIsNone(staged["classifier_revision"])
+        self.assertIn(staged["status"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_STATUSES)
+        self.assertIn(staged["reason"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_REASONS)
+        self.assertIn(
+            staged["authorization"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_AUTHORIZATIONS
+        )
+
+    # ------------------------------------------------------------------
+    # Clear decision: no evaluation, no attachment processing
+    # ------------------------------------------------------------------
+    def test_clear_decision_with_allowed_pdf_is_not_needed(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+
+        result = self._evaluate(decision=_t04_clear_decision(), raw_eml=raw_eml)
+
+        self.assertEqual({"attachment_evaluation"}, set(result))
+        self._assert_staged_contract(
+            self._staged(result),
+            status="not_needed",
+            reason="classification_clear",
+            authorization="not_applicable",
+        )
+
+    def test_missing_review_required_is_false_and_clear_decision_is_not_retriggered(self) -> None:
+        # A clear final decision with no `review_required` key must not trigger.
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        decision = _t04_clear_decision()
+        self.assertNotIn("review_required", decision)
+
+        result = self._evaluate(decision=decision, raw_eml=raw_eml)
+
+        self.assertEqual("classification_clear", self._staged(result)["reason"])
+
+    def test_clear_decision_is_resolved_before_any_mint_or_guard(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=AssertionError("must not mint")
+        ) as minted, patch.object(
+            aevaluate, "guard_context_authorization", side_effect=AssertionError("must not guard")
+        ) as guarded:
+            result = self._evaluate(decision=_t04_clear_decision(), raw_eml=raw_eml)
+
+        minted.assert_not_called()
+        guarded.assert_not_called()
+        self.assertEqual("classification_clear", self._staged(result)["reason"])
+
+    # ------------------------------------------------------------------
+    # Trigger predicates, each exercised independently
+    # ------------------------------------------------------------------
+    def test_each_trigger_predicate_triggers_evaluation(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        cases = {
+            "kind_unknown": {
+                "kind": "unknown",
+                "id": "proj-x",
+                "confidence": "high",
+                "needs_reply": False,
+            },
+            "id_unclassified": {
+                "kind": "project",
+                "id": "unclassified",
+                "confidence": "high",
+                "needs_reply": False,
+            },
+            "confidence_low": {
+                "kind": "project",
+                "id": "proj-x",
+                "confidence": "low",
+                "needs_reply": False,
+            },
+            "review_required_true": {
+                "kind": "project",
+                "id": "proj-x",
+                "confidence": "high",
+                "needs_reply": False,
+                "review_required": True,
+            },
+        }
+        for name, decision in cases.items():
+            with self.subTest(predicate=name):
+                result = self._evaluate(decision=decision, raw_eml=raw_eml)
+                self._assert_staged_contract(
+                    self._staged(result),
+                    status="skipped",
+                    reason="evaluation_pending",
+                    authorization="auto_evaluated",
+                )
+
+    def test_trigger_predicates_require_exact_values(self) -> None:
+        """FR-15 trigger predicates are exact equalities — no strip/lowercase coercion.
+
+        `decision.kind`, `decision.id` and `decision.confidence` must be compared verbatim, so
+        an uppercase or space-padded variant of `unknown` / `unclassified` / `low` (or a
+        non-string) must **not** trigger an evaluation and must therefore never mint or guard an
+        authorization.  `review_required is True` stays an exact identity check.
+        """
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        non_triggering = {
+            "kind_uppercase": {"kind": "UNKNOWN"},
+            "kind_mixed_case": {"kind": "Unknown"},
+            "kind_padded": {"kind": " unknown "},
+            "kind_trailing_pad": {"kind": "unknown "},
+            "kind_none": {"kind": None},
+            "id_uppercase": {"id": "UNCLASSIFIED"},
+            "id_mixed_case": {"id": "Unclassified"},
+            "id_padded": {"id": " unclassified "},
+            "confidence_uppercase": {"confidence": "LOW"},
+            "confidence_mixed_case": {"confidence": "Low"},
+            "confidence_padded": {"confidence": " low "},
+            "confidence_non_string": {"confidence": 1},
+            "review_required_truthy_int": {"review_required": 1},
+            "review_required_string": {"review_required": "true"},
+        }
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=AssertionError("must not mint")
+        ) as minted:
+            for name, override in non_triggering.items():
+                with self.subTest(predicate=name):
+                    result = self._evaluate(
+                        decision=_t04_clear_decision(**override), raw_eml=raw_eml
+                    )
+                    self._assert_staged_contract(
+                        self._staged(result),
+                        status="not_needed",
+                        reason="classification_clear",
+                        authorization="not_applicable",
+                    )
+        minted.assert_not_called()
+
+    def test_read_escalation_with_ambiguous_decision_triggers(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        escalations = {
+            "failed": {
+                "level": "full_body",
+                "triggers": ["insufficient_preview_evidence"],
+                "status": "failed",
+                "error": {"type": "RuntimeError", "message": "full read failed"},
+            },
+            "completed": {
+                "level": "full_body",
+                "triggers": ["visible_action_or_reply_request"],
+                "status": "completed",
+            },
+        }
+        for name, escalation in escalations.items():
+            with self.subTest(escalation_status=name):
+                result = self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=raw_eml,
+                    read_escalation=escalation,
+                )
+                self._assert_staged_contract(
+                    self._staged(result),
+                    status="skipped",
+                    reason="evaluation_pending",
+                    authorization="auto_evaluated",
+                )
+
+    def test_read_escalation_nested_inside_decision_triggers(self) -> None:
+        # Production also emits the escalation as an item sibling nested under the decision.
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        decision = _t04_ambiguous_decision(
+            read_escalation={"level": "full_body", "status": "failed", "triggers": ["x"]}
+        )
+
+        result = self._evaluate(decision=decision, raw_eml=raw_eml)
+
+        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+
+    def test_malformed_nested_read_escalation_fails_closed(self) -> None:
+        """A present-but-non-mapping nested `read_escalation` is a contract violation.
+
+        Neither `None` nor a mapping is acceptable when `decision["read_escalation"]` is
+        present; the malformed value must fail closed instead of being silently treated as
+        absent, for an already-ambiguous decision as well as an otherwise-clear one.
+        """
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        for malformed in ("not-a-mapping", 123, ["full_body"], object()):
+            with self.subTest(malformed=repr(malformed)):
+                ambiguous = _t04_ambiguous_decision(read_escalation=malformed)
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(decision=ambiguous, raw_eml=raw_eml)
+
+                clear = _t04_clear_decision(read_escalation=malformed)
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(decision=clear, raw_eml=raw_eml)
+
+    def test_explicit_read_escalation_takes_precedence_over_malformed_nested(self) -> None:
+        """An explicitly supplied valid escalation wins; the nested value is never examined."""
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        explicit = {"level": "full_body", "status": "failed", "triggers": ["x"]}
+        decision = _t04_ambiguous_decision(read_escalation="not-a-mapping")
+
+        result = self._evaluate(decision=decision, raw_eml=raw_eml, read_escalation=explicit)
+
+        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+
+    def test_nested_read_escalation_none_is_treated_as_absent(self) -> None:
+        """A nested `read_escalation` of `None` is the documented absent form, not malformed."""
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        decision = _t04_ambiguous_decision(read_escalation=None)
+
+        result = self._evaluate(decision=decision, raw_eml=raw_eml)
+
+        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+
+    def test_read_escalation_does_not_retrigger_an_otherwise_clear_decision(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        for status in ("completed", "failed"):
+            with self.subTest(escalation_status=status):
+                escalation: dict[str, Any] = {"level": "full_body", "status": status, "triggers": ["x"]}
+                if status == "failed":
+                    escalation["error"] = {"type": "RuntimeError", "message": "boom"}
+                result = self._evaluate(
+                    decision=_t04_clear_decision(),
+                    raw_eml=raw_eml,
+                    read_escalation=escalation,
+                )
+                self.assertEqual("classification_clear", self._staged(result)["reason"])
+
+    # ------------------------------------------------------------------
+    # Bounded no-op outcomes
+    # ------------------------------------------------------------------
+    def test_ambiguous_without_attachments_is_not_needed_no_attachments(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[])
+
+        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+
+        self._assert_staged_contract(
+            self._staged(result),
+            status="not_needed",
+            reason="no_attachments",
+            authorization="not_applicable",
+        )
+
+    def test_ambiguous_with_only_disallowed_attachment_is_not_needed_no_allowed(self) -> None:
+        raw_eml = _t04_raw_eml(
+            attachments_list=[
+                _t04_attachment_part(
+                    "tool.exe",
+                    mime_type="application/octet-stream",
+                    data=b"MZ\x90\x00active",
+                )
+            ]
+        )
+
+        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+
+        self._assert_staged_contract(
+            self._staged(result),
+            status="not_needed",
+            reason="no_allowed_attachments",
+            authorization="not_applicable",
+        )
+
+    def test_ambiguous_without_eligible_attachment_never_mints(self) -> None:
+        raw_eml = _t04_raw_eml(
+            attachments_list=[
+                _t04_attachment_part(
+                    "tool.exe",
+                    mime_type="application/octet-stream",
+                    data=b"MZ\x90\x00active",
+                )
+            ]
+        )
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=AssertionError("must not mint")
+        ) as minted:
+            self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+
+        minted.assert_not_called()
+
+    # ------------------------------------------------------------------
+    # Eligible path: bounded pre-T05 staged outcome
+    # ------------------------------------------------------------------
+    def test_ambiguous_with_allowed_attachment_is_skipped_evaluation_pending(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+
+        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+
+        self._assert_staged_contract(
+            self._staged(result),
+            status="skipped",
+            reason="evaluation_pending",
+            authorization="auto_evaluated",
+        )
+
+    def test_all_outcomes_pin_false_and_null_and_empty_files(self) -> None:
+        allowed = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        no_attachment = _t04_raw_eml(attachments_list=[])
+        disallowed = _t04_raw_eml(
+            attachments_list=[
+                _t04_attachment_part(
+                    "tool.exe", mime_type="application/octet-stream", data=b"MZ\x90\x00"
+                )
+            ]
+        )
+        matrix = [
+            (self._evaluate(decision=_t04_clear_decision(), raw_eml=allowed), "classification_clear"),
+            (self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=no_attachment), "no_attachments"),
+            (
+                self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=disallowed),
+                "no_allowed_attachments",
+            ),
+            (
+                self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=allowed),
+                "evaluation_pending",
+            ),
+        ]
+        for result, reason in matrix:
+            with self.subTest(reason=reason):
+                staged = self._staged(result)
+                self.assertEqual(reason, staged["reason"])
+                self.assertEqual([], staged["files"])
+                self.assertIs(False, staged["used_for_classification"])
+                self.assertIsNone(staged["classifier_revision"])
+
+    # ------------------------------------------------------------------
+    # Machine-authorization factory/guard binding
+    # ------------------------------------------------------------------
+    def test_machine_authorization_is_minted_and_guarded_with_canonical_bindings(self) -> None:
+        payload = _t04_pdf_payload()
+        sha256 = hashlib.sha256(payload).hexdigest()
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part(data=payload)])
+        expected_review_hash = afetch.compute_review_hash(
+            account=_ACCOUNT,
+            message_id=_T04_MESSAGE_ID,
+            folder=_FOLDER,
+            envelope_id=_ENVELOPE_ID,
+            part_locator="2",
+            inventory_sha256=sha256,
+        )
+        real_create = aevaluate.create_machine_authorization
+        real_guard = aevaluate.guard_context_authorization
+
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=real_create
+        ) as minted, patch.object(
+            aevaluate, "guard_context_authorization", side_effect=real_guard
+        ) as guarded:
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T04_MESSAGE_ID,
+            )
+
+        self.assertEqual(1, minted.call_count)
+        mint_kwargs = minted.call_args.kwargs
+        self.assertEqual(expected_review_hash, mint_kwargs["request_hash"])
+        self.assertEqual("1.0.0", mint_kwargs["policy_revision"])
+        self.assertEqual(sha256, mint_kwargs["inventory_sha256"])
+        self.assertEqual("2", mint_kwargs["part_locator"])
+        self.assertEqual(_ACCOUNT, mint_kwargs["account"])
+        self.assertEqual(_FOLDER, mint_kwargs["folder"])
+        self.assertEqual(str(_ENVELOPE_ID), mint_kwargs["envelope_id"])
+        self.assertEqual(_T04_MESSAGE_ID, mint_kwargs["message_id"])
+
+        self.assertEqual(1, guarded.call_count)
+        guard_kwargs = guarded.call_args.kwargs
+        self.assertEqual(authz.CONTEXT_EVALUATION, guard_kwargs["context"])
+        self.assertEqual(expected_review_hash, guard_kwargs["expected_request_hash"])
+        self.assertEqual("1.0.0", guard_kwargs["expected_policy_revision"])
+
+        # The opaque capability is never serialized or leaked into the staged output.
+        self.assertEqual("auto_evaluated", self._staged(result)["authorization"])
+        json.dumps(result)
+
+    def test_each_eligible_part_gets_its_own_authorization(self) -> None:
+        pdf_payload = _t04_pdf_payload()
+        docx_payload = _t04_docx_payload()
+        raw_eml = _t04_raw_eml(
+            attachments_list=[
+                _t04_attachment_part("report.pdf", data=pdf_payload),
+                _t04_attachment_part(
+                    "notes.docx",
+                    mime_type=(
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    ),
+                    data=docx_payload,
+                ),
+            ]
+        )
+        expected_hashes = {
+            afetch.compute_review_hash(
+                account=_ACCOUNT,
+                message_id=_T04_MESSAGE_ID,
+                folder=_FOLDER,
+                envelope_id=_ENVELOPE_ID,
+                part_locator="2",
+                inventory_sha256=hashlib.sha256(pdf_payload).hexdigest(),
+            ),
+            afetch.compute_review_hash(
+                account=_ACCOUNT,
+                message_id=_T04_MESSAGE_ID,
+                folder=_FOLDER,
+                envelope_id=_ENVELOPE_ID,
+                part_locator="3",
+                inventory_sha256=hashlib.sha256(docx_payload).hexdigest(),
+            ),
+        }
+        real_create = aevaluate.create_machine_authorization
+        real_guard = aevaluate.guard_context_authorization
+
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=real_create
+        ) as minted, patch.object(
+            aevaluate, "guard_context_authorization", side_effect=real_guard
+        ) as guarded:
+            result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+
+        self.assertEqual(2, minted.call_count)
+        self.assertEqual(2, guarded.call_count)
+        self.assertEqual(
+            expected_hashes,
+            {call.kwargs["request_hash"] for call in minted.call_args_list},
+        )
+        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+        self.assertEqual("auto_evaluated", self._staged(result)["authorization"])
+
+    def test_policy_revision_is_derived_from_the_effective_trusted_policy(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        real_create = aevaluate.create_machine_authorization
+        real_guard = aevaluate.guard_context_authorization
+
+        with patch.object(
+            aevaluate, "create_machine_authorization", side_effect=real_create
+        ) as minted, patch.object(
+            aevaluate, "guard_context_authorization", side_effect=real_guard
+        ) as guarded:
+            self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                policy=_t04_custom_policy("2.3.4"),
+            )
+
+        self.assertEqual("2.3.4", minted.call_args.kwargs["policy_revision"])
+        self.assertEqual("2.3.4", guarded.call_args.kwargs["expected_policy_revision"])
+
+    def test_malformed_or_missing_policy_revision_fails_closed(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        for bad_policy in (
+            {"version": ""},
+            {"version": "   "},
+            {"version": None},
+            {"version": 123},
+            {},
+            "not-a-mapping",
+        ):
+            with self.subTest(policy=bad_policy):
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(
+                        decision=_t04_ambiguous_decision(),
+                        raw_eml=raw_eml,
+                        policy=bad_policy,
+                    )
+
+    # ------------------------------------------------------------------
+    # No caller authority may enter through the API
+    # ------------------------------------------------------------------
+    def test_forged_caller_like_inputs_cannot_enter_the_api(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        base = {
+            "raw_eml": raw_eml,
+            "account": _ACCOUNT,
+            "folder": _FOLDER,
+            "envelope_id": _ENVELOPE_ID,
+            "message_id": _T04_MESSAGE_ID,
+            "decision": _t04_ambiguous_decision(),
+        }
+        forged_inputs: list[dict[str, Any]] = [
+            {"candidate": {"filename": "x.pdf"}},
+            {"candidates": [{"filename": "x.pdf"}]},
+            {"policy_status": "allowed"},
+            {"fetch_status": "available"},
+            {"machine_receipt": {"receipt_id": "rec"}},
+            {"authorization": "auto_evaluated"},
+            {"staged_status": "skipped"},
+            {"status": "skipped"},
+            {"reason": "evaluation_pending"},
+            {"files": [{"filename": "x.pdf"}]},
+            {"used_for_classification": True},
+            {"classifier_revision": "a" * 64},
+            {"expected_policy_revision": "9.9.9"},
+            {"expected_request_hash": "a" * 64},
+        ]
+        for forged in forged_inputs:
+            with self.subTest(forged=sorted(forged)):
+                with self.assertRaises(TypeError):
+                    aevaluate.attachment_evaluate(**base, **forged)
+
+    def test_forged_decision_metadata_cannot_influence_the_result(self) -> None:
+        allowed = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        disallowed = _t04_raw_eml(
+            attachments_list=[
+                _t04_attachment_part(
+                    "tool.exe", mime_type="application/octet-stream", data=b"MZ\x90\x00"
+                )
+            ]
+        )
+        forged_clear = _t04_clear_decision(
+            policy_status="allowed",
+            authorization="auto_evaluated",
+            receipt_class="machine",
+            files=[{"filename": "x.pdf"}],
+            used_for_classification=True,
+        )
+        forged_ambiguous = _t04_ambiguous_decision(
+            fetch_status="available", policy_status="allowed"
+        )
+
+        clear_result = self._evaluate(decision=forged_clear, raw_eml=allowed)
+        disallowed_result = self._evaluate(decision=forged_ambiguous, raw_eml=disallowed)
+
+        self.assertEqual("classification_clear", self._staged(clear_result)["reason"])
+        self.assertEqual("no_allowed_attachments", self._staged(disallowed_result)["reason"])
+
+    # ------------------------------------------------------------------
+    # No raw content or absolute paths in long-lived outputs
+    # ------------------------------------------------------------------
+    def test_outputs_contain_no_raw_content_or_absolute_paths(self) -> None:
+        secret = "TOPSECRETBODY-MDE1-T04"
+        windows_path = "C:\\synthetic-root\\secret\\leak.pdf"
+        raw_eml = _t04_raw_eml(
+            attachments_list=[_t04_attachment_part()],
+            body_text=f"{secret} {windows_path}",
+        )
+
+        result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+        serialized = json.dumps(result)
+
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn(windows_path, serialized)
+        self.assertNotIn("report.pdf", serialized)
+        self.assertNotRegex(serialized, r"[A-Za-z]:\\\\")
+
+    # ------------------------------------------------------------------
+    # No T05 / mutation seam may be imported or called
+    # ------------------------------------------------------------------
+    def test_no_forbidden_t05_or_mutation_seam_is_imported(self) -> None:
+        module_path = MAIL_DESK_ROOT / "scripts" / "core" / "attachment_evaluation.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+
+        imported_modules: set[str] = set()
+        referenced_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_modules.add(node.module.split(".")[0])
+                for alias in node.names:
+                    referenced_names.add(alias.name)
+            elif isinstance(node, ast.Attribute):
+                referenced_names.add(node.attr)
+            elif isinstance(node, ast.Name):
+                referenced_names.add(node.id)
+
+        self.assertFalse(
+            _T04_FORBIDDEN_CALLABLES & referenced_names,
+            f"T04 imported/referenced forbidden callable(s): "
+            f"{sorted(_T04_FORBIDDEN_CALLABLES & referenced_names)}",
+        )
+        self.assertFalse(
+            _T04_FORBIDDEN_MODULES & imported_modules,
+            f"T04 imported forbidden module(s): {sorted(_T04_FORBIDDEN_MODULES & imported_modules)}",
+        )
+
+    def test_no_forbidden_t05_or_mutation_seam_is_called(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        blockers = [
+            patch.object(afetch, "op_attachment_fetch", side_effect=AssertionError("T05 fetch ran")),
+            patch.object(
+                aextract, "extract_attachment_content", side_effect=AssertionError("T05 extract ran")
+            ),
+            patch.object(
+                ahandoff,
+                "build_attachment_analysis_handoff",
+                side_effect=AssertionError("T05 handoff ran"),
+            ),
+            patch.object(
+                ahandoff,
+                "apply_attachment_handoff_to_item",
+                side_effect=AssertionError("handoff install ran"),
+            ),
+            patch.object(
+                afiling, "propose_attachment_filing", side_effect=AssertionError("filing ran")
+            ),
+            patch.object(
+                adisp, "record_disposition_entry", side_effect=AssertionError("disposition ran")
+            ),
+            patch.object(adisp, "apply_discard", side_effect=AssertionError("discard ran")),
+        ]
+        started = [blocker.start() for blocker in blockers]
+        try:
+            result = self._evaluate(decision=_t04_ambiguous_decision(), raw_eml=raw_eml)
+        finally:
+            for blocker in blockers:
+                blocker.stop()
+
+        for mock in started:
+            mock.assert_not_called()
+        self.assertEqual("evaluation_pending", self._staged(result)["reason"])
+
+    def test_non_bytes_or_str_raw_eml_fails_closed(self) -> None:
+        """`raw_eml` accepts only bytes or str; any other type fails closed before parsing."""
+        for malformed in (None, 123, bytearray(b"%PDF-1.4\n"), ["%PDF-1.4"]):
+            with self.subTest(raw_eml=repr(malformed)):
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(
+                        decision=_t04_ambiguous_decision(),
+                        raw_eml=malformed,  # type: ignore[arg-type]
+                    )
+
+    def test_clear_decision_with_malformed_raw_eml_fails_closed(self) -> None:
+        """A malformed `raw_eml` is a contract error even when the decision is already clear.
+
+        The trusted-input type check must run before the clear-decision no-op branch, so a
+        malformed `raw_eml` never silently degrades into a staged `classification_clear`
+        outcome.
+        """
+        for malformed in (None, 123, bytearray(b"%PDF-1.4\n"), ["%PDF-1.4"]):
+            with self.subTest(raw_eml=repr(malformed)):
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(
+                        decision=_t04_clear_decision(),
+                        raw_eml=malformed,  # type: ignore[arg-type]
+                    )
+
+    def test_invalid_binding_and_decision_inputs_fail_closed(self) -> None:
+        raw_eml = _t04_raw_eml(attachments_list=[_t04_attachment_part()])
+        invalid_cases = [
+            {"account": ""},
+            {"folder": "   "},
+            {"envelope_id": ""},
+            {"message_id": ""},
+        ]
+        for override in invalid_cases:
+            with self.subTest(override=override):
+                with self.assertRaises(aevaluate.AttachmentEvaluationError):
+                    self._evaluate(
+                        decision=_t04_ambiguous_decision(), raw_eml=raw_eml, **override
+                    )
+        with self.assertRaises(aevaluate.AttachmentEvaluationError):
+            self._evaluate(decision="not-a-mapping", raw_eml=raw_eml)  # type: ignore[arg-type]
+        with self.assertRaises(aevaluate.AttachmentEvaluationError):
+            self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                read_escalation="not-a-mapping",
+            )
 
 
 if __name__ == "__main__":

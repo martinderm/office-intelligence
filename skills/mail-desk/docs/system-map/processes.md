@@ -91,6 +91,32 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 6. **Atomarer Index-Eintrag:**
    - `save_quarantine_index_atomic()` lädt den bestehenden Index, validiert Schema 1, prüft auf Drift (`AttachmentIndexDriftError`), fügt das Item ein und speichert atomar via `tempfile` + `os.replace`.
 
+### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04)
+
+Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator ist in T04 bewusst ein **Skeleton** und führt noch keinen Fetch, keine Extraktion und keinen Handoff aus.
+
+```
+[Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
+                                   │ ja
+                                   ▼
+                 [inspect_mime_tree] ──► keine Anhänge ──► not_needed/no_attachments
+                                   │
+                                   ▼
+        [canonicalize_and_bind_attachments] ──► kein allowed+available ──► not_needed/no_allowed_attachments
+                                   │ ≥1 zulässiger Part
+                                   ▼
+   [verify_attachment_drift] ──► [compute_review_hash] ──► [create_machine_authorization]
+                                   ──► [guard_context_authorization(CONTEXT_EVALUATION)]
+                                   ──► staged: skipped/evaluation_pending/auto_evaluated/files:[]
+```
+
+1. **Trigger:** `decision.kind == "unknown"`, `decision.id == "unclassified"`, `decision.confidence == "low"`, `decision.review_required == true` oder eine dokumentierte `read_escalation` (`status` `failed`/`completed`) ohne eindeutige Zuordnung. Ein klarer Entscheid wird durch eine frühere Eskalation nicht erneut ausgewertet.
+2. **Revalidierung:** `inspect_mime_tree` und `canonicalize_and_bind_attachments` (inkl. `check_attachment_policy` mit kumulativen Quoten) binden die echten MIME-Parts; `verify_attachment_drift` prüft Account, Folder, Message-ID, Envelope-ID, Part-Locator und Hash gegen die aktuellen Parts.
+3. **Autorisierung:** Für jeden zulässigen (`fetch_status: "available"`, `policy_status: "allowed"`) Part wird der kanonische `review_hash` berechnet, die interne Maschinen-Autorisierung gemint und sofort im `evaluation`-Kontext geprüft. Die effektive `policy_revision` stammt ausschließlich aus dem `version`-Feld der effektiven Policy.
+4. **Bounded Ausgang:** klarer Entscheid → `not_needed`/`classification_clear`; unklar ohne Anhang → `no_attachments`; unklar ohne zulässigen Anhang → `no_allowed_attachments`; unklar mit zulässigem Anhang → `skipped`/`evaluation_pending`/`auto_evaluated`/`files: []`. Das staged Objekt trägt immer `used_for_classification: false` und `classifier_revision: null`.
+5. **T05-Grenze:** Fetch (`op_attachment_fetch`), Extraktion (`extract_attachment_content`), Handoff (`build_attachment_analysis_handoff`) und jede `DraftManifest`-Installation folgen erst in **MD-E1-T05** und sind in T04 nicht implementiert.
+
+
 ---
 
 ## 4. Die Attachment-Disposition & Sichere Bereinigung (MD-Q3)

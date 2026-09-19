@@ -91,6 +91,6 @@ Für Änderungen an den zentralen Registern (`projects.json`, `topics.json`) gil
 Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweiligen L2-Prozesskarten dokumentiert:
 
 * **Mail-Desk Deep Dive:** [`../../skills/mail-desk/docs/system-map/processes.md`](../../skills/mail-desk/docs/system-map/processes.md)  
-  *(Himalaya-Client-Flow, Mailbox-Preflight, Quarantäne-Engine MD-Q1/MD-Q2 inkl. bounded read-only Tracked-Quarantäne-Preflight `quarantine_preflight.py` FR-15/MD-E1-T02, Disposition, Verifiable Receipts & Discard Recovery Journal MD-Q3, Read-only Reconcile, Dossier-Synthese)*
+  *(Himalaya-Client-Flow, Mailbox-Preflight, Quarantäne-Engine MD-Q1/MD-Q2 inkl. bounded read-only Tracked-Quarantäne-Preflight `quarantine_preflight.py` FR-15/MD-E1-T02, Disposition, Verifiable Receipts & Discard Recovery Journal MD-Q3, policygebundene Anhang-Evaluierung `attachment_evaluate` FR-15/MD-E1-T04 als staged Skeleton (`skipped`/`evaluation_pending`; Fetch/Extraktion/Handoff bleiben T05), Read-only Reconcile, Dossier-Synthese)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, Mirror-Sync)*
