@@ -1287,7 +1287,7 @@ Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarati
 
 ---
 
-## FR-15 / MD-E1-T04 + T05 + T06: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
+## FR-15 / MD-E1-T04 + T05 + T06 + T07: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
 
 Das Modul `scripts/core/attachment_evaluation.py` stellt den einzigen, separat testbaren
 `attachment_evaluate`-Seam bereit. Er qualifiziert den automatischen Auswertungs-Trigger,
@@ -1306,6 +1306,10 @@ Fehler-/Reason-Matrix fail-closed.
 > Ausnahmen und den terminalen Extraktionsstatus `extraction_failed` ab und bildet sie auf bounded
 > `failed`-Envelopes ab (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`,
 > `extraction_failed`, `handoff_invalid`). Jede `DraftManifest`-Installation bleibt **MD-E2**.
+> **T07** nimmt das Paket ab: ein hermetischer End-to-End-Test belegt Inspect → policygebundenen
+> Fetch → begrenzte Extraktion → validierten Handoff bei null Mailbox-, Promotion-, Export-,
+> Dispositions-, Cleanup- und Classifier-Writes. `--evaluate-attachments`, die `draft`/`inspect`-
+> Aufrufverdrahtung und die Neuklassifikation bleiben geplante MD-E2-Funktionen.
 
 1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
    ```python
@@ -1422,3 +1426,9 @@ Fehler-/Reason-Matrix fail-closed.
    Mailbox-, Dispositions-, Promotions-, Export-, Filing-, Evidence-, Katalog-, Cloud-, Classifier-
    oder Cleanup-/GC-Mutation auf. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
    erhalten (auch nach einem T06-Fehler). Die `DraftManifest`-Installation bleibt MD-E2.
+   `--evaluate-attachments`, die automatische `draft`/`inspect`-Aufrufverdrahtung und die
+   Neuklassifikation sind **geplante MD-E2-Funktionen und nicht Teil der aktuellen
+   MD-E1-Laufzeit**; MD-E1 stellt ausschließlich den separat aufrufbaren `attachment_evaluate`-Seam
+   bereit und endet am validierten Handoff. Promotion und Export besitzen keinen MD-E1-Laufzeitpfad;
+   ein hermetischer End-to-End-Test (FR-15/MD-E1-T07) belegt den Erfolgspfad bei null Mailbox-,
+   Promotion-, Export-, Dispositions-, Cleanup- und Classifier-Writes.

@@ -24,7 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
-| `FR-15` | 🟨 Spec geklärt, review-ready; Implementierung nicht gestartet, Human Gate offen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; staged `attachment_evaluation`-Vertrag, Receipt-Klassen-Grenze und blockierende Sicherheitsvoraussetzungen spezifiziert | `MD-E1` (erst nach frischem, ausdrücklichem Human Gate) |
+| `FR-15` | 🟨 MD-E1 vollständig implementiert, getestet und abgenommen; FR-15 insgesamt offen; MD-E2 nicht gestartet | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; die drei blockierenden Sicherheitsvoraussetzungen sind implementiert und getestet | `MD-E2` (erst nach frischem, ausdrücklichem Human Gate) |
 
 
 ```text
@@ -521,21 +521,23 @@ abgegrenzt.
 
 ## FR-15: Automatische Anhang-Auswertung bei unklaren Mails
 
-**Status:** 🟨 Spec geklärt, review-ready. Keine Implementierung begonnen; nach
-diesem Spezifikations-Commit bleibt die Umsetzung hinter einem frischen,
-ausdrücklichen Human Gate. FR-08, FR-11 und FR-14 stellen die erforderlichen
-MIME-, Quarantäne-, Extraktions-, Handoff- und Coverage-Verträge bereit; deren
-Sicherheitsgrenzen bleiben unverändert. FR-15 orchestriert diese bestehenden
-Bausteine im Draft-Pfad und baut keine zweite Fetch-, Extraktions- oder
+**Status:** 🟨 FR-15 insgesamt offen; **MD-E1 ist vollständig implementiert,
+getestet und als Paket abgenommen**, **MD-E2 ist nicht gestartet** und wartet auf
+ein frisches, ausdrückliches Human Gate. FR-08, FR-11 und FR-14 stellen die
+erforderlichen MIME-, Quarantäne-, Extraktions-, Handoff- und Coverage-Verträge
+bereit; deren Sicherheitsgrenzen bleiben unverändert. FR-15 orchestriert diese
+bestehenden Bausteine und baut keine zweite Fetch-, Extraktions- oder
 Klassifikationslogik.
 
-**Spezifikationsstand dieses Commits:** Der staged `attachment_evaluation`-Vertrag
-(`MD-E1` → `MD-E2`), die Receipt-Klassen-Grenze, die Lock-Legacy-Schließung, der
-Tracked-Quarantäne-Preflight, die Materialitätsbindung und die
-Aufräum-Verantwortung sind unten verbindlich beschrieben. Die unter
-„Blockierende Sicherheitsvoraussetzungen für MD-E1" genannten Punkte sind
-Bestandteil der MD-E1-Abnahme und keine separaten, aufschiebbaren Tickets.
-Produktionscode und Tests sind **nicht** Teil dieses Commits.
+**Stand:** Der staged `attachment_evaluation`-Vertrag (`MD-E1` → `MD-E2`), die
+Receipt-Klassen-Grenze, die Lock-Legacy-Schließung, der Tracked-Quarantäne-Preflight,
+die Materialitätsbindung und die Aufräum-Verantwortung sind unten verbindlich
+beschrieben. Die unter „Blockierende Sicherheitsvoraussetzungen für MD-E1" genannten
+Punkte sind implementiert, getestet und mit der System Map synchronisiert und damit
+Teil der abgenommenen MD-E1-Abnahme; sie waren keine separaten, aufschiebbaren
+Tickets. MD-E1 endet am validierten Handoff; **Reklassifikation und
+`DraftManifest`-Installation sind ausschließlich MD-E2 und in MD-E1 weder
+implementiert noch behauptet.**
 
 ### Problem und Ziel
 
@@ -634,32 +636,30 @@ aufrufbare Selbstfreigabe verwandeln:
 
 #### Blockierende Sicherheitsvoraussetzungen für MD-E1 (Teil der MD-E1-Abnahme)
 
-Diese Punkte sind keine separaten, aufschiebbaren Tickets; MD-E1 gilt erst als
-abgenommen, wenn sie implementiert, getestet und mit der System Map synchronisiert
-sind.
+Diese Punkte waren keine separaten, aufschiebbaren Tickets; sie sind mit MD-E1
+implementiert, getestet und mit der System Map synchronisiert, weshalb MD-E1 als
+abgenommen gilt.
 
-1. **Lock-Legacy-Bypass schließen:** `attachment_fetch.verify_workspace_lock()`
-   wertet derzeit `WORKSPACE_LOCK_ALLOW_LEGACY` aus und reicht `allow_legacy` an
-   den Guard weiter; `attachment_extract.py` führt denselben Parameter — entgegen
-   der bisherigen System-Map-Aussage, der Env-Bypass werde ignoriert (bekannter
-   Drift). MD-E1 kann Lock-Ownership nicht garantieren, solange dieser Bypass
-   offen ist. Der env-basierte Legacy-Bypass ist aus Attachment-Fetch-/Quarantäne-
-   Pfaden zu entfernen; Runtime, Caller und Manifest dürfen Legacy nicht
-   aktivieren. Zulässig bleibt ausschließlich die vertrauenswürdige
-   Lease-/Conversation-ID aus der Harness-Control-Plane. Erforderlich sind Tests,
-   die belegen, dass weder Env noch Parameter-/Manifest-Bypass einen Schreibpfad
-   öffnen.
-2. **Produktions-Preflight gegen getrackte Quarantäne:** Die Prüfung auf getrackte
-   Quarantänedateien existiert derzeit nur in Tests. Vor dem ersten
-   Quarantäne-Write ist ein Produktions-Preflight erforderlich, der am
-   vertrauenswürdigen `workspace_root` wurzelt und jede getrackte Datei unter
-   `data/mail-desk/attachments/` als begrenzten Stop (fail-closed) behandelt. Der
-   Preflight darf `.gitignore` nicht autonom verändern und muss ein testbares,
-   begrenztes Fail-Closed-Verhalten definieren, ohne eine unsichere Shell
-   vorzuschreiben.
+1. **Lock-Legacy-Bypass geschlossen:** Der frühere Drift, dass
+   `attachment_fetch.verify_workspace_lock()` `WORKSPACE_LOCK_ALLOW_LEGACY`
+   auswertete und `allow_legacy` an den Guard weiterreichte (und
+   `attachment_extract.py` denselben Parameter führte), ist mit MD-E1 beseitigt:
+   der env-basierte Legacy-Bypass ist aus den Attachment-Fetch-/Quarantäne-Pfaden
+   entfernt, und weder Runtime, Caller noch Manifest können Legacy aktivieren.
+   Zulässig ist ausschließlich die vertrauenswürdige Lease-/Conversation-ID aus der
+   Harness-Control-Plane. Tests belegen, dass weder Env noch Parameter-/Manifest-
+   Bypass einen Schreibpfad öffnen.
+2. **Produktions-Preflight gegen getrackte Quarantäne implementiert:** Der frühere
+   Zustand, dass die Prüfung auf getrackte Quarantänedateien nur in Tests existierte,
+   ist mit MD-E1 geschlossen. Vor dem ersten Quarantäne-Write wurzelt ein
+   Produktions-Preflight am vertrauenswürdigen `workspace_root` und behandelt jede
+   getrackte Datei unter `data/mail-desk/attachments/` als begrenzten Stop
+   (fail-closed). Der Preflight verändert `.gitignore` nicht autonom und definiert
+   ein testbares, begrenztes Fail-Closed-Verhalten ohne unsichere Shell.
 3. **Receipt-Klassen-Guard:** Die unter „Receipt-Klassen-Grenze" beschriebene
    schmale, kontextbewusste Validierung ist Bestandteil von MD-E1 und mit Tests für
-   jeden Human-Approval-Pfad sowie den direkten/unrelated Fetch-Pfad nachzuweisen.
+   jeden Human-Approval-Pfad sowie den direkten/unrelated Fetch-Pfad nachgewiesen
+   (implementiert).
 
 #### Lebenszyklus und Aufräum-Verantwortung
 
@@ -755,7 +755,12 @@ eingeführt; `still_ambiguous` verwendet den bestehenden Status `completed`
 (`status: "completed"`, `reason: "still_ambiguous"`). `used_for_classification`
 bleibt dabei `false` und `classifier_revision` `null`.
 
-### MD-E1 — Policygebundener Evaluierungs-Orchestrator
+### MD-E1 — Policygebundener Evaluierungs-Orchestrator (✅ abgenommen)
+
+**Status:** ✅ Implementiert, getestet und als Paket abgenommen (FR-15/MD-E1-T01–T07);
+Evidenz in [`FEATURE-REQUEST-PROGRESS.md`](FEATURE-REQUEST-PROGRESS.md). MD-E1 endet am
+validierten Handoff; Reklassifikation und `DraftManifest`-Installation gehören ausschließlich
+zu MD-E2.
 
 **Ziel:** Einen schmalen, separat testbaren `attachment_evaluate`-Orchestrator
 bereitstellen, der reale MIME-Kandidaten revalidiert, die interne
@@ -778,8 +783,8 @@ Katalog-, Cloud- oder Dispositionsmutation aus.
 **Blockierende Sicherheitsvoraussetzungen (Teil der MD-E1-Abnahme):** Die drei
 unter „Blockierende Sicherheitsvoraussetzungen für MD-E1" genannten Punkte —
 Lock-Legacy-Bypass-Schließung, Produktions-Preflight gegen getrackte Quarantäne und
-der Receipt-Klassen-Guard — sind zwingend in MD-E1 zu implementieren und zu testen,
-bevor MD-E1 als abgenommen gilt. Sie sind keine separaten, aufschiebbaren Tickets.
+der Receipt-Klassen-Guard — sind mit MD-E1 implementiert und getestet; MD-E1 ist
+damit abgenommen. Sie waren keine separaten, aufschiebbaren Tickets.
 
 **Pflichttests:** Trigger-Matrix; echte Part-Bindung; caller-seitig gefälschte
 Policy-/Receipt-Werte; fehlender/fremder Lock; aktiver Inhalt; disallowed Extension;
@@ -810,6 +815,11 @@ Mailbox-, Promotion-, Export- und Dispositionswrites ausführt. Paket, Progress-
 und System-Map-Update werden gemeinsam committed.
 
 ### MD-E2 — Draft-Integration und Neuklassifikation
+
+**Status:** ⬜ Nicht gestartet; wartet auf ein frisches, ausdrückliches Human Gate
+(nach abgenommenem MD-E1). Die einmalige Neuklassifikation, die `draft`/`inspect`-
+Verdrahtung, `--evaluate-attachments` und die `DraftManifest`-Installation sind in MD-E1
+nicht implementiert.
 
 **Ziel:** Nach der bestehenden Body-/Full-Read-Klassifikation nur unklare Items
 über MD-E1 anreichern und exakt einmal mit dem validierten Anhangs-Handoff erneut
@@ -853,31 +863,36 @@ auf das betroffene Item; bestehender klarer Draft wird nicht ausgewertet.
 
 ### Dokumentation und Abnahme
 
-Dieser Spezifikations-Commit hat ausschließlich den **aktuellen**
+Die Dokumentation ist mit der **abgenommenen MD-E1-Implementierung** synchron
+nachgezogen. Der frühere Spezifikations-Commit hatte ausschließlich den damaligen
 Implementierungsdrift in der Mail-Desk-Subsystem-System-Map bereinigt und den
-bekannten MD-E1-Blocker markiert; er dokumentiert **keine** geplante MD-E1-Laufzeit
-als bereits implementiert. Die normativen Invarianten bleiben von der
-Ist-Implementierung und ihrer geplanten Schließung in MD-E1 klar getrennt.
+MD-E1-Blocker markiert; er dokumentierte bewusst noch **keine** MD-E1-Laufzeit als
+bereits implementiert. Mit der MD-E1-Abnahme sind synchron aktualisiert:
 
-Mit der Implementierung, nicht vorgezogen in diesem Backlog-Commit, werden synchron
-aktualisiert:
-
-- `skills/mail-desk/SKILL.md`: Auswertungsstufe in Kernfluss Schritt 2/3;
-- `skills/mail-desk/references/batch-runner.md`: Modus/Option,
-  `attachment_evaluation`-Schema und Beispiel;
+- `skills/mail-desk/SKILL.md`: `attachment_evaluate`-Seam in Kernfluss Schritt 3 und
+  die MD-E2-Grenze für `draft`/`inspect`-Verdrahtung und `--evaluate-attachments`;
+- `skills/mail-desk/references/batch-runner.md`: `attachment_evaluation`-Schema,
+  Beispiele und die explizite MD-E2-Abgrenzung;
 - `skills/mail-desk/references/cli-operations.md`: kanonischer Ablauf
-  Inspect → policygebundener Fetch → begrenzte Extraktion → Handoff → Reclassify;
-- `skills/mail-desk/references/backends/himalaya.md`: Fetch-, Timeout- und
-  Retry-Grenzen;
-- `skills/mail-desk/docs/system-map/README.md` sowie betroffene Nomen-/Prozess-/
-  Effektkarten: automatische Evaluierung und neue Autorisierungsgrenze;
-- diese Statuszeile und die jeweilige Paketkarte.
+  Inspect → policygebundener Fetch → begrenzte Extraktion → validierter Handoff
+  (Ende MD-E1) mit bounded Fehlern und MD-E2-Grenze;
+- `skills/mail-desk/references/backends/himalaya.md`: Raw-MIME-/Fetch-Grenze,
+  Lock-/Preflight-/Policy-Kontrollen, Extraktions-Timeout → `extraction_failed`
+  und fehlender automatischer Retry/Reclassify/Write;
+- L2 `skills/mail-desk/docs/system-map/{README,objects,processes,effects}.md` und
+  L1 `docs/system-map/{README,objects,processes,effects}.md`: automatische
+  Evaluierung, neue Autorisierungsgrenze und MD-E1-Paketabnahme;
+- diese Statuszeile, die Paketkarten und `FEATURE-REQUEST-PROGRESS.md`.
 
-**Gesamtabnahme:** Alle oben genannten Verhaltens- und Sicherheitstests,
-vollständige Mail-Desk-Suite, Compileall, Skill-/Workspace-Validierung und
+**Gesamtabnahme MD-E1:** Alle oben genannten Verhaltens- und Sicherheitstests, die
+vollständige entdeckte Mail-Desk-Suite, Compileall, Skill-/Workspace-Validierung und
 `git diff --check` sind grün. Ein hermetischer End-to-End-Test beweist
-Inspect → Fetch → Extract → Handoff → Reclassify für einen klarstellenden Anhang
-und zugleich null Mailbox-, Promotion-, Export- und Dispositionswrites. FR-15 und
-FR-13 verändern dieselben Classifier-/Attachment-Grenzen und dürfen nicht parallel
-umgesetzt werden; FR-15 wird entweder vor `MD-M1` abgeschlossen oder nach komplett
-grünem FR-13 gegen dessen neue Modulstruktur neu geplant.
+Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für
+einen klarstellenden Anhang und zugleich null Mailbox-, Promotion-, Export- und
+Dispositionswrites. **MD-E1 endet am Handoff; Reclassify und
+`DraftManifest`-Installation sind ausschließlich MD-E2 und werden von MD-E1 weder
+ausgeführt noch behauptet.** FR-15 insgesamt bleibt bis zur abgenommenen
+MD-E2-Umsetzung offen. FR-15 und FR-13 verändern dieselben
+Classifier-/Attachment-Grenzen und dürfen nicht parallel umgesetzt werden; MD-E2
+wird entweder vor `MD-M1` umgesetzt oder nach komplett grünem FR-13 gegen dessen
+neue Modulstruktur neu geplant.

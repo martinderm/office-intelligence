@@ -73,6 +73,32 @@ is a temporary compatibility path pending FR-10's least-privilege gateway.
   exactly match the manifest-bound account. Inventory or drift failures are
   errors, never an empty successful attachment result.
 
+### Attachment evaluation boundary (FR-15 / MD-E1)
+
+The MD-E1 attachment-evaluation flow reuses the client's read-only RFC-822 inspection and the
+canonical fetch/extract/handoff seams; it never issues a mailbox write.
+
+- **Raw-MIME / fetch boundary:** `inspect_attachments` exports the message read-only as an
+  RFC-822 source, and only the canonically revalidated, policy-allowed MIME parts
+  (`fetch_status: "available"`, `policy_status: "allowed"`) are fetched into
+  `data/mail-desk/attachments/<run-id>/`. Mail and attachment content stay
+  `untrusted_external`; caller-claimed candidates, policy/fetch statuses or receipts are not
+  authority.
+- **Lock / preflight / policy controls:** fetch runs behind the shared workspace-lock guard
+  with `allow_legacy=False` (no env/parameter/manifest legacy bypass), behind the bounded
+  read-only tracked-quarantine preflight (`git ls-files`, no shell, with timeout), and behind
+  active-content blocking, extension/MIME consistency and the 15 MB per-file / 25 MB per-mail
+  / max-5-files quotas. A missing or foreign lock stops fail-closed before the first write.
+- **Extraction timeout:** extraction is bounded and reuses the canonical extractor; the
+  terminal extraction status `extraction_failed` (including a timeout) maps to the bounded
+  staged `failed` / `extraction_failed` envelope. There is **no automatic retry**.
+- **No automatic write / reclassification:** MD-E1 performs no mailbox write, no promotion,
+  no export, no filing, no disposition and no cleanup, and it does **not** reclassify the mail
+  or install the staged result into a `DraftManifest`.
+- **MD-E2 boundary:** automatic `draft`/`inspect` invocation wiring, the
+  `--evaluate-attachments` option, the single reclassification attempt and the `DraftManifest`
+  installation are MD-E2 and not implemented in MD-E1.
+
 ## Envelope IDs
 
 - Envelope IDs are transient operational locators, never durable identifiers.

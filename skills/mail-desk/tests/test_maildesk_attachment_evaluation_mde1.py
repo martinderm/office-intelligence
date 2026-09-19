@@ -1370,6 +1370,8 @@ _T05_FORBIDDEN_CALLABLES = frozenset(
         "record_quarantine_entry",
         "save_quarantine_index_atomic",
         "update_quarantine_inventory_atomic",
+        "cleanup_run_quarantine",
+        "classify_email",
     }
 )
 _T05_FORBIDDEN_MODULES = frozenset(
@@ -1378,6 +1380,7 @@ _T05_FORBIDDEN_MODULES = frozenset(
         "attachment_filing",
         "attachment_quarantine_index",
         "quarantine_preflight",
+        "classifier",
     }
 )
 
@@ -2447,6 +2450,144 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(
         for mock in started:
             mock.assert_not_called()
         self.assertEqual("handoff_ready", self._staged(result)["reason"])
+
+    # ------------------------------------------------------------------
+    # T07 package acceptance: one run, zero downstream writes
+    # ------------------------------------------------------------------
+    def test_mde1_package_acceptance_inspect_fetch_extract_handoff_zero_writes(self) -> None:
+        """T07 acceptance: MD-E1 composes Inspect -> policy-bound Fetch -> Extract ->
+        validated Handoff for an ambiguous mail and executes zero downstream writes.
+
+        One hermetic successful run proves the staged contract (`completed`/`handoff_ready`/
+        `auto_evaluated`, `used_for_classification: false`, `classifier_revision: null`,
+        bounded `files[]`) plus the ready validated `attachment_analysis_handoff`.  Every
+        existing downstream mutation seam is blocked and proven unused: the three mailbox
+        writes (`op_copy_message`/`op_move_message`/`op_delete_message`), the filing proposal,
+        the `DraftManifest` handoff install, the disposition recorder, the discard apply and
+        the quarantine cleanup.  Promotion and export have **no** MD-E1 runtime seam: rather
+        than inventing a seam to block, this test proves the static forbidden-import/call
+        boundary of the orchestrator module and states that absence precisely.
+        """
+        message_id = "mde1-t07-acceptance@example.org"
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[_t05_pdf_attachment()],
+            message_id=message_id,
+        )
+
+        blockers = [
+            patch.object(
+                mclient, "op_copy_message", side_effect=AssertionError("mailbox copy ran")
+            ),
+            patch.object(
+                mclient, "op_move_message", side_effect=AssertionError("mailbox move ran")
+            ),
+            patch.object(
+                mclient, "op_delete_message", side_effect=AssertionError("mailbox delete ran")
+            ),
+            patch.object(
+                ahandoff,
+                "apply_attachment_handoff_to_item",
+                side_effect=AssertionError("handoff install ran"),
+            ),
+            patch.object(
+                afiling, "propose_attachment_filing", side_effect=AssertionError("filing ran")
+            ),
+            patch.object(
+                adisp, "record_disposition_entry", side_effect=AssertionError("disposition ran")
+            ),
+            patch.object(adisp, "apply_discard", side_effect=AssertionError("discard ran")),
+            patch.object(
+                afetch, "cleanup_run_quarantine", side_effect=AssertionError("cleanup ran")
+            ),
+            patch.object(
+                aevaluate,
+                "classify_email",
+                side_effect=AssertionError("classifier ran"),
+                create=True,
+            ),
+        ]
+        started = [blocker.start() for blocker in blockers]
+        try:
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=message_id,
+                **self._control_plane(),
+            )
+        finally:
+            for blocker in blockers:
+                blocker.stop()
+
+        for mock in started:
+            mock.assert_not_called()
+
+        # Staged contract, bounded files and the ready validated handoff.
+        self.assertEqual({"attachment_evaluation", "attachment_analysis_handoff"}, set(result))
+        staged = self._staged(result)
+        self._assert_staged_contract(
+            staged,
+            status="completed",
+            reason="handoff_ready",
+            authorization="auto_evaluated",
+        )
+        self.assertEqual(1, len(staged["files"]))
+        entry = staged["files"][0]
+        self.assertEqual(
+            {"filename", "sha256", "mime_type", "chars", "coverage", "run_id"},
+            set(entry),
+        )
+        self.assertEqual("report.pdf", entry["filename"])
+        self.assertEqual("application/pdf", entry["mime_type"])
+        self.assertIn(entry["coverage"], {"full", "truncated"})
+        self.assertGreater(entry["chars"], 0)
+        self.assertTrue(str(entry["run_id"]).strip())
+        self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
+
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual("ready", handoff["status"])
+        self.assertEqual(1, handoff["total_attachments"])
+        self.assertEqual([], handoff["blocked_required_attachments"])
+
+        # Promotion/export have no MD-E1 runtime seam.  Prove the absence statically instead of
+        # inventing a seam: the orchestrator module imports no mailbox/promotion/export module
+        # and references no mailbox write or downstream mutation callable.
+        module_path = MAIL_DESK_ROOT / "scripts" / "core" / "attachment_evaluation.py"
+        tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        imported_modules: set[str] = set()
+        referenced_names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_modules.add(node.module.split(".")[0])
+                for alias in node.names:
+                    referenced_names.add(alias.name)
+            elif isinstance(node, ast.Attribute):
+                referenced_names.add(node.attr)
+            elif isinstance(node, ast.Name):
+                referenced_names.add(node.id)
+
+        static_forbidden_modules = _T05_FORBIDDEN_MODULES | {
+            "mail_desk_himalaya_client",  # mailbox copy/move/delete
+            "attachment_promotion",  # FR-09, not part of MD-E1
+            "attachment_export",  # no MD-E1 runtime export seam
+        }
+        self.assertFalse(
+            static_forbidden_modules & imported_modules,
+            f"MD-E1 imported forbidden module(s): "
+            f"{sorted(static_forbidden_modules & imported_modules)}",
+        )
+        self.assertFalse(
+            _T05_FORBIDDEN_CALLABLES & referenced_names,
+            f"MD-E1 referenced forbidden callable(s): "
+            f"{sorted(_T05_FORBIDDEN_CALLABLES & referenced_names)}",
+        )
+        self.assertFalse(
+            {"op_copy_message", "op_move_message", "op_delete_message"} & referenced_names,
+            "MD-E1 must not reference any mailbox write callable.",
+        )
 
     # ------------------------------------------------------------------
     # Upfront lock guard: no I/O before an owned lock

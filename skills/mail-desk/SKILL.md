@@ -167,7 +167,11 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    (`corrupt_attachment`, `attachment_conversion_unavailable`) bleibt dagegen
    `required_for_decision` und endet `completed`/`still_ambiguous`. Die
    `DraftManifest`-Installation bleibt MD-E2. Ein klarer Entscheid wird durch eine
-   frühere Eskalation nicht erneut ausgewertet. Details stehen in
+   frühere Eskalation nicht erneut ausgewertet. Der `attachment_evaluate`-Seam ist mit
+   FR-15/MD-E1 (T01–T07) vollständig und als Paket abgenommen; die automatische
+   `draft`/`inspect`-Aufrufverdrahtung, die CLI-Option `--evaluate-attachments`, die
+   Neuklassifikation und die `DraftManifest`-Installation sind **nicht implementiert**
+   und bleiben **MD-E2**. Details stehen in
    [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.

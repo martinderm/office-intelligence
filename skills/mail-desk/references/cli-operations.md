@@ -176,6 +176,62 @@ dem ersten Quarantäne-Write stoppt ein bounded read-only Git-Preflight fail-clo
 falls unter `data/mail-desk/attachments/` bereits etwas getrackt ist (siehe
 Stop-Bedingung unten).
 
+## FR-15 / MD-E1: Policygebundene Anhang-Auswertung (Inspect → Fetch → Extract → Handoff)
+
+Der `attachment_evaluate`-Orchestrator (`scripts/core/attachment_evaluation.py`) ist der
+separat aufrufbare, abgenommene MD-E1-Seam (FR-15/MD-E1-T01–T07). Er verarbeitet eine
+bereits als unklar klassifizierte Einzelmail und führt in einem Lauf aus:
+
+1. **Inspect:** `inspect_attachments` (`scripts/mail_desk_himalaya_client.py`) exportiert
+   die Nachricht read-only als RFC-822-Quelle und liefert an Account, Message-ID, Folder,
+   Envelope-ID und Part-Locator gebundene Anhangskandidaten. Caller-seitig behauptete
+   Kandidaten-, Policy- oder Fetch-Status-Werte sind keine Autorität.
+2. **Fetch:** `attachment_fetch` ruft ausschließlich kanonisch revalidierte, policykonforme
+   Parts (`fetch_status: "available"`, `policy_status: "allowed"`) in die Quarantäne
+   `data/mail-desk/attachments/<run-id>/` ab. Autorisierung ist die intern erzeugte,
+   kontextgebundene Maschinen-Autorisierung (`receipt_class: "machine"`,
+   `receipt_type: "attachment_auto_evaluation"`); sie gilt nur für den MD-E1-Flow und wird
+   von Human-Approval-Pfaden fail-closed abgewiesen. Lock-Ownership (`allow_legacy=False`),
+   der bounded read-only Tracked-Quarantäne-Preflight, aktiver Inhalts-Blocker,
+   Extension-/MIME-Konsistenz und die Quoten (15 MB einzeln, 25 MB kumulativ, max. 5
+   Dateien) bleiben bindend.
+3. **Extract:** `extract_attachment_content` extrahiert begrenzt (max. 15.000 Zeichen je
+   Anhang); Office-/PDF-Formate nutzen ausschließlich diesen kanonischen Extraktor. Alle
+   Anhänge einer Mail teilen eine `run_id`.
+4. **Handoff:** Der validierte, gekapselte `attachment_analysis_handoff` entsteht mit
+   `default_materiality: "required_for_decision"` (max. 30.000 Zeichen je Mail inklusive
+   sichtbarer Truncation-Marker).
+
+**Staged Ergebnis:** `attachment_evaluate` gibt ausschließlich das kanonische staged
+`attachment_evaluation` zurück (`status ∈ {completed, not_needed, skipped, failed}`, bounded
+`reason`, `authorization ∈ {auto_evaluated, not_applicable}`, begrenzte sichere `files[]`,
+`used_for_classification` **immer** `false`, `classifier_revision` **immer** `null`) plus den
+validierten `attachment_analysis_handoff`.
+
+**Erfolg und bounded Fehler:**
+
+- Erfolgspfad: `completed` / `handoff_ready` / `auto_evaluated` mit sicheren `files[]`.
+- Validierter `blocked_on_required_attachment`-Handoff (kanonisch gültige, aber unvollständige
+  erforderliche Evidenz): `completed` / `still_ambiguous` (nie `supplementary`).
+- Fail-closed `failed`-Envelopes mit `authorization: "not_applicable"` und leerem `files[]`:
+  `lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`
+  (inkl. Extraktions-Timeout) und `handoff_invalid`. Langlebige Outputs enthalten nie
+  Exception-Text, Rohinhalt oder absolute Pfade.
+
+**Zero-Write-Garantie:** MD-E1 führt keine Mailbox-Schreiboperation (`copy`/`move`/`delete`),
+keine Promotion, Export, Filing, Disposition, Evidence-, Katalog-, Cloud-, Classifier- oder
+Cleanup-/GC-Mutation aus. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
+erhalten.
+
+**MD-E2-Grenze:** Die automatische `draft`/`inspect`-Aufrufverdrahtung, die CLI-Option
+`--evaluate-attachments`, die einmalige Neuklassifikation und die `DraftManifest`-Installation
+sind **nicht implementiert** und bleiben **MD-E2**. MD-E1 endet am validierten Handoff.
+
+> **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag
+> `mail_desk_inspect_manifest.py --reclassify` (siehe oben) reklassifiziert erstellte
+> Batch-Manifeste offline gegen `projects.json`/`topics.json`. Es ist **nicht** die
+> MD-E2-Neuklassifikation und hat mit FR-15/MD-E1 nichts zu tun.
+
 ## Workspace-Integration: Attachment-Quarantäne (Integrationsempfehlung)
 
 Der Mail-Desk legt abgerufene Anhänge isoliert unter `data/mail-desk/attachments/<run_id>/` ab. Das Skill-Bundle selbst ist kein Mail-Desk-Laufzeitworkspace und verändert Consumer-`.gitignore`-Dateien nicht autonom. Die folgenden Integrationsregeln sind Empfehlungen für nutzende Consumer-Workspaces; vor einer Übernahme sind bestehende Workspace-Regeln sorgfältig zu prüfen, und vorhandene Regeln dürfen nicht unbesehen ersetzt werden.

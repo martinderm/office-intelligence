@@ -34,17 +34,36 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   getestet und committed. Der Abschluss ist archiviert.
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
-- `FR-15` — Spezifikationsklärung und System-Map-Driftbereinigung sind
-  abgeschlossen und review-ready: Der staged `attachment_evaluation`-Vertrag für
-  `MD-E1`/`MD-E2`, die Receipt-Klassen-Grenze (typenlose Human-MD-A2-Receipts
-  bleiben gültig), die Lock-Legacy-Schließung, der Tracked-Quarantäne-Preflight,
-  die Materialität `required_for_decision` und die Aufräum-Verantwortung sind in
-  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) verbindlich beschrieben. Die drei
-  Sicherheitsvoraussetzungen sind blockierender Teil der `MD-E1`-Abnahme. Es wurde
-  **kein** Produktionscode und **kein** Test geschrieben; die `MD-E1`-Umsetzung ist
-  nicht gestartet und bleibt hinter einem frischen, ausdrücklichen Human Gate.
+- `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) ist vollständig implementiert, reviewt,
+  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen, `MD-E2` ist
+  nicht gestartet.** Der staged `attachment_evaluation`-Vertrag
+  (`used_for_classification` immer `false`, `classifier_revision` immer `null`) und die
+  bounded Status-/Reason-Menge sind eingehalten. Alle drei blockierenden
+  Sicherheitsvoraussetzungen sind implementiert und getestet: (1) die
+  Lock-Legacy-Schließung (`allow_legacy=False`; weder Env- noch Parameter-/
+  Manifest-Bypass öffnet einen Schreibpfad), (2) der bounded read-only
+  Produktions-Preflight gegen getrackte Quarantäne (`quarantine_preflight.py`) und
+  (3) der kontextbewusste Receipt-Klassen-Guard (`attachment_authorization.py`; die
+  interne Maschinen-Autorisierung gilt nur im `evaluation`-Kontext und wird von
+  Human-Approval-Pfaden fail-closed abgewiesen, typenlose Human-MD-A2-Receipts
+  bleiben gültig). `MD-E1-T07` fügt einen hermetischen End-to-End-Akzeptanztest hinzu
+  (`skills/mail-desk/tests/test_maildesk_attachment_evaluation_mde1.py`), der in einem
+  erfolgreichen Lauf reale Inspect → policygebundene Fetch → Extraktion → validierter
+  Handoff für einen klarstellenden erlaubten Anhang beweist, das staged Ergebnis
+  (`completed`/`handoff_ready`/`auto_evaluated`), `false`/`null` und die begrenzten
+  `files[]` prüft und zugleich **null** Mailbox- (`op_copy_message`/`op_move_message`/
+  `op_delete_message`) sowie null Promotion-/Filing-/`DraftManifest`-Install-/
+  Dispositions-/Cleanup-/Classifier-Operationen nachweist; Promotion und Export
+  besitzen keinen MD-E1-Laufzeitpfad (statische Import-/Call-Grenze). Verifikation aus
+  dem Target-Root: `test_maildesk_attachment_evaluation_mde1.py` 112/112 grün, die
+  vollständige entdeckte Mail-Desk-Suite 649/649 grün (aktueller Nachweis, kein
+  permanenter Abnahmewert), `compileall`, `validate-skills-catalog.py`,
+  `validate_workspace.py --json` und `git diff --check` sauber. `MD-E2` (automatische
+  `draft`/`inspect`-Verdrahtung, `--evaluate-attachments`, Neuklassifikation,
+  `DraftManifest`-Installation) ist **nicht gestartet** und bleibt hinter einem
+  frischen, ausdrücklichen Human Gate.
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
-- **FR-15:** `MD-E1` — policygebundener Evaluierungs-Orchestrator inklusive der drei blockierenden Sicherheitsvoraussetzungen (nach frischem, ausdrücklichem Human Gate). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation inklusive `draft`/`inspect`-Verdrahtung, `--evaluate-attachments` und `DraftManifest`-Installation (nach frischem, ausdrücklichem Human Gate; `MD-E1` ist abgenommen). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
