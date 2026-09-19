@@ -1,4 +1,4 @@
-"""Policy-bound attachment-evaluation orchestrator (FR-15 / MD-E1-T04 + T05).
+"""Policy-bound attachment-evaluation orchestrator (FR-15 / MD-E1-T04 + T05 + T06).
 
 This module owns the single, separately testable ``attachment_evaluate`` seam.  It qualifies the
 automatic-evaluation trigger, revalidates the real RFC-822 MIME candidates against the trusted
@@ -19,6 +19,10 @@ Scope (deliberately bounded):
   classification result.
 * Only the validated, encapsulated handoff may carry bounded attachment content.  The staged
   object never contains raw extraction text, an absolute path or a caller claim.
+* T06 closes the negative matrix: a canonically expected exception (or a terminal
+  ``extraction_failed`` status) is caught **exactly** and mapped to a bounded
+  ``failed`` staged envelope with ``authorization: "not_applicable"``, ``files: []`` and no
+  handoff sibling.  Exception text, raw content and absolute paths never leak into the output.
 
 Trust boundary (read this before relying on the seam):
 
@@ -57,16 +61,33 @@ from .attachment_authorization import (
     guard_context_authorization,
 )
 from .attachment_extract import extract_attachment_content
-from .attachment_fetch import compute_review_hash, op_attachment_fetch
+from .attachment_fetch import (
+    ActiveContentBlockedError,
+    DisallowedExtensionError,
+    ExtensionMimeDriftError,
+    MimeDriftError,
+    QuarantineCollisionError,
+    QuarantineInventoryError,
+    QuarantinePreflightError,
+    QuotaExceededError,
+    SymlinkEscapeError,
+    TrackedQuarantineError,
+    WorkspaceLockError,
+    compute_review_hash,
+    op_attachment_fetch,
+)
 from .attachment_handoff import (
     HANDOFF_STATUS_BLOCKED,
     HANDOFF_STATUS_READY,
     MATERIALITY_REQUIRED_FOR_DECISION,
+    AttachmentHandoffError,
+    InvalidMaterialityError,
     build_attachment_analysis_handoff,
     validate_attachment_handoff,
 )
 from .attachment_policy import DEFAULT_ATTACHMENT_POLICY
 from .attachments import (
+    AttachmentDriftError,
     canonicalize_and_bind_attachments,
     inspect_mime_tree,
     verify_attachment_drift,
@@ -101,16 +122,29 @@ REASON_NO_ALLOWED_ATTACHMENTS = "no_allowed_attachments"
 #: T05: the eligible parts were fetched, extracted and a validated ready handoff was produced.
 REASON_HANDOFF_READY = "handoff_ready"
 #: T05: a validated ``blocked_on_required_attachment`` handoff remains ambiguous (never
-#: downgraded to supplementary).  The broader failure/reason exception matrix is T06.
+#: downgraded to supplementary).
 REASON_STILL_AMBIGUOUS = "still_ambiguous"
-#: Historical T04 constant only.  Eligible T05 runtime paths no longer emit it; it is retained
+#: T06: the invocation does not own the workspace lock (missing or foreign).
+REASON_LOCK_UNAVAILABLE = "lock_unavailable"
+#: T06: a canonical policy/security guard blocked the part (active content, disallowed
+#: extension, MIME/extension drift, tracked quarantine or an unreadable preflight).
+REASON_POLICY_BLOCKED = "policy_blocked"
+#: T06: a canonical transport/quarantine quota (per-file, cumulative or count) was exceeded.
+REASON_QUOTA_EXCEEDED = "quota_exceeded"
+#: T06: canonical identity/hash drift, a quarantine collision/inventory fault or a symlink
+#: escape stopped the fetch fail-closed.
+REASON_FETCH_FAILED = "fetch_failed"
+#: T06: the canonical extraction result status is ``extraction_failed`` (including a timeout).
+REASON_EXTRACTION_FAILED = "extraction_failed"
+#: T06: the canonical handoff builder/validator rejected the handoff.
+REASON_HANDOFF_INVALID = "handoff_invalid"
+#: Historical T04 constant only.  Eligible runtime paths no longer emit it; it is retained
 #: for compatibility with the documented T04 intermediate and is deliberately absent from the
-#: bounded T05 runtime reason set below.
+#: bounded runtime reason set below.
 REASON_EVALUATION_PENDING = "evaluation_pending"
 
-#: Bounded reason set emitted by T05.  T06 extends this with the remaining FR-15 fail-closed
-#: reasons (``lock_unavailable``, ``policy_blocked``, ``quota_exceeded``, ``fetch_failed``,
-#: ``extraction_failed``, ``handoff_invalid``).
+#: Bounded reason set emitted by the orchestrator.  ``evaluation_pending`` is intentionally
+#: absent: it is a historical non-runtime constant, never a yielded reason.
 ALLOWED_ATTACHMENT_EVALUATION_REASONS = frozenset(
     {
         REASON_CLASSIFICATION_CLEAR,
@@ -118,6 +152,12 @@ ALLOWED_ATTACHMENT_EVALUATION_REASONS = frozenset(
         REASON_NO_ALLOWED_ATTACHMENTS,
         REASON_HANDOFF_READY,
         REASON_STILL_AMBIGUOUS,
+        REASON_LOCK_UNAVAILABLE,
+        REASON_POLICY_BLOCKED,
+        REASON_QUOTA_EXCEEDED,
+        REASON_FETCH_FAILED,
+        REASON_EXTRACTION_FAILED,
+        REASON_HANDOFF_INVALID,
     }
 )
 
@@ -127,6 +167,32 @@ ALLOWED_ATTACHMENT_EVALUATION_COVERAGES = frozenset({COVERAGE_FULL, COVERAGE_TRU
 
 #: The only documented read-escalation terminal statuses that count as a completed attempt.
 _READ_ESCALATION_TERMINAL_STATUSES = frozenset({"failed", "completed"})
+
+#: Canonical MD-A3 extraction status that is a hard, terminal failure for the evaluation stage.
+_EXTRACTION_STATUS_FAILED = "extraction_failed"
+
+# ==============================================================================
+# Bounded fail-closed exception mapping (exact expected classes only)
+# ==============================================================================
+
+#: Exceptions from the canonical policy/security guards that map to ``policy_blocked``.
+#: ``MimeDriftError`` is a subclass of the shared ``AttachmentDriftError`` family, so this
+#: tuple must be matched before the drift family below.
+_POLICY_BLOCKED_EXCEPTIONS = (
+    ActiveContentBlockedError,
+    DisallowedExtensionError,
+    MimeDriftError,
+    ExtensionMimeDriftError,
+    QuarantinePreflightError,
+    TrackedQuarantineError,
+)
+
+#: Canonical storage/collision guards that map to ``fetch_failed``.
+_FETCH_FAILED_STORAGE_EXCEPTIONS = (
+    QuarantineCollisionError,
+    QuarantineInventoryError,
+    SymlinkEscapeError,
+)
 
 
 # ==============================================================================
@@ -270,6 +336,16 @@ def _staged(
 
 def _envelope(staged: dict[str, Any]) -> dict[str, Any]:
     return {"attachment_evaluation": staged}
+
+
+def _failed_envelope(reason: str) -> dict[str, Any]:
+    """Build the bounded, fail-closed staged envelope for a failed evaluation.
+
+    A failed outcome is fully declarative: no ``files``, ``authorization: "not_applicable"``,
+    pinned ``used_for_classification`` / ``classifier_revision`` and **no** handoff sibling.
+    The exception message, raw content and absolute paths are never surfaced.
+    """
+    return _envelope(_staged(STATUS_FAILED, reason, AUTHORIZATION_NOT_APPLICABLE))
 
 
 def _is_eligible(part: Mapping[str, Any]) -> bool:
@@ -474,12 +550,16 @@ def attachment_evaluate(
 
     # Upfront canonical lock guard: no fetch/extract I/O may happen before the invocation owns the
     # workspace lock.  `op_attachment_fetch` retains its own lock/preflight/drift checks as well.
-    attachment_fetch.verify_workspace_lock(
-        workspace_root=workspace_root,
-        lease_id=lease_id,
-        conversation_id=conversation_id,
-        data_dir=base_data_dir,
-    )
+    # A missing or foreign lock is a bounded fail-closed outcome, never a partial result.
+    try:
+        attachment_fetch.verify_workspace_lock(
+            workspace_root=workspace_root,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            data_dir=base_data_dir,
+        )
+    except WorkspaceLockError:
+        return _failed_envelope(REASON_LOCK_UNAVAILABLE)
 
     # One run_id for every attachment of the message, so cumulative count/size quotas cannot be
     # bypassed by spreading parts over separate runs.  When none is supplied the first canonical
@@ -488,74 +568,100 @@ def attachment_evaluate(
     extraction_envelopes: list[dict[str, Any]] = []
     run_id_by_locator: dict[str, str] = {}
 
-    for part in eligible_parts:
-        part_locator = str(part.get("part_locator", "")).strip()
-        inventory_sha256 = str(part.get("sha256", "")).strip().lower()
+    try:
+        for part in eligible_parts:
+            part_locator = str(part.get("part_locator", "")).strip()
+            inventory_sha256 = str(part.get("sha256", "")).strip().lower()
 
-        review_hash, authorization = _mint_and_guard_authorization(
-            part,
-            policy_revision=policy_revision,
-            account=norm_account,
-            folder=norm_folder,
-            envelope_id=norm_envelope,
-            message_id=norm_message_id,
-            inspected_parts=inspected_parts,
-        )
+            review_hash, authorization = _mint_and_guard_authorization(
+                part,
+                policy_revision=policy_revision,
+                account=norm_account,
+                folder=norm_folder,
+                envelope_id=norm_envelope,
+                message_id=norm_message_id,
+                inspected_parts=inspected_parts,
+            )
 
-        # Only after the evaluation-context guard succeeded is the non-authoritative structural
-        # snapshot handed to the unchanged fetch.  The capability itself is never exposed.
-        fetch_result = op_attachment_fetch(
-            candidate=dict(part),
-            account=norm_account,
-            folder=norm_folder,
-            envelope_id=norm_envelope,
-            message_id=norm_message_id,
-            part_locator=part_locator,
-            inventory_sha256=inventory_sha256,
-            review_hash=review_hash,
-            approval_receipt=authorization.to_dict(),
-            run_id=effective_run_id,
-            raw_eml=raw_eml,
-            data_dir=base_data_dir,
-            policy=effective_policy,
-            workspace_root=workspace_root,
-            lease_id=lease_id,
-            conversation_id=conversation_id,
-        )
-        effective_run_id = str(fetch_result["run_id"])
-        run_id_by_locator[part_locator] = effective_run_id
+            # Only after the evaluation-context guard succeeded is the non-authoritative structural
+            # snapshot handed to the unchanged fetch.  The capability itself is never exposed.
+            fetch_result = op_attachment_fetch(
+                candidate=dict(part),
+                account=norm_account,
+                folder=norm_folder,
+                envelope_id=norm_envelope,
+                message_id=norm_message_id,
+                part_locator=part_locator,
+                inventory_sha256=inventory_sha256,
+                review_hash=review_hash,
+                approval_receipt=authorization.to_dict(),
+                run_id=effective_run_id,
+                raw_eml=raw_eml,
+                data_dir=base_data_dir,
+                policy=effective_policy,
+                workspace_root=workspace_root,
+                lease_id=lease_id,
+                conversation_id=conversation_id,
+            )
+            effective_run_id = str(fetch_result["run_id"])
+            run_id_by_locator[part_locator] = effective_run_id
 
-        # Both `fetched` and `already_fetched` proceed identically through the extractor.  Office/
-        # PDF formats use only this canonical extractor -- no converter/OCR/parser duplicate.
-        extraction = extract_attachment_content(
-            fetch_result,
-            expected_sha256=inventory_sha256,
-            data_dir=base_data_dir,
-            policy=effective_policy,
-            workspace_root=workspace_root,
-            lease_id=lease_id,
-            conversation_id=conversation_id,
-        )
-        extraction_envelopes.append(_extraction_envelope(part, extraction))
+            # Both `fetched` and `already_fetched` proceed identically through the extractor.
+            # Office/PDF formats use only this canonical extractor -- no converter/OCR/parser
+            # duplicate.
+            extraction = extract_attachment_content(
+                fetch_result,
+                expected_sha256=inventory_sha256,
+                data_dir=base_data_dir,
+                policy=effective_policy,
+                workspace_root=workspace_root,
+                lease_id=lease_id,
+                conversation_id=conversation_id,
+            )
+            # Inspect the canonical extraction result rather than treating every partial/unavailable
+            # status as an error: only a terminal `extraction_failed` (including a timeout) is a
+            # hard failure.  `corrupt_attachment` / `attachment_conversion_unavailable` stay
+            # required evidence and flow through the canonical handoff.
+            if str(extraction.get("status", "")).strip() == _EXTRACTION_STATUS_FAILED:
+                return _failed_envelope(REASON_EXTRACTION_FAILED)
+            extraction_envelopes.append(_extraction_envelope(part, extraction))
+    # Exact expected exceptions only; programming faults (incl. the trusted-input
+    # `AttachmentEvaluationError`/`AttachmentAuthorizationError`) stay fail-loud.  The order is
+    # inheritance-sensitive: `MimeDriftError` is matched before its `AttachmentDriftError` family.
+    except QuotaExceededError:
+        return _failed_envelope(REASON_QUOTA_EXCEEDED)
+    except _POLICY_BLOCKED_EXCEPTIONS:
+        return _failed_envelope(REASON_POLICY_BLOCKED)
+    except WorkspaceLockError:
+        return _failed_envelope(REASON_LOCK_UNAVAILABLE)
+    except AttachmentDriftError:
+        return _failed_envelope(REASON_FETCH_FAILED)
+    except _FETCH_FAILED_STORAGE_EXCEPTIONS:
+        return _failed_envelope(REASON_FETCH_FAILED)
 
     mail_identity = _mail_identity(norm_account, norm_message_id, norm_folder, norm_envelope)
 
     # One handoff from the enriched extraction envelopes and the canonically bound parts, with the
     # normative required-for-decision materiality.  The canonical 15k/30k budgets and their visible
     # truncation markers live in the builder and are never re-implemented here.
-    handoff = build_attachment_analysis_handoff(
-        mail_identity=mail_identity,
-        attachments=extraction_envelopes,
-        decision=decision,
-        canonical_parts=eligible_parts,
-        default_materiality=MATERIALITY_REQUIRED_FOR_DECISION,
-    )
-    validated_handoff = validate_attachment_handoff(
-        handoff,
-        mail_identity=mail_identity,
-        decision=decision,
-        canonical_parts=eligible_parts,
-    )
+    try:
+        handoff = build_attachment_analysis_handoff(
+            mail_identity=mail_identity,
+            attachments=extraction_envelopes,
+            decision=decision,
+            canonical_parts=eligible_parts,
+            default_materiality=MATERIALITY_REQUIRED_FOR_DECISION,
+        )
+        validated_handoff = validate_attachment_handoff(
+            handoff,
+            mail_identity=mail_identity,
+            decision=decision,
+            canonical_parts=eligible_parts,
+        )
+    except InvalidMaterialityError:
+        return _failed_envelope(REASON_HANDOFF_INVALID)
+    except AttachmentHandoffError:
+        return _failed_envelope(REASON_HANDOFF_INVALID)
 
     files = _safe_file_entries(validated_handoff, run_id_by_locator)
     handoff_status = validated_handoff.get("status")
@@ -592,9 +698,15 @@ __all__ = [
     "COVERAGE_TRUNCATED",
     "REASON_CLASSIFICATION_CLEAR",
     "REASON_EVALUATION_PENDING",
+    "REASON_EXTRACTION_FAILED",
+    "REASON_FETCH_FAILED",
+    "REASON_HANDOFF_INVALID",
     "REASON_HANDOFF_READY",
+    "REASON_LOCK_UNAVAILABLE",
     "REASON_NO_ALLOWED_ATTACHMENTS",
     "REASON_NO_ATTACHMENTS",
+    "REASON_POLICY_BLOCKED",
+    "REASON_QUOTA_EXCEEDED",
     "REASON_STILL_AMBIGUOUS",
     "STATUS_COMPLETED",
     "STATUS_FAILED",

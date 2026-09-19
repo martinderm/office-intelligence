@@ -1287,24 +1287,25 @@ Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarati
 
 ---
 
-## FR-15 / MD-E1-T04 + T05: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
+## FR-15 / MD-E1-T04 + T05 + T06: Policygebundener Anhang-Evaluierungs-Orchestrator (`core/attachment_evaluation.py`)
 
 Das Modul `scripts/core/attachment_evaluation.py` stellt den einzigen, separat testbaren
 `attachment_evaluate`-Seam bereit. Er qualifiziert den automatischen Auswertungs-Trigger,
 revalidiert die echte RFC-822-MIME-Struktur gegen die vertrauenswürdige Policy, autorisiert jeden
 zulässigen Part intern und komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams
-linear zu einem validierten Übergabe-Handoff.
+linear zu einem validierten Übergabe-Handoff. **FR-15/MD-E1-T06** schließt die negative
+Fehler-/Reason-Matrix fail-closed.
 
-> **Implementierungsstand (T04 = Skeleton, T05 = positive Auswertungsstrecke):** T04 lieferte
-> ausschließlich das staged Zwischenergebnis. T05 verdrahtet nun die lineare Komposition
+> **Implementierungsstand (T04 = Skeleton, T05 = positive Auswertungsstrecke, T06 = Fail-closed-Matrix):**
+> T04 lieferte ausschließlich das staged Zwischenergebnis. T05 verdrahtet die lineare Komposition
 > `op_attachment_fetch` → `extract_attachment_content` → `build_attachment_analysis_handoff`
 > → `validate_attachment_handoff` direkt in denselben Orchestrator. Der Erfolgspfad endet
 > `status: "completed"`, `reason: "handoff_ready"`, `authorization: "auto_evaluated"` mit
 > befüllten sicheren `files[]`; ein validierter `blocked_on_required_attachment`-Handoff bleibt
-> `completed` / `still_ambiguous` (nie `supplementary`). Die negative Fehler-/Reason-Matrix
-> (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`,
-> `handoff_invalid`) sowie jede `DraftManifest`-Installation (**MD-E2**) sind **noch nicht**
-> implementiert und bleiben **MD-E1-T06** bzw. MD-E2.
+> `completed` / `still_ambiguous` (nie `supplementary`). T06 fängt die exakt erwarteten kanonischen
+> Ausnahmen und den terminalen Extraktionsstatus `extraction_failed` ab und bildet sie auf bounded
+> `failed`-Envelopes ab (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`,
+> `extraction_failed`, `handoff_invalid`). Jede `DraftManifest`-Installation bleibt **MD-E2**.
 
 1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
    ```python
@@ -1392,7 +1393,7 @@ linear zu einem validierten Übergabe-Handoff.
    begrenzten Inhalt. `used_for_classification` ist **immer** `false` und `classifier_revision`
    **immer** `null`.
 
-7. **T05-Ausgangsmatrix (bounded, ohne Rohinhalt oder absolute Pfade):**
+7. **T05/T06-Ausgangsmatrix (bounded, ohne Rohinhalt oder absolute Pfade):**
    - klarer Entscheid → `not_needed` / `classification_clear` / `not_applicable` / `files: []`.
    - unklar, keine MIME-Anhänge → `not_needed` / `no_attachments` / `not_applicable` / `files: []`.
    - unklar, aber kein kanonisch erlaubter+verfügbarer Anhang → `not_needed` /
@@ -1401,10 +1402,23 @@ linear zu einem validierten Übergabe-Handoff.
      `handoff_ready` / `auto_evaluated` / sichere `files[]`.
    - unklar mit validiertem `blocked_on_required_attachment`-Handoff → `completed` /
      `still_ambiguous` / `auto_evaluated` / sichere `files[]` (bleibt `required_for_decision`,
-     nie `supplementary`).
+     nie `supplementary`). Das umfasst kanonisch gültige, aber unvollständige erforderliche
+     Evidenz (`corrupt_attachment`, `attachment_conversion_unavailable`, Teil-/Truncation);
+     nur der terminale Status `extraction_failed` (inkl. Timeout) ist ein harter Fehler.
+   - T06 `failed`-Envelopes (immer `authorization: "not_applicable"`, `files: []`,
+     `used_for_classification: false`, `classifier_revision: null`, **kein** Handoff-Geschwister,
+     kein Exception-Text/Rohinhalt/absoluter Pfad):
 
-8. **Abgrenzung:** T05 ruft kein `apply_attachment_handoff_to_item` und keine Mailbox-,
-   Dispositions-, Promotions-, Export-, Filing-, Evidence-, Katalog-, Cloud-, Classifier- oder
-   Cleanup-/GC-Mutation auf. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
-   erhalten. Die negative Fehler-/Reason-Matrix und jede `DraftManifest`-Installation folgen in
-   MD-E1-T06 bzw. MD-E2.
+     | Kanonische Ursache | `reason` |
+     | :--- | :--- |
+     | fehlender/fremder Workspace-Lock (`WorkspaceLockError`) | `lock_unavailable` |
+     | aktiver Inhalt (`ActiveContentBlockedError`/`DisallowedExtensionError`), MIME-/Extension-Drift (`MimeDriftError`/`ExtensionMimeDriftError`), getrackte Quarantäne (`TrackedQuarantineError`/`QuarantinePreflightError`) | `policy_blocked` |
+     | Einzel-/Gesamt-/Anzahl-Quote (`QuotaExceededError`) | `quota_exceeded` |
+     | Identity-/Hash-Drift (`AttachmentDriftError`), Quarantäne-Kollision/-Inventar (`QuarantineCollisionError`/`QuarantineInventoryError`), Symlink-/Reparse-Escape (`SymlinkEscapeError`) | `fetch_failed` |
+     | terminaler Extraktionsstatus `extraction_failed` (inkl. `timeout_exceeded`) | `extraction_failed` |
+     | Handoff-Builder/-Validator-Ablehnung (`AttachmentHandoffError`/`HandoffDriftError`/`InvalidMaterialityError`) | `handoff_invalid` |
+
+8. **Abgrenzung:** Der Orchestrator ruft kein `apply_attachment_handoff_to_item` und keine
+   Mailbox-, Dispositions-, Promotions-, Export-, Filing-, Evidence-, Katalog-, Cloud-, Classifier-
+   oder Cleanup-/GC-Mutation auf. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
+   erhalten (auch nach einem T06-Fehler). Die `DraftManifest`-Installation bleibt MD-E2.

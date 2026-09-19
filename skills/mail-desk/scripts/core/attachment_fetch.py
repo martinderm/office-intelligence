@@ -27,7 +27,14 @@ import uuid
 import zipfile
 
 from core.common import normalize_message_id, resolve_data_dir
+# The two preflight exception classes are deliberately re-exported here (alongside the functions
+# actually used below) so the MD-E1 evaluation orchestrator can catch the exact preflight
+# exceptions without importing `core.quarantine_preflight` directly: that direct import is
+# intentionally prohibited by the orchestrator's AST forbidden-import ratchet.  This single
+# authoritative re-export preserves the exception identity for the orchestrator's `except` clause.
 from core.quarantine_preflight import (
+    QuarantinePreflightError,
+    TrackedQuarantineError,
     resolve_workspace_root,
     verify_no_tracked_quarantine,
 )

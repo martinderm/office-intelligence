@@ -155,9 +155,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    `status: "completed"`, `reason: "handoff_ready"`, `authorization:
    "auto_evaluated"` mit befüllten sicheren `files[]`; ein validierter
    `blocked_on_required_attachment`-Handoff bleibt `completed`/`still_ambiguous`
-   (nie `supplementary`). Die negative Fehler-/Reason-Matrix bleibt MD-E1-T06, die
-   `DraftManifest`-Installation MD-E2. Ein klarer Entscheid wird durch eine frühere
-   Eskalation nicht erneut ausgewertet. Details stehen in
+   (nie `supplementary`). Mit **FR-15/MD-E1-T06** ist die negative Fehler-/Reason-
+   Matrix fail-closed geschlossen: fehlender/fremder Lock, aktiver Inhalt,
+   disallowed Extension, MIME-/Extension-Drift, getrackte Quarantäne, Einzel-/
+   Gesamt-/Anzahl-Quoten, Identity-/Hash-/Inventar-Drift, Extraktions-Timeout und
+   ungültiger Handoff werden exakt auf bounded `failed`-Envelopes (`lock_unavailable`,
+   `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`,
+   `handoff_invalid`) abgebildet – mit `authorization: "not_applicable"`, leerem
+   `files[]`, ohne Handoff-Geschwister und ohne Exception-Text, Rohinhalt oder
+   absolute Pfade. Kanonisch gültige, aber unvollständige erforderliche Evidenz
+   (`corrupt_attachment`, `attachment_conversion_unavailable`) bleibt dagegen
+   `required_for_decision` und endet `completed`/`still_ambiguous`. Die
+   `DraftManifest`-Installation bleibt MD-E2. Ein klarer Entscheid wird durch eine
+   frühere Eskalation nicht erneut ausgewertet. Details stehen in
    [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.

@@ -1476,8 +1476,13 @@ def _t04_custom_policy(version: str) -> dict[str, Any]:
     return policy
 
 
-class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
-    """T04 no-op contract plus the T05 positive fetch/extract/handoff composition."""
+class _MDE1EvaluationHarness:
+    """Shared hermetic harness for the public ``attachment_evaluate`` orchestrator.
+
+    Provides an owned workspace lock in a throwaway workspace, the isolated
+    tracked-quarantine preflight, the trusted control-plane bindings and the bounded
+    staged-contract assertions reused by the positive (T05) and fail-closed (T06) suites.
+    """
 
     def setUp(self) -> None:
         self.maxDiff = None
@@ -1585,6 +1590,52 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         self.assertIn(
             staged["authorization"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_AUTHORIZATIONS
         )
+
+    def _assert_failed_contract(
+        self,
+        result: dict[str, Any],
+        *,
+        reason: str,
+    ) -> None:
+        """Assert the bounded fail-closed staged envelope contract (T06).
+
+        A failed outcome must expose only the ``attachment_evaluation`` key (never a handoff
+        sibling), the exact canonical six fields, ``status: "failed"``,
+        ``authorization: "not_applicable"``, an empty ``files`` list, pinned
+        ``used_for_classification: False`` / ``classifier_revision: None`` and a bounded reason.
+        """
+        self.assertEqual(
+            {"attachment_evaluation"},
+            set(result),
+            "A failed envelope must not carry an attachment_analysis_handoff sibling.",
+        )
+        staged = result["attachment_evaluation"]
+        self.assertEqual(
+            {
+                "status",
+                "reason",
+                "authorization",
+                "files",
+                "used_for_classification",
+                "classifier_revision",
+            },
+            set(staged),
+            "The staged object must expose exactly the canonical six fields.",
+        )
+        self.assertEqual("failed", staged["status"])
+        self.assertEqual(reason, staged["reason"])
+        self.assertEqual("not_applicable", staged["authorization"])
+        self.assertEqual([], staged["files"])
+        self.assertIs(False, staged["used_for_classification"])
+        self.assertIsNone(staged["classifier_revision"])
+        self.assertIn(staged["status"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_STATUSES)
+        self.assertIn(staged["reason"], aevaluate.ALLOWED_ATTACHMENT_EVALUATION_REASONS)
+
+
+class MailDeskAttachmentEvaluationMDE1OrchestratorTests(
+    _MDE1EvaluationHarness, unittest.TestCase
+):
+    """T04 no-op contract plus the T05 positive fetch/extract/handoff composition."""
 
     # ------------------------------------------------------------------
     # Clear decision: no evaluation, no attachment processing
@@ -2247,6 +2298,12 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             {"materiality": "required_for_decision"},
             {"handoff": {"status": "ready"}},
             {"attachment_analysis_handoff": {"status": "ready"}},
+            {"receipt_class": "machine"},
+            {"receipt_type": "attachment_auto_evaluation"},
+            {"machine_authorization": {"receipt_id": "rec"}},
+            {"policy_revision": "9.9.9"},
+            {"attachment_evaluation": {"status": "failed"}},
+            {"receipt": {"receipt_id": "rec"}},
         ]
         for forged in forged_inputs:
             with self.subTest(forged=sorted(forged)):
@@ -2395,7 +2452,7 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
     # Upfront lock guard: no I/O before an owned lock
     # ------------------------------------------------------------------
     def test_upfront_lock_guard_blocks_fetch_before_any_write(self) -> None:
-        """A missing/foreign lock stops the composition before the first quarantine write."""
+        """A missing/foreign lock maps to a bounded failed/lock_unavailable before any write."""
         raw_eml = self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
         data_dir = Path(self.workspace_root) / "data" / "mail-desk"
         # A wrong lease cannot own the active lock in this workspace.
@@ -2404,15 +2461,15 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             "verify_workspace_lock",
             side_effect=afetch.WorkspaceLockError("foreign lock"),
         ) as guarded:
-            with self.assertRaises(afetch.WorkspaceLockError):
-                self._evaluate(
-                    decision=_t04_ambiguous_decision(),
-                    raw_eml=raw_eml,
-                    message_id=_T05_MESSAGE_ID,
-                    **self._control_plane(lease_id="foreign-lease"),
-                )
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(lease_id="foreign-lease"),
+            )
 
         guarded.assert_called()
+        self._assert_failed_contract(result, reason="lock_unavailable")
         self.assertFalse(
             (data_dir / "attachments").exists(),
             "No quarantine write may occur before the upfront lock guard passes.",
@@ -2461,19 +2518,18 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
             "extract_attachment_content",
             side_effect=AssertionError("extract must not run"),
         ) as extract_mock:
-            with self.assertRaises(afetch.WorkspaceLockError) as ctx:
-                self._evaluate(
-                    decision=_t04_ambiguous_decision(),
-                    raw_eml=raw_eml,
-                    message_id=_T05_MESSAGE_ID,
-                    workspace_root=foreign_ws,
-                    data_dir=data_dir,
-                    lease_id="foreign-lease-mde1-t05",
-                    conversation_id="foreign-conv-mde1-t05",
-                )
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                workspace_root=foreign_ws,
+                data_dir=data_dir,
+                lease_id="foreign-lease-mde1-t05",
+                conversation_id="foreign-conv-mde1-t05",
+            )
 
-        # The real, active lock exists; the failure is the ownership branch, not a missing lock.
-        self.assertIn("not owned", str(ctx.exception).lower())
+        # The real, active lock exists; the bounded outcome is the ownership branch, not a crash.
+        self._assert_failed_contract(result, reason="lock_unavailable")
 
         fetch_mock.assert_not_called()
         extract_mock.assert_not_called()
@@ -2494,15 +2550,15 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
         ) as extract_mock, patch.object(
             aevaluate, "op_attachment_fetch", side_effect=afetch.HashDriftError("drift")
         ):
-            with self.assertRaises(afetch.HashDriftError):
-                self._evaluate(
-                    decision=_t04_ambiguous_decision(),
-                    raw_eml=raw_eml,
-                    message_id=_T05_MESSAGE_ID,
-                    **self._control_plane(),
-                )
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
 
         extract_mock.assert_not_called()
+        self._assert_failed_contract(result, reason="fetch_failed")
 
     def test_non_bytes_or_str_raw_eml_fails_closed(self) -> None:
         """`raw_eml` accepts only bytes or str; any other type fails closed before parsing."""
@@ -2551,6 +2607,716 @@ class MailDeskAttachmentEvaluationMDE1OrchestratorTests(unittest.TestCase):
                 raw_eml=raw_eml,
                 read_escalation="not-a-mapping",
             )
+
+
+# ======================================================================
+# T06 fail-closed evaluation matrix
+# ======================================================================
+
+_INVENTORY_FILENAME = ".quarantine-inventory.json"
+
+
+class MailDeskAttachmentEvaluationMDE1FailClosedMatrixTests(
+    _MDE1EvaluationHarness, unittest.TestCase
+):
+    """T06: the bounded fail-closed reason matrix of ``attachment_evaluate``.
+
+    Every row maps a canonically expected exception (or a canonical extraction status) to
+    exactly one bounded failed staged envelope: ``status: "failed"``,
+    ``authorization: "not_applicable"``, ``files: []``,
+    ``used_for_classification: false``, ``classifier_revision: null`` and **no** handoff
+    sibling.  No exception text, raw content or absolute path may leak into the output.
+    """
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    def _allowed_raw_eml(self) -> bytes:
+        return self._t05_raw_eml(attachments_list=[_t05_pdf_attachment()])
+
+    def _extraction_failed(self) -> dict[str, Any]:
+        return {
+            "status": "extraction_failed",
+            "quality": "low",
+            "truncation_reason": "timeout_exceeded",
+            "character_count": 0,
+            "source_character_count": None,
+            "text": "",
+            "error": "Attachment extraction timed out",
+        }
+
+    def _conversion_unavailable(self) -> dict[str, Any]:
+        return {
+            "status": "attachment_conversion_unavailable",
+            "quality": "low",
+            "truncation_reason": None,
+            "character_count": 0,
+            "source_character_count": None,
+            "text": "",
+            "error": "No extraction converter available",
+        }
+
+    # ------------------------------------------------------------------
+    # Lock ownership: missing / foreign
+    # ------------------------------------------------------------------
+    def test_missing_lock_returns_failed_lock_unavailable_without_io(self) -> None:
+        with tempfile.TemporaryDirectory() as unlocked_root:
+            data_dir = Path(unlocked_root) / "data" / "mail-desk"
+            with patch.dict(
+                os.environ,
+                {
+                    "WORKSPACE_LOCK_LEASE_ID": "",
+                    "WORKSPACE_LOCK_CONVERSATION_ID": "",
+                },
+            ):
+                result = self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=self._allowed_raw_eml(),
+                    message_id=_T05_MESSAGE_ID,
+                    workspace_root=unlocked_root,
+                    data_dir=data_dir,
+                )
+
+            self._assert_failed_contract(result, reason="lock_unavailable")
+            self.assertFalse(
+                (data_dir / "attachments").exists(),
+                "A missing lock must not create a quarantine artifact.",
+            )
+
+    def test_foreign_lock_returns_failed_lock_unavailable_without_io(self) -> None:
+        guard = afetch._load_workspace_lock_guard()
+        tmp = tempfile.TemporaryDirectory()
+        foreign_ws = tmp.name
+        self.addCleanup(tmp.cleanup)
+        guard.acquire_workspace_lock(
+            foreign_ws,
+            harness="mde1-t06-foreign-test",
+            lease_id="owner-lease-mde1-t06",
+            conversation_id="owner-conv-mde1-t06",
+        )
+
+        def _release_owned_lock() -> None:
+            guard._invoke(
+                guard._command("release", Path(foreign_ws), "--lease-id", "owner-lease-mde1-t06"),
+                None,
+            )
+
+        self.addCleanup(_release_owned_lock)
+
+        data_dir = Path(foreign_ws) / "data" / "mail-desk"
+        with patch.object(
+            aevaluate, "op_attachment_fetch", side_effect=AssertionError("fetch must not run")
+        ) as fetch_mock:
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                workspace_root=foreign_ws,
+                data_dir=data_dir,
+                lease_id="foreign-lease-mde1-t06",
+                conversation_id="foreign-conv-mde1-t06",
+            )
+
+        self._assert_failed_contract(result, reason="lock_unavailable")
+        fetch_mock.assert_not_called()
+        self.assertFalse((data_dir / "attachments").exists())
+
+    # ------------------------------------------------------------------
+    # Policy-blocked class (active content, drift, preflight)
+    # ------------------------------------------------------------------
+    def test_active_content_returns_failed_policy_blocked(self) -> None:
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[
+                {"filename": "probe.pdf", "mime_type": "application/pdf", "data": b"MZ\x90\x00active"}
+            ]
+        )
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    def test_mime_drift_returns_failed_policy_blocked(self) -> None:
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[
+                {
+                    "filename": "probe.pdf",
+                    "mime_type": "application/pdf",
+                    "data": b"this is plainly text, not a pdf",
+                }
+            ]
+        )
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    def test_disallowed_extension_returns_failed_policy_blocked(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.DisallowedExtensionError("disallowed"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    def test_extension_mime_drift_returns_failed_policy_blocked(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.ExtensionMimeDriftError("extension/mime drift"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    def test_tracked_quarantine_returns_failed_policy_blocked(self) -> None:
+        with patch.object(
+            afetch,
+            "verify_no_tracked_quarantine",
+            side_effect=qpf.TrackedQuarantineError("STOP CONDITION"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    def test_quarantine_preflight_error_returns_failed_policy_blocked(self) -> None:
+        with patch.object(
+            afetch,
+            "verify_no_tracked_quarantine",
+            side_effect=qpf.QuarantinePreflightError("index unreadable"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="policy_blocked")
+
+    # ------------------------------------------------------------------
+    # Quota class
+    # ------------------------------------------------------------------
+    def test_per_file_quota_exceeded_returns_failed_quota_exceeded(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.QuotaExceededError("single file quota exceeded"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="quota_exceeded")
+
+    def test_total_quota_exceeded_returns_failed_quota_exceeded(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.QuotaExceededError("cumulative quota exceeded"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="quota_exceeded")
+
+    def test_canonical_count_quota_returns_failed_quota_exceeded(self) -> None:
+        """The canonical per-message count quota stops the run fail-closed.
+
+        A pre-seeded quarantine inventory at the documented count limit for the message
+        makes the unchanged ``op_attachment_fetch`` raise ``QuotaExceededError``; the
+        orchestrator maps it to ``failed``/``quota_exceeded`` without cleaning anything up.
+        """
+        control = self._control_plane()
+        data_dir = control["data_dir"]
+        run_id = "run_mde1_t06_count_quota"
+        run_dir = Path(data_dir) / "attachments" / run_id
+        run_dir.mkdir(parents=True)
+        norm_message_id = afetch.normalize_message_id(_T05_MESSAGE_ID)
+        files = {
+            f"existing_{index}.pdf": {
+                "sha256": hashlib.sha256(f"existing-{index}".encode()).hexdigest(),
+                "size_bytes": 10,
+            }
+            for index in range(5)
+        }
+        inventory = {
+            "schema_version": 1,
+            "messages": {
+                norm_message_id: {"files": files, "count": 5, "total_bytes": 50}
+            },
+        }
+        inventory_path = run_dir / _INVENTORY_FILENAME
+        inventory_path.write_text(json.dumps(inventory), encoding="utf-8")
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=self._allowed_raw_eml(),
+            message_id=_T05_MESSAGE_ID,
+            run_id=run_id,
+            **control,
+        )
+
+        self._assert_failed_contract(result, reason="quota_exceeded")
+        self.assertTrue(
+            inventory_path.is_file(),
+            "Quarantine inventory must be retained (no cleanup/GC).",
+        )
+
+    # ------------------------------------------------------------------
+    # Drift / storage class
+    # ------------------------------------------------------------------
+    def test_identity_drift_before_fetch_returns_failed_fetch_failed(self) -> None:
+        with patch.object(
+            aevaluate, "verify_attachment_drift", side_effect=afetch.HashDriftError("drift")
+        ) as drift_mock, patch.object(
+            aevaluate, "op_attachment_fetch", side_effect=AssertionError("fetch must not run")
+        ) as fetch_mock:
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        drift_mock.assert_called()
+        fetch_mock.assert_not_called()
+        self._assert_failed_contract(result, reason="fetch_failed")
+
+    def test_fetch_hash_drift_returns_failed_fetch_failed(self) -> None:
+        with patch.object(
+            aevaluate, "op_attachment_fetch", side_effect=afetch.HashDriftError("drift")
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="fetch_failed")
+
+    def test_inventory_drift_returns_failed_fetch_failed(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.QuarantineInventoryError("inventory corrupted"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="fetch_failed")
+
+    def test_quarantine_collision_returns_failed_fetch_failed(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.QuarantineCollisionError("collision"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="fetch_failed")
+
+    def test_symlink_escape_returns_failed_fetch_failed(self) -> None:
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.SymlinkEscapeError("reparse point"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="fetch_failed")
+
+    # ------------------------------------------------------------------
+    # Extraction class
+    # ------------------------------------------------------------------
+    def test_extraction_timeout_returns_failed_extraction_failed_without_handoff(self) -> None:
+        with patch.object(
+            aevaluate, "extract_attachment_content", return_value=self._extraction_failed()
+        ), patch.object(
+            aevaluate,
+            "build_attachment_analysis_handoff",
+            side_effect=AssertionError("handoff must not be built"),
+        ) as build_mock:
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        build_mock.assert_not_called()
+        self._assert_failed_contract(result, reason="extraction_failed")
+
+    def test_conversion_unavailable_flows_to_still_ambiguous(self) -> None:
+        """A valid-but-unavailable required extraction is preserved, never a hard error.
+
+        ``corrupt_attachment`` and ``attachment_conversion_unavailable`` are canonical,
+        bounded MD-A3 statuses: the required evidence stays ``required_for_decision`` and
+        the handoff is blocked, so the staged outcome is ``completed``/``still_ambiguous``.
+        """
+        with patch.object(
+            aevaluate,
+            "extract_attachment_content",
+            return_value=self._conversion_unavailable(),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_staged_contract(
+            self._staged(result),
+            status="completed",
+            reason="still_ambiguous",
+            authorization="auto_evaluated",
+        )
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual("blocked_on_required_attachment", handoff["status"])
+        self.assertEqual("required_for_decision", handoff["items"][0]["materiality"])
+        self.assertNotEqual("supplementary", handoff["items"][0]["materiality"])
+
+    # ------------------------------------------------------------------
+    # Handoff class
+    # ------------------------------------------------------------------
+    def test_handoff_build_error_returns_failed_handoff_invalid(self) -> None:
+        with patch.object(
+            aevaluate,
+            "build_attachment_analysis_handoff",
+            side_effect=ahandoff.AttachmentHandoffError("bad handoff"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="handoff_invalid")
+
+    def test_handoff_drift_returns_failed_handoff_invalid(self) -> None:
+        with patch.object(
+            aevaluate,
+            "validate_attachment_handoff",
+            side_effect=ahandoff.HandoffDriftError("drift"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="handoff_invalid")
+
+    def test_invalid_materiality_returns_failed_handoff_invalid(self) -> None:
+        with patch.object(
+            aevaluate,
+            "build_attachment_analysis_handoff",
+            side_effect=ahandoff.InvalidMaterialityError("bad materiality"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="handoff_invalid")
+
+    # ------------------------------------------------------------------
+    # Invariants: reason vocabulary, no leaks, retention, zero forbidden ops
+    # ------------------------------------------------------------------
+    def test_reason_set_is_bounded_and_excludes_evaluation_pending(self) -> None:
+        expected = {
+            "classification_clear",
+            "no_attachments",
+            "no_allowed_attachments",
+            "handoff_ready",
+            "still_ambiguous",
+            "lock_unavailable",
+            "policy_blocked",
+            "quota_exceeded",
+            "fetch_failed",
+            "extraction_failed",
+            "handoff_invalid",
+        }
+        self.assertEqual(expected, set(aevaluate.ALLOWED_ATTACHMENT_EVALUATION_REASONS))
+        self.assertNotIn("evaluation_pending", aevaluate.ALLOWED_ATTACHMENT_EVALUATION_REASONS)
+        # The historical constant stays exported for non-runtime compatibility.
+        self.assertEqual("evaluation_pending", aevaluate.REASON_EVALUATION_PENDING)
+        for name in (
+            "REASON_LOCK_UNAVAILABLE",
+            "REASON_POLICY_BLOCKED",
+            "REASON_QUOTA_EXCEEDED",
+            "REASON_FETCH_FAILED",
+            "REASON_EXTRACTION_FAILED",
+            "REASON_HANDOFF_INVALID",
+        ):
+            with self.subTest(constant=name):
+                self.assertTrue(hasattr(aevaluate, name))
+
+    def test_failed_envelope_leaks_no_exception_text_or_absolute_path(self) -> None:
+        secret = "TOPSECRET-EXC-MDE1-T06"
+        absolute_path = "C:\\synthetic-root\\leak.pdf"
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[_t05_pdf_attachment()],
+            body_text=f"body {secret} {absolute_path}",
+        )
+
+        with patch.object(
+            aevaluate,
+            "op_attachment_fetch",
+            side_effect=afetch.QuotaExceededError(f"{secret} at {absolute_path}"),
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        self._assert_failed_contract(result, reason="quota_exceeded")
+        serialized = json.dumps(result)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn(absolute_path, serialized)
+        self.assertNotRegex(serialized, r"[A-Za-z]:\\\\")
+
+    def test_quarantine_artifacts_are_retained_after_a_failure(self) -> None:
+        raw_eml = self._allowed_raw_eml()
+        control = self._control_plane()
+        first = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **control,
+        )
+        self.assertEqual("handoff_ready", self._staged(first)["reason"])
+        run_id = self._staged(first)["files"][0]["run_id"]
+        artifact = Path(control["data_dir"]) / "attachments" / run_id / "report.pdf"
+        self.assertTrue(artifact.is_file())
+
+        with patch.object(
+            aevaluate,
+            "build_attachment_analysis_handoff",
+            side_effect=ahandoff.AttachmentHandoffError("bad handoff"),
+        ):
+            second = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=raw_eml,
+                message_id=_T05_MESSAGE_ID,
+                run_id=run_id,
+                **control,
+            )
+
+        self._assert_failed_contract(second, reason="handoff_invalid")
+        self.assertTrue(
+            artifact.is_file(),
+            "MD-E1 must not delete or garbage-collect quarantine artifacts.",
+        )
+
+    def test_failed_path_calls_no_forbidden_mutation_seam(self) -> None:
+        raw_eml = self._allowed_raw_eml()
+        blockers = [
+            patch.object(
+                ahandoff,
+                "apply_attachment_handoff_to_item",
+                side_effect=AssertionError("handoff install ran"),
+            ),
+            patch.object(
+                afiling, "propose_attachment_filing", side_effect=AssertionError("filing ran")
+            ),
+            patch.object(
+                adisp, "record_disposition_entry", side_effect=AssertionError("disposition ran")
+            ),
+            patch.object(adisp, "apply_discard", side_effect=AssertionError("discard ran")),
+            patch.object(
+                afetch, "cleanup_run_quarantine", side_effect=AssertionError("cleanup ran")
+            ),
+            patch.object(
+                aevaluate,
+                "classify_email",
+                side_effect=AssertionError("classifier ran"),
+                create=True,
+            ),
+        ]
+        started = [blocker.start() for blocker in blockers]
+        try:
+            with patch.object(
+                aevaluate,
+                "op_attachment_fetch",
+                side_effect=afetch.QuotaExceededError("quota"),
+            ):
+                result = self._evaluate(
+                    decision=_t04_ambiguous_decision(),
+                    raw_eml=raw_eml,
+                    message_id=_T05_MESSAGE_ID,
+                    **self._control_plane(),
+                )
+        finally:
+            for blocker in blockers:
+                blocker.stop()
+
+        for mock in started:
+            mock.assert_not_called()
+        self._assert_failed_contract(result, reason="quota_exceeded")
+
+    def test_forged_decision_metadata_never_stages_or_alters_the_outcome(self) -> None:
+        """Forged candidate/receipt/policy/status values inside metadata are inert.
+
+        Mail- or manifest-supplied machine receipts, policy/fetch statuses, candidate
+        inventories, staged status/reason/files, authorization labels and materiality must
+        neither fabricate a failed outcome nor influence the internally derived result.
+        """
+        forged = _t04_ambiguous_decision(
+            fetch_status="available",
+            policy_status="allowed",
+            receipt_class="machine",
+            receipt_type="attachment_auto_evaluation",
+            authorization="auto_evaluated",
+            machine_receipt={"receipt_id": "rec"},
+            approval_receipt={"receipt_id": "rec"},
+            candidate={"filename": "x.pdf"},
+            status="failed",
+            reason="quota_exceeded",
+            files=[{"filename": "x.pdf"}],
+            materiality="required_for_decision",
+            handoff={"status": "ready"},
+            used_for_classification=True,
+            classifier_revision="a" * 64,
+        )
+
+        result = self._evaluate(
+            decision=forged,
+            raw_eml=self._allowed_raw_eml(),
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged = self._staged(result)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        self.assertEqual("auto_evaluated", staged["authorization"])
+        self.assertEqual(1, len(staged["files"]))
+        self.assertRegex(staged["files"][0]["sha256"], r"^[0-9a-f]{64}$")
+        self.assertIs(False, staged["used_for_classification"])
+        self.assertIsNone(staged["classifier_revision"])
+
+    def test_per_file_15k_budget_truncation_is_visible(self) -> None:
+        """The canonical per-file 15,000-char budget is enforced by the reused extractor.
+
+        A 20,000-char plain-text attachment is capped at 15,000 characters by the canonical
+        extractor; the staged coverage and the canonical truncation_reason make the truncation
+        visible without the orchestrator re-implementing any budget.
+        """
+        raw_eml = self._t05_raw_eml(
+            attachments_list=[_t05_text_attachment("big.txt", chars=20_000)]
+        )
+
+        result = self._evaluate(
+            decision=_t04_ambiguous_decision(),
+            raw_eml=raw_eml,
+            message_id=_T05_MESSAGE_ID,
+            **self._control_plane(),
+        )
+
+        staged = self._staged(result)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        self.assertEqual(1, len(staged["files"]))
+        entry = staged["files"][0]
+        self.assertEqual("truncated", entry["coverage"])
+        self.assertEqual(15_000, entry["chars"])
+        handoff = result["attachment_analysis_handoff"]
+        self.assertEqual("truncated", handoff["items"][0]["analysis_completeness"])
+        self.assertEqual("max_chars_exceeded", handoff["items"][0]["truncation_reason"])
+        self.assertLessEqual(handoff["total_chars"], 15_000)
+
+    def test_per_file_15k_handoff_marker_is_visible(self) -> None:
+        """The canonical builder truncates an over-budget extraction with a visible marker.
+
+        Injecting a valid, non-truncated 20,000-char extraction envelope exercises the
+        canonical per-file builder path directly: the encapsulated content is capped at
+        exactly 15,000 characters **including** the visible marker, and the item is flagged
+        truncated.  No limit is re-implemented by the orchestrator.
+        """
+        over_budget = {
+            "status": "extracted",
+            "quality": "high",
+            "truncation_reason": None,
+            "character_count": 20_000,
+            "source_character_count": 20_000,
+            "text": "y" * 20_000,
+            "error": None,
+        }
+        with patch.object(
+            aevaluate, "extract_attachment_content", return_value=over_budget
+        ):
+            result = self._evaluate(
+                decision=_t04_ambiguous_decision(),
+                raw_eml=self._allowed_raw_eml(),
+                message_id=_T05_MESSAGE_ID,
+                **self._control_plane(),
+            )
+
+        staged = self._staged(result)
+        self.assertEqual("completed", staged["status"])
+        self.assertEqual("handoff_ready", staged["reason"])
+        entry = staged["files"][0]
+        self.assertEqual("truncated", entry["coverage"])
+        self.assertEqual(15_000, entry["chars"])
+        handoff = result["attachment_analysis_handoff"]
+        self.assertTrue(handoff["items"][0]["truncated"])
+        self.assertIn("Truncated at 15000 characters", handoff["prompt_content"])
 
 
 if __name__ == "__main__":
