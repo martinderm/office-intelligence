@@ -10,6 +10,10 @@ Design constraints (security-relevant):
 * The Git invocation is a fixed, deterministic ``git ls-files`` argument vector.
   ``shell=True`` is never used and no caller/mail/manifest value can influence the
   command, so no shell interpolation is possible.
+* Every pathspec carries Git's documented ``:(icase)`` magic.  On case-insensitive
+  worktrees (e.g. Windows) ``Data/Mail-Desk/Attachments/`` denotes the same quarantine
+  namespace as ``data/mail-desk/attachments/``; the query must therefore match paths
+  case-insensitively and the returned path must classify the same way.
 * The invocation is bounded by a hard timeout.  A non-zero exit, a timeout, missing
   or unreadable output, or a runner failure is a bounded stop, never a silent pass.
 * The preflight is strictly read-only: it never edits ``.gitignore``, never stages
@@ -33,17 +37,22 @@ from typing import Any, Callable, Sequence
 
 DEFAULT_GIT_TIMEOUT_SECONDS = 10.0
 
+# Git's documented case-insensitive pathspec magic.  Quarantine paths are a
+# security namespace, so a case variant (``Data/Mail-Desk/Attachments/``) must match
+# exactly like the canonical lower-case form.
+GIT_ICASE_PATHSPEC_MAGIC = ":(icase)"
+
 # Fixed read-only invocation.  ``-z`` yields NUL-separated, unambiguous paths.
 GIT_LS_FILES_ARGV: tuple[str, ...] = (
     "git",
     "ls-files",
     "-z",
     "--",
-    "data/mail-desk/attachments/",
-    "data/mail-desk/attachments/**",
-    "**/attachments/**",
-    "**/.quarantine-inventory.json",
-    "**/.quarantine-inventory.lock",
+    f"{GIT_ICASE_PATHSPEC_MAGIC}data/mail-desk/attachments/",
+    f"{GIT_ICASE_PATHSPEC_MAGIC}data/mail-desk/attachments/**",
+    f"{GIT_ICASE_PATHSPEC_MAGIC}**/attachments/**",
+    f"{GIT_ICASE_PATHSPEC_MAGIC}**/.quarantine-inventory.json",
+    f"{GIT_ICASE_PATHSPEC_MAGIC}**/.quarantine-inventory.lock",
 )
 
 ATTACHMENTS_PREFIX = "data/mail-desk/attachments/"
@@ -96,8 +105,13 @@ def _default_git_runner(argv: Sequence[str], cwd: str, timeout_seconds: float) -
 
 
 def _is_quarantine_path(path: str) -> bool:
-    """Return True for any path that must never be tracked in the Git index."""
-    normalized = path.replace("\\", "/")
+    """Return True for any path that must never be tracked in the Git index.
+
+    Classification is case-insensitive on case-insensitive worktrees and normalises
+    Windows separators, so a returned ``Data/Mail-Desk/Attachments/Leak.PDF`` or
+    ``Shared/.Quarantine-Inventory.JSON`` is treated exactly like its canonical form.
+    """
+    normalized = path.replace("\\", "/").lower()
     return normalized.startswith(ATTACHMENTS_PREFIX) or normalized.endswith(
         QUARANTINE_INVENTORY_SUFFIXES
     )
@@ -198,6 +212,7 @@ def verify_no_tracked_quarantine(
 
 __all__ = [
     "DEFAULT_GIT_TIMEOUT_SECONDS",
+    "GIT_ICASE_PATHSPEC_MAGIC",
     "GIT_LS_FILES_ARGV",
     "GitIndexQueryResult",
     "QuarantinePreflightError",

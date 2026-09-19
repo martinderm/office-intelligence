@@ -23,6 +23,7 @@ from core import attachment_policy  # noqa: E402
 from core import attachments  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_extract as aextract  # noqa: E402
+from core import quarantine_preflight as qpf  # noqa: E402
 import mail_desk_himalaya_client as client  # noqa: E402
 
 
@@ -177,6 +178,31 @@ def _noop_lock_verifier(*args: Any, **kwargs: Any) -> None:
     return None
 
 
+def _clean_tracked_quarantine_runner(argv: Any, cwd: str, timeout_seconds: float) -> qpf.GitIndexQueryResult:
+    """Injected, hermetic stand-in for the bounded tracked-quarantine Git preflight.
+
+    MDA3 exercises extraction semantics, not Git-index state. Returning an empty,
+    successful index keeps every extraction test independent of a live Git checkout
+    while the production default runner stays untouched and fail-closed.
+    """
+    return qpf.GitIndexQueryResult(returncode=0, stdout="", stderr="")
+
+
+_REAL_EXTRACT_ATTACHMENT_CONTENT = aextract.extract_attachment_content
+
+
+def _extract_attachment_content_with_clean_preflight(*args: Any, **kwargs: Any) -> Any:
+    """Public extraction entry point with the hermetic preflight runner pre-injected.
+
+    The preflight executes inside the spawned extraction worker, so a module-level
+    patch would not survive the process boundary. Routing through the established
+    ``_preflight_runner`` argument instead keeps the injection intact across the
+    process boundary without weakening any production semantics.
+    """
+    kwargs.setdefault("_preflight_runner", _clean_tracked_quarantine_runner)
+    return _REAL_EXTRACT_ATTACHMENT_CONTENT(*args, **kwargs)
+
+
 def _tree_spawning_writer_target(write_path_str: str, pid_path_str: str) -> str:
     grandchild_code = f"""
 import time, os, sys
@@ -212,8 +238,19 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
             side_effect=RuntimeError("Real Himalaya process execution is forbidden in hermetic unit tests!"),
         )
         self._himalaya_blocker.start()
+        # FR-15/MD-E1-T02: keep this extraction suite hermetic. The tracked-quarantine
+        # preflight runs inside the spawned extraction worker, so inject a clean runner
+        # through the production `_preflight_runner` seam instead of requiring a live
+        # Git checkout (and never the host's real Git index) for every OCR test.
+        self._preflight_injector = patch.object(
+            aextract,
+            "extract_attachment_content",
+            _extract_attachment_content_with_clean_preflight,
+        )
+        self._preflight_injector.start()
 
     def tearDown(self) -> None:
+        self._preflight_injector.stop()
         self._himalaya_blocker.stop()
 
     def _create_sample_pdf(self, page_texts: list[str]) -> bytes:
@@ -1895,6 +1932,58 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
 
             time.sleep(0.3)
             self.assertFalse(marker.exists(), "Worker executed payload despite failed signature initialization!")
+
+    # --------------------------------------------------------------------------
+    # 37. Hermetic: extraction never reaches a live Git checkout
+    # --------------------------------------------------------------------------
+    def test_extraction_does_not_require_a_live_git_checkout(self) -> None:
+        """Extraction must not depend on (or invoke) a live Git checkout.
+
+        The tracked-quarantine preflight is a pure FR-15 safety guard and must stay
+        hermetically injectable. This test pins that isolation by pointing
+        ``WORKSPACE_ROOT`` at a throwaway directory that is not a Git repository: were
+        the production default Git runner reachable from this OCR path it would exit
+        non-zero and fail the run closed, so a successful derivative proves no live Git
+        query was made.
+        """
+        previous_workspace_root = os.environ.get("WORKSPACE_ROOT")
+        with tempfile.TemporaryDirectory() as non_repo:
+            os.environ["WORKSPACE_ROOT"] = non_repo
+            try:
+                pdf_bytes = self._create_image_only_pdf(num_pages=2)
+                pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
+                data_dir = Path(non_repo) / "data" / "mail-desk"
+                run_dir = data_dir / "attachments" / "run_hermetic"
+                run_dir.mkdir(parents=True)
+                (run_dir / "scanned.pdf").write_bytes(pdf_bytes)
+
+                fetch_result = {
+                    "status": "fetched",
+                    "run_id": "run_hermetic",
+                    "relative_path": "data/mail-desk/attachments/run_hermetic/scanned.pdf",
+                    "filename": "scanned.pdf",
+                    "fetch_sha256": pdf_sha,
+                    "inventory_sha256": pdf_sha,
+                    "effective_mime_type": "application/pdf",
+                    "size_bytes": len(pdf_bytes),
+                }
+
+                res = aextract.extract_attachment_content(
+                    fetch_result,
+                    expected_sha256=pdf_sha,
+                    data_dir=data_dir,
+                    _lock_verifier=_noop_lock_verifier,
+                    _ocr_runner=_mock_ocr_pdf_2pages,
+                )
+
+                self.assertEqual("extracted", res["status"])
+                self.assertEqual("ocr_local_derivative", res["method"])
+                self.assertTrue((run_dir / "derivatives" / "scanned.ocr.pdf").is_file())
+            finally:
+                if previous_workspace_root is None:
+                    os.environ.pop("WORKSPACE_ROOT", None)
+                else:
+                    os.environ["WORKSPACE_ROOT"] = previous_workspace_root
 
 
 if __name__ == "__main__":

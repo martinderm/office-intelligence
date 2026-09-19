@@ -590,6 +590,77 @@ class MailDeskAttachmentEvaluationMDE1PreflightTests(unittest.TestCase):
         # No repo artifacts leaked into the target checkout.
         self.assertFalse((target_root / "elsewhere" / ".quarantine-inventory.lock").exists())
 
+    def test_preflight_detects_mixed_case_quarantine_paths_with_real_git(self) -> None:
+        """Case-variant quarantine paths must be detected by the production default runner.
+
+        On a case-insensitive worktree (Windows) a tracked ``Data/Mail-Desk/Attachments/Leak.PDF``
+        names the same quarantine namespace as its lower-case form, so the bounded pathspec
+        query must match case-insensitively and the returned path must still classify as a
+        quarantine artefact.  All Git state lives in a throwaway temporary repo; the real
+        default runner is exercised without injection.
+        """
+        target_root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            # Isolation: the temporary repo is never part of the target checkout.
+            self.assertFalse(
+                str(repo.resolve()).lower().startswith(str(target_root.resolve()).lower())
+            )
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.name", "MDE1 T02"], cwd=repo, check=True, capture_output=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "mde1-t02@example.org"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            mixed_attachment = "Data/Mail-Desk/Attachments/run_mixed/Leak.PDF"
+            mixed_inventory_json = "Shared/.Quarantine-Inventory.JSON"
+            mixed_inventory_lock = "Shared/.Quarantine-Inventory.LOCK"
+            unrelated_tracked = "Notes.TXT"
+            for rel in (
+                mixed_attachment,
+                mixed_inventory_json,
+                mixed_inventory_lock,
+                unrelated_tracked,
+            ):
+                artifact = repo / rel
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_bytes(b"tracked")
+            subprocess.run(
+                [
+                    "git",
+                    "add",
+                    "-f",
+                    mixed_attachment,
+                    mixed_inventory_json,
+                    mixed_inventory_lock,
+                    unrelated_tracked,
+                ],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
+
+            tracked = qpf.find_tracked_quarantine_files(repo)
+            self.assertCountEqual(
+                [mixed_attachment, mixed_inventory_json, mixed_inventory_lock],
+                tracked,
+                "Mixed-case quarantine paths must be surfaced by the case-insensitive pathspec query",
+            )
+
+            with self.assertRaises(qpf.TrackedQuarantineError) as ctx:
+                qpf.assert_no_tracked_quarantine_files(repo)
+
+            message = str(ctx.exception)
+            self.assertIn(mixed_attachment, message)
+            self.assertIn(mixed_inventory_json, message)
+            self.assertIn(mixed_inventory_lock, message)
+            self.assertNotIn(unrelated_tracked, message)
+
     # ------------------------------------------------------------------
     # Integration: fetch leg stops before the first quarantine write
     # ------------------------------------------------------------------
