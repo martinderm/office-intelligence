@@ -71,7 +71,7 @@ Der Schutz vor Race Conditions und parallelen Mutationen erfolgt mehrstufig:
 
 Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 
-* **Quarantine-Index-Drift:** Alle 16 Pflichtfelder im `attachment-quarantine-index.json` werden streng typisiert. Widersprüchliche Alias-Felder (z. B. `folder` vs. `original_folder` oder `clean_filename` vs. `filename`) werden als Manipulation gewertet → `AttachmentIndexDriftError`.
+* **Quarantine-Index-Drift:** Die 17 kanonischen Basisfelder sowie der optionale konsistente Block aus 6 Coverage-Feldern im `attachment-quarantine-index.json` werden streng typisiert. `CANONICAL_ENTRY_FIELDS` bindet alle 23 Felder bei der Idempotenzprüfung. Widersprüchliche Alias-Felder (z. B. `folder` vs. `original_folder` oder `clean_filename` vs. `filename`) werden als Manipulation gewertet → `AttachmentIndexDriftError`.
 * **Bereinigungs-Scope-Drift:** Beim Ausführen einer Discard-Bereinigung (`apply_attachment_disposition`) muss der tatsächliche Kandidaten-Scope deterministisch mit dem `apply_request_hash` des `ApplyRequest` und `ApprovalReceipt` übereinstimmen. Jede Abweichung im Scope bricht die Bereinigung vor dem Unlink ab → `AttachmentDispositionError`.
 * **Recovery-Journal-Integrität:**
   * Das `attachment-discard-journal.json` verlangt eine lückenlos monotone State Machine (`prepared → file_deleted → inventory_updated → index_updated → completed`).

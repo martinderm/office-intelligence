@@ -29,7 +29,7 @@ Das Wurzelelement erlaubt ausschließlich drei Felder (`ALLOWED_ROOT_FIELDS`):
 ```
 
 ### 1.2 Die kanonischen Eintragsfelder
-Schema 1 erzwingt 17 Pflichtschlüssel (`CANONICAL_ENTRY_FIELDS`). Optional können als konsistenter Gesamtblock bis zu 6 Coverage-Felder vorhanden sein:
+Schema 1 normalisiert 17 kanonische Basisfelder; `contract_hash` bleibt optional. Zusätzlich können 6 Coverage-Felder nur als konsistenter Gesamtblock vorhanden sein. `CANONICAL_ENTRY_FIELDS` bindet diese insgesamt 23 Felder bei der Idempotenzprüfung:
 
 #### 1.2.1 Basisfelder (Schema 1)
 | Feldname | Typ / Regex | Beschreibung |
@@ -244,4 +244,3 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `attachment_evaluate` akzeptiert nur rohes MIME plus trusted Message-/Binding-Kontext, Decision-/Read-Escalation-Metadaten, die effektive Policy und minimale Fetch-/Extract-Control-Plane-Bindungen; Kandidaten-, Policy-, Fetch-Status-, Receipt-, Materiality-, Status-/Reason-/Files- oder Handoff-Werte des Callers sind keine Autorität. `inventory_sha256` wird aus dem revalidierten MIME-Kandidaten-SHA-256 abgeleitet (MD-A2-Fetch-Semantik), der kanonische `review_hash` via `compute_review_hash` gebildet und die interne Maschinen-Autorisierung (T03) gemint und sofort im `evaluation`-Kontext geprüft.
   * **T05 komponiert linear:** `attachment_fetch.verify_workspace_lock` (upfront) → `op_attachment_fetch` → `extract_attachment_content` → `build_attachment_analysis_handoff(default_materiality="required_for_decision")` → `validate_attachment_handoff`, alles unter einer `run_id` je Mail. Erfolgreich → `completed`/`handoff_ready`; validiert blockiert → `completed`/`still_ambiguous` (nie `supplementary`). Nur der validierte Handoff trägt begrenzten Inhalt; das staged Objekt enthält nie Rohinhalt oder absolute Pfade.
   * **T06-Grenze:** Die negative Fehler-/Reason-Matrix (`lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`, `handoff_invalid`) und jede `DraftManifest`-Installation (**MD-E2**) sind hier nicht implementiert.
-
