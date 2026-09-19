@@ -19,6 +19,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 from core.common import normalize_message_id
 from .attachment_extract import is_valid_run_id
+from .attachment_authorization import (
+    CONTEXT_FILING,
+    guard_context_authorization,
+)
 from .attachment_fetch import (
     ApprovalReceiptMissingError,
     QuarantineInventoryError,
@@ -322,6 +326,8 @@ def validate_mda2_attachment(
 
     # Verify approval_receipt
     receipt = op.get("approval_receipt")
+    # Human-Approval boundary: reject the machine receipt class/type/issuer fail-closed.
+    guard_context_authorization(receipt, context=CONTEXT_FILING)
     try:
         verify_approval_receipt(receipt, expected_review_hash=expected_review_hash)
     except Exception as exc:

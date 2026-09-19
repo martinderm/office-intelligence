@@ -57,6 +57,11 @@ from core.attachment_quarantine_index import (
     validate_quarantine_index_entry,
     verify_quarantine_workspace_lock,
 )
+from core.attachment_authorization import (
+    CONTEXT_APPLY,
+    CONTEXT_DISPOSITION,
+    guard_context_authorization,
+)
 
 
 # ==============================================================================
@@ -558,6 +563,8 @@ def verify_apply_receipt(
     expected_request_hash: str,
 ) -> dict[str, Any]:
     """Verify an apply approval receipt fail-closed."""
+    # Human-Approval boundary: reject the machine receipt class/type/issuer fail-closed.
+    guard_context_authorization(receipt, context=CONTEXT_APPLY)
     return verify_approval_receipt(receipt, expected_request_hash, context="apply_discard")
 
 
@@ -848,6 +855,10 @@ def record_disposition_entry(
                 "An explicit verifiable 'approval_receipt' mapping is required."
             )
         raise ReceiptMissingError("Missing required 'approval_receipt' mapping.")
+
+    # 2b. Human-Approval boundary: reject the machine receipt class/type/issuer fail-closed
+    # before any index read or write.
+    guard_context_authorization(receipt_to_verify, context=CONTEXT_DISPOSITION)
 
     # 3. Verify target attachment in quarantine index
     att_id = payload.get("attachment_id")

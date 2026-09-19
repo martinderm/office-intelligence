@@ -473,6 +473,13 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                         )
                 if not acc or not str(acc).strip():
                     raise ValueError("Cannot fetch attachment: an explicitly bound account is required.")
+                # Human-Approval boundary: the direct/manifest-driven fetch path never accepts
+                # the internal machine authorization class/type/issuer.
+                from core.attachment_authorization import (
+                    CONTEXT_DIRECT_FETCH,
+                    guard_context_authorization,
+                )
+                guard_context_authorization(op.get("approval_receipt"), context=CONTEXT_DIRECT_FETCH)
                 res = op_attachment_fetch(
                     candidate=op.get("candidate", {}),
                     account=acc,

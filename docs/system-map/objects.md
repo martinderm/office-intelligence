@@ -121,7 +121,7 @@ Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezial
 * **`attachment-disposition-log.jsonl`**: Revisionssicheres, zeilenbasiertes Append-Only-Auditlog für alle Dispositionsentscheidungen, Promotion-Links und Discard-Löschungen.
 * **`attachment-discard-journal.json`**: Transaktionales 5-Stufen-Recovery-Journal (`prepared → file_deleted → inventory_updated → index_updated → completed`) mit lückenloser History-Integrität und Resumability.
 * **Coverage- & Handoff-Verträge (MD-C1)**: Trennung von technischem Status (`analysis_status: "completed"`) und inhaltlicher Abdeckung (`analysis_completeness`), Hash-Bindung in `compute_handoff_hash()` und `compute_candidate_hash()`.
-* **Verifiable Receipts**: `ApprovalReceipt`, `DispositionRequest`, `ApplyRequest` mit kanonischem Request-Hashing und Drift-Prüfung.
+* **Verifiable Receipts**: `ApprovalReceipt`, `DispositionRequest`, `ApplyRequest` mit kanonischem Request-Hashing und Drift-Prüfung. Die kontextgebundene Receipt-Klassen-Grenze (FR-15/MD-E1-T03) trennt die interne Maschinen-Autorisierung (`receipt_class: "machine"`, `receipt_type: "attachment_auto_evaluation"`, `mail_desk_auto_evaluator`) vom typenlosen Human-Receipt: nur der `evaluation`-Kontext akzeptiert die Maschinenklasse, Human-Approval-Kontexte weisen sie fail-closed ab.
 * **`final-location-index.json`**: Mapping von normalisierter `message_id` auf die Ablageposition.
 * **Dossier- & Envelope-Modelle**: Strukturierte Fallakten und Handlungs-Empfehlungen.
 

@@ -1,4 +1,4 @@
-"""TDD tests for FR-15 / MD-E1 — T01 lock ownership and T02 tracked-quarantine preflight.
+"""TDD tests for FR-15 / MD-E1 — T01 lock ownership, T02 preflight and T03 receipt classes.
 
 This focused suite is written before the production change (Red → Green → Refactor).
 
@@ -12,13 +12,26 @@ T02 proves that the bounded, fail-closed tracked-quarantine preflight stops
 derivative write in `extract_attachment_content`, without ever touching `.gitignore`,
 and that a clean Git index lets the write proceed. The Git invocation is injected
 hermetically through a fake command runner, so no live Git checkout is required.
+
+T03 proves the narrow context-bound receipt-class seam: an internal machine-authorization
+factory mints a process-internal, non-serializable capability (`receipt_class: "machine"`,
+`receipt_type: "attachment_auto_evaluation"`, trusted issuer/policy/request bindings) that
+only the evaluation context accepts. A structurally identical caller-supplied dictionary is
+insufficient, and every Human-Approval callsite (filing, promotion, export, disposition,
+apply-discard and the manifest-driven direct fetch) rejects the machine class fail-closed
+while the existing typeless human MD-A2 receipts keep working unchanged.
 """
 
 from __future__ import annotations
 
+import copy
+from collections.abc import Mapping
+import gc
 import hashlib
+import json
 import os
 from pathlib import Path
+import pickle
 import subprocess
 import sys
 import tempfile
@@ -26,6 +39,7 @@ import unittest
 from typing import Any
 from unittest.mock import patch
 import uuid
+import weakref
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
@@ -34,7 +48,11 @@ from core import himalaya  # noqa: E402
 from core import attachments  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_extract as aextract  # noqa: E402
+from core import attachment_authorization as authz  # noqa: E402
+from core import attachment_disposition_log as adisp  # noqa: E402
+from core import attachment_filing as afiling  # noqa: E402
 from core import quarantine_preflight as qpf  # noqa: E402
+import mail_desk_himalaya_client as mclient  # noqa: E402
 
 
 _ACCOUNT = "BOKU-MARTIN"
@@ -690,6 +708,570 @@ class MailDeskAttachmentEvaluationMDE1PreflightTests(unittest.TestCase):
 
             self.assertEqual("extracted", res["status"])
             self.assertTrue((ctx["run_dir"] / "derivatives" / "scanned.ocr.pdf").is_file())
+
+
+def _machine_factory_kwargs() -> dict[str, Any]:
+    """Build canonical trusted bindings for the internal machine-authorization factory."""
+    inventory_sha256 = hashlib.sha256(b"mde1-t03-inventory").hexdigest()
+    message_id = f"mde1-t03-{uuid.uuid4().hex[:8]}@example.org"
+    request_hash = afetch.compute_review_hash(
+        account=_ACCOUNT,
+        message_id=message_id,
+        folder=_FOLDER,
+        envelope_id=_ENVELOPE_ID,
+        part_locator="2",
+        inventory_sha256=inventory_sha256,
+    )
+    return {
+        "request_hash": request_hash,
+        "policy_revision": "policy-rev-1",
+        "account": _ACCOUNT,
+        "message_id": message_id,
+        "folder": _FOLDER,
+        "envelope_id": _ENVELOPE_ID,
+        "part_locator": "2",
+        "inventory_sha256": inventory_sha256,
+    }
+
+
+def _typeless_human_receipt(request_hash: str | None = None, *, approved_by: str = "martin") -> dict[str, Any]:
+    """A legacy FR-08 human MD-A2 receipt: persists unchanged and carries no receipt_type."""
+    return {
+        "receipt_id": "rec-human-mde1-t03",
+        "request_hash": request_hash or ("a" * 64),
+        "approved_at": "2026-09-19T09:00:00Z",
+        "approved_by": approved_by,
+    }
+
+
+def _build_mda2_composite(receipt: Any = None) -> dict[str, Any]:
+    """Build a valid MD-A2 composite contract (operation/result/candidate) bound to `_ACCOUNT`.
+
+    When no receipt is supplied a correctly bound typeless human receipt is used, so the
+    composite exercises the unchanged FR-08 human path.
+    """
+    sha256 = "a" * 64
+    filename = "minutes_2026.pdf"
+    run_id = "run_mde1_t03_filing"
+    candidate = {
+        "account": _ACCOUNT,
+        "message_id": f"<mde1-t03-filing-{uuid.uuid4().hex[:8]}@example.org>",
+        "folder": _FOLDER,
+        "envelope_id": _ENVELOPE_ID,
+        "part_locator": "2",
+        "filename": filename,
+        "sha256": sha256,
+        "size_bytes": 1024,
+        "mime_type": "application/pdf",
+        "fetch_status": "available",
+        "provenance": attachments.PROVENANCE_RFC822,
+    }
+    review_hash = afetch.compute_review_hash(
+        account=_ACCOUNT,
+        message_id=candidate["message_id"],
+        folder=_FOLDER,
+        envelope_id=_ENVELOPE_ID,
+        part_locator="2",
+        inventory_sha256=sha256,
+    )
+    if receipt is None:
+        receipt = _typeless_human_receipt(review_hash)
+    operation = {
+        "action": "attachment_fetch",
+        "account": _ACCOUNT,
+        "message_id": candidate["message_id"],
+        "folder": _FOLDER,
+        "envelope_id": _ENVELOPE_ID,
+        "part_locator": "2",
+        "inventory_sha256": sha256,
+        "review_hash": review_hash,
+        "approval_receipt": receipt,
+        "run_id": run_id,
+        "candidate": candidate,
+    }
+    result = {
+        "status": "fetched",
+        "run_id": run_id,
+        "filename": filename,
+        "inventory_sha256": sha256,
+        "fetch_sha256": sha256,
+        "effective_mime_type": "application/pdf",
+        "size_bytes": 1024,
+        "relative_path": f"data/mail-desk/attachments/{run_id}/{filename}",
+        "error": None,
+    }
+    return {"operation": operation, "result": result, "candidate": candidate}
+
+
+class MailDeskAttachmentEvaluationMDE1MachineAuthorizationTests(unittest.TestCase):
+    """T03: internal machine-authorization factory and the evaluation-context guard."""
+
+    def setUp(self) -> None:
+        self.maxDiff = None
+
+    def _mint(self, **overrides: Any) -> Any:
+        kwargs = _machine_factory_kwargs()
+        kwargs.update(overrides)
+        return authz.create_machine_authorization(**kwargs)
+
+    @staticmethod
+    def _expected(kwargs: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "expected_request_hash": kwargs["request_hash"],
+            "expected_policy_revision": kwargs["policy_revision"],
+        }
+
+    # ------------------------------------------------------------------
+    # Factory: trusted, unique, canonical bindings as an opaque mapping
+    # ------------------------------------------------------------------
+    def test_factory_mints_mapping_with_trusted_bindings(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        # Mapping behaviour/shape only; the implementation class is intentionally private.
+        self.assertIsInstance(auth, Mapping)
+        self.assertNotIsInstance(auth, dict)
+        self.assertIn("receipt_class", auth)
+        self.assertEqual(auth.get("receipt_class"), authz.RECEIPT_CLASS_MACHINE)
+        self.assertEqual(auth["receipt_type"], authz.RECEIPT_TYPE_ATTACHMENT_AUTO_EVALUATION)
+        self.assertEqual(auth["approved_by"], authz.MACHINE_APPROVER_ID)
+        self.assertEqual(len(dict(auth)), len(list(auth.keys())))
+        self.assertEqual(
+            {
+                "receipt_class": authz.RECEIPT_CLASS_MACHINE,
+                "receipt_type": authz.RECEIPT_TYPE_ATTACHMENT_AUTO_EVALUATION,
+                "approved_by": authz.MACHINE_APPROVER_ID,
+                "request_hash": kwargs["request_hash"],
+                "policy_revision": kwargs["policy_revision"],
+                "account": kwargs["account"],
+                "message_id": kwargs["message_id"],
+                "folder": kwargs["folder"],
+                "envelope_id": kwargs["envelope_id"],
+                "part_locator": kwargs["part_locator"],
+                "inventory_sha256": kwargs["inventory_sha256"],
+            },
+            {
+                key: value
+                for key, value in dict(auth).items()
+                if key not in ("receipt_id", "approved_at")
+            },
+        )
+        self.assertTrue(str(auth["receipt_id"]).strip())
+        self.assertTrue(str(auth["approved_at"]).strip())
+
+    def test_capability_is_not_a_plain_dict_and_not_directly_serializable(self) -> None:
+        auth = self._mint()
+        # The capability is an opaque mapping, so it cannot leak via dict-oriented serializers.
+        with self.assertRaises(TypeError):
+            json.dumps(auth)
+        self.assertNotIsInstance(auth, dict)
+
+    def test_factory_receipt_ids_are_unique_and_nonempty(self) -> None:
+        first = self._mint()
+        second = self._mint()
+        self.assertTrue(str(first["receipt_id"]).strip())
+        self.assertTrue(str(second["receipt_id"]).strip())
+        self.assertNotEqual(first["receipt_id"], second["receipt_id"])
+
+    def test_factory_rejects_request_hash_that_is_not_canonical_review_hash(self) -> None:
+        with self.assertRaises(authz.AttachmentAuthorizationError):
+            self._mint(request_hash="b" * 64)
+
+    def test_factory_rejects_missing_binding(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        kwargs["part_locator"] = ""
+        with self.assertRaises(authz.AttachmentAuthorizationError):
+            authz.create_machine_authorization(**kwargs)
+
+    def test_factory_rejects_none_for_every_required_binding(self) -> None:
+        for field in (
+            "request_hash",
+            "policy_revision",
+            "account",
+            "message_id",
+            "folder",
+            "envelope_id",
+            "part_locator",
+            "inventory_sha256",
+        ):
+            with self.subTest(field=field):
+                kwargs = _machine_factory_kwargs()
+                kwargs[field] = None
+                with self.assertRaises(authz.AttachmentAuthorizationError):
+                    authz.create_machine_authorization(**kwargs)
+
+    # ------------------------------------------------------------------
+    # Evaluation context: accepts only the exact internally issued object
+    # ------------------------------------------------------------------
+    def test_evaluation_context_accepts_internal_machine_authorization(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        info = authz.guard_context_authorization(
+            auth, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+        )
+
+        self.assertEqual("machine", info["class"])
+        self.assertEqual("auto_evaluated", info["authorization"])
+
+    def test_evaluation_context_requires_explicit_nonempty_expected_bindings(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        # A genuine capability must not be accepted when either trusted expected binding is omitted.
+        with self.assertRaises(authz.MachineBindingError):
+            authz.guard_context_authorization(
+                auth,
+                context=authz.CONTEXT_EVALUATION,
+                expected_request_hash=kwargs["request_hash"],
+            )
+        with self.assertRaises(authz.MachineBindingError):
+            authz.guard_context_authorization(
+                auth,
+                context=authz.CONTEXT_EVALUATION,
+                expected_policy_revision=kwargs["policy_revision"],
+            )
+        for blank in ("", "   "):
+            with self.subTest(blank=repr(blank)):
+                with self.assertRaises(authz.MachineBindingError):
+                    authz.guard_context_authorization(
+                        auth,
+                        context=authz.CONTEXT_EVALUATION,
+                        expected_request_hash=blank,
+                        expected_policy_revision=kwargs["policy_revision"],
+                    )
+
+    def test_evaluation_context_rejects_structurally_identical_plain_dict(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+        forged = dict(auth)
+        self.assertIs(type(forged), dict)
+        self.assertEqual(dict(auth), forged)
+
+        with self.assertRaises(authz.MachineAuthorizationRequiredError):
+            authz.guard_context_authorization(
+                forged, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+            )
+
+    def test_evaluation_context_rejects_second_instance_with_same_content(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        for builder in (lambda: type(auth)(dict(auth)), lambda: dict(auth)):
+            try:
+                forged = builder()
+            except TypeError:
+                continue  # a constructor/shape mismatch is itself a rejection
+            self.assertIsNot(forged, auth)
+            with self.subTest(builder=builder):
+                with self.assertRaises(authz.MachineAuthorizationRequiredError):
+                    authz.guard_context_authorization(
+                        forged, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+                    )
+
+    def test_evaluation_context_rejects_borrowed_internals(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        # An attacker who reads every exposed value off a genuine capability still cannot
+        # reconstruct an accepted second object.
+        attempts: list[Any] = [dict(auth)]
+        for name in dir(auth):
+            if name.startswith("__"):
+                continue
+            try:
+                borrowed = getattr(auth, name)
+            except AttributeError:  # pragma: no cover - defensive
+                continue
+            try:
+                attempts.append(type(auth)(dict(auth), borrowed))
+            except TypeError:
+                continue
+        for forged in attempts:
+            with self.assertRaises(authz.AttachmentAuthorizationError):
+                authz.guard_context_authorization(
+                    forged, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+                )
+
+    def test_evaluation_context_rejects_wrong_class_or_type(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+
+        wrong_class = dict(auth)
+        wrong_class["receipt_class"] = "human"
+        wrong_type = dict(auth)
+        wrong_type["receipt_type"] = "attachment_manual_approval"
+
+        for forged in (wrong_class, wrong_type):
+            with self.subTest(forged=forged):
+                with self.assertRaises(authz.MachineAuthorizationRequiredError):
+                    authz.guard_context_authorization(
+                        forged, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+                    )
+
+    def test_evaluation_context_rejects_tampered_issuer_policy_and_bindings(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        for field, tampered in (
+            ("approved_by", "attacker"),
+            ("policy_revision", "evil-policy"),
+            ("account", "attacker@example.org"),
+            ("request_hash", "c" * 64),
+        ):
+            with self.subTest(field=field):
+                auth = self._mint()
+                auth[field] = tampered
+                with self.assertRaises(authz.MachineAuthorizationProvenanceError):
+                    authz.guard_context_authorization(
+                        auth, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+                    )
+
+    def test_evaluation_context_rejects_missing_binding_on_genuine_object(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = self._mint()
+        del auth["part_locator"]
+        with self.assertRaises(authz.MachineAuthorizationProvenanceError):
+            authz.guard_context_authorization(
+                auth, context=authz.CONTEXT_EVALUATION, **self._expected(kwargs)
+            )
+
+    def test_evaluation_context_rejects_wrong_expected_policy_revision(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = self._mint(policy_revision="policy-v1")
+        with self.assertRaises(authz.MachineBindingError):
+            authz.guard_context_authorization(
+                auth,
+                context=authz.CONTEXT_EVALUATION,
+                expected_request_hash=kwargs["request_hash"],
+                expected_policy_revision="policy-v2",
+            )
+
+    def test_evaluation_context_rejects_wrong_expected_request_hash(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = self._mint()
+        with self.assertRaises(authz.MachineBindingError):
+            authz.guard_context_authorization(
+                auth,
+                context=authz.CONTEXT_EVALUATION,
+                expected_request_hash="d" * 64,
+                expected_policy_revision=kwargs["policy_revision"],
+            )
+
+    def test_machine_authorization_is_process_internal_and_not_serializable(self) -> None:
+        auth = self._mint()
+        for operation in (
+            lambda: pickle.dumps(auth),
+            lambda: copy.copy(auth),
+            lambda: copy.deepcopy(auth),
+        ):
+            with self.subTest(operation=operation):
+                with self.assertRaises(TypeError):
+                    operation()
+        # No provenance/material attribute is exposed on the capability itself.
+        self.assertFalse(hasattr(auth, "_provenance"))
+
+    def test_issued_capability_is_not_kept_alive_by_the_registry(self) -> None:
+        # Safe cleanup: the weak identity registry must not pin a dropped capability.
+        auth = self._mint()
+        ref = weakref.ref(auth)
+        del auth
+        gc.collect()
+        self.assertIsNone(ref(), "The identity registry must release collected capabilities.")
+
+    def test_unknown_context_is_rejected(self) -> None:
+        auth = self._mint()
+        with self.assertRaises(authz.UnknownAuthorizationContextError):
+            authz.guard_context_authorization(auth, context="not_a_context")
+
+    # ------------------------------------------------------------------
+    # Human-Approval contexts: fail-closed on the machine class, typeless intact
+    # ------------------------------------------------------------------
+    def test_human_contexts_reject_machine_class_fail_closed(self) -> None:
+        kwargs = _machine_factory_kwargs()
+        auth = authz.create_machine_authorization(**kwargs)
+        for context in (
+            authz.CONTEXT_FILING,
+            authz.CONTEXT_PROMOTION,
+            authz.CONTEXT_EXPORT,
+            authz.CONTEXT_DISPOSITION,
+            authz.CONTEXT_APPLY,
+            authz.CONTEXT_DIRECT_FETCH,
+        ):
+            with self.subTest(context=context):
+                with self.assertRaises(authz.ReceiptClassRejectedError):
+                    authz.guard_context_authorization(auth, context=context)
+                # A structurally identical caller-supplied dictionary is insufficient too.
+                with self.assertRaises(authz.ReceiptClassRejectedError):
+                    authz.guard_context_authorization(dict(auth), context=context)
+
+    def test_human_contexts_reject_machine_approver_identity_even_without_class(self) -> None:
+        stripped = _typeless_human_receipt(approved_by=authz.MACHINE_APPROVER_ID)
+        with self.assertRaises(authz.ReceiptClassRejectedError):
+            authz.guard_context_authorization(stripped, context=authz.CONTEXT_DISPOSITION)
+
+    def test_human_contexts_reject_unknown_receipt_class(self) -> None:
+        forged = _typeless_human_receipt()
+        forged["receipt_class"] = "android"
+        with self.assertRaises(authz.ReceiptClassRejectedError):
+            authz.guard_context_authorization(forged, context=authz.CONTEXT_FILING)
+
+    def test_human_contexts_accept_typeless_human_receipt_unchanged(self) -> None:
+        receipt = _typeless_human_receipt()
+        for context in (
+            authz.CONTEXT_FILING,
+            authz.CONTEXT_PROMOTION,
+            authz.CONTEXT_EXPORT,
+            authz.CONTEXT_DISPOSITION,
+            authz.CONTEXT_APPLY,
+            authz.CONTEXT_DIRECT_FETCH,
+        ):
+            with self.subTest(context=context):
+                info = authz.guard_context_authorization(receipt, context=context)
+                self.assertEqual("human", info["class"])
+        # No hidden mutation / migration of the persisted typeless form.
+        self.assertNotIn("receipt_type", receipt)
+        self.assertNotIn("receipt_class", receipt)
+
+
+class MailDeskAttachmentEvaluationMDE1CallsiteTests(unittest.TestCase):
+    """T03: the named Human-Approval callsites reject the machine class fail-closed."""
+
+    def setUp(self) -> None:
+        self.maxDiff = None
+        self._himalaya_blocker = patch.object(
+            himalaya,
+            "run_himalaya",
+            side_effect=RuntimeError("Real Himalaya process execution is forbidden in hermetic unit tests!"),
+        )
+        self._himalaya_blocker.start()
+        self._env_backup = {
+            key: os.environ.pop(key, None)
+            for key in (
+                "WORKSPACE_ROOT",
+                "WORKSPACE_LOCK_ALLOW_LEGACY",
+                "WORKSPACE_LOCK_LEASE_ID",
+                "WORKSPACE_LOCK_CONVERSATION_ID",
+            )
+        }
+
+    def tearDown(self) -> None:
+        for key, value in self._env_backup.items():
+            if value is not None:
+                os.environ[key] = value
+        self._himalaya_blocker.stop()
+
+    def _mint_machine(self) -> Any:
+        return authz.create_machine_authorization(**_machine_factory_kwargs())
+
+    # ------------------------------------------------------------------
+    # Filing (attachment_filing.validate_mda2_attachment)
+    # ------------------------------------------------------------------
+    def test_filing_callsite_rejects_machine_authorization(self) -> None:
+        composite = _build_mda2_composite(dict(self._mint_machine()))
+        with self.assertRaises(authz.ReceiptClassRejectedError):
+            afiling.validate_mda2_attachment(composite, manifest_account=_ACCOUNT)
+
+    def test_filing_callsite_still_accepts_typeless_human_receipt(self) -> None:
+        composite = _build_mda2_composite()
+        normalized = afiling.validate_mda2_attachment(composite, manifest_account=_ACCOUNT)
+        self.assertEqual(_ACCOUNT, normalized["account"])
+
+    # ------------------------------------------------------------------
+    # Disposition + apply (attachment_disposition_log)
+    # ------------------------------------------------------------------
+    def test_record_disposition_callsite_rejects_machine_authorization(self) -> None:
+        guard = afetch._load_workspace_lock_guard()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            guard.acquire_workspace_lock(
+                tmp_dir,
+                harness="mde1-t03-test",
+                lease_id="lease-t03",
+                conversation_id="conv-t03",
+            )
+            machine = dict(self._mint_machine())
+            with self.assertRaises(authz.ReceiptClassRejectedError):
+                adisp.record_disposition_entry(
+                    payload={
+                        "attachment_id": "a" * 64,
+                        "decision": "discard",
+                        "approval_receipt": machine,
+                    },
+                    workspace_root=tmp_dir,
+                    lease_id="lease-t03",
+                    conversation_id="conv-t03",
+                )
+
+    def test_verify_apply_receipt_rejects_machine_authorization(self) -> None:
+        with self.assertRaises(authz.ReceiptClassRejectedError):
+            adisp.verify_apply_receipt(dict(self._mint_machine()), "e" * 64)
+
+    def test_verify_apply_receipt_still_accepts_typeless_human_receipt(self) -> None:
+        apply_request = {
+            "action": "discard",
+            "attachment_id": "a" * 64,
+            "decision_id": "b" * 64,
+            "index_entry_sha256": "c" * 64,
+            "quarantine_path": "data/mail-desk/attachments/run_x/a.pdf",
+            "sha256": "d" * 64,
+            "size_bytes": 12,
+            "run_id": "run_x",
+            "schema_version": 1,
+        }
+        request_hash = adisp.canonical_apply_request_sha256(apply_request)
+        receipt = adisp.build_apply_receipt(request_hash=request_hash, approved_by="human_operator")
+        info = adisp.verify_apply_receipt(receipt, request_hash)
+        self.assertEqual(request_hash, info["receipt"]["request_hash"])
+
+    # ------------------------------------------------------------------
+    # Manifest-driven direct fetch (mail_desk_himalaya_client)
+    # ------------------------------------------------------------------
+    def _write_manifest(self, tmp_dir: str, receipt: Any) -> Path:
+        manifest_path = Path(tmp_dir) / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "account": _ACCOUNT,
+                    "delete_input_on_success": False,
+                    "operations": [
+                        {
+                            "action": "attachment_fetch",
+                            "account": _ACCOUNT,
+                            "folder": _FOLDER,
+                            "envelope_id": _ENVELOPE_ID,
+                            "message_id": "mde1-t03@example.org",
+                            "part_locator": "2",
+                            "inventory_sha256": "a" * 64,
+                            "review_hash": "a" * 64,
+                            "run_id": "run_mde1_t03_fetch",
+                            "approval_receipt": receipt,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def test_manifest_direct_fetch_rejects_machine_authorization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_path = self._write_manifest(tmp_dir, dict(self._mint_machine()))
+            result = mclient.execute_manifest(manifest_path)
+
+        self.assertFalse(result["all_succeeded"])
+        error = str(result["results"][0]["error"]).lower()
+        self.assertIn("machine", error)
+
+    def test_manifest_direct_fetch_still_reaches_typeless_human_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            manifest_path = self._write_manifest(tmp_dir, _typeless_human_receipt())
+            with patch.object(
+                afetch,
+                "op_attachment_fetch",
+                return_value={"status": "fetched", "run_id": "run_mde1_t03_fetch"},
+            ) as mocked_fetch:
+                result = mclient.execute_manifest(manifest_path)
+
+        self.assertTrue(mocked_fetch.called, "A typeless human receipt must pass the direct-fetch guard.")
+        self.assertTrue(result["all_succeeded"])
 
 
 if __name__ == "__main__":
