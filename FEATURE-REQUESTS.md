@@ -24,7 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
-| `FR-15` | 🟨 MD-E1 vollständig implementiert, getestet und abgenommen; FR-15 insgesamt offen; MD-E2 T01 implementiert (T02–T04 offen) | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; die drei blockierenden Sicherheitsvoraussetzungen sind implementiert und getestet | `MD-E2`-T01 abgeschlossen; T02–T04 offen |
+| `FR-15` | 🟨 MD-E1 vollständig implementiert, getestet und abgenommen; FR-15 insgesamt offen; MD-E2 T01+02 implementiert (T03–T04 offen) | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; die drei blockierenden Sicherheitsvoraussetzungen sind implementiert und getestet | `MD-E2`-T01+T02 abgeschlossen; T03–T04 offen |
 
 
 ```text
@@ -522,8 +522,8 @@ abgegrenzt.
 ## FR-15: Automatische Anhang-Auswertung bei unklaren Mails
 
 **Status:** 🟨 FR-15 insgesamt offen; **MD-E1 ist vollständig implementiert,
-getestet und als Paket abgenommen**, **MD-E2 ist gestartet (T01 implementiert,
-T02–T04 offen)** und wartet für das Gesamtpaket weiterhin auf ein frisches,
+getestet und als Paket abgenommen**, **MD-E2 ist gestartet (T01+T02 implementiert,
+T03–T04 offen)** und wartet für das Gesamtpaket weiterhin auf ein frisches,
 ausdrückliches Human Gate. FR-08, FR-11 und FR-14 stellen die
 erforderlichen MIME-, Quarantäne-, Extraktions-, Handoff- und Coverage-Verträge
 bereit; deren Sicherheitsgrenzen bleiben unverändert. FR-15 orchestriert diese
@@ -541,7 +541,17 @@ Tickets. MD-E1 endet am validierten Handoff; **Reklassifikation und
 implementiert noch behauptet.** Mit **MD-E2-T01** ist die standardmäßig aktive
 `draft`-Verdrahtung, die Option `--evaluate-attachments`/`--no-evaluate-attachments`
 und die einmalige Neuklassifikation samt additiver `DraftManifest`-Installation
-implementiert (T02–T04 offen).
+implementiert. Mit **MD-E2-T02** ist diese Grenze fail-closed gehärtet: jede bounded
+MD-E1-Fehler-/No-Op-Ursache bleibt item-lokal in Review/`INBOX` (`lock_unavailable`,
+`policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`,
+`handoff_invalid`), ein `ready`-Handoff wird vor der Klassifikation kanonisch gegen
+Identität, Vorab-Entscheid und Anhangs-Inventar revalidiert, fortbestehende
+Mehrdeutigkeit erhält `completed`/`still_ambiguous` mit `auto_evaluated` und sicheren
+`files[]`, `classifier_revision` bindet zusätzlich den normalisierten AST des
+Classifier-Regelmoduls, unerwartete Backend-/Programmiervertragsfehler schlagen über
+`AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer,
+PII-freier Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1
+`already_fetched` ohne Doppel-Fetch. T03–T04 bleiben offen.
 
 ### Problem und Ziel
 
@@ -820,10 +830,12 @@ und System-Map-Update werden gemeinsam committed.
 
 ### MD-E2 — Draft-Integration und Neuklassifikation
 
-**Status:** 🟨 Gestartet; **MD-E2-T01 implementiert** (standardmäßig aktive
+**Status:** 🟨 Gestartet; **MD-E2-T01+T02 implementiert** (standardmäßig aktive
 `draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige
-Neuklassifikation, additive `DraftManifest`-Installation). MD-E2-T02 (fail-closed-Härtung,
-Revisionsdeterminismus, Idempotenz), MD-E2-T03 (opt-in `inspect`-Vorschlag) und MD-E2-T04
+Neuklassifikation, additive `DraftManifest`-Installation; fail-closed-Outcome-Matrix,
+kanonische Handoff-Revalidierung, Code-/Katalog-/Hash-gebundene
+`classifier_revision`, `still_ambiguous`-Erhalt und deterministische
+`already_fetched`-Idempotenz). MD-E2-T03 (opt-in `inspect`-Vorschlag) und MD-E2-T04
 (Paketabnahme) sind offen.
 
 **Ziel:** Nach der bestehenden Body-/Full-Read-Klassifikation nur unklare Items
@@ -901,3 +913,12 @@ MD-E2-Umsetzung offen. FR-15 und FR-13 verändern dieselben
 Classifier-/Attachment-Grenzen und dürfen nicht parallel umgesetzt werden; MD-E2
 wird entweder vor `MD-M1` umgesetzt oder nach komplett grünem FR-13 gegen dessen
 neue Modulstruktur neu geplant.
+
+**T02-Synchronisation:** Die fail-closed-Härtung (MD-E2-T02) wurde im selben
+Arbeitsschritt in `skills/mail-desk/scripts/core/attachment_reclassification.py`,
+den fokussierten Tests (`test_batch_runner_mde2_hardening.py`,
+`test_batch_runner_mde2_draft.py` mit kanonischen Fixtures in `mde2_fixtures.py`),
+den Operator-Docs (`SKILL.md`, `references/batch-runner.md`,
+`references/cli-operations.md`, `references/backends/himalaya.md`), beiden
+System-Map-Ebenen und dieser Status-/Fortschrittsdatei nachgezogen. FR-15 bleibt
+offen; T03/T04 bleiben offen.

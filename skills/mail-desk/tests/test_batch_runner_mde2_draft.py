@@ -6,6 +6,7 @@ These tests fix the two confirmed T01 public seams: the Batch Runner CLI flags f
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 import sys
 import tempfile
@@ -14,19 +15,14 @@ from unittest.mock import Mock
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mail_desk_batch_runner as runner  # noqa: E402
 from core.modes import draft as draft_mode  # noqa: E402
+import mde2_fixtures as fixtures  # noqa: E402
 
-_ATTACHMENT_SHA = "a" * 64
-_PROMPT_CONTENT = (
-    '<untrusted_attachment_content part_locator="2" filename="clue.txt" '
-    f'source_sha256="{_ATTACHMENT_SHA}" sha256="{_ATTACHMENT_SHA}" '
-    'mime_type="text/plain" materiality="required_for_decision" status="extracted" '
-    'char_count="24" truncated="false">\n'
-    "Project PILOT kickoff next week\n"
-    "</untrusted_attachment_content>"
-)
+_ATTACHMENT_TEXT = fixtures.DEFAULT_TEXT
+_ATTACHMENT_SHA = hashlib.sha256(_ATTACHMENT_TEXT.encode("utf-8")).hexdigest()
 
 
 def _ambiguous_decision() -> dict[str, object]:
@@ -44,40 +40,30 @@ def _clear_decision() -> dict[str, object]:
     return {"kind": "project", "id": "pilot", "confidence": "high", "needs_reply": False}
 
 
-def _ready_evaluation() -> dict[str, object]:
-    staged = {
-        "status": "completed",
-        "reason": "handoff_ready",
-        "authorization": "auto_evaluated",
-        "files": [
-            {
-                "filename": "clue.txt",
-                "sha256": _ATTACHMENT_SHA,
-                "mime_type": "text/plain",
-                "chars": 31,
-                "coverage": "full",
-                "run_id": "run-mde2-1",
-            }
-        ],
-        "used_for_classification": False,
-        "classifier_revision": None,
-    }
-    handoff = {
-        "schema_version": 1,
-        "status": "ready",
-        "prompt_content": _PROMPT_CONTENT,
-        "items": [
-            {
-                "part_locator": "2",
-                "filename": "clue.txt",
-                "source_sha256": _ATTACHMENT_SHA,
-                "sha256": _ATTACHMENT_SHA,
-                "mime_type": "text/plain",
-                "status": "extracted",
-            }
-        ],
-    }
-    return {"attachment_evaluation": staged, "attachment_analysis_handoff": handoff}
+def _ready_evaluation(
+    *,
+    envelope_id: str | int = "2",
+    message_id: str = "ambiguous@example.test",
+    account: str = "primary",
+    folder: str = "INBOX",
+    decision: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build a canonical MD-E1-shaped ready evaluation (FR-15/MD-E2-T02 revalidation).
+
+    T02 revalidates every ready handoff with ``validate_attachment_handoff``, so the fixture
+    must be a genuine MD-E1 handoff bound to the item's trusted identity and decision.
+    """
+    return fixtures.canonical_ready_evaluation(
+        account=account,
+        folder=folder,
+        envelope_id=envelope_id,
+        message_id=message_id,
+        decision=_ambiguous_decision() if decision is None else decision,
+        text=_ATTACHMENT_TEXT,
+    )
+
+
+_PROMPT_CONTENT = _ready_evaluation()["attachment_analysis_handoff"]["prompt_content"]
 
 
 class _Tracker:
@@ -445,7 +431,15 @@ class Mde2EffectiveSourceTests(unittest.TestCase):
                 "preview": self._FULL_BODY,
             }
         )
-        evaluate = Mock(return_value=_ready_evaluation())
+        evaluate = Mock(
+            side_effect=lambda **kwargs: _ready_evaluation(
+                envelope_id=kwargs["envelope_id"],
+                message_id=kwargs["message_id"],
+                account=kwargs["account"],
+                folder=kwargs["folder"],
+                decision=kwargs["decision"],
+            )
+        )
         captured: dict[str, object] = {}
 
         def reclassify(source, **kwargs):

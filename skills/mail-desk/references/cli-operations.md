@@ -230,8 +230,18 @@ getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält ge
 additives finales `attachment_evaluation` (`completed/classification_clear` mit
 `used_for_classification: true` und 64-Hex-`classifier_revision` nur bei eindeutigem Erfolg).
 Die direkten, gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments`
-sind nur für `draft`/`inspect` gültig (`draft` default an, `inspect` default aus). Der opt-in
-`inspect`-Vorschlag (MD-E2-T03) und die fail-closed-Härtung (MD-E2-T02) sind noch offen; MD-E1
+sind nur für `draft`/`inspect` gültig (`draft` default an, `inspect` default aus). Mit
+**FR-15/MD-E2-T02** ist die Grenze fail-closed gehärtet: jede bounded MD-E1-Fehler-/No-Op-Ursache
+bleibt item-lokal in Review/`INBOX` (`lock_unavailable`, `policy_blocked`, `quota_exceeded`,
+`fetch_failed`, `extraction_failed`, `handoff_invalid`), Identitäts-/Quellen-Pairing-Fehler sind
+Bindungsfehler (`handoff_invalid`), ein `ready`-Handoff wird vor der Klassifikation kanonisch mit
+`validate_attachment_handoff` revalidiert, fortbestehende Mehrdeutigkeit erhält
+`completed`/`still_ambiguous` mit `auto_evaluated` und sicheren `files[]`, `classifier_revision`
+bindet den normalisierten AST des Classifier-Regelmoduls plus Kataloge und konsumierte Hashes,
+unerwartete Backend-/Programmiervertragsfehler schlagen über
+`AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer, PII-freier
+Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched` ohne Doppel-Fetch.
+Der opt-in `inspect`-Vorschlag (MD-E2-T03) und die Paketabnahme (MD-E2-T04) sind noch offen; MD-E1
 endet am validierten Handoff.
 
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag

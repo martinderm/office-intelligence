@@ -100,8 +100,13 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
   handoff exactly once as a distinct `untrusted_external` classifier input, and installs the
   additive final `attachment_evaluation`. The mutually exclusive
   `--evaluate-attachments`/`--no-evaluate-attachments` options are valid only for direct
-  `draft`/`inspect` (`draft` defaults on, `inspect` defaults off). The opt-in `inspect`
-  proposal (MD-E2-T03) and the fail-closed hardening (MD-E2-T02) remain open.
+  `draft`/`inspect` (`draft` defaults on, `inspect` defaults off). With **FR-15/MD-E2-T02**
+  the ready handoff is revalidated canonically before any classification, every bounded
+  MD-E1 failure stays item-local in Review/`INBOX`, a deterministic PII-free per-message
+  run-id reaches MD-E1 `already_fetched` on a repeated default invocation (no duplicate
+  attachment fetch, no cross-run cache), and unexpected backend contract errors fail loud
+  instead of being relabelled. The opt-in `inspect`
+  proposal (MD-E2-T03) and the package acceptance (MD-E2-T04) remain open.
 
 ## Envelope IDs
 

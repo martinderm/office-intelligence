@@ -21,31 +21,56 @@ when one actual second classification consumed the validated handoff and produce
 successful, unambiguous result.  Every other terminal outcome stays ``false``/``null``.
 The revision is content-addressed over the active classification rules and the sorted
 exact attachment hashes actually consumed; no caller, mail or manifest value can set it.
+
+MD-E2-T02 hardens the seam into a fail-closed production boundary: every bounded MD-E1
+no-op/failure reason is preserved item-locally with Review/``INBOX`` fallback, a ready
+handoff is revalidated with the canonical ``validate_attachment_handoff`` against the
+trusted identity, the pre-reclassification decision and the canonical attachment
+inventory before any classification, a continued ambiguity keeps the MD-E1
+``auto_evaluated`` provenance and safe ``files[]``, and the code-level classifier rule
+module is bound into the revision.  Genuinely unexpected backend/programmer contract
+violations raise :class:`AttachmentReclassificationContractError` fail-loud instead of
+being silently relabelled as ``fetch_failed`` or ``still_ambiguous``.
 """
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from .attachment_evaluation import (
+    ALLOWED_ATTACHMENT_EVALUATION_AUTHORIZATIONS,
+    ALLOWED_ATTACHMENT_EVALUATION_COVERAGES,
     ALLOWED_ATTACHMENT_EVALUATION_REASONS,
+    ALLOWED_ATTACHMENT_EVALUATION_STATUSES,
     AUTHORIZATION_AUTO_EVALUATED,
     AUTHORIZATION_NOT_APPLICABLE,
     REASON_CLASSIFICATION_CLEAR,
     REASON_FETCH_FAILED,
     REASON_HANDOFF_READY,
+    REASON_HANDOFF_INVALID,
     REASON_STILL_AMBIGUOUS,
     STATUS_COMPLETED,
     STATUS_FAILED,
     STATUS_NOT_NEEDED,
     STATUS_SKIPPED,
 )
-from .attachment_handoff import HANDOFF_STATUS_READY
+from .attachment_fetch import is_valid_run_id
+from .attachment_handoff import (
+    HANDOFF_STATUS_READY,
+    AttachmentHandoffError,
+    InvalidMaterialityError,
+    validate_attachment_handoff,
+)
+from .common import normalize_message_id
 from .himalaya import HimalayaInvocationError
+
+_SHA256_LOWER = re.compile(r"^[0-9a-f]{64}$")
 
 # ==============================================================================
 # Bounded MD-E2 vocabulary
@@ -68,24 +93,115 @@ _CATALOG_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("topics", ("memory", "references", "topics", "topics.json")),
 )
 
+#: The active, code-level classifier rule module whose normalized AST is content-addressed
+#: into ``classifier_revision``.  Resolved next to this module so no host path is ever hashed.
+_CLASSIFIER_MODULE_PATH: Path = Path(__file__).resolve().parent / "classifier.py"
+
 #: Fields the single reclassification may replace on the draft item.  All are produced by
 #: the existing classifier rules; MD-E2 never invents a target.
 _RECLASSIFICATION_FIELDS = ("decision", "action", "notes", "evidence", "synthesis_targets")
+
+#: Deterministic, PII-free per-message evaluation run-id namespace material.
+_EVAL_RUN_ID_PREFIX = "eval"
+_EVAL_RUN_ID_DIGEST_CHARS = 32
+_EVAL_RUN_ID_MAX_LENGTH = 100
+
+
+# ==============================================================================
+# Bounded contract exceptions
+# ==============================================================================
+
+class AttachmentReclassificationContractError(ValueError):
+    """Raised when an MD-E1 backend/programmer contract is violated.
+
+    This is a bounded, fail-loud error type: a non-mapping backend result, a malformed
+    staged object, an unexpected status/reason/authorization/files vocabulary or a
+    non-mapping reclassifier result never silently degrades into a bounded policy outcome
+    such as ``fetch_failed`` or ``still_ambiguous``.  The message never carries raw
+    content, an absolute path, an exception message or a capability.
+    """
+
+
+# ==============================================================================
+# Deterministic per-message evaluation run-id
+# ==============================================================================
+
+def derive_evaluation_run_id(
+    identity: Mapping[str, Any], *, namespace: str | None = None
+) -> str:
+    """Derive a deterministic, PII-free evaluation run-id from trusted mail identity.
+
+    The run-id is stable for one immutable message so a repeated ``draft`` invocation
+    reaches the canonical MD-E1 ``already_fetched`` path instead of allocating a fresh
+    quarantine run and fetching the same attachment again.  It binds account, folder,
+    envelope and normalized message id by hash, so distinct messages never collide and no
+    address is exposed.  A caller-supplied trusted ``namespace`` becomes a base prefix and
+    still isolates every message deterministically.
+    """
+    normalized = {
+        "account": str(identity.get("account") or "").strip(),
+        "folder": str(identity.get("folder") or "").strip(),
+        "envelope_id": str(identity.get("envelope_id") or "").strip(),
+        "message_id": normalize_message_id(str(identity.get("message_id") or "")),
+    }
+    payload = json.dumps(
+        normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    digest = hashlib.sha256(
+        f"md-e2-evaluation-run-id:{payload}".encode("utf-8"), usedforsecurity=False
+    ).hexdigest()[:_EVAL_RUN_ID_DIGEST_CHARS]
+
+    base = ""
+    if namespace is not None and str(namespace).strip():
+        sanitized = re.sub(r"[^A-Za-z0-9_-]", "", str(namespace).strip())
+        base = sanitized[: _EVAL_RUN_ID_MAX_LENGTH - len(digest) - 1]
+    candidate = f"{base}_{digest}" if base else f"{_EVAL_RUN_ID_PREFIX}_{digest}"
+    if is_valid_run_id(candidate):
+        return candidate
+    return f"{_EVAL_RUN_ID_PREFIX}_{digest}"
 
 
 # ==============================================================================
 # Content-addressed classifier revision
 # ==============================================================================
 
+def _classifier_code_digest() -> str:
+    """Return a normalized-AST SHA-256 over the active classifier rule module.
+
+    The digest is taken over ``ast.dump`` of the parsed module, so it is insensitive to
+    formatting and comments but moves on any code-level rule or constant change.  It never
+    hashes bytecode, an absolute path, a runtime object repr or raw source formatting.
+    """
+    try:
+        source = _CLASSIFIER_MODULE_PATH.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:  # pragma: no cover - deployment fault
+        raise AttachmentReclassificationContractError(
+            "The canonical classifier rule module is unavailable."
+        ) from exc
+    try:
+        tree = ast.parse(source, filename="classifier.py")
+    except SyntaxError as exc:  # pragma: no cover - deployment fault
+        raise AttachmentReclassificationContractError(
+            "The canonical classifier rule module is not parseable."
+        ) from exc
+    normalized = ast.dump(tree, annotate_fields=True, include_attributes=False)
+    return hashlib.sha256(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 def classifier_rules_fingerprint(workspace_root: str | Path) -> str:
     """Return a deterministic SHA-256 over the active canonical classification rules.
 
-    The rules that decide ``kind``/``id``/catalog-bound subdecisions are driven by the
-    workspace project/topic catalogs, so their canonical JSON is bound together with a
-    fixed rules version tag.  Formatting-only catalog edits therefore cannot move the
-    fingerprint, but any rule-relevant content change does.
+    The rules that decide ``kind``/``id``/catalog-bound subdecisions are driven both by the
+    code-level classifier rule module and by the workspace project/topic catalogs.  The
+    normalized classifier-module AST, the canonical catalog JSON and a fixed rules version
+    tag are bound together, so formatting-only edits cannot move the fingerprint but any
+    rule-relevant code or catalog content change does.
     """
-    material: dict[str, Any] = {"version": CLASSIFIER_RULES_VERSION, "catalogs": {}}
+    material: dict[str, Any] = {
+        "version": CLASSIFIER_RULES_VERSION,
+        "classifier_code_sha256": _classifier_code_digest(),
+        "catalogs": {},
+    }
     base = Path(workspace_root)
     for name, parts in _CATALOG_SOURCES:
         catalog_path = base.joinpath(*parts)
@@ -154,9 +270,7 @@ def _bounded_staged(staged: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _successful_evaluation(
-    staged: Mapping[str, Any], handoff: Mapping[str, Any], revision: str
-) -> dict[str, Any]:
+def _successful_evaluation(staged: Mapping[str, Any], revision: str) -> dict[str, Any]:
     """Build the one allowed ``used_for_classification: true`` final object."""
     return {
         "status": STATUS_COMPLETED,
@@ -168,22 +282,71 @@ def _successful_evaluation(
     }
 
 
-def _is_successful_ready(staged: Mapping[str, Any], handoff: Any) -> bool:
-    """A ready handoff is the only input eligible for exactly one reclassification."""
-    if not isinstance(handoff, Mapping):
-        return False
-    if str(handoff.get("status") or "") != HANDOFF_STATUS_READY:
-        return False
-    return (
-        str(staged.get("status") or "") == STATUS_COMPLETED
-        and str(staged.get("reason") or "") == REASON_HANDOFF_READY
-    )
+def _still_ambiguous(staged: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve the MD-E1 authorization and safe ``files[]`` for a continued ambiguity.
+
+    The second classification ran exactly once and stayed ambiguous, so the item keeps the
+    MD-E1 ``auto_evaluated`` provenance and the canonical, bounded ``files[]`` (including
+    coverage/truncation) while remaining ``false``/``null``.
+    """
+    return {
+        "status": STATUS_COMPLETED,
+        "reason": REASON_STILL_AMBIGUOUS,
+        "authorization": str(
+            staged.get("authorization") or AUTHORIZATION_NOT_APPLICABLE
+        ),
+        "files": list(staged.get("files") or []),
+        "used_for_classification": False,
+        "classifier_revision": None,
+    }
 
 
-def _consumed_input_hashes(handoff: Mapping[str, Any]) -> list[str]:
-    """Collect the exact MD-E1-bound attachment hashes the reclassification consumed."""
+def _validate_staged_vocabulary(
+    status: str, reason: str, authorization: str, files: Any
+) -> None:
+    """Enforce the final bounded status/reason/authorization/files vocabulary.
+
+    A malformed staged object is a backend-contract violation and fails loud instead of
+    being silently relabelled as a bounded policy outcome.  Long-lived ``files[]`` entries
+    remain the canonical safe MD-E1 metadata records only.
+    """
+    if status not in ALLOWED_ATTACHMENT_EVALUATION_STATUSES:
+        raise AttachmentReclassificationContractError(
+            "The attachment_evaluation status is outside the bounded vocabulary."
+        )
+    if reason not in ALLOWED_DRAFT_ATTACHMENT_EVALUATION_REASONS:
+        raise AttachmentReclassificationContractError(
+            "The attachment_evaluation reason is outside the bounded vocabulary."
+        )
+    if authorization not in ALLOWED_ATTACHMENT_EVALUATION_AUTHORIZATIONS:
+        raise AttachmentReclassificationContractError(
+            "The attachment_evaluation authorization is outside the bounded vocabulary."
+        )
+    if not isinstance(files, list):
+        raise AttachmentReclassificationContractError(
+            "The attachment_evaluation files must be a list of safe metadata records."
+        )
+    for entry in files:
+        if not isinstance(entry, Mapping):
+            raise AttachmentReclassificationContractError(
+                "Every attachment_evaluation files entry must be a safe metadata record."
+            )
+        sha256 = str(entry.get("sha256") or "").strip()
+        if not _SHA256_LOWER.fullmatch(sha256):
+            raise AttachmentReclassificationContractError(
+                "Every attachment_evaluation files entry must carry a lowercase 64-hex sha256."
+            )
+        coverage = entry.get("coverage")
+        if coverage is not None and coverage not in ALLOWED_ATTACHMENT_EVALUATION_COVERAGES:
+            raise AttachmentReclassificationContractError(
+                "The attachment_evaluation files coverage is outside the bounded vocabulary."
+            )
+
+
+def _validated_consumed_hashes(validated: Mapping[str, Any]) -> list[str]:
+    """Collect the exact validated MD-E1-bound attachment hashes actually consumed."""
     hashes: list[str] = []
-    items = handoff.get("items")
+    items = validated.get("items")
     if isinstance(items, Sequence):
         for entry in items:
             if not isinstance(entry, Mapping):
@@ -193,6 +356,46 @@ def _consumed_input_hashes(handoff: Mapping[str, Any]) -> list[str]:
             if text:
                 hashes.append(text)
     return hashes
+
+
+def _staged_file_hashes(staged: Mapping[str, Any]) -> list[str]:
+    """Collect the bounded staged ``files[]`` SHA-256 values for binding cross-checks."""
+    hashes: list[str] = []
+    files = staged.get("files")
+    if isinstance(files, Sequence):
+        for entry in files:
+            if not isinstance(entry, Mapping):
+                continue
+            hashes.append(str(entry.get("sha256") or "").strip().lower())
+    return hashes
+
+
+def _consumed_hashes_are_bound(consumed: Sequence[str], staged: Mapping[str, Any]) -> bool:
+    """True only when the consumed hashes are valid, unique and match the staged files.
+
+    The revision may bind only the exact hashes of the validated handoff items that were
+    actually passed, so missing, duplicate, invalid or staged-mismatched hashes stop as a
+    binding failure before any reclassification or revision.
+    """
+    if not consumed:
+        return False
+    if any(not _SHA256_LOWER.fullmatch(value) for value in consumed):
+        return False
+    if len(set(consumed)) != len(consumed):
+        return False
+    return sorted(consumed) == sorted(_staged_file_hashes(staged))
+
+
+def _force_review_inbox(item: dict[str, Any], reason: str) -> None:
+    """Force a fail-closed / ambiguous item to stay in Review/``INBOX`` at low confidence."""
+    item["action"] = {"type": "keep_in_folder", "target_folder": "INBOX"}
+    decision = item.get("decision")
+    if not isinstance(decision, dict):
+        decision = {}
+        item["decision"] = decision
+    decision["review_required"] = True
+    decision["review_reason"] = str(reason)
+    decision["confidence"] = "low"
 
 
 # ==============================================================================
@@ -283,21 +486,38 @@ def _evaluate_item(
 
     email = _matching_source(item, source_index)
     if email is None:
-        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+        # An identity/source pairing failure is a binding failure, never a successful no-op.
+        _force_review_inbox(item, REASON_HANDOFF_INVALID)
+        return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
 
     envelope_id = str(item.get("envelope_id") or email.get("envelope_id") or "").strip()
     message_id = str(item.get("message_id") or email.get("message_id") or "").strip()
     folder = str(email.get("folder") or item.get("source_folder") or "INBOX").strip() or "INBOX"
     normalized_account = str(account or "").strip()
     if not envelope_id or not message_id or not normalized_account:
-        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+        _force_review_inbox(item, REASON_HANDOFF_INVALID)
+        return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
 
     try:
         raw_eml = read_raw_mime(envelope_id, folder=folder, account=account)
     # Only the canonical raw-MIME acquisition failures map to the bounded item-local
     # `fetch_failed` outcome; unexpected programmer errors stay fail-loud.
     except (HimalayaInvocationError, OSError, RuntimeError):
+        _force_review_inbox(item, REASON_FETCH_FAILED)
         return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    # A deterministic, PII-free per-message run-id lets a repeated invocation reuse the
+    # canonical MD-E1 `already_fetched` path instead of fetching the same immutable
+    # attachment again.  A caller-supplied run_id is only a trusted base namespace.
+    effective_run_id = derive_evaluation_run_id(
+        {
+            "account": normalized_account,
+            "folder": folder,
+            "envelope_id": envelope_id,
+            "message_id": message_id,
+        },
+        namespace=run_id,
+    )
 
     result = evaluate(
         raw_eml=raw_eml,
@@ -307,23 +527,88 @@ def _evaluate_item(
         message_id=message_id,
         decision=decision,
         policy=policy,
-        run_id=run_id,
+        run_id=effective_run_id,
         data_dir=data_dir,
         workspace_root=workspace_root,
         lease_id=lease_id,
         conversation_id=conversation_id,
     )
     if not isinstance(result, Mapping):
-        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+        raise AttachmentReclassificationContractError(
+            "attachment_evaluate returned a non-mapping result."
+        )
 
     staged = result.get("attachment_evaluation")
     if not isinstance(staged, Mapping):
-        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+        raise AttachmentReclassificationContractError(
+            "attachment_evaluate returned a non-mapping attachment_evaluation."
+        )
 
+    staged_status = str(staged.get("status") or "")
+    staged_reason = str(staged.get("reason") or "")
+    staged_authorization = str(staged.get("authorization") or "")
+    _validate_staged_vocabulary(
+        staged_status, staged_reason, staged_authorization, staged.get("files")
+    )
+
+    # A staged ready result and a ready handoff sibling are mutually coherent only as a
+    # pair; any other combination is an impossible backend contract and fails loud before
+    # reclassification or write.  In particular a ready stage must never be silently
+    # installed when the handoff is missing, non-mapping or not `ready`.
     handoff = result.get("attachment_analysis_handoff")
-    if not _is_successful_ready(staged, handoff):
-        # not_needed / blocked / failed / still_ambiguous stay bounded and never classify.
+    staged_is_ready = (
+        staged_status == STATUS_COMPLETED
+        and staged_reason == REASON_HANDOFF_READY
+        and staged_authorization == AUTHORIZATION_AUTO_EVALUATED
+    )
+    handoff_is_ready = (
+        isinstance(handoff, Mapping)
+        and str(handoff.get("status") or "") == HANDOFF_STATUS_READY
+    )
+    if staged_is_ready and not handoff_is_ready:
+        raise AttachmentReclassificationContractError(
+            "A finished handoff_ready attachment_evaluation requires exactly one ready "
+            "attachment_analysis_handoff."
+        )
+    if handoff_is_ready and not staged_is_ready:
+        raise AttachmentReclassificationContractError(
+            "A ready attachment_analysis_handoff requires a finished handoff_ready "
+            "attachment_evaluation."
+        )
+
+    if not staged_is_ready:
+        # not_needed / blocked / failed stay bounded and never classify.  A failed outcome
+        # and a continued ambiguity are forced back to Review/INBOX at low confidence.
+        if staged_status == STATUS_FAILED or (
+            staged_status == STATUS_COMPLETED and staged_reason == REASON_STILL_AMBIGUOUS
+        ):
+            _force_review_inbox(item, staged_reason)
         return _bounded_staged(staged), None
+
+    # Revalidate the ready handoff against the trusted identity, the pre-reclassification
+    # decision and the canonical item/source attachment inventory before any classification.
+    # A manipulated, missing, duplicate or hash-mismatched handoff stops here with no call.
+    mail_identity = {
+        "account": normalized_account,
+        "message_id": message_id,
+        "folder": folder,
+        "envelope_id": envelope_id,
+    }
+    try:
+        validated = validate_attachment_handoff(
+            handoff,
+            mail_identity=mail_identity,
+            decision=decision,
+            canonical_parts=handoff.get("canonical_parts"),
+        )
+    except (InvalidMaterialityError, AttachmentHandoffError):
+        _force_review_inbox(item, REASON_HANDOFF_INVALID)
+        return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
+
+    consumed_hashes = _validated_consumed_hashes(validated)
+    if not _consumed_hashes_are_bound(consumed_hashes, staged):
+        _force_review_inbox(item, REASON_HANDOFF_INVALID)
+        return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
 
     # Exactly one second invocation of the existing classifier rules, consuming the
     # validated handoff as a distinct, encapsulated untrusted_external input.
@@ -331,19 +616,23 @@ def _evaluate_item(
         email,
         workspace_root=workspace_root,
         account=account,
-        untrusted_external_text=str(handoff.get("prompt_content") or ""),
+        untrusted_external_text=str(validated.get("prompt_content") or ""),
     )
-    new_decision = replacement.get("decision") if isinstance(replacement, Mapping) else None
-    if not isinstance(new_decision, Mapping) or triggers_evaluation(new_decision):
-        return (
-            _terminal(STATUS_COMPLETED, REASON_STILL_AMBIGUOUS, AUTHORIZATION_NOT_APPLICABLE),
-            None,
+    if not isinstance(replacement, Mapping):
+        raise AttachmentReclassificationContractError(
+            "The reclassifier returned a non-mapping result."
         )
+    new_decision = replacement.get("decision")
+    if not isinstance(new_decision, Mapping):
+        raise AttachmentReclassificationContractError(
+            "The reclassifier returned a malformed decision."
+        )
+    if triggers_evaluation(new_decision):
+        _force_review_inbox(item, REASON_STILL_AMBIGUOUS)
+        return _still_ambiguous(staged), None
 
-    revision = compute_classifier_revision(
-        rules_fingerprint, _consumed_input_hashes(handoff)
-    )
-    return _successful_evaluation(staged, handoff, revision), dict(replacement)
+    revision = compute_classifier_revision(rules_fingerprint, consumed_hashes)
+    return _successful_evaluation(staged, revision), dict(replacement)
 
 
 # ==============================================================================
@@ -372,7 +661,13 @@ def install_draft_attachment_evaluations(
     ``sources`` is the transient, order-preserving list of effective source emails the
     classifier reported for each item's final initial decision.  Only an approved (ambiguous)
     item may fetch raw MIME and call ``attachment_evaluate``; a clear item performs no raw
-    fetch, evaluation or reclassification.  Item-local outcomes never raise into the batch.
+    fetch, evaluation or reclassification.
+
+    Every bounded MD-E1 outcome is installed item-locally and never aborts the batch.  A
+    genuinely unexpected backend/programmer contract violation instead raises the bounded
+    :class:`AttachmentReclassificationContractError` fail-loud rather than being relabelled
+    as an expected policy outcome.  ``run_id`` is a trusted base namespace only; the effective
+    run-id is always derived deterministically per message.
     """
     workspace = Path(workspace_root)
     rules_fingerprint = classifier_rules_fingerprint(workspace)
@@ -404,9 +699,11 @@ def install_draft_attachment_evaluations(
 
 __all__ = [
     "ALLOWED_DRAFT_ATTACHMENT_EVALUATION_REASONS",
+    "AttachmentReclassificationContractError",
     "CLASSIFIER_RULES_VERSION",
     "REASON_EVALUATION_DISABLED",
     "classifier_rules_fingerprint",
     "compute_classifier_revision",
+    "derive_evaluation_run_id",
     "install_draft_attachment_evaluations",
 ]

@@ -1437,12 +1437,14 @@ Fehler-/Reason-Matrix fail-closed.
 
 ---
 
-## FR-15 / MD-E2-T01: Draft-Integration und einmalige Neuklassifikation (`core/attachment_reclassification.py`)
+## FR-15 / MD-E2-T01 + T02: Draft-Integration und einmalige Neuklassifikation (`core/attachment_reclassification.py`)
 
 **Implementierungsstand:** MD-E2-T01 implementiert die standardmäßig aktive
 `draft`-Auswertung, die gegenseitig exklusiven CLI-Optionen und die genau einmalige
-Neuklassifikation samt `DraftManifest`-Installation. MD-E2-T02 (fail-closed-Härtung,
-Revisionsdeterminismus, Idempotenz) und MD-E2-T03 (opt-in `inspect`-Vorschlag) sind
+Neuklassifikation samt `DraftManifest`-Installation. MD-E2-T02 härtet die Grenze
+fail-closed (Outcome-Matrix, kanonische Handoff-Revalidierung, Code-/Katalog-/Hash-
+gebundene Revision, `still_ambiguous`-Erhalt, deterministische `already_fetched`-
+Idempotenz). MD-E2-T03 (opt-in `inspect`-Vorschlag) und MD-E2-T04 (Paketabnahme) sind
 noch offen; FR-15 insgesamt bleibt offen.
 
 Der schmale Orchestrierungs-Seam `install_draft_attachment_evaluations(...)` in
@@ -1465,14 +1467,53 @@ Review-Hash die installierte Auswertung bindet:
    `attachment_evaluation`: `status: "completed"`, `reason: "classification_clear"`,
    `authorization: "auto_evaluated"`, die MD-E1-`files[]`, `used_for_classification: true`
    und eine 64-Hex-`classifier_revision`.
-5. Fortbestehende Mehrdeutigkeit → `completed` / `still_ambiguous` / `false` / `null`;
-   MD-E1-Fehler/no-op → das bounded staged Objekt (`false`/`null`).
+5. Fortbestehende Mehrdeutigkeit → `completed` / `still_ambiguous` mit
+   `authorization: "auto_evaluated"` und den unveränderten sicheren `files[]` (inkl.
+   Coverage/Truncation), `used_for_classification: false` / `classifier_revision: null`;
+   kein Ersatz wird adoptiert und das Item bleibt Review/`INBOX`. MD-E1-Fehler/no-op →
+   das bounded staged Objekt (`false`/`null`).
+
+**T02 Fail-closed-Härtung:**
+
+- Jede bounded MD-E1-Fehler-/No-Op-Ursache bleibt item-lokal in Review/`INBOX`:
+  `lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`,
+  `extraction_failed`, `handoff_invalid` (jeweils `failed`/`not_applicable`, leere
+  `files[]`, `false`/`null`), sowie die MD-E1-No-Ops `classification_clear`,
+  `no_attachments`, `no_allowed_attachments` und das validierte
+  `completed`/`still_ambiguous`. Fehlerhafte/mehrdeutige Ausgänge werden auf
+  `keep_in_folder`/`INBOX` mit `review_required: true` und niedriger Confidence gezwungen.
+- Identitäts-/Quellen-Pairing-Fehler (fehlende, doppelte oder nicht passende effektive
+  Quelle) sind Bindungsfehler (`failed`/`handoff_invalid`), keine erfolgreichen No-Ops.
+- Ein `ready`-Handoff wird **vor** der Klassifikation mit dem kanonischen
+  `validate_attachment_handoff` gegen die vertrauenswürdige Account-/Folder-/Envelope-/
+  Message-Identität, den Vorab-Entscheid und das kanonische Anhangs-Inventar revalidiert;
+  ein manipulierter, fehlender, doppelter oder hash-abweichender Handoff stoppt als
+  `failed`/`handoff_invalid` ohne jeden Classifier-Aufruf. Die konsumierten Hashes müssen
+  gültige lowercase 64-Hex sein, eindeutig sein und exakt den staged `files[]` entsprechen.
+- Die finale Status-/Reason-/Authorization-/`files[]`-Vocabulary wird erzwungen.
+  Langlebige `files[]` bleiben ausschließlich die kanonischen sechs sicheren MD-E1-Felder
+  `{filename, sha256, mime_type, chars, coverage, run_id}`.
+- Unerwartete Backend-/Programmiervertragsfehler (nicht-Mapping-Ergebnis, malformtes
+  staged Objekt, unerwartete Status/Reason/Authorization/Files, nicht-Mapping-
+  Reclassifier-Ergebnis) schlagen fail-loud über
+  `AttachmentReclassificationContractError` fehl; sie werden **nie** als `fetch_failed`
+  oder `still_ambiguous` umetikettiert.
 
 **`classifier_revision`:** `compute_classifier_revision` bindet einen deterministischen
-SHA-256-Fingerprint der aktiven kanonischen Klassifikationsregeln (Projekt-/Topic-Kataloge
-plus `CLASSIFIER_RULES_VERSION`) an die sortierte, deduplizierte Menge der tatsächlich
-konsumierten Anhangs-Hashes. Reihenfolge ist irrelevant; jede Regel- oder Input-Änderung
-ändert die Revision. Caller-, Mail- und Manifest-Werte können sie nicht setzen.
+SHA-256-Fingerprint der aktiven kanonischen Klassifikationsregeln (der normalisierte
+AST des Classifier-Regelmoduls `classifier.py` plus Projekt-/Topic-Kataloge und
+`CLASSIFIER_RULES_VERSION`) an die sortierte, deduplizierte Menge der tatsächlich
+konsumierten Anhangs-Hashes. Reihenfolge ist irrelevant; jede regel- oder
+katalogrelevante Code-Änderung und jede Input-Änderung ändert die Revision, während
+Kommentare/Formatierung und Host-Pfade sie nicht bewegen. Caller-, Mail- und
+Manifest-Werte können sie nicht setzen.
+
+**Idempotenz / `already_fetched`:** `derive_evaluation_run_id` leitet aus der
+vertrauenswürdigen Account-/Folder-/Envelope-/Message-Identität deterministisch einen
+sicheren, PII-freien Run-ID je Nachricht ab (ein optionaler Caller-`attachment_run_id`
+dient nur als Basis-Namespace). Der zweite Default-`draft`-Lauf derselben unveränderten
+Nachricht erreicht damit MD-E1 `already_fetched` und schreibt keinen zweiten Anhang;
+es wird kein zweiter Cache/Index und kein Cross-Run-Ergebnis-Cache eingeführt.
 
 **CLI/Konfiguration:** `--evaluate-attachments` und `--no-evaluate-attachments` sind
 gegenseitig exklusiv und nur mit direktem `--draft`/`--inspect` gültig. Ohne Flag ist
