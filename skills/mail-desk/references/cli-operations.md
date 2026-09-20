@@ -241,7 +241,13 @@ bindet den normalisierten AST des Classifier-Regelmoduls plus Kataloge und konsu
 unerwartete Backend-/Programmiervertragsfehler schlagen über
 `AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer, PII-freier
 Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched` ohne Doppel-Fetch.
-Der opt-in `inspect`-Vorschlag (MD-E2-T03) und die Paketabnahme (MD-E2-T04) sind noch offen; MD-E1
+Mit **FR-15/MD-E2-T03** ist der opt-in `inspect`-Vorschlag verdrahtet: `inspect` bleibt
+standardmäßig rein lesend; nur `--evaluate-attachments` (`evaluate_attachments: true`) ergänzt
+einen top-level, **nicht ausführbaren** `manifest_proposal` über denselben
+`draft_manifest`- + `install_draft_attachment_evaluations`-Flow wie `draft`, und eine
+ausführbare Batch-Manifest-Datei entsteht weiterhin nur bei explizit konfiguriertem
+`manifest_file`. Ein gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed)
+bleibt geordnet und item-lokal. Die Paketabnahme (MD-E2-T04) ist noch offen; MD-E1
 endet am validierten Handoff.
 
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag

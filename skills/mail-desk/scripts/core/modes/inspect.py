@@ -13,9 +13,11 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Mapping
 
-from ..classifier import draft_manifest
+from ..attachment_evaluation import attachment_evaluate, decision_triggers_evaluation
+from ..attachment_reclassification import install_draft_attachment_evaluations
+from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
-from ..himalaya import get_single_email_details, run_himalaya
+from ..himalaya import fetch_raw_message_eml, get_single_email_details, run_himalaya
 from ..index import load_final_index
 
 
@@ -54,6 +56,15 @@ def run_inspect_mode(
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
     write_json = _dependency(dependencies, "atomic_write_json", atomic_write_json)
     sleep = _dependency(dependencies, "sleep", time.sleep)
+    # FR-15/MD-E2-T03 reuses the already-hardened draft item flow; the MD-E1 backend and the
+    # existing classifier stay authoritative and are resolved through the same patchable
+    # dependency boundary as ``run_draft_mode``.
+    evaluate_backend = _dependency(dependencies, "attachment_evaluate", attachment_evaluate)
+    reclassify = _dependency(dependencies, "classify_email", classify_email)
+    raw_mime_reader = _dependency(dependencies, "fetch_raw_message_eml", fetch_raw_message_eml)
+    triggers_evaluation = _dependency(
+        dependencies, "decision_triggers_evaluation", decision_triggers_evaluation
+    )
 
     folder = config.get("folder", "INBOX")
     count = int(config.get("count", 20))
@@ -66,9 +77,12 @@ def run_inspect_mode(
     output_file = config.get("output_file")
     check_known = bool(config.get("check_known", True))
     skip_known = bool(config.get("skip_known", False))
-    # FR-15/MD-E2-T01: inspect defaults evaluation OFF and only validates the boolean here;
-    # the opt-in `manifest_proposal` behaviour is MD-E2-T03 and intentionally not wired yet.
-    if not isinstance(config.get("evaluate_attachments", False), bool):
+    # FR-15/MD-E2-T03: inspect stays inspection-only by default.  The opt-in
+    # ``evaluate_attachments`` flag implicitly enables exactly the same non-executable
+    # ``manifest_proposal`` that an explicit ``propose_manifest`` already produced; an
+    # executable batch manifest is still written only to an explicit ``manifest_file``.
+    evaluate_attachments = config.get("evaluate_attachments", False)
+    if not isinstance(evaluate_attachments, bool):
         raise ValueError("evaluate_attachments must be a boolean")
     propose_manifest = bool(config.get("propose_manifest", False) or config.get("propose", False))
     manifest_file = config.get("manifest_file")
@@ -152,12 +166,34 @@ def run_inspect_mode(
         "known_count": known_count,
         "emails": ordered_emails,
     }
-    if propose_manifest:
+    if propose_manifest or evaluate_attachments:
+        # Initial preview/body/full-read classification always completes first.  The
+        # classifier reports the effective source it actually used through the transient
+        # ``source_sink``, so the single reclassification consumes the same effective source
+        # (preview or full-read) rather than the raw inspection entry.
+        effective_sources: list[dict[str, Any]] = []
         manifest = draft(
             ordered_emails,
             workspace_root=workspace_root,
             full_reader=get_details,
             account=account,
+            source_sink=effective_sources.append,
+        )
+        install_draft_attachment_evaluations(
+            manifest.get("items", []),
+            effective_sources,
+            evaluate_attachments=evaluate_attachments,
+            workspace_root=workspace_root,
+            data_dir=dd,
+            account=account,
+            evaluate=evaluate_backend,
+            reclassify=reclassify,
+            read_raw_mime=raw_mime_reader,
+            triggers_evaluation=triggers_evaluation,
+            policy=config.get("attachment_policy"),
+            run_id=config.get("attachment_run_id"),
+            lease_id=config.get("lease_id"),
+            conversation_id=config.get("conversation_id"),
         )
         output_data["manifest_proposal"] = manifest
         if manifest_file:

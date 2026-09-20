@@ -105,8 +105,11 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
   MD-E1 failure stays item-local in Review/`INBOX`, a deterministic PII-free per-message
   run-id reaches MD-E1 `already_fetched` on a repeated default invocation (no duplicate
   attachment fetch, no cross-run cache), and unexpected backend contract errors fail loud
-  instead of being relabelled. The opt-in `inspect`
-  proposal (MD-E2-T03) and the package acceptance (MD-E2-T04) remain open.
+  instead of being relabelled. With **FR-15/MD-E2-T03** the opt-in `inspect` proposal is
+  wired: plain `inspect` stays read-only, and only `--evaluate-attachments` (default off)
+  adds a top-level, non-executable `manifest_proposal` through the same item flow as
+  `draft`; an executable batch manifest is still written only to an explicitly configured
+  `manifest_file`. The package acceptance (MD-E2-T04) remains open.
 
 ## Envelope IDs
 

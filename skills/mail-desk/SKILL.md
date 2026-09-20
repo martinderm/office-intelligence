@@ -190,10 +190,13 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    Backend-/Programmiervertragsfehler schlagen über
    `AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer,
    PII-freier Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched`
-   ohne Doppel-Fetch. Der opt-in `inspect`-Vorschlag (MD-E2-T03) und die Paketabnahme
-   (MD-E2-T04) sind noch offen;
-   FR-15 insgesamt bleibt offen. Details stehen in
-   [`references/batch-runner.md`](references/batch-runner.md).
+    ohne Doppel-Fetch. Mit **FR-15/MD-E2-T03** ist der opt-in `inspect`-Vorschlag
+    verdrahtet: `inspect` bleibt ohne Opt-in rein lesend; nur `evaluate_attachments: true`
+    ergänzt einen top-level, nicht ausführbaren `manifest_proposal` über denselben
+    Item-Flow wie `draft`, und eine ausführbare Batch-Manifest-Datei entsteht weiterhin nur
+    bei explizit konfiguriertem `manifest_file`. Die Paketabnahme (MD-E2-T04) ist noch offen;
+    FR-15 insgesamt bleibt offen. Details stehen in
+    [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.
 5. Spam-Quarantäne-Benachrichtigungen mit systemischem Absender und passendem Betreff

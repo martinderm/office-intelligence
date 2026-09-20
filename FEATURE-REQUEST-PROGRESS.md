@@ -35,8 +35,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
 - `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) ist vollständig implementiert, reviewt,
-  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen; `MD-E2-T01` und
-  `MD-E2-T02` sind implementiert, `MD-E2-T03`–`T04` sind offen.** Der staged
+  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen; `MD-E2-T01`,
+  `MD-E2-T02` und `MD-E2-T03` sind implementiert, `MD-E2-T04` ist offen.** Der staged
   `attachment_evaluation`-Vertrag
   (`used_for_classification` immer `false`, `classifier_revision` immer `null`) und die
   bounded Status-/Reason-Menge sind eingehalten. Alle drei blockierenden
@@ -76,13 +76,20 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   Classifier-Regelmoduls (Kommentare/Formatierung/Host-Pfade bewegen ihn nicht), unerwartete
   Backend-/Programmiervertragsfehler schlagen über
   `AttachmentReclassificationContractError` fail-loud fehl (nie als `fetch_failed`/
-  `still_ambiguous` umetikettiert), und ein deterministischer, PII-freier Run-ID je
+  `still_ambiguous` umetikettiert),   und ein deterministischer, PII-freier Run-ID je
   Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched` ohne Doppel-Fetch.
-  `MD-E2-T03` (opt-in `inspect`-Vorschlag) und `MD-E2-T04` (Paketabnahme) sind offen.
+  Mit **`MD-E2-T03`** (`skills/mail-desk/scripts/core/modes/inspect.py`) ist der opt-in
+  `inspect`-Vorschlag implementiert: `inspect` bleibt ohne Opt-in rein lesend, nur
+  `evaluate_attachments: true` erzeugt einen top-level, nicht ausführbaren
+  `manifest_proposal` über denselben Item-Flow, `propose_manifest: true` ohne Auswertung
+  installiert je Proposal-Item `skipped`/`evaluation_disabled`, und eine ausführbare
+  Batch-Manifest-Datei entsteht nur bei explizitem `manifest_file`. `MD-E2-T04`
+  (Paketabnahme) ist offen.
   Fokussierter Nachweis `skills/mail-desk/tests/test_batch_runner_mde2_hardening.py` 30/30
-  grün, `test_batch_runner_mde2_draft.py` 14/14 grün, `test_batch_runner_modes.py` 21/21
+  grün, `test_batch_runner_mde2_draft.py` 14/14 grün, `test_batch_runner_mde2_inspect.py`
+  12/12 grün, `test_batch_runner_modes.py` 21/21
   grün, `test_maildesk_attachment_evaluation_mde1.py` 112/112 grün, vollständige entdeckte
-  Mail-Desk-Suite 693/693 grün (aktueller Nachweis, kein permanenter Abnahmewert).
+  Mail-Desk-Suite 705/705 grün (aktueller Nachweis, kein permanenter Abnahmewert).
   Prozesshinweis: Die T02-Red-vor-Implementierung-Sequenz wurde für diesen Dispatch
   nicht eingehalten (Implementierung begann vor dem ersten Testlauf); der Dispatch-
   Hinweis wird im T02-Handoff-Bericht offen dokumentiert.
@@ -90,4 +97,4 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
-- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation. `MD-E2-T01` (standardmäßig aktive `draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, `DraftManifest`-Installation) und `MD-E2-T02` (fail-closed-Härtung, Revisionsdeterminismus, Idempotenz) sind implementiert; als Nächstes folgen `MD-E2-T03` (opt-in `inspect`-Vorschlag) und `MD-E2-T04` (Paketabnahme). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation. `MD-E2-T01` (standardmäßig aktive `draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, `DraftManifest`-Installation), `MD-E2-T02` (fail-closed-Härtung, Revisionsdeterminismus, Idempotenz) und `MD-E2-T03` (opt-in `inspect`-Vorschlag) sind implementiert; als Nächstes folgt `MD-E2-T04` (Paketabnahme). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).

@@ -93,7 +93,7 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 
 ### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04/T05/T06/T07)
 
-Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path implementiert (§3.2; T03–T04 offen).
+Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path und mit **FR-15/MD-E2-T03** als opt-in `inspect`-Vorschlag implementiert (§3.2/§3.3; T04 offen).
 
 ```
 [Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
@@ -131,7 +131,7 @@ Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attac
 
 ---
 
-### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01/T02)
+### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01/T02/T03)
 
 Implementiert in [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py)
 und aufgerufen aus [`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py) **nach** der
@@ -172,7 +172,8 @@ Review-Hash bindet die installierte Auswertung):
    `false`/`null` (siehe [`objects.md`](objects.md) §6).
 4. `--evaluate-attachments`/`--no-evaluate-attachments` sind gegenseitig exklusiv und nur für
    direktes `draft`/`inspect` gültig (`draft` default an, `inspect` default aus); `--pipeline` bleibt
-   unverändert. MD-E2-T03 (inspect-Vorschlag) und MD-E2-T04 (Paketabnahme) sind noch offen.
+   unverändert. MD-E2-T03 verdrahtet den opt-in `inspect`-Vorschlag (§3.3); MD-E2-T04 (Paketabnahme)
+   ist noch offen.
 5. **T02 fail-closed:** Identitäts-/Quellen-Pairing-Fehler sind Bindungsfehler (`handoff_invalid`).
    Der `ready`-Handoff wird vor der Klassifikation kanonisch revalidiert; manipulierte, fehlende,
    doppelte oder hash-abweichende Handoffs stoppen ohne Classifier-Aufruf. Fortbestehende
@@ -181,6 +182,23 @@ Review-Hash bindet die installierte Auswertung):
    `AttachmentReclassificationContractError` fehl, statt als bounded Policy-Outcome umetikettiert
    zu werden. Der deterministische, PII-freie Run-ID je Nachricht erreicht im zweiten Default-Lauf
    MD-E1 `already_fetched` ohne Doppel-Fetch (kein zweiter Cache/Index).
+
+---
+
+### 3.3 Opt-in `inspect`-Vorschlag (`inspect.py`, FR-15/MD-E2-T03)
+
+[`scripts/core/modes/inspect.py`](../scripts/core/modes/inspect.py) bleibt ohne
+`evaluate_attachments`/`propose_manifest` rein lesend. `evaluate_attachments: true` impliziert
+den top-level `manifest_proposal`: der Inspektor baut das Manifest über
+`draft_manifest(ordered_emails, …, source_sink=…)` (die initiale Preview-/Body-/Full-Read-
+Klassifikation schließt zuerst ab) und reicht die transienten effektiven Quellen an denselben
+`install_draft_attachment_evaluations(...)`-Seam wie `draft` weiter. `propose_manifest: true`
+ohne Auswertung installiert je Proposal-Item genau ein `skipped`/`evaluation_disabled`. Ein
+gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed) bleibt geordnet und
+item-lokal; ein ausführbares Batch-Manifest entsteht nur bei explizitem `manifest_file`. Die
+T01/T02-Semantik (genau eine Neuklassifikation je Item, `already_fetched`-Idempotenz,
+Zero-Mutation, kein Rohinhalt/`prompt_content`/absoluter Pfad/Capability im Output) wird
+unverändert geerbt. MD-E2-T04 (Paketabnahme) bleibt offen.
 
 ---
 
