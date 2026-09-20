@@ -109,7 +109,14 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
   wired: plain `inspect` stays read-only, and only `--evaluate-attachments` (default off)
   adds a top-level, non-executable `manifest_proposal` through the same item flow as
   `draft`; an executable batch manifest is still written only to an explicitly configured
-  `manifest_file`. The package acceptance (MD-E2-T04) remains open.
+  `manifest_file`. The package acceptance (**FR-15/MD-E2-T04**) is complete: a hermetic
+  package-acceptance test (`tests/test_batch_runner_mde2_acceptance.py`) proves the single
+  real path Body/Full Read -> ambiguous -> real `text/plain` attachment -> one
+  `untrusted_external` reclassification -> persisted project `DraftManifest` with a bounded
+  `attachment_evaluation` (`used_for_classification: true`, 64-hex `classifier_revision`
+  bound to the classifier rules plus the consumed attachment hash) at zero mailbox/network
+  and zero execute/promote/export/filing/disposition/catalog/cloud side effects. FR-15 is
+  closed.
 
 ## Envelope IDs
 

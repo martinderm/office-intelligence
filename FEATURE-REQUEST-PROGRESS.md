@@ -34,9 +34,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   getestet und committed. Der Abschluss ist archiviert.
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
-- `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) ist vollständig implementiert, reviewt,
-  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen; `MD-E2-T01`,
-  `MD-E2-T02` und `MD-E2-T03` sind implementiert, `MD-E2-T04` ist offen.** Der staged
+- `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) und MD-E2 (`MD-E2-T01`–`T04`) sind vollständig
+  implementiert, reviewt, verifiziert und paketabgenommen; `FR-15` ist geschlossen.** Der staged
   `attachment_evaluation`-Vertrag
   (`used_for_classification` immer `false`, `classifier_revision` immer `null`) und die
   bounded Status-/Reason-Menge sind eingehalten. Alle drei blockierenden
@@ -83,18 +82,44 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   `evaluate_attachments: true` erzeugt einen top-level, nicht ausführbaren
   `manifest_proposal` über denselben Item-Flow, `propose_manifest: true` ohne Auswertung
   installiert je Proposal-Item `skipped`/`evaluation_disabled`, und eine ausführbare
-  Batch-Manifest-Datei entsteht nur bei explizitem `manifest_file`. `MD-E2-T04`
-  (Paketabnahme) ist offen.
+  Batch-Manifest-Datei entsteht nur bei explizitem `manifest_file`. Mit **`MD-E2-T04`** ist die
+  Paketabnahme über den neuen hermetischen Akzeptanztest
+  `skills/mail-desk/tests/test_batch_runner_mde2_acceptance.py` abgeschlossen: ein einziger
+  realer Pfad (`run_draft_mode` mit echtem `draft_manifest`, echter Classifier-Regelbasis und
+  echtem MD-E1 `attachment_evaluate`) Body/Full-Read → mehrdeutig → realer `text/plain`-Anhang
+  → genau eine `untrusted_external`-Neuklassifikation → persistiertes Projekt-`DraftManifest`
+  mit bounded `attachment_evaluation` (`used_for_classification: true`,
+  64-Hex-`classifier_revision` gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash)
+  bei null Mailbox-/Netzwerk- und null Execute-/Promote-/Export-/Filing-/Dispositions-/
+  Katalog-/Cloud-Seiteneffekten. **`FR-15` ist damit geschlossen.**
   Fokussierter Nachweis `skills/mail-desk/tests/test_batch_runner_mde2_hardening.py` 30/30
   grün, `test_batch_runner_mde2_draft.py` 14/14 grün, `test_batch_runner_mde2_inspect.py`
-  12/12 grün, `test_batch_runner_modes.py` 21/21
-  grün, `test_maildesk_attachment_evaluation_mde1.py` 112/112 grün, vollständige entdeckte
-  Mail-Desk-Suite 705/705 grün (aktueller Nachweis, kein permanenter Abnahmewert).
+  12/12 grün, `test_batch_runner_mde2_acceptance.py` 1/1 grün, `test_batch_runner_modes.py`
+  21/21 grün, `test_maildesk_attachment_evaluation_mde1.py` 112/112 grün, vollständige
+  entdeckte Mail-Desk-Suite 706/706 grün (aktueller Nachweis, kein permanenter Abnahmewert).
+  Git-Index-Metrik: 111 getrackte Dateien / 54 unter `scripts/` (43 unter `scripts/core`) /
+  42 Testmodule / 706 Tests.
   Prozesshinweis: Die T02-Red-vor-Implementierung-Sequenz wurde für diesen Dispatch
   nicht eingehalten (Implementierung begann vor dem ersten Testlauf); der Dispatch-
   Hinweis wird im T02-Handoff-Bericht offen dokumentiert.
+  Akzeptierte Residuen (bewusst, nicht Teil eines Fixes): (1) Ein opt-in
+  `inspect --evaluate-attachments`-`manifest_proposal` erbt beim Manifestbau den
+  bestehenden `DraftManifest`-Sent-Index-Synchronisations-/lokalen Index-Schreibpfad;
+  das ist **keine** Mailbox-Mutation, bleibt aber operator-sichtbar (ein ausführbares
+  Manifest entsteht weiterhin nur bei explizitem `manifest_file`). (2) `manifest_file_created`
+  darf ein operator-konfiguriertes Manifest-Ziel echoen; FR-15 verbietet
+  anhang-abgeleitete absolute Pfade, nicht diesen operator-konfigurierten Pfad. (3)
+  `classifier_revision` bewahrt absichtlich die Katalog-Listenreihenfolge, weil das
+  Classifier-Matching reihenfolge-sensitiv ist. (4) Die bestehende defensive Behandlung
+  von Nicht-dict-Items und `files: []`-Fehlerfällen benötigt keine Produktionsänderung.
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
-- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation. `MD-E2-T01` (standardmäßig aktive `draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, `DraftManifest`-Installation), `MD-E2-T02` (fail-closed-Härtung, Revisionsdeterminismus, Idempotenz) und `MD-E2-T03` (opt-in `inspect`-Vorschlag) sind implementiert; als Nächstes folgt `MD-E2-T04` (Paketabnahme). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
+  `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
+  `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in
+  `inspect`-Vorschlag und hermetische Paketabnahme) sind implementiert und paketabgenommen;
+  **FR-15 ist geschlossen**. Als nächstes Paket folgt **FR-13/`MD-M1`** (noch nicht gestartet)
+  gegen diesen abgenommenen MD-E2-Baseline. Spezifikation und Abnahme stehen in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).

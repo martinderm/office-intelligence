@@ -247,8 +247,14 @@ einen top-level, **nicht ausführbaren** `manifest_proposal` über denselben
 `draft_manifest`- + `install_draft_attachment_evaluations`-Flow wie `draft`, und eine
 ausführbare Batch-Manifest-Datei entsteht weiterhin nur bei explizit konfiguriertem
 `manifest_file`. Ein gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed)
-bleibt geordnet und item-lokal. Die Paketabnahme (MD-E2-T04) ist noch offen; MD-E1
-endet am validierten Handoff.
+bleibt geordnet und item-lokal. Die Paketabnahme (**FR-15/MD-E2-T04**) ist abgeschlossen:
+`tests/test_batch_runner_mde2_acceptance.py` beweist in einem einzigen hermetischen realen
+Pfad Body/Full-Read → mehrdeutig → realer `text/plain`-Anhang → genau eine
+`untrusted_external`-Neuklassifikation → persistiertes Projekt-`DraftManifest` mit
+bounded `attachment_evaluation` (`used_for_classification: true`, 64-Hex-`classifier_revision`
+gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei null Mailbox-/Netzwerk-
+und null Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
+**FR-15 ist damit geschlossen**; MD-E1 endet weiterhin am validierten Handoff.
 
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag
 > `mail_desk_inspect_manifest.py --reclassify` (siehe oben) reklassifiziert erstellte

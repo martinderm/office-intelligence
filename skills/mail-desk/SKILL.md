@@ -194,8 +194,14 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     verdrahtet: `inspect` bleibt ohne Opt-in rein lesend; nur `evaluate_attachments: true`
     ergänzt einen top-level, nicht ausführbaren `manifest_proposal` über denselben
     Item-Flow wie `draft`, und eine ausführbare Batch-Manifest-Datei entsteht weiterhin nur
-    bei explizit konfiguriertem `manifest_file`. Die Paketabnahme (MD-E2-T04) ist noch offen;
-    FR-15 insgesamt bleibt offen. Details stehen in
+    bei explizit konfiguriertem `manifest_file`. Die Paketabnahme (**FR-15/MD-E2-T04**) ist
+    abgeschlossen: `tests/test_batch_runner_mde2_acceptance.py` beweist in einem einzigen
+    hermetischen realen Pfad Body/Full-Read -> mehrdeutig -> realer `text/plain`-Anhang ->
+    genau eine `untrusted_external`-Neuklassifikation -> persistiertes Projekt-`DraftManifest`
+    mit bounded `attachment_evaluation` (`used_for_classification: true`, 64-Hex-
+    `classifier_revision` gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei
+    null Mailbox-/Netzwerk- und null Execute-/Promote-/Export-/Filing-/Dispositions-/
+    Katalog-/Cloud-Seiteneffekten. **FR-15 ist geschlossen.** Details stehen in
     [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.

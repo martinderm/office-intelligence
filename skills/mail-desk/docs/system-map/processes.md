@@ -93,7 +93,7 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 
 ### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04/T05/T06/T07)
 
-Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path und mit **FR-15/MD-E2-T03** als opt-in `inspect`-Vorschlag implementiert (§3.2/§3.3; T04 offen).
+Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path und mit **FR-15/MD-E2-T03** als opt-in `inspect`-Vorschlag implementiert und mit **FR-15/MD-E2-T04** über den hermetischen Real-Pfad-Akzeptanztest paketabgenommen (FR-15 geschlossen; §3.2/§3.3).
 
 ```
 [Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
@@ -131,7 +131,7 @@ Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attac
 
 ---
 
-### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01/T02/T03)
+### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01/T02/T03/T04)
 
 Implementiert in [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py)
 und aufgerufen aus [`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py) **nach** der
@@ -172,8 +172,15 @@ Review-Hash bindet die installierte Auswertung):
    `false`/`null` (siehe [`objects.md`](objects.md) §6).
 4. `--evaluate-attachments`/`--no-evaluate-attachments` sind gegenseitig exklusiv und nur für
    direktes `draft`/`inspect` gültig (`draft` default an, `inspect` default aus); `--pipeline` bleibt
-   unverändert. MD-E2-T03 verdrahtet den opt-in `inspect`-Vorschlag (§3.3); MD-E2-T04 (Paketabnahme)
-   ist noch offen.
+   unverändert. MD-E2-T03 verdrahtet den opt-in `inspect`-Vorschlag (§3.3); mit **MD-E2-T04**
+   ist die Paketabnahme über den hermetischen Akzeptanztest
+   [`tests/test_batch_runner_mde2_acceptance.py`](../tests/test_batch_runner_mde2_acceptance.py)
+   abgeschlossen (**FR-15 geschlossen**): ein einziger realer Pfad Body/Full-Read → mehrdeutig →
+   realer `text/plain`-Anhang → genau eine `untrusted_external`-Neuklassifikation →
+   persistiertes Projekt-`DraftManifest` mit bounded `attachment_evaluation`
+   (`used_for_classification: true`, 64-Hex-`classifier_revision` gebunden an Classifier-Regeln
+   plus konsumierten Anhangs-Hash) bei null Mailbox-/Netzwerk- und null
+   Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
 5. **T02 fail-closed:** Identitäts-/Quellen-Pairing-Fehler sind Bindungsfehler (`handoff_invalid`).
    Der `ready`-Handoff wird vor der Klassifikation kanonisch revalidiert; manipulierte, fehlende,
    doppelte oder hash-abweichende Handoffs stoppen ohne Classifier-Aufruf. Fortbestehende
@@ -198,7 +205,8 @@ gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed) bleibt geor
 item-lokal; ein ausführbares Batch-Manifest entsteht nur bei explizitem `manifest_file`. Die
 T01/T02-Semantik (genau eine Neuklassifikation je Item, `already_fetched`-Idempotenz,
 Zero-Mutation, kein Rohinhalt/`prompt_content`/absoluter Pfad/Capability im Output) wird
-unverändert geerbt. MD-E2-T04 (Paketabnahme) bleibt offen.
+unverändert geerbt. Mit **MD-E2-T04** ist die Paketabnahme abgeschlossen
+(`tests/test_batch_runner_mde2_acceptance.py`); **FR-15 ist geschlossen**.
 
 ---
 

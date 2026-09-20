@@ -1312,7 +1312,14 @@ Fehler-/Reason-Matrix fail-closed.
 > `draft`-Aufrufverdrahtung, die `--evaluate-attachments`/`--no-evaluate-attachments`-Option
 > und die einmalige Neuklassifikation samt `DraftManifest`-Installation implementiert; mit
 > **FR-15/MD-E2-T02** ist die Grenze fail-closed gehärtet, und mit **FR-15/MD-E2-T03** ist der
-> opt-in `inspect`-Vorschlag verdrahtet. Die Paketabnahme (MD-E2-T04) bleibt offen.
+> opt-in `inspect`-Vorschlag verdrahtet. **FR-15/MD-E2-T04** schließt die Paketabnahme: der
+> hermetische Akzeptanztest `tests/test_batch_runner_mde2_acceptance.py` beweist in einem
+> einzigen realen Pfad Body/Full-Read → mehrdeutig → realer `text/plain`-Anhang → genau eine
+> `untrusted_external`-Neuklassifikation → persistiertes Projekt-`DraftManifest` mit bounded
+> `attachment_evaluation` (`used_for_classification: true`, 64-Hex-`classifier_revision`
+> gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei null Mailbox-/Netzwerk-
+> und null Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
+> **FR-15 ist damit geschlossen.**
 
 1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
    ```python
@@ -1438,7 +1445,7 @@ Fehler-/Reason-Matrix fail-closed.
 
 ---
 
-## FR-15 / MD-E2-T01 + T02 + T03: Draft-Integration, einmalige Neuklassifikation und opt-in inspect-Vorschlag (`core/attachment_reclassification.py`)
+## FR-15 / MD-E2-T01 + T02 + T03 + T04: Draft-Integration, einmalige Neuklassifikation und opt-in inspect-Vorschlag (`core/attachment_reclassification.py`)
 
 **Implementierungsstand:** MD-E2-T01 implementiert die standardmäßig aktive
 `draft`-Auswertung, die gegenseitig exklusiven CLI-Optionen und die genau einmalige
@@ -1446,8 +1453,9 @@ Neuklassifikation samt `DraftManifest`-Installation. MD-E2-T02 härtet die Grenz
 fail-closed (Outcome-Matrix, kanonische Handoff-Revalidierung, Code-/Katalog-/Hash-
 gebundene Revision, `still_ambiguous`-Erhalt, deterministische `already_fetched`-
 Idempotenz). MD-E2-T03 verdrahtet den opt-in `inspect`-Vorschlag über denselben
-Item-Flow (`scripts/core/modes/inspect.py`). MD-E2-T04 (Paketabnahme) ist noch offen;
-FR-15 insgesamt bleibt offen.
+Item-Flow (`scripts/core/modes/inspect.py`). MD-E2-T04 nimmt das Paket über den
+hermetischen Akzeptanztest `tests/test_batch_runner_mde2_acceptance.py` ab; **FR-15 ist
+damit geschlossen**.
 
 Der schmale Orchestrierungs-Seam `install_draft_attachment_evaluations(...)` in
 `scripts/core/attachment_reclassification.py` läuft nach der bestehenden
