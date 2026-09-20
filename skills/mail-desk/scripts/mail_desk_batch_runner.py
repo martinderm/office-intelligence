@@ -953,12 +953,31 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Minimum confidence threshold for pipeline auto-execution")
     parser.add_argument("--expected-count", type=int, help="Required selected count for --draft review manifest (defaults to N)")
     parser.add_argument("--allow-fewer", action="store_true", help="Permit fewer reviewed candidates than --expected-count for --draft")
+    evaluation = parser.add_mutually_exclusive_group()
+    evaluation.add_argument(
+        "--evaluate-attachments",
+        dest="evaluate_attachments",
+        action="store_true",
+        default=None,
+        help="Evaluate policy-allowed attachments for --draft/--inspect (draft default: on)",
+    )
+    evaluation.add_argument(
+        "--no-evaluate-attachments",
+        dest="evaluate_attachments",
+        action="store_false",
+        default=None,
+        help="Disable attachment evaluation for --draft/--inspect",
+    )
     return parser
 
 
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
         raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
+    if args.evaluate_attachments is not None and args.draft is None and args.inspect is None:
+        raise ArgumentParseError(
+            "--evaluate-attachments/--no-evaluate-attachments are valid only with --draft or --inspect"
+        )
     if args.reconcile and any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.dossier is not None, args.sync_sent is not None, args.resolve)):
         raise ArgumentParseError("--reconcile cannot be combined with another direct mode")
     if args.dossier is not None:
@@ -1011,6 +1030,7 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             "skip_known": args.skip_known,
             "expected_count": expected_count,
             "allow_fewer": args.allow_fewer,
+            "evaluate_attachments": True if args.evaluate_attachments is None else args.evaluate_attachments,
             "output_file": str(data_dir / "batch-manifest.json"),
         }
         if args.query:
@@ -1025,6 +1045,7 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             "order": args.order,
             "folder": args.folder,
             "skip_known": args.skip_known,
+            "evaluate_attachments": False if args.evaluate_attachments is None else args.evaluate_attachments,
             "output_file": str(data_dir / "batch-inspected.json"),
         }
         if args.query:

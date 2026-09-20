@@ -61,6 +61,6 @@ Das Bundle steuert bei Bedarf externe CLI-Tools an, kapselt diese jedoch strikt:
 Vertiefende systemspezifische Schutz- und Isolationseffekte sind in den L2-Effektkarten dokumentiert:
 
 * **Mail-Desk Deep Dive:** [`../../skills/mail-desk/docs/system-map/effects.md`](../../skills/mail-desk/docs/system-map/effects.md)  
-  *(Windows Reparse-Point-Blockade 0x400, Symlink-Bann, Filterung verbotener Inhalte in Metadaten/Receipts, Inventory-Lock, Monotone Discard-Recovery-Integrität, Fail-Closed Drift-Abbruch)*
+  *(Windows Reparse-Point-Blockade 0x400, Symlink-Bann, Filterung verbotener Inhalte in Metadaten/Receipts, Inventory-Lock, Monotone Discard-Recovery-Integrität, Fail-Closed Drift-Abbruch, additive Draft-Integration mit genau einem `attachment_evaluation` je Item und content-addressed `classifier_revision` FR-15/MD-E2-T01)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/effects.md`](../../skills/cloud-atlas/docs/system-map/effects.md)  
   *(Schutz signierter PDFs vor In-Place-Mutation, Differenzierung `enrich_source` vs. `local_derivative`, Tool-Timeouts)*

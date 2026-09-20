@@ -183,13 +183,15 @@ class DraftModeTests(unittest.TestCase):
             )
 
             fetch.assert_not_called()
-            classify.assert_called_once_with(
-                [{"envelope_id": "unseen-1"}],
-                workspace_root=data_dir.parent.parent,
-                sent_lookup={"sent": []},
-                full_reader=runner.get_single_email_details,
-                account=None,
-            )
+            classify.assert_called_once()
+            called = classify.call_args
+            self.assertEqual([{"envelope_id": "unseen-1"}], called.args[0])
+            self.assertEqual(data_dir.parent.parent, called.kwargs["workspace_root"])
+            self.assertEqual({"sent": []}, called.kwargs["sent_lookup"])
+            self.assertEqual(runner.get_single_email_details, called.kwargs["full_reader"])
+            self.assertIsNone(called.kwargs["account"])
+            # FR-15/MD-E2-T01: the transient effective-source sink is passed through.
+            self.assertTrue(callable(called.kwargs["source_sink"]))
             self.assertEqual(manifest, json.loads(output_path.read_text(encoding="utf-8")))
             self.assertEqual({
                 "ok": True, "mode": "draft", "folder": "INBOX", "order": "oldest",

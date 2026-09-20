@@ -6,10 +6,12 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from ..classifier import draft_manifest
+from ..attachment_evaluation import attachment_evaluate, decision_triggers_evaluation
+from ..attachment_reclassification import install_draft_attachment_evaluations
+from ..classifier import classify_email, draft_manifest
 from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
-from ..himalaya import get_single_email_details
+from ..himalaya import fetch_raw_message_eml, get_single_email_details
 from ..progress import BatchProgressTracker
 from ..sent_indexer import load_sent_index
 
@@ -47,6 +49,12 @@ def run_draft_mode(
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
     full_reader = _dependency(dependencies, "get_single_email_details", get_single_email_details)
     write_json = _dependency(dependencies, "atomic_write_json", atomic_write_json)
+    evaluate_backend = _dependency(dependencies, "attachment_evaluate", attachment_evaluate)
+    reclassify = _dependency(dependencies, "classify_email", classify_email)
+    raw_mime_reader = _dependency(dependencies, "fetch_raw_message_eml", fetch_raw_message_eml)
+    triggers_evaluation = _dependency(
+        dependencies, "decision_triggers_evaluation", decision_triggers_evaluation
+    )
 
     dd = data_dir or resolve_data()
     workspace_root = dd.parent.parent
@@ -57,6 +65,17 @@ def run_draft_mode(
     query = config.get("query")
     preview_lines = int(config.get("preview_lines", 30))
     skip_known = bool(config.get("skip_known", True))
+    evaluate_attachments = config.get("evaluate_attachments", True)
+    if not isinstance(evaluate_attachments, bool):
+        raise ValueError("evaluate_attachments must be a boolean")
+    # All draft configuration is validated before any mailbox read, classification,
+    # evaluation or write, so a malformed request can never perform side effects.
+    expected_count = config.get("expected_count", count)
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 1:
+        raise ValueError("expected_count must be a positive integer")
+    allow_fewer = config.get("allow_fewer", False)
+    if not isinstance(allow_fewer, bool):
+        raise ValueError("allow_fewer must be a boolean")
     output_file = config.get("output_file", str(dd / "batch-manifest.json"))
     inspected_file = config.get("inspected_file") or (dd / "batch-inspected.json")
     tracker = progress_tracker(mode="draft", total_items=count, data_dir=dd)
@@ -92,19 +111,37 @@ def run_draft_mode(
         )
 
     tracker.step("classifying_and_checking_sent")
+    sent_lookup = load_sent(dd)
+    # FR-15/MD-E2-T01: the classifier reports the effective source it actually used for each
+    # final initial decision (preview email, or full-read email when it re-read the envelope)
+    # through an explicitly transient, non-persisted channel.
+    effective_sources: list[dict[str, Any]] = []
     manifest = draft(
         emails,
         workspace_root=workspace_root,
-        sent_lookup=load_sent(dd),
+        sent_lookup=sent_lookup,
         full_reader=full_reader,
         account=account,
+        source_sink=effective_sources.append,
     )
-    expected_count = config.get("expected_count", count)
-    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 1:
-        raise ValueError("expected_count must be a positive integer")
-    allow_fewer = config.get("allow_fewer", False)
-    if not isinstance(allow_fewer, bool):
-        raise ValueError("allow_fewer must be a boolean")
+    # The two-pass classification completes first; only then may a still ambiguous item enter
+    # the MD-E1 evaluation and exactly one reclassification against its effective full source.
+    install_draft_attachment_evaluations(
+        manifest.get("items", []),
+        effective_sources,
+        evaluate_attachments=evaluate_attachments,
+        workspace_root=workspace_root,
+        data_dir=dd,
+        account=account,
+        evaluate=evaluate_backend,
+        reclassify=reclassify,
+        read_raw_mime=raw_mime_reader,
+        triggers_evaluation=triggers_evaluation,
+        policy=config.get("attachment_policy"),
+        run_id=config.get("attachment_run_id"),
+        lease_id=config.get("lease_id"),
+        conversation_id=config.get("conversation_id"),
+    )
     manifest = add_draft_contract(
         manifest,
         expected_count=expected_count,

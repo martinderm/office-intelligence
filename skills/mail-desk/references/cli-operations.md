@@ -223,9 +223,16 @@ keine Promotion, Export, Filing, Disposition, Evidence-, Katalog-, Cloud-, Class
 Cleanup-/GC-Mutation aus. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
 erhalten.
 
-**MD-E2-Grenze:** Die automatische `draft`/`inspect`-Aufrufverdrahtung, die CLI-Option
-`--evaluate-attachments`, die einmalige Neuklassifikation und die `DraftManifest`-Installation
-sind **nicht implementiert** und bleiben **MD-E2**. MD-E1 endet am validierten Handoff.
+**MD-E2-Fortsetzung:** Mit **FR-15/MD-E2-T01** ist die standardmäßig aktive
+`draft`-Aufrufverdrahtung umgesetzt (`core/attachment_reclassification.py`): nur ein unklares
+Item durchläuft `attachment_evaluate`, ein validierter `ready`-Handoff wird genau einmal als
+getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein
+additives finales `attachment_evaluation` (`completed/classification_clear` mit
+`used_for_classification: true` und 64-Hex-`classifier_revision` nur bei eindeutigem Erfolg).
+Die direkten, gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments`
+sind nur für `draft`/`inspect` gültig (`draft` default an, `inspect` default aus). Der opt-in
+`inspect`-Vorschlag (MD-E2-T03) und die fail-closed-Härtung (MD-E2-T02) sind noch offen; MD-E1
+endet am validierten Handoff.
 
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag
 > `mail_desk_inspect_manifest.py --reclassify` (siehe oben) reklassifiziert erstellte

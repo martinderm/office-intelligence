@@ -47,7 +47,7 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 
 | Sub-Skill | Komplexitäts-Klasse | Dateien / Tests | Dokumentationspfad | Primäre Aufgabe |
 | :--- | :--- | :--- | :--- | :--- |
-| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | 105 getrackte Dateien (`git ls-files`)<br>53 getrackte Dateien unter `scripts/` (davon 42 unter `scripts/core`)<br>38 Testmodule<br>649 Tests | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, versionierter Quarantäneindex (MD-Q1/MD-Q2/MD-C1 Schema 1 mit additiven Coverage-Feldern), Coverage-Vertrag (MD-C1), Disposition, Verifiable Receipts & Discard-Recovery-Journal (MD-Q3), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundene Anhang-Evaluierung mit linearer Fetch/Extraktions/Handoff-Komposition (FR-15/MD-E1-T05) und fail-closed Fehler-/Reason-Matrix (FR-15/MD-E1-T06), MD-E1-Paketabnahme mit hermetischem End-to-End-Nachweis Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07), Himalaya-Adapter, Dossier-Synthese. |
+| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | 107 getrackte Dateien (`git ls-files`)<br>54 getrackte Dateien unter `scripts/` (davon 43 unter `scripts/core`)<br>39 Testmodule<br>663 Tests | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, versionierter Quarantäneindex (MD-Q1/MD-Q2/MD-C1 Schema 1 mit additiven Coverage-Feldern), Coverage-Vertrag (MD-C1), Disposition, Verifiable Receipts & Discard-Recovery-Journal (MD-Q3), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundene Anhang-Evaluierung mit linearer Fetch/Extraktions/Handoff-Komposition (FR-15/MD-E1-T05) und fail-closed Fehler-/Reason-Matrix (FR-15/MD-E1-T06), MD-E1-Paketabnahme mit hermetischem End-to-End-Nachweis Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07), Himalaya-Adapter, Dossier-Synthese. |
 | [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | 65 Dateien<br>41 Tests | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), Cloud-Sync. |
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
@@ -78,3 +78,20 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
    - `data/`: Flüchtige oder maschinengenerierte Betriebsdaten (z. B. Mail-Quarantäne)
 4. **Dual Evidence Prinzip:** Trennung von operativer Evidenz (Mails, Transkripte, Downloads) und konsolidierter Referenz (Kataloge, Notizen, Action Items).
 5. **Structured CLI Envelopes:** Skriptausgaben erfolgen ausnahmslos als parsebares JSON über standardisierte Hüllkurven mit deterministischen Stopcodes.
+
+---
+
+## 5. FR-15/MD-E2-T01 Status (Mail-Desk)
+
+**FR-15/MD-E2-T01** implementiert die standardmäßig aktive `draft`-Anhang-Auswertung, die
+gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments` (nur
+direktes `draft`/`inspect`; `draft` default an, `inspect` default aus) und die genau einmalige
+Neuklassifikation mit additivem finalem `attachment_evaluation` je Draft-Item
+([`../../skills/mail-desk/SKILL.md`](../../skills/mail-desk/SKILL.md),
+[`../../skills/mail-desk/references/batch-runner.md`](../../skills/mail-desk/references/batch-runner.md)).
+Nur ein unklares Item ruft `attachment_evaluate`; der validierte Handoff bleibt als
+`untrusted_external` gekapselt und wird nie persistiert. MD-E2-T02 (fail-closed-Härtung,
+Revisionsdeterminismus, Idempotenz) und MD-E2-T03 (opt-in `inspect`-Vorschlag) sind noch offen;
+FR-15 insgesamt bleibt offen. Mail-Desk-Karten: L2
+[`README.md`](../../skills/mail-desk/docs/system-map/README.md) §5, `processes.md` §3.2,
+`objects.md` §6, `effects.md` §6.

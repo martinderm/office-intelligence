@@ -168,10 +168,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    `required_for_decision` und endet `completed`/`still_ambiguous`. Die
    `DraftManifest`-Installation bleibt MD-E2. Ein klarer Entscheid wird durch eine
    frühere Eskalation nicht erneut ausgewertet. Der `attachment_evaluate`-Seam ist mit
-   FR-15/MD-E1 (T01–T07) vollständig und als Paket abgenommen; die automatische
-   `draft`/`inspect`-Aufrufverdrahtung, die CLI-Option `--evaluate-attachments`, die
-   Neuklassifikation und die `DraftManifest`-Installation sind **nicht implementiert**
-   und bleiben **MD-E2**. Details stehen in
+   FR-15/MD-E1 (T01–T07) vollständig und als Paket abgenommen. Mit **FR-15/MD-E2-T01** ist
+   die standardmäßig aktive `draft`-Auswertung verdrahtet: nur ein unklares Item durchläuft
+   `attachment_evaluate`, ein validierter `ready`-Handoff wird genau einmal als getrenntes
+   `untrusted_external` an die bestehenden Classifier-Regeln übergeben (ohne neue Ziele zu
+   erfinden), und jedes Draft-Item erhält genau ein additives finales
+   `attachment_evaluation`. `completed/classification_clear` mit `used_for_classification:
+   true` und 64-Hex-`classifier_revision` gilt nur bei erfolgreicher, eindeutiger
+   Neuklassifikation; klar/`skipped`/`failed`/`still_ambiguous` bleiben `false`/`null`. Die
+   gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments`
+   gelten nur für direktes `draft`/`inspect` (`draft` default an, `inspect` default aus); die
+   JSON-Konfiguration akzeptiert `evaluate_attachments` nur als Boolean. Der opt-in
+   `inspect`-Vorschlag (MD-E2-T03) und die fail-closed-Härtung (MD-E2-T02) sind noch offen;
+   FR-15 insgesamt bleibt offen. Details stehen in
    [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.

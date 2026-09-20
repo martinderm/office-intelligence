@@ -24,7 +24,7 @@ verbindliche Paketkarten.
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
-| `FR-15` | 🟨 MD-E1 vollständig implementiert, getestet und abgenommen; FR-15 insgesamt offen; MD-E2 nicht gestartet | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; die drei blockierenden Sicherheitsvoraussetzungen sind implementiert und getestet | `MD-E2` (erst nach frischem, ausdrücklichem Human Gate) |
+| `FR-15` | 🟨 MD-E1 vollständig implementiert, getestet und abgenommen; FR-15 insgesamt offen; MD-E2 T01 implementiert (T02–T04 offen) | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; die drei blockierenden Sicherheitsvoraussetzungen sind implementiert und getestet | `MD-E2`-T01 abgeschlossen; T02–T04 offen |
 
 
 ```text
@@ -522,8 +522,9 @@ abgegrenzt.
 ## FR-15: Automatische Anhang-Auswertung bei unklaren Mails
 
 **Status:** 🟨 FR-15 insgesamt offen; **MD-E1 ist vollständig implementiert,
-getestet und als Paket abgenommen**, **MD-E2 ist nicht gestartet** und wartet auf
-ein frisches, ausdrückliches Human Gate. FR-08, FR-11 und FR-14 stellen die
+getestet und als Paket abgenommen**, **MD-E2 ist gestartet (T01 implementiert,
+T02–T04 offen)** und wartet für das Gesamtpaket weiterhin auf ein frisches,
+ausdrückliches Human Gate. FR-08, FR-11 und FR-14 stellen die
 erforderlichen MIME-, Quarantäne-, Extraktions-, Handoff- und Coverage-Verträge
 bereit; deren Sicherheitsgrenzen bleiben unverändert. FR-15 orchestriert diese
 bestehenden Bausteine und baut keine zweite Fetch-, Extraktions- oder
@@ -537,7 +538,10 @@ Punkte sind implementiert, getestet und mit der System Map synchronisiert und da
 Teil der abgenommenen MD-E1-Abnahme; sie waren keine separaten, aufschiebbaren
 Tickets. MD-E1 endet am validierten Handoff; **Reklassifikation und
 `DraftManifest`-Installation sind ausschließlich MD-E2 und in MD-E1 weder
-implementiert noch behauptet.**
+implementiert noch behauptet.** Mit **MD-E2-T01** ist die standardmäßig aktive
+`draft`-Verdrahtung, die Option `--evaluate-attachments`/`--no-evaluate-attachments`
+und die einmalige Neuklassifikation samt additiver `DraftManifest`-Installation
+implementiert (T02–T04 offen).
 
 ### Problem und Ziel
 
@@ -816,10 +820,11 @@ und System-Map-Update werden gemeinsam committed.
 
 ### MD-E2 — Draft-Integration und Neuklassifikation
 
-**Status:** ⬜ Nicht gestartet; wartet auf ein frisches, ausdrückliches Human Gate
-(nach abgenommenem MD-E1). Die einmalige Neuklassifikation, die `draft`/`inspect`-
-Verdrahtung, `--evaluate-attachments` und die `DraftManifest`-Installation sind in MD-E1
-nicht implementiert.
+**Status:** 🟨 Gestartet; **MD-E2-T01 implementiert** (standardmäßig aktive
+`draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige
+Neuklassifikation, additive `DraftManifest`-Installation). MD-E2-T02 (fail-closed-Härtung,
+Revisionsdeterminismus, Idempotenz), MD-E2-T03 (opt-in `inspect`-Vorschlag) und MD-E2-T04
+(Paketabnahme) sind offen.
 
 **Ziel:** Nach der bestehenden Body-/Full-Read-Klassifikation nur unklare Items
 über MD-E1 anreichern und exakt einmal mit dem validierten Anhangs-Handoff erneut

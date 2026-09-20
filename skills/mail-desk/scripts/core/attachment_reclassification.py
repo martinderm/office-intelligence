@@ -1,0 +1,412 @@
+"""MD-E2 draft-side attachment evaluation and single reclassification (FR-15 / MD-E2-T01).
+
+Narrow orchestration seam that turns the already-tested MD-E1 ``attachment_evaluate``
+backend into the default-on ``draft`` behaviour:
+
+1. the existing preview/body/full-read classification always runs first (the caller
+   passes the finished manifest items plus the transient effective source emails the
+   classifier actually used for each final initial decision);
+2. only a still-ambiguous item may acquire raw MIME and call ``attachment_evaluate``;
+3. a validated ``ready`` handoff is presented **once** to the existing classifier rules
+   as a distinct ``untrusted_external`` input;
+4. the item receives exactly one final, bounded ``attachment_evaluation``.
+
+This module re-implements **no** fetch, MIME, policy, quota, extraction or hash
+validation: those stay authoritative in MD-E1 and its canonical seams.  It also never
+persists the raw handoff content as durable extraction output -- only the bounded
+``files[]`` metadata survives.
+
+``used_for_classification: true`` plus a 64-hex ``classifier_revision`` is set **only**
+when one actual second classification consumed the validated handoff and produced a
+successful, unambiguous result.  Every other terminal outcome stays ``false``/``null``.
+The revision is content-addressed over the active classification rules and the sorted
+exact attachment hashes actually consumed; no caller, mail or manifest value can set it.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+from .attachment_evaluation import (
+    ALLOWED_ATTACHMENT_EVALUATION_REASONS,
+    AUTHORIZATION_AUTO_EVALUATED,
+    AUTHORIZATION_NOT_APPLICABLE,
+    REASON_CLASSIFICATION_CLEAR,
+    REASON_FETCH_FAILED,
+    REASON_HANDOFF_READY,
+    REASON_STILL_AMBIGUOUS,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_NOT_NEEDED,
+    STATUS_SKIPPED,
+)
+from .attachment_handoff import HANDOFF_STATUS_READY
+from .himalaya import HimalayaInvocationError
+
+# ==============================================================================
+# Bounded MD-E2 vocabulary
+# ==============================================================================
+
+#: MD-E2 installs this terminal reason when the operator disabled evaluation.  MD-E1 never
+#: emits it, so it is added to (not merged into) the MD-E1 runtime reason set.
+REASON_EVALUATION_DISABLED = "evaluation_disabled"
+
+#: The bounded reason set a *final* DraftManifest ``attachment_evaluation`` may carry.
+ALLOWED_DRAFT_ATTACHMENT_EVALUATION_REASONS = frozenset(
+    set(ALLOWED_ATTACHMENT_EVALUATION_REASONS) | {REASON_EVALUATION_DISABLED}
+)
+
+#: Version tag for the active canonical classifier rules bound into ``classifier_revision``.
+CLASSIFIER_RULES_VERSION = "md-e2-classifier-rules-v1"
+
+_CATALOG_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("projects", ("memory", "references", "projects", "projects.json")),
+    ("topics", ("memory", "references", "topics", "topics.json")),
+)
+
+#: Fields the single reclassification may replace on the draft item.  All are produced by
+#: the existing classifier rules; MD-E2 never invents a target.
+_RECLASSIFICATION_FIELDS = ("decision", "action", "notes", "evidence", "synthesis_targets")
+
+
+# ==============================================================================
+# Content-addressed classifier revision
+# ==============================================================================
+
+def classifier_rules_fingerprint(workspace_root: str | Path) -> str:
+    """Return a deterministic SHA-256 over the active canonical classification rules.
+
+    The rules that decide ``kind``/``id``/catalog-bound subdecisions are driven by the
+    workspace project/topic catalogs, so their canonical JSON is bound together with a
+    fixed rules version tag.  Formatting-only catalog edits therefore cannot move the
+    fingerprint, but any rule-relevant content change does.
+    """
+    material: dict[str, Any] = {"version": CLASSIFIER_RULES_VERSION, "catalogs": {}}
+    base = Path(workspace_root)
+    for name, parts in _CATALOG_SOURCES:
+        catalog_path = base.joinpath(*parts)
+        canonical: Any = None
+        if catalog_path.is_file():
+            try:
+                canonical = json.loads(catalog_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                canonical = None
+        material["catalogs"][name] = canonical
+    payload = json.dumps(
+        material, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False
+    )
+    return hashlib.sha256(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+def compute_classifier_revision(
+    rules_fingerprint: str, used_input_hashes: Iterable[str]
+) -> str:
+    """Return the 64-hex revision binding the rules and the sorted hashes actually consumed.
+
+    Input ordering never influences the result because the hashes are de-duplicated and
+    sorted.  A changed rule fingerprint or a changed consumed hash changes the revision.
+    """
+    normalized = sorted(
+        {str(value).strip().lower() for value in used_input_hashes if str(value).strip()}
+    )
+    payload = json.dumps(
+        {"rules": str(rules_fingerprint), "inputs": normalized},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
+# ==============================================================================
+# Bounded evaluation objects
+# ==============================================================================
+
+def _terminal(status: str, reason: str, authorization: str) -> dict[str, Any]:
+    """Build a terminal, non-classifying ``attachment_evaluation`` object."""
+    return {
+        "status": status,
+        "reason": reason,
+        "authorization": authorization,
+        "files": [],
+        "used_for_classification": False,
+        "classifier_revision": None,
+    }
+
+
+def _bounded_staged(staged: Mapping[str, Any]) -> dict[str, Any]:
+    """Reduce an MD-E1 staged/failed envelope to the final bounded six-field object.
+
+    The staged ``used_for_classification``/``classifier_revision`` can never leak a
+    ``true``/revision pair here; only :func:`_successful_evaluation` sets those.
+    """
+    return {
+        "status": str(staged.get("status") or STATUS_FAILED),
+        "reason": str(staged.get("reason") or REASON_FETCH_FAILED),
+        "authorization": str(staged.get("authorization") or AUTHORIZATION_NOT_APPLICABLE),
+        "files": list(staged.get("files") or []),
+        "used_for_classification": False,
+        "classifier_revision": None,
+    }
+
+
+def _successful_evaluation(
+    staged: Mapping[str, Any], handoff: Mapping[str, Any], revision: str
+) -> dict[str, Any]:
+    """Build the one allowed ``used_for_classification: true`` final object."""
+    return {
+        "status": STATUS_COMPLETED,
+        "reason": REASON_CLASSIFICATION_CLEAR,
+        "authorization": AUTHORIZATION_AUTO_EVALUATED,
+        "files": list(staged.get("files") or []),
+        "used_for_classification": True,
+        "classifier_revision": revision,
+    }
+
+
+def _is_successful_ready(staged: Mapping[str, Any], handoff: Any) -> bool:
+    """A ready handoff is the only input eligible for exactly one reclassification."""
+    if not isinstance(handoff, Mapping):
+        return False
+    if str(handoff.get("status") or "") != HANDOFF_STATUS_READY:
+        return False
+    return (
+        str(staged.get("status") or "") == STATUS_COMPLETED
+        and str(staged.get("reason") or "") == REASON_HANDOFF_READY
+    )
+
+
+def _consumed_input_hashes(handoff: Mapping[str, Any]) -> list[str]:
+    """Collect the exact MD-E1-bound attachment hashes the reclassification consumed."""
+    hashes: list[str] = []
+    items = handoff.get("items")
+    if isinstance(items, Sequence):
+        for entry in items:
+            if not isinstance(entry, Mapping):
+                continue
+            value = entry.get("source_sha256") or entry.get("sha256")
+            text = str(value or "").strip().lower()
+            if text:
+                hashes.append(text)
+    return hashes
+
+
+# ==============================================================================
+# Item-source pairing
+# ==============================================================================
+
+def _index_sources(
+    sources: Sequence[Mapping[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    """Identity-index the transient effective sources; a duplicate identity poisons the key.
+
+    The classifier reports one effective source per item (preview email, or the full-read
+    email when it re-read the envelope).  Pairing is by envelope identity, never by position,
+    and a duplicate identity fails closed instead of silently attaching the wrong source.
+    """
+    index: dict[str, dict[str, Any] | None] = {}
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        envelope_id = str(source.get("envelope_id") or "").strip()
+        if not envelope_id:
+            continue
+        index[envelope_id] = None if envelope_id in index else dict(source)
+    return index
+
+
+def _matching_source(
+    item: Mapping[str, Any], index: Mapping[str, dict[str, Any] | None]
+) -> dict[str, Any] | None:
+    """Return the identity-matched effective source, or ``None`` (missing/duplicate/mismatch)."""
+    envelope_id = str(item.get("envelope_id") or "").strip()
+    if not envelope_id:
+        return None
+    matched = index.get(envelope_id)
+    if matched is None:
+        return None
+    item_folder = str(item.get("source_folder") or "INBOX").strip() or "INBOX"
+    source_folder = str(matched.get("folder") or "INBOX").strip() or "INBOX"
+    if item_folder != source_folder:
+        return None
+    return dict(matched)
+
+
+def _adopt_reclassification(item: dict[str, Any], replacement: Mapping[str, Any]) -> None:
+    """Adopt only the existing-classifier-derived decision/action fields."""
+    for field in _RECLASSIFICATION_FIELDS:
+        if field in replacement:
+            item[field] = replacement[field]
+
+
+# ==============================================================================
+# Per-item evaluation
+# ==============================================================================
+
+def _evaluate_item(
+    item: dict[str, Any],
+    source_index: Mapping[str, dict[str, Any] | None],
+    *,
+    evaluate_attachments: bool,
+    evaluate: Callable[..., dict[str, Any]],
+    reclassify: Callable[..., dict[str, Any]],
+    read_raw_mime: Callable[..., bytes],
+    triggers_evaluation: Callable[..., bool],
+    rules_fingerprint: str,
+    workspace_root: Path,
+    data_dir: Path,
+    account: str | None,
+    policy: Mapping[str, Any] | None,
+    run_id: str | None,
+    lease_id: str | None,
+    conversation_id: str | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Resolve exactly one final ``attachment_evaluation`` and an optional reclassification."""
+    if not evaluate_attachments:
+        return (
+            _terminal(STATUS_SKIPPED, REASON_EVALUATION_DISABLED, AUTHORIZATION_NOT_APPLICABLE),
+            None,
+        )
+
+    decision = item.get("decision")
+    if not isinstance(decision, Mapping):
+        decision = {}
+    if not triggers_evaluation(decision):
+        return (
+            _terminal(STATUS_NOT_NEEDED, REASON_CLASSIFICATION_CLEAR, AUTHORIZATION_NOT_APPLICABLE),
+            None,
+        )
+
+    email = _matching_source(item, source_index)
+    if email is None:
+        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    envelope_id = str(item.get("envelope_id") or email.get("envelope_id") or "").strip()
+    message_id = str(item.get("message_id") or email.get("message_id") or "").strip()
+    folder = str(email.get("folder") or item.get("source_folder") or "INBOX").strip() or "INBOX"
+    normalized_account = str(account or "").strip()
+    if not envelope_id or not message_id or not normalized_account:
+        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    try:
+        raw_eml = read_raw_mime(envelope_id, folder=folder, account=account)
+    # Only the canonical raw-MIME acquisition failures map to the bounded item-local
+    # `fetch_failed` outcome; unexpected programmer errors stay fail-loud.
+    except (HimalayaInvocationError, OSError, RuntimeError):
+        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    result = evaluate(
+        raw_eml=raw_eml,
+        account=normalized_account,
+        folder=folder,
+        envelope_id=envelope_id,
+        message_id=message_id,
+        decision=decision,
+        policy=policy,
+        run_id=run_id,
+        data_dir=data_dir,
+        workspace_root=workspace_root,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+    )
+    if not isinstance(result, Mapping):
+        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    staged = result.get("attachment_evaluation")
+    if not isinstance(staged, Mapping):
+        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+
+    handoff = result.get("attachment_analysis_handoff")
+    if not _is_successful_ready(staged, handoff):
+        # not_needed / blocked / failed / still_ambiguous stay bounded and never classify.
+        return _bounded_staged(staged), None
+
+    # Exactly one second invocation of the existing classifier rules, consuming the
+    # validated handoff as a distinct, encapsulated untrusted_external input.
+    replacement = reclassify(
+        email,
+        workspace_root=workspace_root,
+        account=account,
+        untrusted_external_text=str(handoff.get("prompt_content") or ""),
+    )
+    new_decision = replacement.get("decision") if isinstance(replacement, Mapping) else None
+    if not isinstance(new_decision, Mapping) or triggers_evaluation(new_decision):
+        return (
+            _terminal(STATUS_COMPLETED, REASON_STILL_AMBIGUOUS, AUTHORIZATION_NOT_APPLICABLE),
+            None,
+        )
+
+    revision = compute_classifier_revision(
+        rules_fingerprint, _consumed_input_hashes(handoff)
+    )
+    return _successful_evaluation(staged, handoff, revision), dict(replacement)
+
+
+# ==============================================================================
+# Public entry point
+# ==============================================================================
+
+def install_draft_attachment_evaluations(
+    items: Sequence[dict[str, Any]],
+    sources: Sequence[Mapping[str, Any]],
+    *,
+    evaluate_attachments: bool,
+    workspace_root: str | Path,
+    data_dir: Path,
+    account: str | None,
+    evaluate: Callable[..., dict[str, Any]],
+    reclassify: Callable[..., dict[str, Any]],
+    read_raw_mime: Callable[..., bytes],
+    triggers_evaluation: Callable[..., bool],
+    policy: Mapping[str, Any] | None = None,
+    run_id: str | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+) -> None:
+    """Install exactly one final ``attachment_evaluation`` on every draft item in place.
+
+    ``sources`` is the transient, order-preserving list of effective source emails the
+    classifier reported for each item's final initial decision.  Only an approved (ambiguous)
+    item may fetch raw MIME and call ``attachment_evaluate``; a clear item performs no raw
+    fetch, evaluation or reclassification.  Item-local outcomes never raise into the batch.
+    """
+    workspace = Path(workspace_root)
+    rules_fingerprint = classifier_rules_fingerprint(workspace)
+    source_index = _index_sources(sources)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        evaluation, replacement = _evaluate_item(
+            item,
+            source_index,
+            evaluate_attachments=evaluate_attachments,
+            evaluate=evaluate,
+            reclassify=reclassify,
+            read_raw_mime=read_raw_mime,
+            triggers_evaluation=triggers_evaluation,
+            rules_fingerprint=rules_fingerprint,
+            workspace_root=workspace,
+            data_dir=data_dir,
+            account=account,
+            policy=policy,
+            run_id=run_id,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+        )
+        item["attachment_evaluation"] = evaluation
+        if replacement is not None:
+            _adopt_reclassification(item, replacement)
+
+
+__all__ = [
+    "ALLOWED_DRAFT_ATTACHMENT_EVALUATION_REASONS",
+    "CLASSIFIER_RULES_VERSION",
+    "REASON_EVALUATION_DISABLED",
+    "classifier_rules_fingerprint",
+    "compute_classifier_revision",
+    "install_draft_attachment_evaluations",
+]

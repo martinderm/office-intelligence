@@ -930,8 +930,21 @@ def classify_email_two_pass(
     final_index: dict[str, Any] | None = None,
     full_reader: Callable[..., dict[str, Any]] | None = None,
     account: str | None = None,
+    source_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Classify a preview, optionally re-read the same envelope, then classify again."""
+    """Classify a preview, optionally re-read the same envelope, then classify again.
+
+    ``source_sink`` (FR-15/MD-E2-T01) is an optional, explicitly transient channel: when
+    supplied, it is called exactly once with the effective source email that produced the
+    returned item's final decision -- the preview email when no full read happened, or the
+    full-read email when it did.  The channel is never persisted and is not part of the
+    manifest schema.
+    """
+    def _finish(item: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        if source_sink is not None:
+            source_sink(source)
+        return item
+
     preview_item = classify_email(
         email,
         workspace_root=workspace_root,
@@ -943,17 +956,20 @@ def classify_email_two_pass(
     )
     triggers = full_body_triggers(email, preview_item)
     if not triggers:
-        return preview_item
+        return _finish(preview_item, email)
 
     # Keep the classifier/manifest layer deterministic. Mailbox I/O is an
     # explicit orchestration concern: draft, pipeline and inspect-propose pass
     # a reader, while library callers without one remain preview-only.
     if full_reader is None:
-        return preview_item
+        return _finish(preview_item, email)
 
     envelope_id = str(email.get("envelope_id", "")).strip()
     if not envelope_id:
-        return _full_read_failure(preview_item, triggers, ValueError("Missing envelope_id for full message read."))
+        return _finish(
+            _full_read_failure(preview_item, triggers, ValueError("Missing envelope_id for full message read.")),
+            email,
+        )
 
     try:
         full_email_details = full_reader(
@@ -1074,9 +1090,9 @@ def classify_email_two_pass(
                             workspace_root=workspace_root or Path.cwd(),
                             **common,
                         )
-        return full_item
+        return _finish(full_item, full_email)
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
-        return _full_read_failure(preview_item, triggers, exc)
+        return _finish(_full_read_failure(preview_item, triggers, exc), email)
 
 
 def classify_email(
@@ -1087,8 +1103,14 @@ def classify_email(
     sent_lookup: dict[str, Any] | None = None,
     final_index: dict[str, Any] | None = None,
     account: str | None = None,
+    untrusted_external_text: str | None = None,
 ) -> dict[str, Any]:
-    """Classify a single email conservatively and determine recommended target folder and evidence."""
+    """Classify a single email conservatively and determine recommended target folder and evidence.
+
+    ``untrusted_external_text`` is an optional, already-escaped/encapsulated context (the
+    validated FR-15/MD-E2 attachment handoff).  It participates in content matching only and
+    is never merged into the trusted header fields or persisted as raw extraction output.
+    """
     ws = workspace_root or Path.cwd()
     if projects is None or topics is None:
         p, t = load_catalogs(ws)
@@ -1120,6 +1142,13 @@ def classify_email(
 
     ym, ymd = parse_date_to_year_month(date_str)
     full_text = f"{subject}\n{from_str}\n{to_str}\n{cc_str}\n{preview}"
+    # FR-15/MD-E2: a validated attachment handoff may be supplied as a distinct,
+    # encapsulated untrusted_external source.  It is appended to the local matching
+    # buffer only -- never into the trusted header fields above, catalog data or
+    # authorization data -- and is not part of the returned item.
+    untrusted_external = str(untrusted_external_text or "")
+    if untrusted_external:
+        full_text = f"{full_text}\n{untrusted_external}"
     full_text_lower = full_text.lower()
     forwarded_senders = re.findall(
         r"(?:>>>|Von:|From:)\s*[^<>\n]*<([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})>",
@@ -1952,8 +1981,14 @@ def draft_manifest(
     final_index: dict[str, Any] | None = None,
     full_reader: Callable[..., dict[str, Any]] | None = None,
     account: str | None = None,
+    source_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    """Generate a batch manifest dictionary from a list of inspected emails."""
+    """Generate a batch manifest dictionary from a list of inspected emails.
+
+    ``source_sink`` (FR-15/MD-E2-T01) is an optional transient pass-through: when supplied it
+    receives the effective source email for each item's final initial classification.  It is
+    never part of the returned manifest.
+    """
     ws = workspace_root or Path.cwd()
     projects, topics = load_catalogs(ws)
     dd = ws / "data" / "mail-desk"
@@ -1989,6 +2024,7 @@ def draft_manifest(
             final_index=final_index,
             full_reader=full_reader,
             account=account,
+            source_sink=source_sink,
         )
         items.append(item)
 

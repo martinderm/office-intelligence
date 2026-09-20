@@ -316,6 +316,29 @@ def _should_evaluate(
     return _read_escalation_without_clear_assignment(decision, escalation)
 
 
+def decision_triggers_evaluation(
+    decision: Mapping[str, Any] | None,
+    read_escalation: Mapping[str, Any] | None = None,
+) -> bool:
+    """Public, authoritative view of the MD-E1 trigger predicate for the MD-E2 integration.
+
+    MD-E2 must decide *before* calling :func:`attachment_evaluate` whether an item is
+    eligible, so that a clear item performs no raw fetch/evaluation at all.  This helper
+    exposes the verbatim FR-15 predicate instead of re-implementing it.  A malformed
+    decision or escalation fails closed (``False``); a genuinely ambiguous decision is
+    still reported as triggering regardless of a malformed escalation sibling.
+    """
+    if not isinstance(decision, Mapping):
+        return False
+    if _decision_is_ambiguous(decision):
+        return True
+    try:
+        escalation = _effective_read_escalation(decision, read_escalation)
+    except AttachmentEvaluationError:
+        return False
+    return _read_escalation_without_clear_assignment(decision, escalation)
+
+
 def _staged(
     status: str,
     reason: str,
@@ -713,4 +736,5 @@ __all__ = [
     "STATUS_NOT_NEEDED",
     "STATUS_SKIPPED",
     "attachment_evaluate",
+    "decision_triggers_evaluation",
 ]

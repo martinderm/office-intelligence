@@ -1308,8 +1308,10 @@ Fehler-/Reason-Matrix fail-closed.
 > `extraction_failed`, `handoff_invalid`). Jede `DraftManifest`-Installation bleibt **MD-E2**.
 > **T07** nimmt das Paket ab: ein hermetischer End-to-End-Test belegt Inspect → policygebundenen
 > Fetch → begrenzte Extraktion → validierten Handoff bei null Mailbox-, Promotion-, Export-,
-> Dispositions-, Cleanup- und Classifier-Writes. `--evaluate-attachments`, die `draft`/`inspect`-
-> Aufrufverdrahtung und die Neuklassifikation bleiben geplante MD-E2-Funktionen.
+> Dispositions-, Cleanup- und Classifier-Writes. Mit **FR-15/MD-E2-T01** ist die
+> `draft`-Aufrufverdrahtung, die `--evaluate-attachments`/`--no-evaluate-attachments`-Option
+> und die einmalige Neuklassifikation samt `DraftManifest`-Installation implementiert; der
+> opt-in `inspect`-Vorschlag (MD-E2-T03) und die fail-closed-Härtung (MD-E2-T02) bleiben offen.
 
 1. **Öffentliche Signatur (Keyword-only, trusted Inputs only):**
    ```python
@@ -1425,10 +1427,55 @@ Fehler-/Reason-Matrix fail-closed.
 8. **Abgrenzung:** Der Orchestrator ruft kein `apply_attachment_handoff_to_item` und keine
    Mailbox-, Dispositions-, Promotions-, Export-, Filing-, Evidence-, Katalog-, Cloud-, Classifier-
    oder Cleanup-/GC-Mutation auf. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
-   erhalten (auch nach einem T06-Fehler). Die `DraftManifest`-Installation bleibt MD-E2.
-   `--evaluate-attachments`, die automatische `draft`/`inspect`-Aufrufverdrahtung und die
-   Neuklassifikation sind **geplante MD-E2-Funktionen und nicht Teil der aktuellen
+   erhalten (auch nach einem T06-Fehler). Die `DraftManifest`-Installation ist **nicht Teil von
+   MD-E1**, sondern erfolgt in MD-E2 (siehe unten, MD-E2-T01). `--evaluate-attachments`, die
+   automatische `draft`/`inspect`-Aufrufverdrahtung und die Neuklassifikation sind **nicht Teil der
    MD-E1-Laufzeit**; MD-E1 stellt ausschließlich den separat aufrufbaren `attachment_evaluate`-Seam
    bereit und endet am validierten Handoff. Promotion und Export besitzen keinen MD-E1-Laufzeitpfad;
    ein hermetischer End-to-End-Test (FR-15/MD-E1-T07) belegt den Erfolgspfad bei null Mailbox-,
    Promotion-, Export-, Dispositions-, Cleanup- und Classifier-Writes.
+
+---
+
+## FR-15 / MD-E2-T01: Draft-Integration und einmalige Neuklassifikation (`core/attachment_reclassification.py`)
+
+**Implementierungsstand:** MD-E2-T01 implementiert die standardmäßig aktive
+`draft`-Auswertung, die gegenseitig exklusiven CLI-Optionen und die genau einmalige
+Neuklassifikation samt `DraftManifest`-Installation. MD-E2-T02 (fail-closed-Härtung,
+Revisionsdeterminismus, Idempotenz) und MD-E2-T03 (opt-in `inspect`-Vorschlag) sind
+noch offen; FR-15 insgesamt bleibt offen.
+
+Der schmale Orchestrierungs-Seam `install_draft_attachment_evaluations(...)` in
+`scripts/core/attachment_reclassification.py` läuft nach der bestehenden
+Preview-/Body-/Full-Read-Klassifikation und vor `add_draft_contract`, damit der
+Review-Hash die installierte Auswertung bindet:
+
+1. Ein klares Item führt **keinen** Rohabruf, keine Auswertung und keine Neuklassifikation
+   aus und erhält `not_needed` / `classification_clear` / `not_applicable` mit
+   `used_for_classification: false` und `classifier_revision: null`.
+2. Nur ein unklares Item (autoritativer MD-E1-Trigger `decision_triggers_evaluation`)
+   ruft `attachment_evaluate` nach dem Roh-MIME-Abruf genau einmal auf.
+3. Der validierte `ready`-Handoff wird genau **einmal** als getrenntes, gekapseltes
+   `untrusted_external` (`prompt_content`, sichtbare Truncation-Marker) an die bestehenden
+   Classifier-Regeln übergeben; Anhangstext wird nie in vertrauenswürdige Header,
+   Katalog- oder Autorisierungsdaten konkateniert. Die Regeln dürfen `kind`, `id`,
+   kataloggebundene Unterentscheidungen und `needs_reply` neu ableiten, aber keine
+   Zieltypen oder Katalogziele erfinden.
+4. Erfolgreiche, eindeutige Neuklassifikation installiert genau ein additives
+   `attachment_evaluation`: `status: "completed"`, `reason: "classification_clear"`,
+   `authorization: "auto_evaluated"`, die MD-E1-`files[]`, `used_for_classification: true`
+   und eine 64-Hex-`classifier_revision`.
+5. Fortbestehende Mehrdeutigkeit → `completed` / `still_ambiguous` / `false` / `null`;
+   MD-E1-Fehler/no-op → das bounded staged Objekt (`false`/`null`).
+
+**`classifier_revision`:** `compute_classifier_revision` bindet einen deterministischen
+SHA-256-Fingerprint der aktiven kanonischen Klassifikationsregeln (Projekt-/Topic-Kataloge
+plus `CLASSIFIER_RULES_VERSION`) an die sortierte, deduplizierte Menge der tatsächlich
+konsumierten Anhangs-Hashes. Reihenfolge ist irrelevant; jede Regel- oder Input-Änderung
+ändert die Revision. Caller-, Mail- und Manifest-Werte können sie nicht setzen.
+
+**CLI/Konfiguration:** `--evaluate-attachments` und `--no-evaluate-attachments` sind
+gegenseitig exklusiv und nur mit direktem `--draft`/`--inspect` gültig. Ohne Flag ist
+`evaluate_attachments` für `draft` `true` und für `inspect` `false`. Die JSON-Konfiguration
+akzeptiert `evaluate_attachments` nur als Boolean; ein Nicht-Boolean stoppt vor jeder
+Auswertung. `--pipeline` und die übrigen Modi bleiben unverändert.

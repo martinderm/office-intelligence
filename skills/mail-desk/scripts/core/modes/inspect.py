@@ -66,6 +66,10 @@ def run_inspect_mode(
     output_file = config.get("output_file")
     check_known = bool(config.get("check_known", True))
     skip_known = bool(config.get("skip_known", False))
+    # FR-15/MD-E2-T01: inspect defaults evaluation OFF and only validates the boolean here;
+    # the opt-in `manifest_proposal` behaviour is MD-E2-T03 and intentionally not wired yet.
+    if not isinstance(config.get("evaluate_attachments", False), bool):
+        raise ValueError("evaluate_attachments must be a boolean")
     propose_manifest = bool(config.get("propose_manifest", False) or config.get("propose", False))
     manifest_file = config.get("manifest_file")
 

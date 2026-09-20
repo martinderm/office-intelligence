@@ -93,7 +93,7 @@ Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core
 
 ### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04/T05/T06/T07)
 
-Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; die `DraftManifest`-Installation bleibt MD-E2. **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; Reklassifikation und `DraftManifest`-Installation bleiben ausschließlich **MD-E2** und sind nicht implementiert.
+Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01** für den `draft`-Happy-Path implementiert (§3.2; T02–T04 offen).
 
 ```
 [Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
@@ -126,8 +126,47 @@ Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attac
 4. **Upfront-Lock & Fetch:** Vor der Fetch-Schleife läuft der kanonische `attachment_fetch.verify_workspace_lock`; kein I/O davor. Ein fehlender oder fremder Lock endet fail-closed `failed`/`lock_unavailable`. `op_attachment_fetch` behält seinen eigenen Lock-/Preflight-/Drift-Check und erhält erst nach bestandenem Guard den nicht-autoritativen `capability.to_dict()`-Snapshot als `approval_receipt`. Alle Anhänge einer Mail teilen eine `run_id`.
 5. **Extraktion & Handoff:** `fetched` und `already_fetched` laufen identisch durch `extract_attachment_content`; aus den angereicherten Envelopes und den kanonisch gebundenen Parts entsteht ein `build_attachment_analysis_handoff(default_materiality="required_for_decision")`, das mit `validate_attachment_handoff` validiert wird. Die 15k/30k-Budgets samt sichtbaren Markern stammen unverändert aus dem Builder.
 6. **Bounded Ausgang:** klarer Entscheid → `not_needed`/`classification_clear`; unklar ohne Anhang → `no_attachments`; unklar ohne zulässigen Anhang → `no_allowed_attachments`; unklar mit zulässigem Anhang und validiertem `ready`-Handoff → `completed`/`handoff_ready`/`auto_evaluated` mit sicheren `files[]`; validierter `blocked_on_required_attachment`-Handoff → `completed`/`still_ambiguous` (nie `supplementary`). Das staged Objekt trägt immer `used_for_classification: false` und `classifier_revision: null`.
-7. **T06 Fail-closed:** Nur exakt erwartete kanonische Ausnahmen werden gefangen (kein `except Exception`; Programmierfehler bleiben fail-loud) und auf bounded `failed`-Envelopes abgebildet: `lock_unavailable` (fehlender/fremder Lock), `policy_blocked` (aktiver Inhalt/disallowed Extension, MIME-/Extension-Drift, getrackte Quarantäne/Preflight), `quota_exceeded`, `fetch_failed` (Identity-/Hash-Drift, Kollision/Inventar, Symlink-Escape), `extraction_failed` (terminaler Extraktionsstatus inkl. Timeout) und `handoff_invalid` (Builder-/Validator-Ablehnung). Jeder `failed`-Envelope trägt `authorization: "not_applicable"`, `files: []`, `used_for_classification: false`, `classifier_revision: null`, kein Handoff-Geschwister und keinen Exception-Text/Rohinhalt/absoluten Pfad. Kanonisch gültige, aber unvollständige erforderliche Evidenz (`corrupt_attachment`/`attachment_conversion_unavailable`) bleibt `required_for_decision`. Jede `DraftManifest`-Installation bleibt MD-E2.
+7. **T06 Fail-closed:** Nur exakt erwartete kanonische Ausnahmen werden gefangen (kein `except Exception`; Programmierfehler bleiben fail-loud) und auf bounded `failed`-Envelopes abgebildet: `lock_unavailable` (fehlender/fremder Lock), `policy_blocked` (aktiver Inhalt/disallowed Extension, MIME-/Extension-Drift, getrackte Quarantäne/Preflight), `quota_exceeded`, `fetch_failed` (Identity-/Hash-Drift, Kollision/Inventar, Symlink-Escape), `extraction_failed` (terminaler Extraktionsstatus inkl. Timeout) und `handoff_invalid` (Builder-/Validator-Ablehnung). Jeder `failed`-Envelope trägt `authorization: "not_applicable"`, `files: []`, `used_for_classification: false`, `classifier_revision: null`, kein Handoff-Geschwister und keinen Exception-Text/Rohinhalt/absoluten Pfad. Kanonisch gültige, aber unvollständige erforderliche Evidenz (`corrupt_attachment`/`attachment_conversion_unavailable`) bleibt `required_for_decision`. Die `DraftManifest`-Installation erfolgt in MD-E2 (T01, §3.2), nicht in MD-E1.
 
+
+---
+
+### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01)
+
+Implementiert in [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py)
+und aufgerufen aus [`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py) **nach** der
+bestehenden Preview-/Body-/Full-Read-Klassifikation und **vor** `add_draft_contract` (der
+Review-Hash bindet die installierte Auswertung):
+
+```
+[DraftManifest-Items + Quell-Mails] ──► evaluate_attachments?
+        │ nein ──────────────────────► skipped/evaluation_disabled (false/null)
+        │ ja, je Item:
+        ▼
+   [decision_triggers_evaluation?] ──nein──► not_needed/classification_clear (kein Rohabruf)
+        │ ja (autoritativer MD-E1-Trigger)
+        ▼
+   [Roh-MIME-Abruf] ──Fehler──► failed/fetch_failed (false/null)
+        ▼
+   [attachment_evaluate genau einmal]
+        │ nicht erfolgreich/ready ──► bounded staged Objekt (false/null)
+        ▼ validierter ready-Handoff
+   [classify_email(untrusted_external_text=prompt_content) genau einmal]
+        │ weiter mehrdeutig ──► completed/still_ambiguous (false/null)
+        ▼ eindeutig
+   [installiere completed/classification_clear/auto_evaluated, used_for_classification: true, 64-Hex-Revision]
+```
+
+1. Der Rohabruf und die MD-E1-Auswertung erfolgen ausschließlich für ein unklares Item; ein klares
+   Item führt keinen Fetch, keine Auswertung und keine Neuklassifikation aus.
+2. Der validierte Handoff bleibt gekapselt und wird genau einmal als getrenntes `untrusted_external`
+   an die bestehenden Classifier-Regeln übergeben (keine neuen Zieltypen, keine Katalogerfindung).
+3. Jedes Item erhält genau ein additives finales `attachment_evaluation`. `used_for_classification:
+   true` und eine 64-Hex-Revision nur bei erfolgreicher, eindeutiger Neuklassifikation; sonst
+   `false`/`null` (siehe [`objects.md`](objects.md) §6).
+4. `--evaluate-attachments`/`--no-evaluate-attachments` sind gegenseitig exklusiv und nur für
+   direktes `draft`/`inspect` gültig (`draft` default an, `inspect` default aus); `--pipeline` bleibt
+   unverändert. MD-E2-T02 (Härtung) und MD-E2-T03 (inspect-Vorschlag) sind noch offen.
 
 ---
 

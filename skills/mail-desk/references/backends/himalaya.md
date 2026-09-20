@@ -95,9 +95,13 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
 - **No automatic write / reclassification:** MD-E1 performs no mailbox write, no promotion,
   no export, no filing, no disposition and no cleanup, and it does **not** reclassify the mail
   or install the staged result into a `DraftManifest`.
-- **MD-E2 boundary:** automatic `draft`/`inspect` invocation wiring, the
-  `--evaluate-attachments` option, the single reclassification attempt and the `DraftManifest`
-  installation are MD-E2 and not implemented in MD-E1.
+- **MD-E2 continuation:** with **FR-15/MD-E2-T01** the default-on `draft` path fetches raw
+  MIME only for an ambiguous item, runs `attachment_evaluate`, consumes a validated `ready`
+  handoff exactly once as a distinct `untrusted_external` classifier input, and installs the
+  additive final `attachment_evaluation`. The mutually exclusive
+  `--evaluate-attachments`/`--no-evaluate-attachments` options are valid only for direct
+  `draft`/`inspect` (`draft` defaults on, `inspect` defaults off). The opt-in `inspect`
+  proposal (MD-E2-T03) and the fail-closed hardening (MD-E2-T02) remain open.
 
 ## Envelope IDs
 

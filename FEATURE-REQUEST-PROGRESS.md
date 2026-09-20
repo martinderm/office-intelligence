@@ -35,8 +35,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
   Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
 - `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) ist vollständig implementiert, reviewt,
-  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen, `MD-E2` ist
-  nicht gestartet.** Der staged `attachment_evaluation`-Vertrag
+  verifiziert und als Paket abgenommen; `FR-15` insgesamt bleibt offen; `MD-E2-T01` ist
+  implementiert, `MD-E2-T02`–`T04` sind offen.** Der staged `attachment_evaluation`-Vertrag
   (`used_for_classification` immer `false`, `classifier_revision` immer `null`) und die
   bounded Status-/Reason-Menge sind eingehalten. Alle drei blockierenden
   Sicherheitsvoraussetzungen sind implementiert und getestet: (1) die
@@ -58,12 +58,18 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   dem Target-Root: `test_maildesk_attachment_evaluation_mde1.py` 112/112 grün, die
   vollständige entdeckte Mail-Desk-Suite 649/649 grün (aktueller Nachweis, kein
   permanenter Abnahmewert), `compileall`, `validate-skills-catalog.py`,
-  `validate_workspace.py --json` und `git diff --check` sauber. `MD-E2` (automatische
-  `draft`/`inspect`-Verdrahtung, `--evaluate-attachments`, Neuklassifikation,
-  `DraftManifest`-Installation) ist **nicht gestartet** und bleibt hinter einem
-  frischen, ausdrücklichen Human Gate.
+  `validate_workspace.py --json` und `git diff --check` sauber. Seit **`MD-E2-T01`**
+  (`skills/mail-desk/scripts/core/attachment_reclassification.py`) ist die standardmäßig
+  aktive `draft`-Verdrahtung, die gegenseitig exklusiven Optionen
+  `--evaluate-attachments`/`--no-evaluate-attachments` (nur direktes `draft`/`inspect`) und
+  die genau einmalige `untrusted_external`-Neuklassifikation samt additivem
+  `attachment_evaluation` je Draft-Item implementiert; `MD-E2-T02` (fail-closed-Härtung,
+  Revisionsdeterminismus, Idempotenz), `MD-E2-T03` (opt-in `inspect`-Vorschlag) und
+  `MD-E2-T04` (Paketabnahme) sind offen. Fokussierter Nachweis
+  `skills/mail-desk/tests/test_batch_runner_mde2_draft.py` 14/14 grün, vollständige entdeckte
+  Mail-Desk-Suite 663/663 grün (aktueller Nachweis, kein permanenter Abnahmewert).
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
-- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation inklusive `draft`/`inspect`-Verdrahtung, `--evaluate-attachments` und `DraftManifest`-Installation (nach frischem, ausdrücklichem Human Gate; `MD-E1` ist abgenommen). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-15:** `MD-E2` — Draft-Integration und einmalige Neuklassifikation. `MD-E2-T01` (standardmäßig aktive `draft`-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, `DraftManifest`-Installation) ist implementiert; als Nächstes folgen `MD-E2-T02` (fail-closed-Härtung, Revisionsdeterminismus, Idempotenz), `MD-E2-T03` (opt-in `inspect`-Vorschlag) und `MD-E2-T04` (Paketabnahme). Spezifikation und Abnahme stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
