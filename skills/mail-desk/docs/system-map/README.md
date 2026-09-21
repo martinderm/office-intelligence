@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 111 getrackte Dateien; 54 getrackte Dateien unter `scripts/`, davon 43 unter `scripts/core`; 42 Testmodule; 706 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 115 getrackte Dateien; 57 getrackte Dateien unter `scripts/`, davon 46 unter `scripts/core`; 43 Testmodule; 725 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -20,9 +20,9 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py                                │
-│  ├─ Core Domain: scripts/core/ (43 getrackte Dateien)                  │
+│  ├─ Core Domain: scripts/core/ (46 getrackte Dateien)                  │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
-│  │   ├─ classifier.py (Triage-Heuristiken & Katalog-Matching)          │
+│  │   ├─ classifier.py (Facade + matching/ date & ambiguity)            │
 │  │   ├─ attachment_quarantine_index.py (Schema 1 Quarantäne-Engine)     │
 │  │   ├─ attachment_handoff.py (Coverage-Vertrag & Truncation-Tracking) │
 │  │   └─ sent_indexer.py (Sent-Mails & Reply-Erkennung)                 │
@@ -52,7 +52,7 @@
 | **Quarantäne-, Coverage- & Recovery-Engine** | [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py)<br>[`scripts/core/attachment_handoff.py`](../scripts/core/attachment_handoff.py)<br>[`scripts/core/attachment_filing.py`](../scripts/core/attachment_filing.py)<br>[`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)<br>[`scripts/mail_desk_attachment_quarantine_index.py`](../scripts/mail_desk_attachment_quarantine_index.py)<br>[`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py)<br>[`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py)<br>[`scripts/core/attachment_extract.py`](../scripts/core/attachment_extract.py)<br>[`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py)<br>[`scripts/core/attachment_authorization.py`](../scripts/core/attachment_authorization.py)<br>[`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py) | Schema 1 (17 Pflichtfelder + bis zu 6 additive optionale Coverage-Felder) Quarantäneindex, Trennung von technischem Status (`analysis_status: "completed"`) und inhaltlicher Deckung (`analysis_completeness`, `truncation_stage`), Append-only Dispositionslog, verifizierbare Receipt-Contracts, persistiertes Apply-/Recovery-Journal mit monotoner Zustandsmaschine (`prepared` bis `completed`), Fehler-Resumability via `last_successful_state`, atomare Inventar-Mutation via `_QuarantineInventoryLock`, SHA-256 Disk-Verifikation, Symlink- & 0x400-Reparse-Point-Blockade, 10-Vorbedingungen Discard-Apply, bounded read-only Tracked-Quarantäne-Preflight vor jedem Quarantäne-/Derivat-Write (FR-15/MD-E1-T02), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundener Anhang-Evaluierungs-Orchestrator `attachment_evaluate` mit staged `attachment_evaluation`, linearer Fetch/Extraktions/Handoff-Komposition und validiertem `attachment_analysis_handoff` (FR-15/MD-E1-T05) sowie geschlossener Fail-closed-Fehler-/Reason-Matrix (FR-15/MD-E1-T06). MD-E1 ist mit **FR-15/MD-E1-T07** als Paket abgenommen: ein hermetischer End-to-End-Test belegt Inspect → policygebundenen Fetch → Extraktion → validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; Promotion und Export besitzen weiterhin keinen MD-E1-Laufzeitpfad. **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation**; mit **FR-15/MD-E2-T01** sind die `draft`-Happy-Path-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments` und die einmalige Neuklassifikation samt additiver `DraftManifest`-Installation implementiert, und mit **FR-15/MD-E2-T02** ist diese Grenze fail-closed gehärtet (bounded Outcome-Matrix, kanonische Handoff-Revalidierung, AST-/Katalog-/Hash-gebundene `classifier_revision`, deterministische `already_fetched`-Idempotenz) sowie der opt-in `inspect`-`manifest_proposal` mit wiederverwendetem Item-Flow und `manifest_file`-Grenze (FR-15/MD-E2-T03) und die MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` (FR-15/MD-E2-T04) implementiert; **FR-15 geschlossen**. |
 | **MD-E2 Draft-Integration (FR-15/MD-E2-T01/T02)** | [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py) | Standardmäßig aktive `draft`-Auswertung: nur unklare Items rufen `attachment_evaluate`, der validierte `ready`-Handoff wird genau einmal als getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein additives finales `attachment_evaluation`; `classifier_revision` bindet den Classifier-Regel-AST, Kataloge und konsumierte Hashes. Fail-closed-Härtung: bounded Outcome-Matrix in Review/`INBOX`, kanonische Handoff-Revalidierung, fail-loud `AttachmentReclassificationContractError`, deterministische `already_fetched`-Idempotenz. Keine zweite Fetch-/MIME-/Hash-Validierung. |
 | **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
-| **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/attachment_policy.py`](../scripts/core/attachment_policy.py) | Konservatives Katalog-Matching gegen `projects.json` / `topics.json`, Signalanalyse. |
+| **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/attachment_policy.py`](../scripts/core/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing) und `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01). |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
 | **Integrität & Reconcile** | [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py)<br>[`scripts/core/readiness.py`](../scripts/core/readiness.py) | Read-only Drift-Erkennung zwischen Disk, Inventar und Quarantäne-Index. |
@@ -113,3 +113,28 @@ gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei null Mailbox-/
 und null Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
 **FR-15 ist geschlossen.** Details:
 [`processes.md`](processes.md) §3.2, [`objects.md`](objects.md) §6, [`effects.md`](effects.md) §6.
+
+---
+
+## 6. FR-13/MD-M1-T01 — Matching-Foundation (implementiert)
+
+Mit **FR-13/MD-M1-T01** ist die erste Stufe der Classifier-Entflechtung implementiert.
+[`scripts/core/matching/`](../scripts/core/matching/) ist ein eigenständiges Unterpaket mit
+[`matching/date_parser.py`](../scripts/core/matching/date_parser.py) als kanonischem Owner von
+`parse_date_to_year_month` und
+[`matching/ambiguity.py`](../scripts/core/matching/ambiguity.py) als kanonischem Owner der
+wiederverwendbaren Policy (`resolve_scored_candidates`, `select_unique_fallback`,
+`cross_kind_conflict`, `mark_cross_kind_conflict`). [`scripts/core/classifier.py`](../scripts/core/classifier.py)
+bleibt die kompatible Facade, re-exportiert `parse_date_to_year_month` per Objektidentität und
+leitet Topic-/Operation-Ranking, Parent-Topic-Fallback und Cross-Kind-Conflict über die
+Owner-Callables. Die Matching-Module importieren `classifier.py` nie (kein Zyklus, keine
+Importzeit-Nebenwirkung); Verhalten, Katalogsemantik und Ergebnisform bleiben unverändert.
+
+Der `classifier_revision`-Fingerprint bindet den normalisierten AST der geordneten
+T01-Quelle-Menge `classifier.py`, `matching/ambiguity.py`, `matching/date_parser.py`
+(host-pfad-invariant, Kommentar-/Formatierungs-invariant, fail-closed ohne Partial-Digest).
+
+**Noch offen (Zukunft):** **MD-M1-T02** extrahiert `matching/project_matching.py`,
+**MD-M1-T03** `matching/topic_matching.py`; erst danach wächst die gebundene Quelle-Menge
+auf fünf Module und die Facade auf ≤ 813 Zeilen. MD-M2 und die Quarantäne-Paketierung
+bleiben out of scope.

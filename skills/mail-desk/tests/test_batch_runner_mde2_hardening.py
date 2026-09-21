@@ -578,8 +578,21 @@ class Mde2RevisionTests(unittest.TestCase):
         self.assertEqual(3, len({missing, empty, populated}))
 
     def test_code_rule_change_moves_fingerprint_but_comments_and_paths_do_not(self) -> None:
-        source = reclass._CLASSIFIER_MODULE_PATH.read_text(encoding="utf-8")
+        # MD-M1: the fingerprint binds the ordered active rule source set; the facade
+        # ``classifier.py`` entry carries the code-level rules.
+        sources = tuple(reclass._CLASSIFIER_MODULE_PATHS)
+        facade_index = next(
+            index for index, path in enumerate(sources) if Path(path).name == "classifier.py"
+        )
+        source = Path(sources[facade_index]).read_text(encoding="utf-8")
         self.assertIn('"Junk"', source)
+
+        def _with_facade_replaced(replacement: Path) -> tuple[Path, ...]:
+            return tuple(
+                replacement if position == facade_index else path
+                for position, path in enumerate(sources)
+            )
+
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             native = reclass.classifier_rules_fingerprint(workspace)
@@ -589,11 +602,17 @@ class Mde2RevisionTests(unittest.TestCase):
             comment_path.write_text(source + "\n# trailing comment only\n", encoding="utf-8")
             changed_path = workspace / "changed.py"
             changed_path.write_text(source.replace('"Junk"', '"Junk2"'), encoding="utf-8")
-            with patch.object(reclass, "_CLASSIFIER_MODULE_PATH", baseline_path):
+            with patch.object(
+                reclass, "_CLASSIFIER_MODULE_PATHS", _with_facade_replaced(baseline_path)
+            ):
                 baseline = reclass.classifier_rules_fingerprint(workspace)
-            with patch.object(reclass, "_CLASSIFIER_MODULE_PATH", comment_path):
+            with patch.object(
+                reclass, "_CLASSIFIER_MODULE_PATHS", _with_facade_replaced(comment_path)
+            ):
                 comment = reclass.classifier_rules_fingerprint(workspace)
-            with patch.object(reclass, "_CLASSIFIER_MODULE_PATH", changed_path):
+            with patch.object(
+                reclass, "_CLASSIFIER_MODULE_PATHS", _with_facade_replaced(changed_path)
+            ):
                 changed = reclass.classifier_rules_fingerprint(workspace)
         # Identical content at a different host path must not move the fingerprint.
         self.assertEqual(native, baseline)

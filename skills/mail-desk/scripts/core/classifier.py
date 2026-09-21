@@ -17,6 +17,8 @@ from .attachment_handoff import (
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
+from .matching import ambiguity
+from .matching.date_parser import parse_date_to_year_month
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
@@ -36,35 +38,6 @@ FULL_BODY_ACTION_REQUEST = re.compile(
     r"\b(?:please|kindly|could you|can you|action required|please respond|bitte|kannst du|können sie)\b",
     re.IGNORECASE,
 )
-
-
-def parse_date_to_year_month(date_str: str) -> tuple[str, str]:
-    """Parse date string into ('YYYY-MM', 'YYYY-MM-DD'). Default to current year-month if invalid."""
-    if not date_str:
-        return "2026-01", "2026-01-01"
-
-    # Match standard formats like "Thu, 15 Jan 2026 13:11:40 +0000" or "2026-01-15"
-    months = {
-        "jan": "01", "feb": "02", "mar": "03", "apr": "04", "may": "05", "jun": "06",
-        "jul": "07", "aug": "08", "sep": "09", "oct": "10", "nov": "11", "dec": "12"
-    }
-
-    # ISO format check
-    iso_match = re.search(r"(\d{4})-(\d{2})-(\d{2})", date_str)
-    if iso_match:
-        y, m, d = iso_match.group(1), iso_match.group(2), iso_match.group(3)
-        return f"{y}-{m}", f"{y}-{m}-{d}"
-
-    # RFC 2822 format check: "15 Jan 2026"
-    rfc_match = re.search(r"(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})", date_str)
-    if rfc_match:
-        d = int(rfc_match.group(1))
-        mon = rfc_match.group(2).lower()
-        y = rfc_match.group(3)
-        m = months.get(mon, "01")
-        return f"{y}-{m}", f"{y}-{m}-{d:02d}"
-
-    return "2026-01", "2026-01-01"
 
 
 def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -433,13 +406,11 @@ def _select_topic_subtopic(
         if reasons:
             candidates.append((score, {"id": identifier, "title": title, "reasons": reasons, "_source": subtopic}))
 
-    if not candidates:
+    resolved = ambiguity.resolve_scored_candidates(candidates)
+    if not resolved:
         return {}
-    highest_score = max(score for score, _ in candidates)
-    choices = [candidate for score, candidate in candidates if score == highest_score]
-    choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
-    if len(choices) == 1:
-        selected = choices[0]
+    if "unique" in resolved:
+        selected = resolved["unique"]
         return {
             "subtopic": selected["id"],
             "match_reasons": selected["reasons"],
@@ -448,7 +419,7 @@ def _select_topic_subtopic(
     return {
         "candidates": [
             {"id": candidate["id"], "title": candidate["title"], "reasons": candidate["reasons"]}
-            for candidate in choices
+            for candidate in resolved["candidates"]
         ]
     }
 
@@ -511,11 +482,13 @@ def _select_subtopic_operation(
         if reasons:
             candidates.append((score, {"id": identifier, "title": title, "reasons": reasons, "_source": operation}))
 
-    if not candidates:
+    resolved = ambiguity.resolve_scored_candidates(candidates)
+    if not resolved:
         return {}
-    highest_score = max(score for score, _ in candidates)
-    choices = [candidate for score, candidate in candidates if score == highest_score]
-    choices.sort(key=lambda candidate: (candidate["id"].casefold(), candidate["title"].casefold()))
+    if "unique" in resolved:
+        choices = [resolved["unique"]]
+    else:
+        choices = list(resolved["candidates"])
     # Duplicate active/legacy operation IDs make every matching operation
     # structurally ambiguous, even if one duplicate happened to score lower.
     ids = [str(operation.get("id", "")).strip().casefold() for operation in operations]
@@ -1544,7 +1517,7 @@ def classify_email(
         # refusing to guess between two parent topics. A unique, documented
         # subtopic subject pattern may also beat a weaker generic root pattern or
         # keyword from another topic; explicit parent names always remain stronger.
-        fallback_matches: list[tuple[dict[str, Any], dict[str, Any], int]] = []
+        fallback_matches: list[tuple[int, tuple[dict[str, Any], dict[str, Any], int]]] = []
         fallback_ambiguity = False
         for top in (topics or []):
             if not isinstance(top, dict):
@@ -1568,18 +1541,14 @@ def classify_email(
                     elif reason.startswith("subject_keyword:"):
                         subject_strength = max(subject_strength, 300)
             if isinstance(resolution.get("subtopic"), str) and subject_strength:
-                fallback_matches.append((top, resolution, subject_strength))
+                fallback_matches.append((subject_strength, (top, resolution, subject_strength)))
             elif isinstance(resolution.get("candidates"), list):
                 fallback_ambiguity = True
-        if fallback_matches:
-            strongest_fallback_strength = max(match[2] for match in fallback_matches)
-            strongest_fallbacks = [
-                match for match in fallback_matches if match[2] == strongest_fallback_strength
-            ]
-        else:
-            strongest_fallbacks = []
-        if len(strongest_fallbacks) == 1 and not fallback_ambiguity:
-            fallback_topic, fallback_resolution, fallback_strength = strongest_fallbacks[0]
+        selected_fallback = ambiguity.select_unique_fallback(
+            fallback_matches, ambiguous=fallback_ambiguity
+        )
+        if selected_fallback is not None:
+            fallback_topic, fallback_resolution, fallback_strength = selected_fallback
             can_select_fallback = not matched_topic
             can_override_generic_root = (
                 matched_topic_source in {"root_pattern", "root_keyword", "root_context"}
@@ -1777,9 +1746,7 @@ def classify_email(
             # ambiguous even when only one side was individually unique. Convert
             # every scalar back into a candidate and retain only subtopic-level
             # evidence/targets; no event or operation path may survive the conflict.
-            operation_present = isinstance(decision.get("operation"), str) or bool(decision.get("operation_candidates"))
-            event_present = isinstance(decision.get("event"), str) or bool(decision.get("event_candidates"))
-            if operation_present and event_present:
+            if ambiguity.cross_kind_conflict(decision):
                 if isinstance(decision.get("operation"), str):
                     decision["operation_candidates"] = [{
                         "id": decision.pop("operation"),
@@ -1793,17 +1760,7 @@ def classify_email(
                         "reasons": list(decision.pop("event_match_reasons", [])),
                     }]
                 for field in ("operation_candidates", "event_candidates"):
-                    normalized_candidates = []
-                    for candidate in decision.get(field, []):
-                        if not isinstance(candidate, dict):
-                            continue
-                        normalized = dict(candidate)
-                        reasons = list(normalized.get("reasons", []))
-                        if "cross_kind_conflict" not in reasons:
-                            reasons.append("cross_kind_conflict")
-                        normalized["reasons"] = reasons
-                        normalized_candidates.append(normalized)
-                    decision[field] = normalized_candidates
+                    decision[field] = ambiguity.mark_cross_kind_conflict(decision.get(field, []))
                 evidence_spec = _build_topic_evidence(
                     selected_topic,
                     subtopic_source,

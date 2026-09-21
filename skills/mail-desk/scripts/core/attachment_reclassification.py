@@ -93,9 +93,15 @@ _CATALOG_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("topics", ("memory", "references", "topics", "topics.json")),
 )
 
-#: The active, code-level classifier rule module whose normalized AST is content-addressed
-#: into ``classifier_revision``.  Resolved next to this module so no host path is ever hashed.
-_CLASSIFIER_MODULE_PATH: Path = Path(__file__).resolve().parent / "classifier.py"
+#: The active, code-level classifier rule modules whose normalized ASTs are
+#: content-addressed into ``classifier_revision``.  Resolved next to this module so no
+#: host path is ever hashed.  MD-M1-T01 binds the facade plus the canonical date and
+#: ambiguity owners; project/topic matching modules are appended in MD-M1-T02/T03.
+_CLASSIFIER_MODULE_PATHS: tuple[Path, ...] = (
+    Path(__file__).resolve().parent / "classifier.py",
+    Path(__file__).resolve().parent / "matching" / "ambiguity.py",
+    Path(__file__).resolve().parent / "matching" / "date_parser.py",
+)
 
 #: Fields the single reclassification may replace on the draft item.  All are produced by
 #: the existing classifier rules; MD-E2 never invents a target.
@@ -166,26 +172,32 @@ def derive_evaluation_run_id(
 # ==============================================================================
 
 def _classifier_code_digest() -> str:
-    """Return a normalized-AST SHA-256 over the active classifier rule module.
+    """Return a normalized-AST SHA-256 over the ordered active classifier rule modules.
 
-    The digest is taken over ``ast.dump`` of the parsed module, so it is insensitive to
-    formatting and comments but moves on any code-level rule or constant change.  It never
-    hashes bytecode, an absolute path, a runtime object repr or raw source formatting.
+    Each bound module's normalized AST (``ast.dump``) is folded into one digest in the
+    deterministic ``_CLASSIFIER_MODULE_PATHS`` order, so the result is insensitive to
+    formatting, comments and host paths but moves on any code-level rule or constant
+    change in any bound module.  It never hashes bytecode, an absolute path, a runtime
+    object repr or raw source formatting.  A missing, unreadable or unparseable bound
+    module fails closed with no partial digest.
     """
-    try:
-        source = _CLASSIFIER_MODULE_PATH.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:  # pragma: no cover - deployment fault
-        raise AttachmentReclassificationContractError(
-            "The canonical classifier rule module is unavailable."
-        ) from exc
-    try:
-        tree = ast.parse(source, filename="classifier.py")
-    except SyntaxError as exc:  # pragma: no cover - deployment fault
-        raise AttachmentReclassificationContractError(
-            "The canonical classifier rule module is not parseable."
-        ) from exc
-    normalized = ast.dump(tree, annotate_fields=True, include_attributes=False)
-    return hashlib.sha256(normalized.encode("utf-8"), usedforsecurity=False).hexdigest()
+    digest = hashlib.sha256(usedforsecurity=False)
+    for module_path in _CLASSIFIER_MODULE_PATHS:
+        try:
+            source = module_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:  # pragma: no cover - deployment fault
+            raise AttachmentReclassificationContractError(
+                "A canonical classifier rule module is unavailable."
+            ) from exc
+        try:
+            tree = ast.parse(source, filename=module_path.name)
+        except SyntaxError as exc:  # pragma: no cover - deployment fault
+            raise AttachmentReclassificationContractError(
+                "A canonical classifier rule module is not parseable."
+            ) from exc
+        normalized = ast.dump(tree, annotate_fields=True, include_attributes=False)
+        digest.update(normalized.encode("utf-8"))
+    return digest.hexdigest()
 
 
 def classifier_rules_fingerprint(workspace_root: str | Path) -> str:
