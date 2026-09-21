@@ -112,14 +112,44 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   `classifier_revision` bewahrt absichtlich die Katalog-Listenreihenfolge, weil das
   Classifier-Matching reihenfolge-sensitiv ist. (4) Die bestehende defensive Behandlung
   von Nicht-dict-Items und `files: []`-Fehlerfällen benötigt keine Produktionsänderung.
+- `FR-13` — **`MD-M1` (`MD-M1-T01`–`T04`) ist implementiert und paketabgenommen;
+  `FR-13` bleibt teilweise, `MD-M2` bleibt offen.** Das kanonische Unterpaket
+  `skills/mail-desk/scripts/core/matching/` besitzt die Owner `date_parser.py`,
+  `ambiguity.py`, `project_matching.py` und `topic_matching.py`; `classifier.py` bleibt die
+  kompatible Facade und ist auf 810 physische Zeilen kontrahiert (≤ 813; Baseline 2.035)
+  und hält Katalog-I/O, Full-Reader-I/O, Zwei-Pass-Orchestrierung,
+  Thread-Referenzparsing/-Parent-Lookup, Anhangsbindung und Manifest-Drafting. Die
+  Thread-Ordner-Inheritance und der Full-Read-Evidenz-Rebuild sind an die Domänen-Owner
+  geroutet (`match_thread_project_inheritance`/`resolve_full_read_project_evidence` bzw.
+  `match_thread_topic_inheritance`/`resolve_full_read_topic_evidence`) und wahren die
+  Reihenfolge Projekt-vor-Topic sowie exakte Katalogobjekte und die Entscheidungs-/
+  Evidenz-/Notiz-/Zielsemantik. Der Kompatibilitätsvertrag
+  `skills/mail-desk/tests/test_classifier_compatibility_contract.py` sichert die gesamte
+  Basissymbol-, Re-Export-, DI-, Lazy-Import- und Monkeypatch-Oberfläche sowie die neue
+  Owner-Identität/-Routing. Der `classifier_revision`-Fingerprint bindet weiterhin exakt
+  die geordnete Fünf-Quellen-AST-Menge (`classifier.py`, `matching/ambiguity.py`,
+  `matching/date_parser.py`, `matching/project_matching.py`,
+  `matching/topic_matching.py`); da sich diese Quellen in MD-M1 einmalig geändert haben,
+  rotierten vorhandene `classifier_revision`-Werte genau einmal (genehmigt). Fokussierter
+  Nachweis: `test_classifier_compatibility_contract.py` 15/15 grün,
+  `test_classifier_matching_modules.py` 19/19 grün, `test_full_body_escalation.py` 11/11
+  grün, `test_classifier_evidence_context.py` 6/6 grün, `test_batch_runner_modes.py` 21/21
+  grün, `test_batch_runner_mde2_acceptance.py` 1/1 grün, vollständige entdeckte
+  Mail-Desk-Suite 786/786 grün (aktueller Nachweis, kein permanenter Abnahmewert). Bewusst
+  **nicht** enthalten: jegliche MD-M2-/Quarantäne-Paketierung, Änderungen an
+  FR-15-Anhangssemantik oder neue Matching-Regeln. Git-Index-Metrik: 120 getrackte Dateien
+  / 59 unter `scripts/` (48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-13:** `MD-M1` (`T01`–`T04`) ist abgeschlossen und paketabgenommen (siehe oben); offen
+  bleibt **`MD-M2`** — Paketierung der Quarantäne-Module unter
+  `skills/mail-desk/scripts/core/quarantine/` mit transparenten Re-Exports. Paketkarte und
+  Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
   `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
   `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in
   `inspect`-Vorschlag und hermetische Paketabnahme) sind implementiert und paketabgenommen;
-  **FR-15 ist geschlossen**. Als nächstes Paket folgt **FR-13/`MD-M1`** (noch nicht gestartet)
-  gegen diesen abgenommenen MD-E2-Baseline. Spezifikation und Abnahme stehen in
+  **FR-15 ist geschlossen**. Spezifikation und Abnahme stehen in
   [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).

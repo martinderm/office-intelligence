@@ -27,12 +27,15 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
-from ..common import resolve_evidence_dir
+from ..common import normalize_message_id, resolve_evidence_dir
+from .date_parser import parse_date_to_year_month
 
 __all__ = [
     "select_project_match",
+    "match_thread_project_inheritance",
+    "resolve_full_read_project_evidence",
     "_artifact_text_matches",
     "_artifact_code_matches",
     "_artifact_candidate",
@@ -404,3 +407,107 @@ def select_project_match(
             return {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
 
     return None
+
+
+def match_thread_project_inheritance(
+    projects: list[dict[str, Any]],
+    parent_folder: str,
+    *,
+    workspace_root: Path,
+    email: Mapping[str, Any],
+    needs_reply: bool,
+    parent_mid: str,
+) -> dict[str, Any] | None:
+    """Resolve thread inheritance to a project target from the recorded parent folder.
+
+    The facade keeps the In-Reply-To/References parsing and the final-index parent lookup;
+    this owner owns only the project part of the parent-folder mapping plus its decision,
+    notes and monthly evidence spec.  ``None`` means the parent folder is not a project
+    folder, so the facade falls through to the topic owner and then to the generic folder.
+    Catalog order and first-match semantics are preserved.
+    """
+    matched_project: dict[str, Any] | None = None
+    for project in projects or []:
+        project_id = project.get("id", "").strip()
+        kuerzel = project.get("kuerzel", "").strip()
+        mailbox_folder = project.get("mailbox_folder") or f"Projekte/{kuerzel or project_id.upper()}"
+        if mailbox_folder.lower() == parent_folder.lower():
+            matched_project = project
+            break
+    if not matched_project:
+        return None
+
+    subject = str(email.get("subject", "")).strip()
+    from_str = str(email.get("from", "")).strip()
+    message_id = normalize_message_id(email.get("message_id") or email.get("raw_message_id", ""))
+    year_month, date_value = parse_date_to_year_month(str(email.get("date", "")).strip())
+    project_id = matched_project.get("id", "")
+    project_name = matched_project.get("kuerzel") or project_id
+    evidence_dir = resolve_evidence_dir("projects", project_id, workspace_root=workspace_root)
+    try:
+        evidence_dir_rel = str(evidence_dir.relative_to(workspace_root).as_posix())
+    except ValueError:
+        evidence_dir_rel = str(evidence_dir.as_posix())
+    return {
+        "project": matched_project,
+        "target_folder": parent_folder,
+        "decision": {
+            "kind": "project",
+            "id": project_id,
+            "confidence": "high",
+            "needs_reply": needs_reply,
+        },
+        "notes": (
+            f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu "
+            f"{project_name.upper()} ({parent_folder})."
+        ),
+        "evidence": {
+            "type": "project_evidence",
+            "file": f"{evidence_dir_rel}/{year_month}.md",
+            "entry": (
+                f"- {date_value} — {subject}.\n"
+                f"  - Message-ID: `{message_id}`\n"
+                f"  - Beteiligte: {from_str}\n"
+            ),
+        },
+    }
+
+
+def resolve_full_read_project_evidence(
+    projects: list[dict[str, Any]],
+    *,
+    decision: dict[str, Any],
+    workspace_root: Path,
+    email: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Rebuild the project evidence spec after a full-body re-classification.
+
+    The facade keeps the full-reader I/O and the two-pass orchestration; this owner
+    resolves the winning catalog project by id and rebuilds only the project-domain
+    evidence spec.  ``None`` (non-project decision or absent catalog entry) leaves any
+    preview-derived evidence untouched.
+    """
+    if decision.get("kind") != "project":
+        return None
+    project_id = str(decision.get("id", "")).casefold()
+    matched_project = next(
+        (
+            project for project in projects
+            if isinstance(project, dict) and str(project.get("id", "")).casefold() == project_id
+        ),
+        None,
+    )
+    if matched_project is None:
+        return None
+    year_month, date_value = parse_date_to_year_month(str(email.get("date", "")))
+    return _build_project_evidence(
+        matched_project,
+        decision,
+        workspace_root=workspace_root,
+        year_month=year_month,
+        date=date_value,
+        subject=str(email.get("subject", "")),
+        message_id=normalize_message_id(email.get("message_id") or email.get("raw_message_id", "")),
+        from_str=str(email.get("from", "")),
+        to_str=str(email.get("to", "")),
+    )

@@ -1510,13 +1510,17 @@ Review-Hash die installierte Auswertung bindet:
   oder `still_ambiguous` umetikettiert.
 
 **`classifier_revision`:** `compute_classifier_revision` bindet einen deterministischen
-SHA-256-Fingerprint der aktiven kanonischen Klassifikationsregeln (der normalisierte
-AST des Classifier-Regelmoduls `classifier.py` plus Projekt-/Topic-Kataloge und
-`CLASSIFIER_RULES_VERSION`) an die sortierte, deduplizierte Menge der tatsächlich
-konsumierten Anhangs-Hashes. Reihenfolge ist irrelevant; jede regel- oder
-katalogrelevante Code-Änderung und jede Input-Änderung ändert die Revision, während
-Kommentare/Formatierung und Host-Pfade sie nicht bewegen. Caller-, Mail- und
-Manifest-Werte können sie nicht setzen.
+SHA-256-Fingerprint der aktiven kanonischen Klassifikationsregeln (die geordneten,
+normalisierten ASTs der kontrahierten Facade `classifier.py` sowie der Matching-Owner
+`matching/ambiguity.py`, `matching/date_parser.py`, `matching/project_matching.py` und
+`matching/topic_matching.py` plus Projekt-/Topic-Kataloge und `CLASSIFIER_RULES_VERSION`)
+an die sortierte, deduplizierte Menge der tatsächlich konsumierten Anhangs-Hashes.
+Reihenfolge der konsumierten Hashes ist irrelevant; jede regel- oder katalogrelevante
+Code-Änderung und jede Input-Änderung ändert die Revision, während Kommentare/Formatierung
+und Host-Pfade sie nicht bewegen. Caller-, Mail- und Manifest-Werte können sie nicht setzen.
+Mit **FR-13/MD-M1 (T01–T04)** haben sich die gebundenen Regel-ASTs einmalig geändert; die
+erste MD-M1-Ausgabe rotiert damit vorhandene `classifier_revision`-Werte genau einmal
+(genehmigt).
 
 **Idempotenz / `already_fetched`:** `derive_evaluation_run_id` leitet aus der
 vertrauenswürdigen Account-/Folder-/Envelope-/Message-Identität deterministisch einen

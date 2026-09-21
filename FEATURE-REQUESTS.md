@@ -23,7 +23,7 @@ verbindliche Paketkarten.
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
-| `FR-13` | ⬜ geplant | Domänenanalyse der flachen Modulstruktur und des Monolithen `classifier.py` in System Map | `MD-M1` |
+| `FR-13` | 🟡 teilweise; `MD-M1` (T01–T04) abgeschlossen, `MD-M2` offen | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation | `MD-M2` |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 
 
@@ -463,8 +463,11 @@ Coding-Agenten mit übermäßigem Kontext.
 
 ## FR-13: Domänenorientierte Binnengliederung und Matcher-Entflechtung von mail-desk
 
-**Status:** ⬜ Geplant. Reine Refactoring- und Modularisierungsmaßnahme; keine Verhaltens-
-oder Schnittstellenänderung.
+**Status:** 🟡 Teilweise umgesetzt (reine Refactoring- und Modularisierungsmaßnahme ohne
+Verhaltens- oder Schnittstellenänderung). **`MD-M1` ist mit T01–T04 abgeschlossen**
+(kanonisches `core/matching/`, Facade auf 810 physische Zeilen kontrahiert, vollständiger
+Kompatibilitätsvertrag, dokumentierte einmalige `classifier_revision`-Rotation);
+**`MD-M2` (Quarantäne-Paketierung unter `core/quarantine/`) bleibt offen.**
 
 ### Problem & Motivation
 
@@ -500,7 +503,27 @@ abgegrenzt.
 2. `classifier.py` importiert die Sub-Matcher und bleibt als konsolidierte API-Fassade
    bestehen; Reduzierung der Dateigröße um > 60 %.
 
-### MD-M2 — Paketierung der Quarantäne-Module unter core/quarantine/
+**MD-M1-Abnahme (T01–T04, abgeschlossen):** Das Unterpaket
+`skills/mail-desk/scripts/core/matching/` besitzt die kanonischen Owner `date_parser.py`,
+`ambiguity.py`, `project_matching.py` und `topic_matching.py`; `classifier.py` bleibt die
+kompatible Facade (810 physische Zeilen, ≤ 813; Baseline 2.035) und hält Katalog-I/O,
+Full-Reader-I/O, Zwei-Pass-Orchestrierung, Thread-Referenzparsing/-Parent-Lookup,
+Anhangsbindung und Manifest-Drafting. Die Thread-Ordner-Inheritance und der
+Full-Read-Evidenz-Rebuild sind als `match_thread_project_inheritance`/
+`resolve_full_read_project_evidence` (Projekt) bzw. `match_thread_topic_inheritance`/
+`resolve_full_read_topic_evidence` (Topic) an diese Owner geroutet (Reihenfolge
+Projekt-vor-Topic, exakte Katalogobjekte und Entscheidungs-/Evidenz-/Notiz-/Zielsemantik
+erhalten). Der Kompatibilitätsvertrag
+`skills/mail-desk/tests/test_classifier_compatibility_contract.py` sichert die gesamte
+Basissymbol-, Re-Export-, DI-, Lazy-Import- und Monkeypatch-Oberfläche. Der
+`classifier_revision`-Fingerprint bindet weiterhin exakt die geordnete Fünf-Quellen-AST-
+Menge (`classifier.py`, `matching/ambiguity.py`, `matching/date_parser.py`,
+`matching/project_matching.py`, `matching/topic_matching.py`); da sich diese Quellen in
+MD-M1 einmalig geändert haben, rotierten vorhandene `classifier_revision`-Werte genau
+einmal (genehmigt). Git-Index-Metrik: 120 getrackte Dateien / 59 unter `scripts/`
+(48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
+
+### MD-M2 — Paketierung der Quarantäne-Module unter core/quarantine/ (offen)
 
 **Scope:**
 1. Überführung der zusammengehörigen Quarantäne- und Anhangsmodule in
@@ -923,9 +946,9 @@ Dispositionswrites. **MD-E1 endet am Handoff; Reclassify und
 ausgeführt noch behauptet.** FR-15 ist mit der abgenommenen
 MD-E2-Umsetzung (T01–T04) geschlossen. FR-15 und FR-13 verändern dieselben
 Classifier-/Attachment-Grenzen und dürfen nicht parallel umgesetzt werden; **MD-E2 wurde
-zuerst abgeschlossen (FR-15 geschlossen), FR-13/`MD-M1` ist noch nicht gestartet** und beginnt
-erst gegen diesen abgenommenen MD-E2-Baseline (alternativ nach komplett grünem FR-13 gegen
-dessen neue Modulstruktur neu geplant).
+zuerst abgeschlossen (FR-15 geschlossen), danach wurde FR-13/`MD-M1` (T01–T04) gegen diesen
+abgenommenen MD-E2-Baseline implementiert und paketabgenommen; FR-13 bleibt offen, bis
+`MD-M2` (Quarantäne-Paketierung) folgt.**
 
 **T02/T03-Synchronisation:** Die fail-closed-Härtung (MD-E2-T02) wurde im selben
 Arbeitsschritt in `skills/mail-desk/scripts/core/attachment_reclassification.py`,
@@ -943,4 +966,4 @@ System-Map-Ebenen und dieser Status-/Fortschrittsdatei nachgezogen. Die Paketabn
 Operator-Docs, beide System-Map-Ebenen sowie diese Status-/Fortschrittsdatei synchron
 nachgezogen; die Git-Index-Metrik ist auf 111 getrackte Dateien / 54 unter `scripts/`
 (43 unter `scripts/core`) / 42 Testmodule / 706 Tests aktualisiert. **FR-15 ist geschlossen;
-FR-13/`MD-M1` ist noch nicht gestartet.**
+FR-13/`MD-M1` ist mit T01–T04 abgeschlossen, `MD-M2` bleibt offen.**

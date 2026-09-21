@@ -40,15 +40,18 @@ from __future__ import annotations
 import re
 from datetime import date
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Mapping
 
-from ..common import resolve_evidence_dir
+from ..common import normalize_message_id, resolve_evidence_dir
 from . import ambiguity
+from .date_parser import parse_date_to_year_month
 from .project_matching import _artifact_text_matches, _evidence_read_escalation
 
 __all__ = [
     "select_topic_match",
     "materialize_topic_details",
+    "match_thread_topic_inheritance",
+    "resolve_full_read_topic_evidence",
     "_topic_parent_subject_signal",
     "_subject_signal_matches",
     "_select_topic_subtopic",
@@ -924,3 +927,140 @@ def materialize_topic_details(
         "evidence": evidence_spec,
         "synthesis_targets": synthesis_targets,
     }
+
+
+def match_thread_topic_inheritance(
+    topics: list[dict[str, Any]],
+    parent_folder: str,
+    *,
+    workspace_root: Path,
+    email: Mapping[str, Any],
+    needs_reply: bool,
+    parent_mid: str,
+) -> dict[str, Any] | None:
+    """Resolve thread inheritance to a topic target from the recorded parent folder.
+
+    The facade keeps the In-Reply-To/References parsing and the final-index parent lookup;
+    this owner owns only the topic part of the parent-folder mapping plus its decision,
+    notes and monthly evidence spec.  ``None`` means the parent folder is not a topic
+    folder, so the facade keeps the generic parent-folder routing.  Catalog order and
+    first-match semantics are preserved, and the topic rule only runs after the project
+    owner declined (project-before-topic).
+    """
+    matched_topic: dict[str, Any] | None = None
+    for topic in topics or []:
+        topic_id = topic.get("id", "").strip()
+        mailbox_folder = topic.get("mailbox_folder") or f"Themen/{topic_id}"
+        if mailbox_folder.lower() == parent_folder.lower():
+            matched_topic = topic
+            break
+    if not matched_topic:
+        return None
+
+    subject = str(email.get("subject", "")).strip()
+    from_str = str(email.get("from", "")).strip()
+    message_id = normalize_message_id(email.get("message_id") or email.get("raw_message_id", ""))
+    year_month, date_value = parse_date_to_year_month(str(email.get("date", "")).strip())
+    topic_id = matched_topic.get("id", "")
+    topic_title = matched_topic.get("title", topic_id)
+    evidence_dir = resolve_evidence_dir("topics", topic_id, workspace_root=workspace_root)
+    try:
+        evidence_dir_rel = str(evidence_dir.relative_to(workspace_root).as_posix())
+    except ValueError:
+        evidence_dir_rel = str(evidence_dir.as_posix())
+    return {
+        "topic": matched_topic,
+        "target_folder": parent_folder,
+        "decision": {
+            "kind": "topic",
+            "id": topic_id,
+            "confidence": "high",
+            "needs_reply": needs_reply,
+        },
+        "notes": (
+            f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu "
+            f"{topic_title} ({parent_folder})."
+        ),
+        "evidence": {
+            "type": "topic_evidence",
+            "file": f"{evidence_dir_rel}/{year_month}.md",
+            "entry": (
+                f"- {date_value} — {subject}.\n"
+                f"  - Message-ID: `{message_id}`\n"
+                f"  - Beteiligte: {from_str}\n"
+            ),
+        },
+    }
+
+
+def resolve_full_read_topic_evidence(
+    topics: list[dict[str, Any]],
+    *,
+    decision: dict[str, Any],
+    workspace_root: Path,
+    email: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Rebuild topic/subtopic/operation/event evidence after a full-body re-classification.
+
+    The facade keeps the full-reader I/O and the two-pass orchestration; this owner resolves
+    the winning catalog topic (and its subtopic/event/operation) by the already-decided
+    scalars and rebuilds only the topic-domain evidence spec.  ``None`` (non-topic decision
+    or absent catalog entry) leaves any preview-derived evidence untouched.
+    """
+    if decision.get("kind") != "topic":
+        return None
+    topic_id = str(decision.get("id", "")).casefold()
+    subtopic_id = str(decision.get("subtopic", "")).casefold()
+    matched_topic = next(
+        (
+            topic for topic in topics
+            if isinstance(topic, dict) and str(topic.get("id", "")).casefold() == topic_id
+        ),
+        None,
+    )
+    if matched_topic is None or not subtopic_id:
+        return None
+    matched_subtopic = next(
+        (
+            subtopic for subtopic in matched_topic.get("subtopics", [])
+            if isinstance(subtopic, dict) and str(subtopic.get("id", "")).casefold() == subtopic_id
+        ),
+        None,
+    ) if isinstance(matched_topic.get("subtopics"), list) else None
+    if matched_subtopic is None:
+        return None
+    event_id = str(decision.get("event", "")).casefold()
+    matched_event = next(
+        (
+            event for event in matched_subtopic.get("events", [])
+            if isinstance(event, dict) and str(event.get("id", "")).casefold() == event_id
+        ),
+        None,
+    ) if event_id and isinstance(matched_subtopic.get("events"), list) else None
+    operation_id = str(decision.get("operation", "")).casefold()
+    matched_operation = next(
+        (
+            operation for operation in matched_subtopic.get("operations", [])
+            if isinstance(operation, dict)
+            and str(operation.get("id", "")).casefold() == operation_id
+        ),
+        None,
+    ) if operation_id and isinstance(matched_subtopic.get("operations"), list) else None
+    year_month, date_value = parse_date_to_year_month(str(email.get("date", "")))
+    common = {
+        "year_month": year_month,
+        "date": date_value,
+        "subject": str(email.get("subject", "")),
+        "message_id": normalize_message_id(email.get("message_id") or email.get("raw_message_id", "")),
+        "from_str": str(email.get("from", "")),
+        "to_str": str(email.get("to", "")),
+    }
+    if matched_event is not None:
+        return _build_event_evidence(matched_topic, matched_subtopic, matched_event, decision, **common)
+    if matched_operation is not None:
+        return _build_operation_evidence(
+            matched_topic, matched_subtopic, matched_operation, decision, **common
+        )
+    return _build_topic_evidence(
+        matched_topic, matched_subtopic, decision, workspace_root=workspace_root, **common
+    )

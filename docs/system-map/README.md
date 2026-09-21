@@ -27,7 +27,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (119 Dateien)│       │ (65 Dateien) │       │ - project-catalog-entry  │
+│ (120 Dateien)│       │ (65 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -47,7 +47,7 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 
 | Sub-Skill | Komplexitäts-Klasse | Dateien / Tests | Dokumentationspfad | Primäre Aufgabe |
 | :--- | :--- | :--- | :--- | :--- |
-| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | 119 getrackte Dateien (`git ls-files`)<br>59 getrackte Dateien unter `scripts/` (davon 48 unter `scripts/core`)<br>45 Testmodule<br>771 Tests | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, versionierter Quarantäneindex (MD-Q1/MD-Q2/MD-C1 Schema 1 mit additiven Coverage-Feldern), Coverage-Vertrag (MD-C1), Disposition, Verifiable Receipts & Discard-Recovery-Journal (MD-Q3), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundene Anhang-Evaluierung mit linearer Fetch/Extraktions/Handoff-Komposition (FR-15/MD-E1-T05) und fail-closed Fehler-/Reason-Matrix (FR-15/MD-E1-T06), MD-E1-Paketabnahme mit hermetischem End-to-End-Nachweis Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07), standardmäßig aktive `draft`-Integration mit fail-closed-Härtung, kanonischer Handoff-Revalidierung und deterministischer `already_fetched`-Idempotenz (FR-15/MD-E2-T01/T02), opt-in `inspect`-`manifest_proposal` (FR-15/MD-E2-T03), MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` (FR-15/MD-E2-T04), Classifier-Entflechtung mit kanonischen Matching-Ownern (FR-13/MD-M1-T01/T02/T03), Himalaya-Adapter, Dossier-Synthese. |
+| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | 120 getrackte Dateien (`git ls-files`)<br>59 getrackte Dateien unter `scripts/` (davon 48 unter `scripts/core`)<br>46 Testmodule<br>786 Tests | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, versionierter Quarantäneindex (MD-Q1/MD-Q2/MD-C1 Schema 1 mit additiven Coverage-Feldern), Coverage-Vertrag (MD-C1), Disposition, Verifiable Receipts & Discard-Recovery-Journal (MD-Q3), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundene Anhang-Evaluierung mit linearer Fetch/Extraktions/Handoff-Komposition (FR-15/MD-E1-T05) und fail-closed Fehler-/Reason-Matrix (FR-15/MD-E1-T06), MD-E1-Paketabnahme mit hermetischem End-to-End-Nachweis Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07), standardmäßig aktive `draft`-Integration mit fail-closed-Härtung, kanonischer Handoff-Revalidierung und deterministischer `already_fetched`-Idempotenz (FR-15/MD-E2-T01/T02), opt-in `inspect`-`manifest_proposal` (FR-15/MD-E2-T03), MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` (FR-15/MD-E2-T04), Classifier-Entflechtung mit kanonischen Matching-Ownern und kontrahierter Facade (FR-13/MD-M1-T01–T04), Himalaya-Adapter, Dossier-Synthese. |
 | [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | 65 Dateien<br>41 Tests | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), Cloud-Sync. |
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
@@ -118,7 +118,7 @@ Cloud-Seiteneffekten. **FR-15 ist geschlossen.** Mail-Desk-Karten: L2
 
 ---
 
-## 6. FR-13/MD-M1-T01 + T02 + T03 — Matching-Foundation, Projekt- & Topic-Vertikale (implementiert)
+## 6. FR-13/MD-M1-T01–T04 — Matching-Foundation, Projekt-/Topic-Vertikale & Facade-Kontraktion (MD-M1 abgeschlossen)
 
 Mit **FR-13/MD-M1-T01** beginnt die Classifier-Entflechtung im `mail-desk`-Subsystem:
 `skills/mail-desk/scripts/core/matching/` ist ein eigenständiges Unterpaket mit den
@@ -148,7 +148,22 @@ Importzyklus. Der `classifier_revision`-Fingerprint bindet die geordnete AST-Que
 `classifier.py`, `matching/ambiguity.py`, `matching/date_parser.py`,
 `matching/project_matching.py`, `matching/topic_matching.py` host-pfad- und
 kommentarinvariant und fail-closed.
-**Zukunft:** MD-M1-T04 kontrahiert die Facade (≤ 813 Zeilen), vervollständigt die
-Kompatibilitätsabdeckung und nimmt das MD-M1-Paket ab; MD-M2 und die
-Quarantäne-Paketierung bleiben out of scope.
+**MD-M1-T04 (abgeschlossen):** Mit **FR-13/MD-M1-T04** ist die Facade auf 810 physische
+Zeilen kontrahiert (≤ 813; Baseline 2.035) und das MD-M1-Paket abgenommen. Die
+verbleibende project/topic-Domänenauswertung (Full-Read-Evidenz-Rebuild und
+Thread-Ordner-Inheritance) liegt jetzt bei den bestehenden Ownern
+`matching/project_matching.py` (`match_thread_project_inheritance`,
+`resolve_full_read_project_evidence`) und `matching/topic_matching.py`
+(`match_thread_topic_inheritance`, `resolve_full_read_topic_evidence`); `classifier.py`
+behält Katalog-I/O, Full-Reader-I/O, Zwei-Pass-Orchestrierung, Thread-Referenzparsing und
+Final-Index-Parent-Lookup, Anhangsbindung und Manifest-Drafting und hält die Reihenfolge
+Projekt-vor-Topic sowie exakte Katalogobjekte, Entscheidungs-, Evidenz-, Notiz- und
+Zielsemantik. Der Kompatibilitätsvertrag
+[`../../skills/mail-desk/tests/test_classifier_compatibility_contract.py`](../../skills/mail-desk/tests/test_classifier_compatibility_contract.py)
+sichert die gesamte Basissymboloberfläche. Da sich die gebundenen Regel-ASTs in MD-M1
+einmalig geändert haben, rotierten die vorhandenen `classifier_revision`-Werte genau
+einmal (genehmigt); der Fünf-Quellen-AST-Fingerprint bleibt `classifier.py`,
+`matching/ambiguity.py`, `matching/date_parser.py`, `matching/project_matching.py`,
+`matching/topic_matching.py`. **FR-13 ist damit teilweise umgesetzt (MD-M1
+abgeschlossen); MD-M2 und die Quarantäne-Paketierung bleiben offen.**
 L2-Detail: [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §6.

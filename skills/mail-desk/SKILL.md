@@ -412,6 +412,22 @@ nie manuell**; die kanonischen CLI-, Compliance- und Pfadregeln stehen in
 Übergangsadapter ist nur bei nachgewiesenem historischen Konsumenten relevant:
 [`references/legacy-cli-adapter.md`](references/legacy-cli-adapter.md).
 
+Seit **FR-13/MD-M1 (T01–T04, abgeschlossen)** sind die Klassifikationsregeln
+domänenorientiert entflochten: die kompatible Facade
+[`scripts/core/classifier.py`](scripts/core/classifier.py) (810 physische Zeilen, ≤ 813;
+Baseline 2.035) hält Katalog-I/O, Full-Reader-I/O, Zwei-Pass-Orchestrierung,
+Thread-Referenzparsing und Final-Index-Parent-Lookup, Anhangsbindung und
+Manifest-Drafting, während die kanonischen Owner unter
+[`scripts/core/matching/`](scripts/core/matching/) (`date_parser.py`, `ambiguity.py`,
+`project_matching.py`, `topic_matching.py`) Datums-, Ambiguitäts-, Projekt- und
+Topic-Vertikale besitzen und per Objektidentität an die Facade gebunden sind. Der
+`classifier_revision`-Fingerprint bindet die geordnete AST-Quelle `classifier.py`,
+`matching/ambiguity.py`, `matching/date_parser.py`, `matching/project_matching.py` und
+`matching/topic_matching.py`; da sich diese Quellen in MD-M1 einmalig geändert haben,
+rotieren vorhandene `classifier_revision`-Werte genau einmal (genehmigt). MD-M1 ist
+damit abgeschlossen; MD-M2 (Quarantäne-Paketierung unter `core/quarantine/`) bleibt offen.
+Detail: [`docs/system-map/README.md`](docs/system-map/README.md) §6.
+
 Verifiziere nur mit dem kleinstmöglichen belastbaren Nachweis; keine breiten
 Mailbox-, Ordner- oder Rohmail-Listen in den Kontext ziehen, wenn ein fokussierter
 Nachweis Ziel, Identität und finalen Index belegt.

@@ -57,7 +57,12 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
 - `core/evidence.py`: Aktualisierung von Markdown-Evidenzen
   (`evidence/YYYY-MM.md`) mit Dublettenerkennung.
 - `core/classifier.py`: Offline-Regel- und Katalog-Klassifikation mit
-  Projekt-/Topic-Pattern-Matching.
+  Projekt-/Topic-Pattern-Matching; kompatible Facade (≤ 813 Zeilen) mit Katalog-I/O,
+  Full-Reader-I/O, Thread-Referenzparsing/-Parent-Lookup, Anhangsbindung und
+  Manifest-Drafting. Die kanonischen Domänen-Owner liegen unter `core/matching/`
+  (`date_parser.py`, `ambiguity.py`, `project_matching.py`, `topic_matching.py`) und sind
+  per Objektidentität gebunden (FR-13/MD-M1-T01–T04; die einmalige MD-M1-Revision rotiert
+  vorhandene `classifier_revision`-Werte genau einmal).
 - `core/envelope.py`: Zentraler Envelope-Builder für kanonische JSON-Ausgabe.
 - `core/progress.py`: Atomare Fortschritts- und ETA-Statusdatei für
   Batch-Läufe.

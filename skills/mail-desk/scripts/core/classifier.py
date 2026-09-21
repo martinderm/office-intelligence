@@ -17,7 +17,7 @@ from .attachment_handoff import (
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
-from .matching import ambiguity
+from .matching import ambiguity, project_matching, topic_matching
 from .matching.date_parser import parse_date_to_year_month
 # Project/artifact/evidence callables stay importable from the facade by object identity.
 from .matching.project_matching import (
@@ -237,91 +237,21 @@ def classify_email_two_pass(
             "triggers": triggers,
             "status": "completed",
         }
-        if full_item["decision"].get("kind") == "project":
-            project_id = str(full_item["decision"].get("id", "")).casefold()
-            matched_project = next(
-                (
-                    project for project in (projects or [])
-                    if isinstance(project, dict) and str(project.get("id", "")).casefold() == project_id
-                ),
-                None,
+        # Domain evidence rebuilding is owned by the matching modules; the facade keeps the
+        # full-reader I/O and two-pass orchestration and only routes the reclassified decision.
+        full_read_context = {"workspace_root": workspace_root or Path.cwd(), "email": full_email}
+        full_evidence: dict[str, Any] | None = None
+        kind = full_item["decision"].get("kind")
+        if kind == "project":
+            full_evidence = project_matching.resolve_full_read_project_evidence(
+                projects or [], decision=full_item["decision"], **full_read_context
             )
-            if matched_project is not None:
-                full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
-                full_item["evidence"] = _build_project_evidence(
-                    matched_project,
-                    full_item["decision"],
-                    workspace_root=workspace_root or Path.cwd(),
-                    year_month=full_ym,
-                    date=full_ymd,
-                    subject=str(full_email.get("subject", "")),
-                    message_id=normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
-                    from_str=str(full_email.get("from", "")),
-                    to_str=str(full_email.get("to", "")),
-                )
-        elif full_item["decision"].get("kind") == "topic":
-            topic_id = str(full_item["decision"].get("id", "")).casefold()
-            subtopic_id = str(full_item["decision"].get("subtopic", "")).casefold()
-            matched_topic = next(
-                (
-                    topic for topic in (topics or [])
-                    if isinstance(topic, dict) and str(topic.get("id", "")).casefold() == topic_id
-                ),
-                None,
+        elif kind == "topic":
+            full_evidence = topic_matching.resolve_full_read_topic_evidence(
+                topics or [], decision=full_item["decision"], **full_read_context
             )
-            if matched_topic is not None and subtopic_id:
-                matched_subtopic = next(
-                    (
-                        subtopic for subtopic in matched_topic.get("subtopics", [])
-                        if isinstance(subtopic, dict)
-                        and str(subtopic.get("id", "")).casefold() == subtopic_id
-                    ),
-                    None,
-                ) if isinstance(matched_topic.get("subtopics"), list) else None
-                if matched_subtopic is not None:
-                    full_ym, full_ymd = parse_date_to_year_month(str(full_email.get("date", "")))
-                    event_id = str(full_item["decision"].get("event", "")).casefold()
-                    matched_event = next(
-                        (
-                            event for event in matched_subtopic.get("events", [])
-                            if isinstance(event, dict)
-                            and str(event.get("id", "")).casefold() == event_id
-                        ),
-                        None,
-                    ) if event_id and isinstance(matched_subtopic.get("events"), list) else None
-                    operation_id = str(full_item["decision"].get("operation", "")).casefold()
-                    matched_operation = next(
-                        (
-                            operation for operation in matched_subtopic.get("operations", [])
-                            if isinstance(operation, dict)
-                            and str(operation.get("id", "")).casefold() == operation_id
-                        ),
-                        None,
-                    ) if operation_id and isinstance(matched_subtopic.get("operations"), list) else None
-                    common = {
-                        "year_month": full_ym,
-                        "date": full_ymd,
-                        "subject": str(full_email.get("subject", "")),
-                        "message_id": normalize_message_id(full_email.get("message_id") or full_email.get("raw_message_id", "")),
-                        "from_str": str(full_email.get("from", "")),
-                        "to_str": str(full_email.get("to", "")),
-                    }
-                    if matched_event is not None:
-                        full_item["evidence"] = _build_event_evidence(
-                            matched_topic, matched_subtopic, matched_event, full_item["decision"], **common
-                        )
-                    elif matched_operation is not None:
-                        full_item["evidence"] = _build_operation_evidence(
-                            matched_topic, matched_subtopic, matched_operation, full_item["decision"], **common
-                        )
-                    else:
-                        full_item["evidence"] = _build_topic_evidence(
-                            matched_topic,
-                            matched_subtopic,
-                            full_item["decision"],
-                            workspace_root=workspace_root or Path.cwd(),
-                            **common,
-                        )
+        if full_evidence is not None:
+            full_item["evidence"] = full_evidence
         return _finish(full_item, full_email)
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
         return _finish(_full_read_failure(preview_item, triggers, exc), email)
@@ -461,82 +391,27 @@ def classify_email(
 
     if parent_item:
         parent_folder = parent_item.get("final_folder", "")
-        # Map parent folder to project or topic
-        matched_proj_obj = None
-        for proj in (projects or []):
-            p_id = proj.get("id", "").strip()
-            kuerzel = proj.get("kuerzel", "").strip()
-            mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
-            if mb_folder.lower() == parent_folder.lower():
-                matched_proj_obj = proj
-                break
-
-        matched_topic_obj = None
-        if not matched_proj_obj:
-            for top in (topics or []):
-                t_id = top.get("id", "").strip()
-                mb_folder = top.get("mailbox_folder") or f"Themen/{t_id}"
-                if mb_folder.lower() == parent_folder.lower():
-                    matched_topic_obj = top
-                    break
-
-        if matched_proj_obj:
-            pid = matched_proj_obj.get("id", "")
-            p_name = matched_proj_obj.get("kuerzel") or pid
-            target_folder = parent_folder
-            decision = {
-                "kind": "project",
-                "id": pid,
-                "confidence": "high",
-                "needs_reply": needs_reply,
-            }
-            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {p_name.upper()} ({parent_folder})."
-            ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
-            try:
-                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
-            except ValueError:
-                ev_dir_rel = str(ev_dir.as_posix())
-            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
-            ev_entry = (
-                f"- {ymd} — {subject}.\n"
-                f"  - Message-ID: `{norm_mid}`\n"
-                f"  - Beteiligte: {from_str}\n"
+        # Parent-folder mapping stays ordered project-before-topic; owners build the state.
+        thread_context = {
+            "workspace_root": ws,
+            "email": email,
+            "needs_reply": needs_reply,
+            "parent_mid": str(parent_mid or ""),
+        }
+        inheritance = project_matching.match_thread_project_inheritance(
+            projects or [], parent_folder, **thread_context
+        )
+        if inheritance is None:
+            inheritance = topic_matching.match_thread_topic_inheritance(
+                topics or [], parent_folder, **thread_context
             )
-            evidence_spec = {
-                "type": "project_evidence",
-                "file": ev_file_rel,
-                "entry": ev_entry,
-            }
-            selected_project = matched_proj_obj
-            thread_matched = True
-        elif matched_topic_obj:
-            tid = matched_topic_obj.get("id", "")
-            t_title = matched_topic_obj.get("title", tid)
-            target_folder = parent_folder
-            decision = {
-                "kind": "topic",
-                "id": tid,
-                "confidence": "high",
-                "needs_reply": needs_reply,
-            }
-            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {t_title} ({parent_folder})."
-            ev_dir = resolve_evidence_dir("topics", tid, workspace_root=ws)
-            try:
-                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
-            except ValueError:
-                ev_dir_rel = str(ev_dir.as_posix())
-            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
-            ev_entry = (
-                f"- {ymd} — {subject}.\n"
-                f"  - Message-ID: `{norm_mid}`\n"
-                f"  - Beteiligte: {from_str}\n"
-            )
-            evidence_spec = {
-                "type": "topic_evidence",
-                "file": ev_file_rel,
-                "entry": ev_entry,
-            }
-            selected_topic = matched_topic_obj
+        if inheritance is not None:
+            selected_project = inheritance.get("project")
+            selected_topic = inheritance.get("topic")
+            target_folder = inheritance["target_folder"]
+            decision = inheritance["decision"]
+            notes = inheritance["notes"]
+            evidence_spec = inheritance["evidence"]
             thread_matched = True
         else:
             target_folder = parent_folder
@@ -546,7 +421,7 @@ def classify_email(
                 "confidence": "high",
                 "needs_reply": needs_reply,
             }
-            notes = f"Thread-Vererbung via In-Reply-To ({parent_mid[:20]}...) zu {parent_folder}."
+            notes = f"Thread-Vererbung via In-Reply-To ({str(parent_mid or '')[:20]}...) zu {parent_folder}."
             thread_matched = True
 
     # --------------------------------------------------------------------------
