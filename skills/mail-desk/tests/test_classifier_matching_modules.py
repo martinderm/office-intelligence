@@ -12,13 +12,14 @@ exists (evidence mode ``tdd``, risk tier ``high``):
 4. The T01 ambiguity owner exposes a minimal, concrete callable API for reusable
    ranking/unique-choice, cross-kind conflict and fallback ambiguity, and the facade
    routes a representative classification through that canonical owner.
-5. ``classifier_rules_fingerprint`` binds the deterministic, ordered T01 active
-   source set, moves for a semantic AST change in any bound module, ignores
-   comments/formatting/host paths and fails closed for missing or invalid sources.
+5. ``classifier_rules_fingerprint`` binds the deterministic, ordered active source
+   set (MD-M1-T02 extends it with ``matching/project_matching.py``), moves for a
+   semantic AST change in any bound module, ignores comments/formatting/host paths and
+   fails closed for missing or invalid sources.
 
-T01 owns only ``classifier.py``, ``ambiguity.py`` and ``date_parser.py``; the project
-and topic matching modules arrive with their own tickets and are deliberately not
-required here.  The fingerprint exposes its ordered source set as
+T01 owns ``classifier.py``, ``ambiguity.py`` and ``date_parser.py``; the project and
+topic matching modules arrive with their own tickets.  The fingerprint exposes its
+ordered source set as
 ``attachment_reclassification._CLASSIFIER_MODULE_PATHS`` (the approved MD-M1
 source-set seam).  No private matcher helper, digest literal or ranking detail beyond
 the owner's observable contract is asserted.
@@ -41,12 +42,14 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 from core import classifier  # noqa: E402
 from core import attachment_reclassification as reclass  # noqa: E402
 
-# The active T01 ordered source set from the spec ("Classifier revision"), relative to
-# the mail-desk root.  T02 (project_matching) and T03 (topic_matching) extend it later.
+# The active ordered source set from the spec ("Classifier revision"), relative to the
+# mail-desk root.  MD-M1-T02 adds the project matching owner; T03 (topic_matching)
+# extends it later.
 _EXPECTED_RULE_SOURCES = (
     "scripts/core/classifier.py",
     "scripts/core/matching/ambiguity.py",
     "scripts/core/matching/date_parser.py",
+    "scripts/core/matching/project_matching.py",
 )
 
 # The canonical T01 ambiguity owner callable seams.

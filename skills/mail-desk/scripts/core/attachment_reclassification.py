@@ -96,11 +96,13 @@ _CATALOG_SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
 #: The active, code-level classifier rule modules whose normalized ASTs are
 #: content-addressed into ``classifier_revision``.  Resolved next to this module so no
 #: host path is ever hashed.  MD-M1-T01 binds the facade plus the canonical date and
-#: ambiguity owners; project/topic matching modules are appended in MD-M1-T02/T03.
+#: ambiguity owners; MD-M1-T02 appends the canonical project-matching owner, and the
+#: topic-matching owner is appended in MD-M1-T03.
 _CLASSIFIER_MODULE_PATHS: tuple[Path, ...] = (
     Path(__file__).resolve().parent / "classifier.py",
     Path(__file__).resolve().parent / "matching" / "ambiguity.py",
     Path(__file__).resolve().parent / "matching" / "date_parser.py",
+    Path(__file__).resolve().parent / "matching" / "project_matching.py",
 )
 
 #: Fields the single reclassification may replace on the draft item.  All are produced by
