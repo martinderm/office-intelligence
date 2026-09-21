@@ -43,13 +43,14 @@ from core import classifier  # noqa: E402
 from core import attachment_reclassification as reclass  # noqa: E402
 
 # The active ordered source set from the spec ("Classifier revision"), relative to the
-# mail-desk root.  MD-M1-T02 adds the project matching owner; T03 (topic_matching)
-# extends it later.
+# mail-desk root.  MD-M1-T02 added the project matching owner; MD-M1-T03 appends the
+# topic matching owner, completing the final five-source order.
 _EXPECTED_RULE_SOURCES = (
     "scripts/core/classifier.py",
     "scripts/core/matching/ambiguity.py",
     "scripts/core/matching/date_parser.py",
     "scripts/core/matching/project_matching.py",
+    "scripts/core/matching/topic_matching.py",
 )
 
 # The canonical T01 ambiguity owner callable seams.
