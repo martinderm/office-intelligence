@@ -137,8 +137,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   grün, `test_batch_runner_mde2_acceptance.py` 1/1 grün, vollständige entdeckte
   Mail-Desk-Suite 786/786 grün (aktueller Nachweis, kein permanenter Abnahmewert). Bewusst
   **nicht** enthalten: jegliche MD-M2-/Quarantäne-Paketierung, Änderungen an
-  FR-15-Anhangssemantik oder neue Matching-Regeln. Git-Index-Metrik: 120 getrackte Dateien
-  / 59 unter `scripts/` (48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
+  FR-15-Anhangssemantik oder neue Matching-Regeln. Git-Index-Metrik: 119 getrackte Dateien
+  / 58 unter `scripts/` (48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
 
 ## Nächste Pakete nach Freigabe
 

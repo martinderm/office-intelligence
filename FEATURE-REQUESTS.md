@@ -520,7 +520,7 @@ Basissymbol-, Re-Export-, DI-, Lazy-Import- und Monkeypatch-Oberfläche. Der
 Menge (`classifier.py`, `matching/ambiguity.py`, `matching/date_parser.py`,
 `matching/project_matching.py`, `matching/topic_matching.py`); da sich diese Quellen in
 MD-M1 einmalig geändert haben, rotierten vorhandene `classifier_revision`-Werte genau
-einmal (genehmigt). Git-Index-Metrik: 120 getrackte Dateien / 59 unter `scripts/`
+einmal (genehmigt). Git-Index-Metrik: 119 getrackte Dateien / 58 unter `scripts/`
 (48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
 
 ### MD-M2 — Paketierung der Quarantäne-Module unter core/quarantine/ (offen)
