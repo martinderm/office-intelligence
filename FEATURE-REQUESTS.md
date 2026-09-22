@@ -26,7 +26,7 @@ verbindliche Paketkarten.
 | `FR-13` | ✅ Abgeschlossen; MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims) implementiert, getestet und paketabgenommen; **FR-13 geschlossen** | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation; Quarantäne-Paketierung: sechs Owner unter `core/quarantine/`, `sys.modules`-aliasende Shims an alten Pfaden, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, 804 Tests grün | keins |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 | `FR-16` | ⬜ geplant; reine Dokumentations-/Metrik-Hygiene aus der MD-M2-Retrospektive | Identifikation der Metrik-Vervielfältigung und des monolithischen Tabellenzellen-Anti-Patterns | `DOC-M1` (Metrik-SSOT), `DOC-M2` (Zellen-Splitting); siehe Paketkarte unten |
-| `FR-17` | ✅ Abgeschlossen; MD-R1–R7 vollständig implementiert, getestet und paketabgenommen; **FR-17 geschlossen** | Alle 10 Befunde (B-1 bis B-10) behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | keins |
+| `FR-17` | ✅ Abgeschlossen für B-1–B-10; MD-R1–R7 vollständig implementiert, getestet und paketabgenommen; **Nachtrag B-11 offen** | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
 
 
 ```text
@@ -1101,6 +1101,7 @@ Hygiene-Fixes. Keine Mailbox-Mutation, keine Promotion, kein Cloud-/Task-Pfad.
 | B-8 | hoch | Client-Suche ohne Ordnerliste hat keinen begrenzten Gesamt-Timeout; Hänger blockiert danach ~10 min auch Einzelabfragen | Suche >5 min ohne Fehler; danach `himalaya_timeout` bei `envelope list -s 1` |
 | B-9 | mittel | Standalone-`verify` kann bei gemischten Batches (Projekt/Topic + Archiv) den Handoff nicht freigeben | zwei reale Läufe: Scope 10 und Scope 9 beide `not_required` |
 | B-10 | mittel | `verify`-Evidence-Fallback globt `memory/references/**/evidence` (im Consumer leer) → `in_evidence: None`, Evidence wird nicht geprüft | 10/10 „consistent“ bei 0 gefundenen Evidence-Dateien |
+| B-11 | mittel | Abschluss-/Dankesmails werden als reply-pflichtig klassifiziert und landen im `_Needs-Reply`-Ordner, obwohl die Mail keine Frage/Bitte/Frist enthält | Env 9412 (Dankes-Abschluss) → `needs_reply: true` |
 
 #### B-1 — `routing_priority` ist wirkungslos; Katalogreihenfolge und Kontakttreffer dominieren
 
@@ -1457,12 +1458,6 @@ Befunde hinzu.
   Batches; der Runner-Envelope soll als Provenienz nutzbar sein oder seine exakt
   erwartete Form ist zu dokumentieren.
 
-**Paket-Zuordnung der Nachträge:** B-8 → neues Paket `MD-R6` (Client-Deadlines und
-Hänger-Freiheit), B-9 und B-10 → neues Paket `MD-R7` (Standalone-Verify-Provenienz,
-Scope-Bildung und Evidence-Prüfung). Beide Pakete sind unabhängig von `MD-R1`–
-`MD-R5` (keine gemeinsamen Dateien mit `MD-R1`/`MD-R2`; `MD-R7` berührt `verify.py`)
-und werden in die gemeinsame Abnahme aufgenommen.
-
 #### B-10 — `verify`-Evidence-Fallback prüft einen leeren Root und kann nicht `False` melden
 
 - Ohne explizite `evidence`-Spezifikation (z. B. bei reinen `message_ids`) globt
@@ -1477,6 +1472,41 @@ und werden in die gemeinsame Abnahme aufgenommen.
 - Anforderung: Fallback an das kanonische Evidenz-Layout angleichen (oder eine
   explizite `evidence`-Map verlangen); fehlende kanonische Evidenz muss `False`
   ergeben und `consistent` beeinflussen; Test.
+
+#### B-11 — Abschluss-/Dankesmails werden als reply-pflichtig klassifiziert
+
+- Beobachtung: Env 9412 (`message_id: 6a6cc07f0200003e0012c6a5@gwia1.boku.ac.at`,
+  Claus Rainer Michalek, 31.07.2026) ist der **abschließende Dank** in einem Thread
+  („vielen Dank für das Zusammenstellen der Unterlagen. Liebe Grüße Claus“); die
+  Vorgängermail enthält die eigentliche Lieferung (Link + Ankündigung einer
+  Ergänzung). Es gibt keine Frage, Bitte, Frist, Entscheidung, Freigabe oder
+  Beitragsanforderung.
+- Ist-Verhalten: `needs_reply: true` → die Mail würde als Reply-Fall in
+  `replies-needed.jsonl` und im `_Needs-Reply`-Ordner des Ziels landen. Der im
+  Testlauf beobachtete falsche Reply-Ordner entstand zusätzlich durch eine
+  konsumerseitige Katalog-Fehlroute (LE-LLL → AIxLLL), die unabhängig korrigiert
+  wurde; der `needs_reply`-Wert selbst bleibt davon unberührt.
+- Abweichung zur fachlichen Regel: `SKILL.md` bindet Antwortbedarf an „eine
+  konkrete Bitte, Frage, Frist, Entscheidung, Freigabe oder einen Beitrag“ und
+  nennt „reine Information“ als gewöhnlich nicht reply-pflichtig.
+- Anforderung: Ein Abschluss-/Dankeschön **ohne** konkrete Anforderung setzt
+  `needs_reply: false`. Wird die Reply-Entscheidung aus dem Preview abgeleitet und
+  ergibt der Full-Read ein reines Abschluss-/Dankmuster, muss sie auf `false`
+  herabgestuft werden. Bei verbleibender Unklarheit gilt die bestehende
+  Review-Semantik statt einer stillen `true`-Behauptung.
+- Pflichttests: Dankes-/Abschlussmails („vielen Dank“, „danke für …“, „passt für
+  mich“, „liebe Grüße“ ohne Rückfrage) → `false`; echte Bitten/Fragen/Fristen →
+  `true`; Thread, in dem nur die **erste** Mail eine Bitte enthielt und die letzte
+  abschließt → `false`; Review-Fall bleibt erhalten.
+- Paket: `MD-R8` (Reply-Heuristik), unabhängig von `MD-R1`/`MD-R2` (Classifier-
+  Regeln), `MD-R3`/`MD-R4` (Attachment) und `MD-R5` (Doku/Hygiene).
+
+**Paket-Zuordnung der Nachträge:** B-8 → neues Paket `MD-R6` (Client-Deadlines und
+Hänger-Freiheit), B-9 und B-10 → neues Paket `MD-R7` (Standalone-Verify-Provenienz,
+Scope-Bildung und Evidence-Prüfung), B-11 → neues Paket `MD-R8` (Reply-Heuristik).
+Alle drei sind unabhängig von `MD-R1`–`MD-R5` (keine gemeinsamen Dateien mit
+`MD-R1`/`MD-R2`; `MD-R7` berührt `verify.py`, `MD-R8` die Reply-Erkennung) und
+werden in die gemeinsame Abnahme aufgenommen.
 
 ### Out of Scope
 
