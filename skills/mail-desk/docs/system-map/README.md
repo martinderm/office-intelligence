@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 864 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 871 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -279,3 +279,21 @@ mit deadline-unterscheidbarem Reason; `run_himalaya` bleibt unverändert
 Transport-Retries). Struktureller Nachweis: [`tests/test_himalaya_client_deadlines.py`](../tests/test_himalaya_client_deadlines.py)
 (16 Tests, Red-Gate `MD-R6-red-001`: 5 Assertion-Failures).
 Mail-Desk-Suite: 864/864 grün.
+
+## 11. FR-17/MD-R7 — Standalone-Verify-Scope, Provenienz und Evidence-Prüfung (MD-R7 abgeschlossen)
+
+Mit **FR-17/MD-R7** ist der Standalone-Verify-Scope teilmengenfähig:
+[`_verified_execute_candidate`](../scripts/core/modes/verify.py) gibt den
+Synthesis-Handoff frei, wenn `candidate_ids ⊆ verify_scope_ids == result_ids`
+gilt (gemischte Batches mit Archiv-/Newsletter-Item funktionieren; Befund B-9 behoben);
+exakte Batches verhalten sich unverändert, Kandidaten außerhalb des Scopes bleiben
+`not_required`, `candidate_ids: null` wird fail-closed abgewiesen.
+Der Runner-Envelope bewahrt `mode`/`ok` unter `data`
+([`mail_desk_batch_runner.py`](../scripts/mail_desk_batch_runner.py)) und der Verify-Reader
+nimmt kanonische Sechs-Key-Envelopes als Execute-Provenienz an (Forging bleibt
+abgewiesen). Der Evidence-Fallback liest kanonisch `memory/evidence/**`; fehlende
+kanonische Evidenz ergibt `in_evidence: false` und markiert das Item
+inkonsistent (Befund B-10 behoben), fehlender Root bleibt der H5-None-Fall. Nachweis:
+[`tests/test_verify_scope_and_evidence.py`](../tests/test_verify_scope_and_evidence.py)
+(7 Tests, Red-Gate `MD-R7-red-001`: 4 Assertion-Failures).
+Mail-Desk-Suite: 871/871 grün.

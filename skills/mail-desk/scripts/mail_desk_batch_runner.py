@@ -783,8 +783,12 @@ class EnvelopeArgumentParser(argparse.ArgumentParser):
 
 
 def _legacy_result_data(result: dict[str, Any], operation: str) -> dict[str, Any]:
-    """Move legacy runner result fields below the canonical envelope boundary."""
-    data = {key: value for key, value in result.items() if key not in {"ok", "mode", "message"}}
+    """Move legacy runner result fields below the canonical envelope boundary.
+
+    ``mode`` and ``ok`` stay under ``data`` so a persisted success envelope
+    remains usable as standalone execute provenance for the verify reader.
+    """
+    data = {key: value for key, value in result.items() if key != "message"}
     data["operation"] = operation
     return data
 

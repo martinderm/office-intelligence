@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 
 from ..common import atomic_write_json, normalize_message_id, resolve_data_dir, resolve_final_index_path
 from ..completion import completion_report, release_synthesis_handoff
+from ..envelope import ENVELOPE_KEYS
 from ..himalaya import verify_in_target_folder
 from ..index import load_final_index
 from ..synthesis_handoff import empty_synthesis_handoff
@@ -44,7 +45,7 @@ def _verified_execute_candidate(
     verify_scope_ids: list[str],
     normalize_id: Callable[[object], str],
 ) -> object | None:
-    """Accept only a complete Execute result as standalone-verify provenance."""
+    """Accept a complete Execute result whose verified scope covers every candidate source."""
     if not isinstance(execute_summary, Mapping):
         return None
     if (
@@ -69,7 +70,9 @@ def _verified_execute_candidate(
     raw_items = candidate.get("items")
     if isinstance(raw_items, list):
         candidate_ids = _message_ids(raw_items, normalize_id)
-        if candidate.get("status") == "pending" and candidate_ids != verify_scope_ids:
+        if candidate.get("status") == "pending" and (
+            candidate_ids is None or not set(candidate_ids).issubset(verify_scope_ids)
+        ):
             return None
     return candidate
 
@@ -106,6 +109,12 @@ def run_verify_mode(
         if batch_file.exists():
             with batch_file.open("r", encoding="utf-8") as batch_handle:
                 batch_data = json.load(batch_handle)
+                if (
+                    isinstance(batch_data, dict)
+                    and set(batch_data) == set(ENVELOPE_KEYS)
+                    and isinstance(batch_data.get("data"), dict)
+                ):
+                    batch_data = batch_data["data"]
                 if isinstance(batch_data, list):
                     target_items = batch_data
                 elif isinstance(batch_data, dict):
@@ -134,7 +143,7 @@ def run_verify_mode(
                     pass
 
     workspace_root = dd.parent.parent
-    references_root = workspace_root / "memory" / "references"
+    evidence_root = workspace_root / "memory" / "evidence"
     results: list[dict[str, Any]] = []
     all_consistent = True
 
@@ -168,16 +177,16 @@ def run_verify_mode(
                     in_evidence = False
             else:
                 in_evidence = False
-        elif references_root.exists():
+        elif evidence_root.exists():
             found_evidence = False
-            for markdown_file in references_root.glob("**/evidence/*.md"):
+            for markdown_file in evidence_root.glob("**/*.md"):
                 try:
                     if message_id in markdown_file.read_text(encoding="utf-8").lower():
                         found_evidence = True
                         break
                 except Exception:
                     pass
-            in_evidence = found_evidence if found_evidence else None
+            in_evidence = found_evidence
 
         folder_verified: bool | None = None
         current_envelope_id: str | None = None
@@ -187,6 +196,8 @@ def run_verify_mode(
             current_envelope_id = verified
 
         consistent = in_index and in_action_log
+        if in_evidence is False:
+            consistent = False
         if expected_folder and indexed_folder and expected_folder != indexed_folder:
             consistent = False
         if check_folders and folder_verified is False:
