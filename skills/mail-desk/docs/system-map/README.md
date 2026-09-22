@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 879 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 887 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -321,3 +321,21 @@ und die `already_fetched`-Idempotenz sind unverändert. Nachweis:
 [`tests/test_draft_mime_inventory_determinism.py`](../tests/test_draft_mime_inventory_determinism.py)
 (8 Tests, Red-Gate `MD-R3-red-001`: 5 Assertion-Failures).
 Mail-Desk-Suite: 879/879 grün.
+
+## 13. FR-17/MD-R4 — Inline-Bild-Policy für die automatische Auswertung (MD-R4 abgeschlossen)
+
+Mit **FR-17/MD-R4** sind Bild-MIME-Parts ohne extrahierbaren Text kein
+`required_for_decision`-Trigger der automatischen Auswertung mehr:
+[`_is_image_without_extractable_text`](../scripts/core/attachment_evaluation.py)
+schließt vor der Eligibility-Entscheidung alle `image/*`-Parts aus —
+inline Signatur-Parts (`content_disposition: inline` mit `content_id`)
+und angehängte Bilder gleichermaßen (Befund B-5 behoben). Es entsteht kein automatischer
+Quarantäne-Fetch, kein `files[]`-Eintrag und keine Materialitätsbindung
+für sie; sie bleiben Inventar-Metadaten. Der Ausschluss ist bewusst eng: texttragende
+Anhänge (z. B. `text/plain` mit Extrakt) lösen weiterhin aus, inline
+`text/plain`-Parts mit Extrakt bleiben gültig, der null-byte-Textfall bleibt
+MD-A1-policy-abgewiesen, der menschliche MD-A2-Fetch-Pfad und die MD-A1-Gates
+(aktiver Inhalt, disallowed Extensions, Quoten) sind unverändert. Struktureller Nachweis:
+[`tests/test_attachment_inline_policy.py`](../tests/test_attachment_inline_policy.py)
+(8 Tests, Red-Gate `MD-R4-red-001`: 3 Assertion-Failures).
+Mail-Desk-Suite: 887/887 grün.

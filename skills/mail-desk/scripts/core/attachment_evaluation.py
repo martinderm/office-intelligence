@@ -378,6 +378,22 @@ def _is_eligible(part: Mapping[str, Any]) -> bool:
     return fetch_status == "available" and policy_status == "allowed"
 
 
+def _is_image_without_extractable_text(part: Mapping[str, Any]) -> bool:
+    """An image MIME part carries no extractable routing text (MD-R4 trigger exclusion).
+
+    Raster image MIME types expose no text to the canonical extractor, so an image part must
+    never become a ``required_for_decision`` trigger of the automatic evaluation on its own:
+    the inline signature image (``content_disposition: inline`` with a concrete
+    ``content_id``) and a non-inline attached image alike stay inventory metadata and are
+    fetched only through the human MD-A2 path.  The predicate is deliberately decided from
+    pre-extraction metadata only (``mime_type``): the extractable ``chars`` are unknown until
+    after a fetch, which this predicate exists to prevent.  Non-image parts -- text-bearing
+    ``text/*`` parts included -- are never excluded by this rule.
+    """
+    mime_type = str(part.get("mime_type", "")).strip().lower()
+    return mime_type.startswith("image/")
+
+
 def _mint_and_guard_authorization(
     part: Mapping[str, Any],
     *,
@@ -561,7 +577,14 @@ def attachment_evaluate(
         norm_message_id,
         policy=effective_policy,
     )
-    eligible_parts = [part for part in bound_parts if _is_eligible(part)]
+    # MD-R4: image MIME parts without extractable text (inline signature images and non-inline
+    # attached images alike) are inventory metadata only -- never an automatic trigger, so they
+    # are excluded from the eligible set before any authorization/fetch/extract/materiality runs.
+    eligible_parts = [
+        part
+        for part in bound_parts
+        if _is_eligible(part) and not _is_image_without_extractable_text(part)
+    ]
     if not eligible_parts:
         return _envelope(
             _staged(

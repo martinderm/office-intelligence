@@ -260,3 +260,144 @@ def run_draft_with_reader(
         merged, account=account, data_dir=data_dir, dependencies=dependencies
     )
     return result, output_path
+
+
+# ==============================================================================
+# MD-R4 hermetic MIME builders (inline signature images vs. routing attachments)
+# ==============================================================================
+
+INLINE_SIGNATURE_FILENAME = "35-years-signature.png"
+INLINE_SIGNATURE_CID = "sig@example"
+INLINE_SIGNATURE_MESSAGE_ID = "mdr4-inline-signature@example.test"
+INLINE_SIGNATURE_PNG = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+
+NON_INLINE_IMAGE_FILENAME = "IMAGE.png"
+NON_INLINE_IMAGE_MESSAGE_ID = "mdr4-attached-image@example.test"
+
+ROUTING_ATTACHMENT_FILENAME = "clue.txt"
+ROUTING_ATTACHMENT_TEXT = "MD-R4 hermetic routing attachment content."
+ROUTING_ATTACHMENT_MESSAGE_ID = "mdr4-routing-attachment@example.test"
+
+INLINE_TEXT_FILENAME = "inline-note.txt"
+INLINE_TEXT_CID = "note@example"
+INLINE_TEXT = "MD-R4 inline text attachment with extractable content."
+INLINE_TEXT_MESSAGE_ID = "mdr4-inline-text@example.test"
+
+EMPTY_ATTACHMENT_FILENAME = "empty.txt"
+EMPTY_ATTACHMENT_MESSAGE_ID = "mdr4-empty-attachment@example.test"
+
+POLICY_SUBJECT = "Kurzfrage"
+POLICY_BODY_TEXT = "Kurze Rueckfrage ohne weitere Details."
+
+
+def _policy_message_id(message_id: str) -> str:
+    """Render an RFC-822 Message-ID header value with angle brackets."""
+    return f"<{message_id}>"
+
+
+def inline_signature_eml(
+    *,
+    filename: str = INLINE_SIGNATURE_FILENAME,
+    cid: str = INLINE_SIGNATURE_CID,
+    png_bytes: bytes = INLINE_SIGNATURE_PNG,
+    message_id: str = INLINE_SIGNATURE_MESSAGE_ID,
+    subject: str = POLICY_SUBJECT,
+) -> bytes:
+    """Return an EML whose only non-body MIME part is an inline signature PNG."""
+    return _attachments.build_test_eml(
+        subject=subject,
+        message_id=_policy_message_id(message_id),
+        body_text=POLICY_BODY_TEXT,
+        body_html=(
+            f"<p>{POLICY_BODY_TEXT}</p>"
+            f'<p>Mit freundlichen Gruessen<br><img src="cid:{cid}" alt="signature"></p>'
+        ),
+        inline_images=[
+            {"filename": filename, "cid": cid, "mime_type": "image/png", "data": png_bytes}
+        ],
+    )
+
+
+def non_inline_image_eml(
+    *,
+    filename: str = NON_INLINE_IMAGE_FILENAME,
+    png_bytes: bytes = INLINE_SIGNATURE_PNG,
+    message_id: str = NON_INLINE_IMAGE_MESSAGE_ID,
+    subject: str = POLICY_SUBJECT,
+) -> bytes:
+    """Return an EML whose only non-body MIME part is a non-inline PNG attachment."""
+    return _attachments.build_test_eml(
+        subject=subject,
+        message_id=_policy_message_id(message_id),
+        body_text=POLICY_BODY_TEXT,
+        attachments=[
+            {
+                "filename": filename,
+                "mime_type": "image/png",
+                "data": png_bytes,
+                "disposition": "attachment",
+            }
+        ],
+    )
+
+
+def routing_attachment_eml(
+    *,
+    filename: str = ROUTING_ATTACHMENT_FILENAME,
+    text: str = ROUTING_ATTACHMENT_TEXT,
+    mime_type: str = "text/plain",
+    message_id: str = ROUTING_ATTACHMENT_MESSAGE_ID,
+    subject: str = POLICY_SUBJECT,
+) -> bytes:
+    """Return an EML whose only non-body MIME part is a text-bearing attachment."""
+    return _attachments.build_test_eml(
+        subject=subject,
+        message_id=_policy_message_id(message_id),
+        body_text=POLICY_BODY_TEXT,
+        attachments=[
+            {"filename": filename, "mime_type": mime_type, "data": text.encode("utf-8")}
+        ],
+    )
+
+
+def inline_text_eml(
+    *,
+    filename: str = INLINE_TEXT_FILENAME,
+    cid: str = INLINE_TEXT_CID,
+    text: str = INLINE_TEXT,
+    message_id: str = INLINE_TEXT_MESSAGE_ID,
+    subject: str = POLICY_SUBJECT,
+) -> bytes:
+    """Return an EML with an inline ``text/plain`` part referenced from the HTML body."""
+    return _attachments.build_test_eml(
+        subject=subject,
+        message_id=_policy_message_id(message_id),
+        body_text=POLICY_BODY_TEXT,
+        body_html=(
+            f"<p>{POLICY_BODY_TEXT}</p>"
+            f'<p><a href="cid:{cid}">inline note</a></p>'
+        ),
+        inline_images=[
+            {
+                "filename": filename,
+                "cid": cid,
+                "mime_type": "text/plain",
+                "data": text.encode("utf-8"),
+            }
+        ],
+    )
+
+
+def zero_byte_attachment_eml(
+    *,
+    filename: str = EMPTY_ATTACHMENT_FILENAME,
+    message_id: str = EMPTY_ATTACHMENT_MESSAGE_ID,
+    subject: str = POLICY_SUBJECT,
+) -> bytes:
+    """Return an EML with a zero-byte text attachment (no extractable content)."""
+    return _attachments.build_test_eml(
+        subject=subject,
+        message_id=_policy_message_id(message_id),
+        body_text=POLICY_BODY_TEXT,
+        attachments=[{"filename": filename, "mime_type": "text/plain", "data": b""}],
+    )
