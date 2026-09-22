@@ -150,6 +150,33 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   `ModuleNotFoundError: core.quarantine`) und
   `test_quarantine_compatibility_contract.py` 9/9 grün. Vollständige entdeckte
   Mail-Desk-Suite 804/804 grün (aktueller Nachweis, kein permanenter Abnahmewert);
+  **`MD-R6` (abgenommen):** `search_mailbox`/`op_search` akzeptieren
+  `overall_deadline_seconds` (Default 120, `None` deaktiviert, fail-closed
+  Validierung vor jedem Mailbox-Kommando); Deadline-Exhaustion ist terminal mit
+  deadline-unterscheidbarem `himalaya_timeout`-Reason, ein per-call Timeout bricht
+  den Sweep sofort ab (B-8 behoben). Red-Gate `MD-R6-red-001` (5 Failures);
+  Review nach Fix-Runde 1 (fail-closed Validierung) `approve`. Commit `90c8acd`.
+  **`MD-R7` (abgenommen):** Subset-Scope (`candidate_ids ⊆ verify_scope_ids ==
+  result_ids`) gibt den Synthesis-Handoff für gemischte Batches frei (B-9 behoben);
+  Runner-Envelope bewahrt `mode`/`ok` unter `data` und der Verify-Reader nimmt
+  kanonische Envelopes als Provenienz an; Evidence-Fallback liest kanonisch
+  `memory/evidence/**`, fehlende Evidenz ergibt `False` und Inkonsistenz (B-10
+  behoben). Red-Gate `MD-R7-red-001` (4 Failures); Review `approve`. Commit
+  `9678b65`. **`MD-R3` (abgenommen):** Trigger-Gate überspringt Items mit
+  unverfügbarer Inventur vor `read_raw_mime` (ein kanonischer Export je Item/Lauf,
+  B-3 behoben); Konsistenz-Gate verwirft widersprüchliche `completed`-Evaluationen
+  (B-4-Fläche); Notes ausschließlich aus der finalen Entscheidung. Red-Gate
+  `MD-R3-red-001` (5 Failures); Review `approve`. Commit `ebb7ef2`.
+  **`MD-R4` (abgenommen):** Bild-MIME-Parts ohne extrahierbaren Text sind kein
+  `required_for_decision`-Trigger mehr (inline Signaturen und angehängte Bilder;
+  B-5 behoben); texttragende Parts lösen weiterhin aus; MD-A1-Gates und der
+  menschliche MD-A2-Pfad unverändert. Red-Gate `MD-R4-red-001` (3 Failures);
+  Review `approve`. Commit `3dda09b`. **`MD-R5` (abgenommen):** `keep_in_folder`
+  vertragsdokumentiert mit Enum-Contract-Test (B-6); `progress_*.tmp` wird in
+  jedem In-Process-Endzustand aufgeräumt, Atomarität erhalten (B-7 behoben);
+  Newsletter-Regel konsistent. Review `approve`. Commit folgt im Paket-Commit.
+  **FR-17 ist mit MD-R5 geschlossen.** Mail-Desk-Suite: 896/896 grün.
+
   `compileall`, `validate-skills-catalog.py`, `validate_workspace.py --json` und
   `git diff --check` sauber. Git-Index-Metrik: 128 getrackte Dateien
   / 65 unter `scripts/` (55 unter `scripts/core`) / 48 Testmodule / 804 Tests.

@@ -617,7 +617,8 @@ leere Results; er führt keine Execute-Seitenwirkung aus.
             "properties": {
               "type": {
                 "type": "string",
-                "enum": ["copy_as_move", "move", "copy", "none", "archive"]
+                "enum": ["copy_as_move", "keep_in_folder", "move", "copy", "none", "archive"],
+                "description": "Routing-Operation. copy_as_move/move/copy/archive schreiben in die Mailbox; keep_in_folder verbleibt im Quellordner (kein Mailbox-Write)."
               },
               "target_folder": {
                 "type": "string",

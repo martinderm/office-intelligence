@@ -96,6 +96,7 @@ class BatchProgressTracker:
             "error": error,
         }
 
+        temp_path: str | None = None
         try:
             self.data_dir.mkdir(parents=True, exist_ok=True)
             temp_fd, temp_path = tempfile.mkstemp(
@@ -105,8 +106,15 @@ class BatchProgressTracker:
                 json.dump(state, f, ensure_ascii=False, indent=2)
                 f.write("\n")
             os.replace(temp_path, self.progress_file)
+            temp_path = None
         except Exception:
             pass
+        finally:
+            if temp_path is not None:
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
 
     def step(
         self,

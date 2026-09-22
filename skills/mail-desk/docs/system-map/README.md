@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 887 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 896 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -339,3 +339,20 @@ MD-A1-policy-abgewiesen, der menschliche MD-A2-Fetch-Pfad und die MD-A1-Gates
 [`tests/test_attachment_inline_policy.py`](../tests/test_attachment_inline_policy.py)
 (8 Tests, Red-Gate `MD-R4-red-001`: 3 Assertion-Failures).
 Mail-Desk-Suite: 887/887 grün.
+
+## 14. FR-17/MD-R5 — Vertragsdokumentation und Laufzeit-Hygiene (MD-R5 abgeschlossen)
+
+Mit **FR-17/MD-R5** ist `keep_in_folder` als kanonischer
+`action.type`-Wert in [`references/batch-runner.md`](../references/batch-runner.md)
+dokumentiert (Verbleib im Quellordner, kein Mailbox-Write; Befund B-6 behoben), mit
+Retention-Semantik in [`references/folder-rules.md`](../references/folder-rules.md); ein
+Contract-Test
+([`tests/test_action_type_contract.py`](../tests/test_action_type_contract.py)) pinnt, dass
+die dokumentierte Enum-Menge exakt der produktionsemittierten Menge plus der Legacy-
+Aliase entspricht. [`core/progress.py`](../scripts/core/progress.py) räumt
+`progress_*.tmp` in jedem In-Process-Endzustand (success/failed/aborted)
+auf — die Atomarität des Ersatzes bleibt erhalten (Befund B-7 behoben;
+[`tests/test_progress_hygiene.py`](../tests/test_progress_hygiene.py)). Die
+Newsletter-Regel ist konsistent mit der MD-R1-Abnahme. Nachweis: beide neuen
+Testmodule grün (6+3 Tests, Charakterisierung ohne hergestelltes Red).
+Mail-Desk-Suite: 896/896 grün. **FR-17 ist mit MD-R5 abgeschlossen.**

@@ -37,6 +37,10 @@ to the `Newsletter` folder (`copy_as_move`, `review_required: false`) unless a s
 non-suppressed candidate wins; all other suppressions keep the mail in `INBOX` with a
 review reason. Thread (parent-folder) inheritance never consults `do_not_route_if`.
 
+`keep_in_folder` (with `target_folder: INBOX`) is the retention action behind the
+`leave in INBOX` rows above: the mail stays in its source folder and no mailbox write
+occurs.
+
 ## Backend mapping
 
 The catalog names above describe the intended business target. The selected backend maps it to a concrete mailbox state:
