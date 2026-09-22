@@ -156,6 +156,24 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 
 ## Nächste Pakete nach Freigabe
 
+- **FR-17 (aktiv, 2026-09-22 gestartet):** Routing-Katalogtreue, Batch-Determinismus und
+  Vertragshygiene — 10 reproduzierte Befunde (B-1 bis B-10) aus der BOKU-Testbatch
+  (10 Mails, Envelope 9387–9404, Account `BOKU-MARTIN`), Paketkarte in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) § FR-17. Verbindliche Ausführungsentscheidungen
+  (Human-Gate-Protokoll 2026-09-22, Orchestrator): (1) Newsletter-Zielpfad **deterministisch**
+  — durch `newsletter`-DNR unterdrückte Mails werden auf den bestehenden `Newsletter`-Pfad
+  abgebildet (`copy_as_move`), im Zweifel/fall-abhängig Review-Grund + `suppressed_candidates`
+  in `INBOX`; die gewählte Regel wird in `references/folder-rules.md` und der Consumer-Pipeline
+  dokumentiert. (2) Reihenfolge **MD-R1 → MD-R2 → MD-R6 → MD-R7 → MD-R3 → MD-R4 → MD-R5**
+  (seriell, je Paket frische Session, Tests zuerst, unabhängiges Review, ein Commit; R1 rotiert
+  `classifier_revision` genau einmal — genehmigt). (3) **Full-Auto** für die gesamte
+  FR-17-Session genehmigt. (4) Der reale BOKU-Verifikationslauf (3× identischer `draft`
+  über die 10 Mails nach MD-R1–R4) wird vom **User** im Consumer-Workspace durchgeführt
+  und ist kein Bundle-Commit-Bestandteil. (5) Hermetische Tests bauen die Pflichtfälle als
+  Analoga aus den im FR dokumentierten Feldern (Message-IDs, Betreffs, Parties, SHA-256)
+  — null Mailbox-Zugriffe in Tests. (6) Write-Scope-Pfade seit MD-M2: `core/quarantine/`-
+  Owner; alte `core/attachment_*.py`-Pfade sind Shims. (7) Metrik-Stellen werden pro Paket
+  synchron nachgezogen (128/65/55/48/804-Baseline); FR-16 konsolidiert danach.
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
@@ -163,7 +181,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - **FR-16:** geplant — Dokumentations- und Metrik-Hygiene aus der MD-M2-Retrospektive
   (`DOC-M1` Metrik-SSOT, `DOC-M2` Zellen-Splitting, `DOC-M3` Stale-Reference-Fix der
   Daedalus-`memory/references/office-intelligence.md`). Reine Dokumentationsmaßnahme;
-  Paketkarte in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+  Paketkarte in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md). Wird **nach FR-17** umgesetzt,
+  da die MD-R-Pakete dieselben Metrik-/Map-Stellen bewegen.
 - **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
   `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
   `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in
