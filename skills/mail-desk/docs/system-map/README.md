@@ -214,32 +214,32 @@ Mit **FR-17/MD-R1** ist die Routing-Ordnung katalogtreu und deterministisch
 ([matching/project_matching.py](../scripts/core/matching/project_matching.py),
 [matching/topic_matching.py](../scripts/core/matching/topic_matching.py)):
 select_project_match bewertet alle nicht-unterdrückten Kandidaten, gewichtet sie
-(subject-exact = 3, pattern = 2, ody-contact = 1) und wählt nach
+(subject-exact = 3, pattern = 2, body-contact = 1) und wählt nach
 (strength desc, routing_priority desc, catalog_index asc) —
-outing_priority ist damit
+routing_priority ist damit
 erstmals wirksam (Befund B-1 behoben), fehlende oder ungültige Werte (string/bool) gelten
 als neutral-niedrigste und fallen auf die stabile Katalogreihenfolge zurück. Exaktcode-/
 Betrefftreffer schlagen reine Kontakt-/Domänentreffer anderer Projekte unabhängig von der
 Priorität (Stärke dominiert). Der do_not_route_if-Prädikatsblock ist als
-valuate_do_not_route_signal kanonischer Owner in project_matching.py und wird von
-	opic_matching.py importiert: do_not_route_if gilt nun für **Projekte und Topics** mit
+evaluate_do_not_route_signal kanonischer Owner in project_matching.py und wird von
+topic_matching.py importiert: do_not_route_if gilt nun für **Projekte und Topics** mit
 identischer Semantik — einmal vor der Root-Schleife (2a) und einmal vor der
 Subtopic-Fallback-Schleife. Das
-ewsletter-Prädikat ist strikt Betreff-/Header-scoped
+Newsletter-Prädikat ist strikt Betreff-/Header-scoped
 (subject, from, to, cc; niemals Body-/Preview-Text; der list.-Token bleibt from/to-only);
 
-o-reply bleibt from-only. Unterdrückte Kandidaten werden als decision.suppressed_candidates[]
+no-reply bleibt from-only. Unterdrückte Kandidaten werden als decision.suppressed_candidates[]
 (Katalogdaten: kind, id, suppression_reason) sichtbar; Newsletter-unterdrückte Mails
 werden deterministisch auf classifier.NEWSLETTER_TARGET_FOLDER (Newsletter,
 copy_as_move,
-eview_required: false) abgebildet, außer ein starker nicht-unterdrückter
+review_required: false) abgebildet, außer ein starker nicht-unterdrückter
 Kandidat gewinnt; nicht-Newsletter-Unterdrückung endet mit Review-Grund
 (do_not_route_suppressed) in INBOX (keep_in_folder). Thread-Vererbung und die
-mbiguity-Policy bleiben unverändert. Struktureller Nachweis:
-[	ests/test_classifier_routing_priority.py](../tests/test_classifier_routing_priority.py)
-(18 Tests) und [	ests/test_classifier_do_not_route.py](../tests/test_classifier_do_not_route.py)
+ambiguity-Policy bleiben unverändert. Struktureller Nachweis:
+[tests/test_classifier_routing_priority.py](../tests/test_classifier_routing_priority.py)
+(18 Tests) und [tests/test_classifier_do_not_route.py](../tests/test_classifier_do_not_route.py)
 (14 Tests) mit hermetischen BOKU-Analog-Fixtures
-([	ests/routing_fixtures.py](../tests/routing_fixtures.py)); die Red-Gate-Sequenz
+([tests/routing_fixtures.py](../tests/routing_fixtures.py)); die Red-Gate-Sequenz
 (MD-R1-red-001: 7+6 Assertion-Failures) ist im Run
 daedalus/runs/2026-09-22-office-intelligence-fr17-routing-determinism dokumentiert.
 Die classifier_revision-Rotation (ASTs von drei der fünf gebundenen Regelmodule geändert)
