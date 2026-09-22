@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 848 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 864 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -262,3 +262,20 @@ Mailinhalt wird nie ein Ziel abgeleitet. Struktureller Nachweis:
 [`tests/test_classifier_thread_sibling_coherence.py](../tests/test_classifier_thread_sibling_coherence.py)
 (12 Tests, Red-Gate `MD-R2-red-001`: 4 Assertion-Failures).
 Mail-Desk-Suite: 848/848 grün.
+
+## 10. FR-17/MD-R6 — Client-Deadlines und Hänger-Freiheit (MD-R6 abgeschlossen)
+
+Mit **FR-17/MD-R6** läuft jede mehrordrige Himalaya-Client-Operation unter einer
+begrenzten Gesamt-Deadline: [`search_mailbox`](../scripts/core/himalaya.py) akzeptiert
+`overall_deadline_seconds` (Modul-Default `DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS = 120.0`, `None` deaktiviert dokumentiert); die Validierung `_validate_overall_deadline_seconds` weist `None`/`bool`/nicht-numerische/nicht-endliche/nicht-positive Werte fail-closed
+vor jedem Mailbox-Kommando ab (bounded `ValueError`; auch über die
+Manifest-Oberfläche von [`mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py)).
+Ein per-call `himalaya_timeout` bricht den Ordner-Sweep sofort
+fail-closed ab statt stillschweigend übernommen zu werden; die Deadline-Exhaustion ist
+terminal (kein Ordner zweimal, kein zweiter Sweep, keine Teil-Ergebnisse als
+vollständig). Deadline-Fehler sind begrenzte `himalaya_timeout`-Errors
+mit deadline-unterscheidbarem Reason; `run_himalaya` bleibt unverändert
+(per-call `timeout=35`, `max_retries=5`, bounded
+Transport-Retries). Struktureller Nachweis: [`tests/test_himalaya_client_deadlines.py`](../tests/test_himalaya_client_deadlines.py)
+(16 Tests, Red-Gate `MD-R6-red-001`: 5 Assertion-Failures).
+Mail-Desk-Suite: 864/864 grün.

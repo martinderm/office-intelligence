@@ -6,6 +6,7 @@ import concurrent.futures
 import email
 import email.policy
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -528,6 +529,37 @@ def verify_in_target_folder(
     return None
 
 
+#: Default overall wall-clock budget (seconds) for a multi-folder mailbox sweep.
+DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS: float = 120.0
+
+#: Bounded reason raised when a multi-folder sweep exhausts its overall budget.
+SEARCH_DEADLINE_REASON = "Himalaya search overall deadline exceeded; aborting the folder sweep."
+
+#: Bounded reason raised when the supplied overall sweep budget is not a usable bound.
+SEARCH_DEADLINE_INVALID_REASON = (
+    "overall_deadline_seconds must be a finite positive number of seconds, or None to disable the bound."
+)
+
+
+def _validate_overall_deadline_seconds(value: float | None) -> None:
+    """Fail closed on a non-finite, non-positive or non-numeric sweep budget.
+
+    ``None`` is the documented disable.  Every other invalid value (NaN, +/-Inf,
+    zero, negative, or a non-numeric type) is rejected before the first mailbox
+    command so that a caller -- including a JSON manifest -- can never silently
+    neuter or disable the wall-clock bound and trigger an unbounded sweep.
+    """
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise ValueError(SEARCH_DEADLINE_INVALID_REASON)
+
+
 def search_mailbox(
     query: str = "",
     message_ids: list[str] | None = None,
@@ -535,10 +567,35 @@ def search_mailbox(
     page_size: int = 50,
     threads: int = 4,
     account: str | None = None,
+    overall_deadline_seconds: float | None = DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS,
 ) -> list[dict[str, Any]]:
-    """Search for messages across specified folders by query or message_ids."""
+    """Search for messages across specified folders by query or message_ids.
+
+    ``overall_deadline_seconds`` bounds the whole folder sweep in wall-clock
+    seconds.  Exhausting it raises ``HimalayaInvocationError`` with reason code
+    ``himalaya_timeout`` and a reason naming the deadline, distinct from a
+    per-call timeout.  ``None`` disables the overall budget.  A per-call
+    ``himalaya_timeout`` stops the sweep fail-closed.  An invalid budget
+    (non-finite, non-positive or non-numeric) raises a bounded ``ValueError``
+    before the first mailbox command, so the bound can never be disabled
+    implicitly.
+    """
+    _validate_overall_deadline_seconds(overall_deadline_seconds)
     query_str = query.strip().lower()
     target_mids = set(normalize_message_id(m) for m in message_ids) if message_ids else set()
+    started_at = time.monotonic()
+
+    def deadline_exhausted() -> bool:
+        """Whether the overall sweep budget is spent."""
+        return (
+            overall_deadline_seconds is not None
+            and (time.monotonic() - started_at) >= overall_deadline_seconds
+        )
+
+    def ensure_within_deadline() -> None:
+        """Fail closed once the overall sweep budget is spent."""
+        if deadline_exhausted():
+            raise HimalayaInvocationError("himalaya_timeout", SEARCH_DEADLINE_REASON)
 
     if not folders:
         try:
@@ -588,17 +645,25 @@ def search_mailbox(
                     "from": from_str.strip(),
                     "date": date_str,
                 }
+        except HimalayaInvocationError as exc:
+            if exc.reason_code == "himalaya_timeout":
+                raise
         except Exception:
             pass
         return None
 
     def search_single_folder(fld: str) -> list[dict[str, Any]]:
         found_in_folder: list[dict[str, Any]] = []
+        ensure_within_deadline()
         try:
             out = run_himalaya(["-o", "json", "envelope", "list", "-f", fld, "-s", str(page_size)], account=account, timeout=30)
             if "[" in out:
                 out = out[out.find("["):]
             envelopes = json.loads(out)
+        except HimalayaInvocationError as exc:
+            if exc.reason_code == "himalaya_timeout":
+                raise
+            return found_in_folder
         except Exception:
             return found_in_folder
 
@@ -619,10 +684,24 @@ def search_mailbox(
 
         return found_in_folder
 
+    if threads <= 1:
+        for fld in folders:
+            ensure_within_deadline()
+            matches.extend(search_single_folder(fld))
+        return matches
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
-        futures = {executor.submit(search_single_folder, fld): fld for fld in folders}
+        futures: dict[concurrent.futures.Future[list[dict[str, Any]]], str] = {}
+        for fld in folders:
+            ensure_within_deadline()
+            futures[executor.submit(search_single_folder, fld)] = fld
         for fut in concurrent.futures.as_completed(futures):
-            res = fut.result()
+            try:
+                res = fut.result()
+            except HimalayaInvocationError:
+                for pending in futures:
+                    pending.cancel()
+                raise
             if res:
                 matches.extend(res)
 

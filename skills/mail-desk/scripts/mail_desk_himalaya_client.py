@@ -45,6 +45,7 @@ from core.attachments import (
     verify_attachment_drift,
 )
 from core.himalaya import (
+    DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS,
     fetch_raw_message_eml,
     get_single_email_details,
     run_himalaya,
@@ -291,13 +292,23 @@ def op_search(
     message_id: str | None = None,
     folders: list[str] | None = None,
     account: str | None = None,
+    overall_deadline_seconds: float | None = DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS,
 ) -> list[dict[str, Any]]:
+    """Search mailbox folders under a bounded overall client deadline.
+
+    ``overall_deadline_seconds`` defaults to the bounded client sweep budget and
+    is forwarded to ``search_mailbox``; ``None`` disables the overall budget.  An
+    invalid forwarded value (non-finite, non-positive or non-numeric) fails
+    closed inside ``search_mailbox`` with a bounded ``ValueError`` before any
+    mailbox command, so a manifest cannot silently disable the sweep bound.
+    """
     mids = [message_id] if message_id else None
     return search_mailbox(
         query=query,
         message_ids=mids,
         folders=folders,
         account=account,
+        overall_deadline_seconds=overall_deadline_seconds,
     )
 
 
@@ -445,6 +456,9 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     message_id=op.get("message_id"),
                     folders=op.get("folders"),
                     account=acc,
+                    overall_deadline_seconds=op.get(
+                        "overall_deadline_seconds", DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS
+                    ),
                 )
             elif action in ["inspect_attachments", "attachments"]:
                 op_account = op.get("account")
