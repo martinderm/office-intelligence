@@ -17,7 +17,7 @@ from .attachment_handoff import (
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
-from .matching import ambiguity, project_matching, topic_matching
+from .matching import ambiguity, project_matching, reply_heuristics, topic_matching
 from .matching.date_parser import parse_date_to_year_month
 # Project/artifact/evidence callables stay importable from the facade by object identity.
 from .matching.project_matching import (
@@ -197,6 +197,21 @@ def classify_email_two_pass(
     manifest schema.
     """
     def _finish(item: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+        # FR-17/MD-R8: a reply requirement derived from the preview may be corrected
+        # by the full body (and vice versa).  The downgrade decision is owned by
+        # core.matching.reply_heuristics; the facade only supplies the closing-check
+        # text of the effective source and routes the reclassified decision.
+        decision = item.get("decision")
+        if isinstance(decision, dict) and decision.get("needs_reply"):
+            closing_context = dict(decision)
+            closing_context["_closing_check_subject"] = str(source.get("subject", "") or item.get("subject", ""))
+            closing_context["_closing_check_body"] = str(source.get("preview", "") or item.get("notes", ""))
+            downgraded, notes = reply_heuristics.downgrade_if_closing(
+                closing_context, str(item.get("notes", ""))
+            )
+            if downgraded is not decision:
+                item["decision"] = downgraded
+                item["notes"] = notes
         if source_sink is not None:
             source_sink(source)
         return item

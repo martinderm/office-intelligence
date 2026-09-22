@@ -91,6 +91,9 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
 - **Deterministische MIME-Inventarkette** mit Feldkonsistenz-Gate (FR-17/MD-R3).
 - **Inline-Bild-Policy** für die automatische Auswertung (FR-17/MD-R4).
 - **Vertragsdokumentation und Laufzeit-Hygiene** (FR-17/MD-R5).
+- **Reply-Heuristik:** Abschluss-/Dankesmails ohne konkrete Anforderung werden
+  auf `needs_reply: false` herabgestuft, in beiden Klassifikationspässen; kanonischer
+  Owner `core/matching/reply_heuristics.py` (FR-17/MD-R8).
 - Himalaya-Adapter, Dossier-Synthese.
 
 ---

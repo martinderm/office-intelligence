@@ -187,13 +187,13 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   beobachtete Grenzrouten (9408 eucen Highlights, 9419 BeyondTrust, 9412
   LE-LLL) sind Consumer-Katalog-Pflege, kein Bundle-Defekt. **FR-17 ist
   abnahmebestätigt.**
-- **Nachtrag B-11 / MD-R8 (User, 2026-09-22):** Nach dem Katalog-Fix im
+- **Nachtrag B-11 / MD-R8 (2026-09-22, abgeschlossen):** Nach dem Katalog-Fix im
   Consumer-Workspace verblieb die Befundklasse „Abschluss-/Dankesmails werden
-  reply-pflichtig klassifiziert" (Env 9412). Der Nachtrag ist in
-  [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md) als **B-11 → Paket `MD-R8`
-  (Reply-Heuristik)** dokumentiert und bleibt offen; er ist unabhängig von
-  MD-R1–R7 und wird separat umgesetzt. Damit ist FR-17 formal für B-1–B-10
-  abgeschlossen; B-11 folgt als eigenes Paket nach FR-16.
+  reply-pflichtig klassifiziert" (Env 9412). **MD-R8 ist umgesetzt und
+  paketabgenommen:** kanonischer Owner `core/matching/reply_heuristics.py`, Facade-
+  Downgrade im `_finish`-Punkt beider Pässe (`reply_downgrade`-Provenienz,
+  `rule_revision: md-r8`), 7 neue Tests, Suite 903/903 grün. **Damit ist FR-17
+  vollständig geschlossen (B-1–B-11).**
 
   `compileall`, `validate-skills-catalog.py`, `validate_workspace.py --json` und
   `git diff --check` sauber. Git-Index-Metrik: 128 getrackte Dateien

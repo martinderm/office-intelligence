@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-16/MD-D2): 141 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner); 57 Testmodule; 896 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-17/MD-R8): 143 getrackte Dateien; 66 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`; 58 Testmodule; 903 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -20,7 +20,7 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py                                │
-│  ├─ Core Domain: scripts/core/ (55 getrackte .py-Dateien)              │
+│  ├─ Core Domain: scripts/core/ (56 getrackte .py-Dateien)              │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
 │  │   ├─ quarantine/ (6 kanonische Quarantäne-Owner + Legacy-Shims)      │
@@ -400,3 +400,31 @@ auf — die Atomarität des Ersatzes bleibt erhalten (Befund B-7 behoben;
 Newsletter-Regel ist konsistent mit der MD-R1-Abnahme. Nachweis: beide neuen
 Testmodule grün (6+3 Tests, Charakterisierung ohne hergestelltes Red).
 Mail-Desk-Suite: 896/896 grün. **FR-17 ist mit MD-R5 abgeschlossen.**
+
+---
+
+## 15. FR-17/MD-R8 — Reply-Heuristik: Abschluss-/Dankesmails sind nie reply-pflichtig (MD-R8 abgeschlossen)
+
+**Befund (B-11):** Abschluss-/Dankesmails wurden als `needs_reply: true` klassifiziert
+(Env 9412: „vielen Dank für das Zusammenstellen… Liebe Grüße") und landeten fälschlich
+im `_Needs-Reply`-Ordner.
+
+**Umsetzung:**
+- Kanonischer Owner [`scripts/core/matching/reply_heuristics.py`](../scripts/core/matching/reply_heuristics.py):
+  Closing-/Dankesmarker („vielen Dank", „passt für mich", Grüße-Floskeln),
+  Request-Signal-Gate (Frage, Bitte, Frist, Entscheidung, Freigabe, Beitrag),
+  `is_closing_or_thanks`, `needs_reply_review` und `downgrade_if_closing` mit
+  `reply_downgrade`-Provenienz (`rule_revision: "md-r8"`).
+- Facade-Verdrahtung im einzigen `_finish`-Punkt von `classify_email_two_pass`
+  ([`scripts/core/classifier.py`](../scripts/core/classifier.py)): der Downgrade wirkt
+  in **beiden** Pässen — ein aus dem Preview abgeleiteter Reply-Bedarf wird durch den
+  Full-Read korrigiert und umgekehrt; nur ein aktuell assertierter `needs_reply`-Wert
+  wird herabgestuft, `false`-Werte und Review-Semantik bleiben unberührt.
+- `FULL_BODY_ACTION_REQUEST` bleibt unverändert der Escalation-Trigger; MD-R8 ändert
+  ausschließlich die Bedarfsbewertung, nicht die Volltext-Eskalation.
+
+**Pflichttests (alle erfüllt, `tests/test_reply_heuristics.py`):** Dankes-/Abschlussmails
+(„vielen Dank", „passt für mich", „Liebe Grüße" ohne Rückfrage) → `needs_reply: false`;
+echte Bitten/Fragen/Fristen werden nie herabgestuft; Thread, in dem nur die erste Mail
+eine Bitte enthielt und die letzte abschließt → `false`; Review-Fall bleibt erhalten.
+**Suite 903/903 grün.**

@@ -7,6 +7,8 @@ completes the domain verticals with the canonical topic/subtopic/operation/event
 (``topic_matching.py``). MD-M1-T04 contracts the facade and routes the remaining
 project/topic domain evaluation (thread-folder inheritance and full-body evidence
 rebuilding) to those same owners. Every owner is bound to the facade by object identity.
+FR-17/MD-R8 adds the canonical reply-heuristics owner (``reply_heuristics.py``) that owns
+the closing/thank-you downgrade of an asserted ``needs_reply``.
 Importing this package has no side effects and never imports ``classifier.py``.
 """
 
