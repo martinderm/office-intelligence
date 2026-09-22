@@ -26,6 +26,7 @@ verbindliche Paketkarten.
 | `FR-13` | ✅ Abgeschlossen; MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims) implementiert, getestet und paketabgenommen; **FR-13 geschlossen** | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation; Quarantäne-Paketierung: sechs Owner unter `core/quarantine/`, `sys.modules`-aliasende Shims an alten Pfaden, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, 804 Tests grün | keins |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 | `FR-16` | ⬜ geplant; reine Dokumentations-/Metrik-Hygiene aus der MD-M2-Retrospektive | Identifikation der Metrik-Vervielfältigung und des monolithischen Tabellenzellen-Anti-Patterns | `DOC-M1` (Metrik-SSOT), `DOC-M2` (Zellen-Splitting); siehe Paketkarte unten |
+| `FR-17` | ⬜ geplant; Befunde aus der BOKU-Testbatch 2026-09-22 reproduziert und verifiziert | Drei identische `draft`-Läufe, Offline-Reproduktion der Routing-/`do_not_route_if`-Befunde, Determinismus-/Idempotenznachweise, echter Execute + Verify + Reconcile der 10 Mails | `MD-R1`–`MD-R7`; siehe Paketkarte unten |
 
 
 ```text
@@ -1060,3 +1061,405 @@ verursachen:
 - Jede inhaltliche Neuschreibung von Verantwortlichkeitsbeschreibungen.
 - Änderungen an Test- oder Produktionscode.
 - Automatische Metrik-Generierung per Skript (möglicher künftiger FR).
+
+---
+
+## FR-17: Routing-Katalogtreue, Batch-Determinismus und Vertragshygiene
+
+**Status:** ⬜ Geplant. Ergebnis einer produktiven Testbatch des konsumierenden
+BOKU-Workspace (10 Mails, Envelope 9387–9404, Account `BOKU-MARTIN`, 2026-09-22).
+Alle Befunde wurden mit drei identischen `draft`-Läufen und zusätzlich offline
+gegen die echten Kataloge reproduziert. Es ist eine **verhaltensändernde
+Korrektur im Classifier-/Routing-Pfad** plus begleitende Vertrags- und
+Hygiene-Fixes. Keine Mailbox-Mutation, keine Promotion, kein Cloud-/Task-Pfad.
+
+### Reproduktionsumfeld
+
+- Konsumierender Workspace mit Backend-Bindung `.agents/mail-desk-backend.json`
+  (`schema_version: 1`, `backend: himalaya`, `account: BOKU-MARTIN`), also der
+  kanonische MD-H3-Pfad; `--account BOKU-MARTIN` stimmte exakt überein.
+- Aufruf (dreimal identisch, jeweils mit gültigem Workspace-Lock und
+  `WORKSPACE_LOCK_LEASE_ID` aus der Harness-Control-Plane):
+  `mail_desk_batch_runner.py --draft 10 --order oldest --folder INBOX --skip-known
+  --data-dir data/mail-desk --account BOKU-MARTIN`.
+- Wirkung: ausschließlich read-only Mailboxzugriffe plus zwei MD-E1-Quarantäne-Fetches;
+  **keine** Mailbox-, Index-, Log-, Evidence- oder Execute-Mutation.
+- Kandidaten: Envelope 9387–9393 und 9400/9403/9404 aus `INBOX` (chronologisch,
+  `skip_known` übersprang bereits indizierte ältere Mails).
+
+### Befunde
+
+| ID | Schwere | Befund | Kern-Evidenz |
+|---|---|---|---|
+| B-1 | hoch | `routing_priority` ist ein toter Katalogwert; Katalogreihenfolge entscheidet, ein reiner Kontakt-Treffer schlägt einen Exaktcode im Betreff | Env 9388 → `usage-ng` statt `atael`, offline reproduziert |
+| B-2 | hoch | Topic-`do_not_route_if` wird nie ausgewertet; Newsletter landen trotz Ausschluss im Topic | Env 9400 → `netzwerke`/`eu-projekte-und-oead`, offline reproduziert |
+| B-3 | hoch | `draft` ist unter transienten MIME-Timeouts nicht deterministisch; Outcome kippt zwischen Klassifikation und Review+Fetch | 3 Läufe, 2 verschiedene Manifeste (9392/9393 kippen) |
+| B-4 | mittel | `notes` und Anhangs-Felder widersprechen der finalen Entscheidung | `unknown` + Notes „Themenbezogene Zuordnung…“ + leeres Inventar + befüllte `files[]` |
+| B-5 | mittel | Automatische Auswertung fetcht Inline-Signaturbilder als `required_for_decision` | 2 Fetches mit `is_inline: true`, `chars: 0`, beide `still_ambiguous` |
+| B-6 | niedrig | `keep_in_folder` fehlt in der dokumentierten `action.type`-Menge | produktiv genutzt an 6 Code-Stellen |
+| B-7 | niedrig | `progress_*.tmp` bleiben als untracked Rauschen liegen | 2 Dateien nach 3 Läufen, nicht git-ignoriert |
+| B-8 | hoch | Client-Suche ohne Ordnerliste hat keinen begrenzten Gesamt-Timeout; Hänger blockiert danach ~10 min auch Einzelabfragen | Suche >5 min ohne Fehler; danach `himalaya_timeout` bei `envelope list -s 1` |
+| B-9 | mittel | Standalone-`verify` kann bei gemischten Batches (Projekt/Topic + Archiv) den Handoff nicht freigeben | zwei reale Läufe: Scope 10 und Scope 9 beide `not_required` |
+| B-10 | mittel | `verify`-Evidence-Fallback globt `memory/references/**/evidence` (im Consumer leer) → `in_evidence: None`, Evidence wird nicht geprüft | 10/10 „consistent“ bei 0 gefundenen Evidence-Dateien |
+
+#### B-1 — `routing_priority` ist wirkungslos; Katalogreihenfolge und Kontakttreffer dominieren
+
+- `routing_priority` wird in `skills/mail-desk/scripts/**` **nirgends** gelesen
+  (Ripgrep über den gesamten Skriptbaum: 0 Treffer), obwohl beide Kataloge das
+  Feld pflegen (`projects.json`: `week` 80, `li4lam` 75, `atael` 65, `rellde` 65,
+  `meshe`/`evolve`/`usage-ng` 50, abgeschlossene 40; `topics.json`:
+  `netzwerke` 60).
+- `core/matching/project_matching.py::select_project_match` iteriert die
+  **Katalogreihenfolge** und gibt den ersten Treffer zurück. Stufe 1a (ID/`kuerzel`/
+  Alias im Betreff) wäre für `atael` erfolgreich (Betreff-Token `ATAEL`), wird aber
+  nie erreicht, weil `usage-ng` an Katalogindex 3 vor `atael` (Index 5) steht und in
+  Stufe 1c bereits über einen reinen Kontakt-Treffer mit `confidence: high` gewinnt.
+- Offline-Reproduktion mit den echten Katalogen (ohne Mailboxzugriff, nur
+  `memory/references/{projects,topics}/*.json` des Consumer-Workspace):
+  - Betreff `WG: For Action - ATAEL - 101323118 - GAP-101323118 - Evaluation results  FYI`,
+    `parties` enthält `sybille.michaelis@tum.de` → `{"id": "usage-ng", "confidence": "high"}`.
+  - Identischer Betreff **ohne** TUM-Kontakt → `{"id": "atael", "confidence": "high",
+    "folder": "Projekte/In Ausarbeitung/ATAEL"}`.
+- Reale Folge: Env 9388 (`message_id: 52270af9e92f47e2a4c9a2a124fa6266@tum.de`) wurde als
+  `decision.kind: project`, `id: usage-ng` gedraftet, obwohl Betreff, Anhänge
+  (`Rejection decision Information Letter.pdf`, sha256
+  `932f9e6f9bb9ce30ca48b6a193336f1397c34e1f378eec771d5a11b657f68818`;
+  `101323118_ATAEL_ESR.pdf`, sha256
+  `be92b098a8263fff4697f6a23b0c880f3363aaa51c697deeac3b18ff12057717`)
+  und Katalog eindeutig `atael` sind.
+- Sibling-Split: Env 9387 (`message_id:
+  734474456.1162619.1784818593223@wlldb00951.cc.cec.eu.int`, Betreff
+  `For Information - ATAEL - …`) bleibt `unknown/unclassified` in `INBOX`, weil der
+  Absender `EC-NO-REPLY-GRANT-MANAGEMENT@…` über `do_not_route_if: ['newsletter','no-reply']`
+  jedes Projekt-Routing unterdrückt. Derselbe Vorgang landet damit potenziell in zwei
+  verschiedenen Zielen, ohne dass der Reviewer den unterdrückten Kandidaten sieht.
+
+#### B-2 — Topic-`do_not_route_if` ist nicht implementiert
+
+- `do_not_route_if` existiert ausschließlich in `core/matching/project_matching.py`
+  (Prüfblock vor der Match-Schleife). `core/matching/topic_matching.py` hat keine
+  entsprechende Behandlung; ein Grep über `core/**` findet `do_not_route` nur im
+  Projekt-Matcher.
+- `topics.json` → `netzwerke.do_not_route_if: ['newsletter', 'no-reply']` ist damit
+  wirkungslos.
+- Offline-Reproduktion: Betreff `OeAD / Hochschule International Newsletter 7/2026`
+  → `netzwerke` (`high`) mit `preselected_subtopic: eu-projekte-und-oead`, obwohl
+  der Betreff das DNR-Signal `Newsletter` enthält.
+- Reale Folge: Env 9400 (`message_id:
+  838d70b285107ce4b6b19c334.14d8e54149.20260728071005.e7b64fd196.86f35121@mail141.atl271.mcdlv.net`)
+  wurde nach `Themen/Netzwerke` gedraftet.
+- Zielkonflikt: Der konsumierende Workspace führt externe Newsletter nach
+  `pipelines/mail-desk-batch.md` → `Newsletter` (dort liegt z. B. Env 9377,
+  `message_id: d112dc7be456467a80d59d29d2c7a32a@1017`, `decision.kind: archive`,
+  final `Newsletter`-Envelope 77). Eine Mailbox-Suche nach `Hochschule International`
+  über `Newsletter`, `Themen/Netzwerke` und `INBOX` fand **keine** früheren
+  OeAD-Ausgaben (nur `INBOX` 9585); der Konflikt ist also nicht durch Historie
+  entschieden und wiederholt sich je Ausgabe.
+- Kein Katalog kennt ein Ziel `Newsletter` (`topics.json` hat keinen
+  `newsletter`-Eintrag); der Pfad ist ein Sonderfall außerhalb der
+  `references/folder-rules.md`-Routingtabelle.
+
+#### B-3 — Nicht-Determinismus bei transienten MIME-Timeouts
+
+- Drei identische Läufe, Ergebnis: Lauf 1 und Lauf 3 sind byte-identisch
+  (`review.execute_request_sha256:
+  75ae9c41456aa3746c765f413b6aa45d71c7a0e7af3c8af18d3939515121f465`), Lauf 2 weicht
+  ab (`55bf1bc2b963fc3115c2cb472c39381e875aba8d76440abe92aaca7813e12891`).
+- Gekippte Items (jeweils gleicher Input, gleicher Mailboxzustand):
+
+  | Env | Message-ID | Lauf 1/3 | Lauf 2 |
+  |---|---|---|---|
+  | 9392 | `6a637340020000f1000d514d@gwia1.boku.ac.at` | `netzwerke/medium`, `not_needed/classification_clear` | `unclassified/low`, `completed/still_ambiguous`, `attachment_status: attachment_inventory_unavailable` |
+  | 9393 | `7fd93e10-a0f2-4759-8383-89a444245a96@eucen.eu` | `unclassified/low`, `completed/still_ambiguous` | `netzwerke/medium`, Subtopic `eucen`, `not_needed/classification_clear` |
+
+- Fehlertext des Review-Zweigs: `attachment_error: "Failed to export or inspect
+  message MIME: Himalaya timed out; refusing to retry the mailbox command."`
+- Mechanik: Der primäre MIME-Export (`inspect_attachments`) läuft transient in einen
+  Timeout; `core/classifier.py` erzwingt daraus Review
+  (`attachment_inventory_unavailable`, ~Zeile 646). MD-E2 startet danach dennoch
+  `attachment_evaluate`, dessen eigener MIME-Abruf im selben Lauf gelingt → es
+  entsteht ein Quarantäne-Fetch, der die Ausgangsmehrdeutigkeit nicht auflöst.
+
+#### B-4 — Widersprüchliche Item-Felder und irreführende `notes`
+
+- Gleichzeitig im selben Item: `attachments: []`,
+  `attachment_status: "attachment_inventory_unavailable"`, `attachment_error` gesetzt
+  **und** `attachment_evaluation.status: "completed"`, `reason: "still_ambiguous"`,
+  `authorization: "auto_evaluated"` mit befülltem `files[]` auf eine real gefetchte
+  Datei (Lauf 1 Env 9393; Lauf 2 Env 9392).
+- `notes` behaupten eine Zuordnung („Themenbezogene Zuordnung zu Netzwerke
+  (Betreff: …)“), obwohl `decision.kind: "unknown"`/`id: "unclassified"` bleibt.
+  Ein Reviewer kann nicht erkennen, welche Aussage gilt.
+
+#### B-5 — Inline-Signaturbilder werden als `required_for_decision` gefetcht
+
+- Env 9393: `35-years-signature_XS.png`, sha256
+  `b2e14e6fb0d7cb3a9c36e350f587ecad6ea1a75a97d33afa5134ba1e0fdd561a`,
+  `is_inline: true`, `content_disposition: inline`, `chars: 0` → Quarantäne-Run
+  `eval_68ef4d21fded25ab8527843bf253bad2`.
+- Env 9392: `IMAGE.png`, sha256
+  `8fb95ec6029dfa51c618a5a4519bb4d656cd31e4f32d35e143b822b740a98af3`,
+  `is_inline: true`, `chars: 0` → Quarantäne-Run
+  `eval_b12670e2d7acf37dfbcb5ab1105571a4` (Lauf 2).
+- Beide Auswertungen endeten `still_ambiguous`, die Mails blieben in Review.
+  Nutzen: keiner; Nebenwirkung: Quarantäne-/PII-/Quoten-Fläche und ein zusätzlicher
+  fehleranfälliger MIME-Abruf.
+
+#### B-6 — `keep_in_folder` fehlt in der dokumentierten Vertragsmenge
+
+- Produktiv genutzt: `core/classifier.py` (Vorlage, Zielwahl, Review-Zweig),
+  `core/attachment_reclassification.py`, `core/quarantine/attachment_handoff.py`,
+  `core/modes/execute.py`.
+- Dokumentiert: `references/batch-runner.md` (execute-Schema) führt `action.type`
+  als `["copy_as_move", "move", "copy", "none", "archive"]`;
+  `references/folder-rules.md` beschreibt die Retention-in-`INBOX`-Semantik nicht.
+  Die Dokumentation ist damit enger als der akzeptierte Vertrag.
+
+#### B-7 — `progress_*.tmp` bleiben liegen
+
+- Nach den Läufen blieben `data/mail-desk/progress_1wv8jnx_.tmp` und
+  `progress_vana2exn.tmp` zurück (in der Vor-Batch ebenfalls drei Dateien). Sie sind
+  nicht git-ignoriert (`.gitignore` des Consumer-Workspace enthält nur
+  `/data/mail-desk/attachments/`) und erzeugen untracked Rauschen in einem
+  versionierten Verzeichnis.
+
+#### Ausdrücklich verifiziert und zu erhalten (kein Fixbedarf)
+
+- **Run-ID-Determinismus:** `core/attachment_reclassification.py::derive_evaluation_run_id`
+  (bindet Account, Folder, Envelope-ID und normalisierte Message-ID) ist
+  deterministisch und PII-frei; die offline nachgerechneten Werte stimmen exakt mit
+  den beobachteten `files[].run_id` überein (Env 9393 →
+  `eval_68ef4d21fded25ab8527843bf253bad2`; Env 9392 →
+  `eval_b12670e2d7acf37dfbcb5ab1105571a4`).
+- **Kein Doppel-Fetch:** Die erneute Auswertung von Env 9393 in Lauf 3 nutzte
+  denselben Quarantäne-Run; `35-years-signature_XS.png` behielt seine mtime
+  (14:27:26), nur `.quarantine-inventory.json` wurde neu geschrieben (14:36:15).
+  Das FR-15/MD-E2-Idempotenzversprechen hält.
+- **Quarantäne-Preflight erfüllt:** `git ls-files data/mail-desk/attachments/` ist
+  leer; `.gitignore` enthält `/data/mail-desk/attachments/`.
+- **Draft ohne Mailbox-Mutation**, Lock-Ownership und Backend-Bindung wirksam.
+
+### Ziel & Invarianten
+
+- Routing wird **katalogtreu und deterministisch**: Priorität, Exaktcodes,
+  Kontakt-/Domänensignale und Ausschlüsse folgen einer dokumentierten, testbaren
+  Ordnung; gleicher Input und gleicher Mailboxzustand ergeben dasselbe Manifest.
+- Exaktcode-/Betrefftreffer schlagen reine Kontakt-/Domänentreffer; `routing_priority`
+  ist die dokumentierte erste Ordnungsinstanz, die Katalogreihenfolge nur der
+  stabile Gleichstands-Tiebreaker.
+- `do_not_route_if` gilt für **Projekte und Topics** mit identischer, begrenzter
+  Semantik; unterdrückte Kandidaten bleiben als Review-Hinweis sichtbar.
+- Keine Abschwächung der FR-15-Grenzen: null neue Schreibpfade,
+  `allow_legacy=False` unverändert, Receipt-Klassen-Guard unverändert, keine
+  Doppel-Fetches, keine automatische Garbage Collection.
+- Vertrags- und Schemaänderungen werden synchron in `SKILL.md`, `references/*`,
+  L1/L2-System-Map und beiden FR-Ledgern nachgeführt (Bundle-`AGENTS.md`-Regel).
+- Änderungen an `classifier.py`/`core/matching/*` rotieren `classifier_revision`
+  genau einmal (genehmigt, wie bei FR-13/MD-M1); betroffene Tests und
+  Dokumentationen werden mitgezogen.
+
+### MD-R1 — Prioritäts- und Ausschlusslogik für Projekte und Topics
+
+**Scope:**
+1. `core/matching/project_matching.py`: `routing_priority` aus dem Katalog anwenden
+   (numerisch, höher zuerst); Gleichstand und fehlender Wert fallen auf die stabile
+   Katalogreihenfolge zurück. Innerhalb der Kandidatenbewertung müssen exakte
+   ID-/`kuerzel`-/Alias-/`typical_subject_patterns`-Treffer im Betreff einen reinen
+   Kontakt-/Domänentreffer eines anderen Projekts schlagen (Signalgüte vor
+   Katalogreihenfolge). Die bestehende Treffersemantik (Schwellen, Confidence,
+   `do_not_route_if`) bleibt erhalten.
+2. `core/matching/topic_matching.py`: `do_not_route_if` mit derselben Semantik und
+   denselben Prädikaten wie im Projekt-Matcher anwenden; die Prädikatlogik in einen
+   gemeinsamen, testbaren Helper ziehen (kein Duplikat). `newsletter` darf dabei
+   **nur** über Betreff-/Header-Signale greifen, nicht über beliebigen Body-Text
+   (sonst unterdrückt jedes beiläufige Wort „Newsletter“ ein Topic).
+3. Unterdrückte Kandidaten sichtbar machen: Wenn alle Projekt-/Topic-Treffer durch
+   DNR entfallen, entsteht kein stilles `unknown`, sondern ein begrenzter
+   Review-Grund plus `decision.suppressed_candidates[]` (ausschließlich
+   Katalogdaten: `kind`, `id`, `suppression_reason`; niemals Mailinhalt als Ziel).
+4. Newsletter-Zielpfad explizit definieren: Ein durch `newsletter` unterdrücktes
+   Topic/Projekt wird deterministisch auf den bestehenden `Newsletter`-Pfad
+   abgebildet (Archiv-/Massenmail-Semantik, `copy_as_move`) **oder** bleibt mit
+   Review-Grund in `INBOX`. Die gewählte Regel wird in
+   `references/folder-rules.md` und in der Consumer-Pipeline dokumentiert; der
+   Katalog erhält – falls nötig – einen kanonischen Ziel-Eintrag statt eines
+   Sonderpfads.
+
+**Pflichttests:** Prioritätsordnung inkl. Gleichstand und fehlendem Wert; Exaktcode
+schlägt Kontakt; 9388-Analogon endet bei `atael`; 9387-Analogon erhält Review mit
+`suppressed_candidates`; 9400-Analogon endet nicht in `netzwerke`; DNR-Prädikate
+inkl. Body-Regressionsfall; Newsletter-Zielpfad deterministisch; bestehende
+Mail-Desk-Suite ohne unbegründete Assertion-Brüche.
+
+### MD-R2 — Thread-/Sibling-Kohärenz
+
+**Scope:** Forward-/Referenzketten (`references`, `in_reply_to`) mit identischem,
+exakt aufgelöstem Katalogcode dürfen nicht in unterschiedliche Projekte laufen.
+Trägt die Klassifikation eines Siblings einen eindeutigen Projektcode, erhält der
+blockierte Partner mindestens einen Review-Hinweis mit demselben Kandidaten. Ein
+automatisches Umrouten des blockierten Originals ist nur zulässig, wenn der Kandidat
+exakt, eindeutig und nicht DNR-verboten ist. Keine Zielableitung aus Mailinhalt;
+`candidates`-Semantik bei Mehrdeutigkeit bleibt erhalten.
+
+**Pflichttests:** 9387/9388-Paar; Kette mit unbekanntem Sibling; widersprüchliche
+Kandidaten bleiben `candidates`; DNR bleibt wirksam; keine Routing-Änderung ohne
+eindeutigen Katalogcode.
+
+### MD-R3 — Deterministische MIME-Inventarkette und Feldkonsistenz
+
+**Scope:**
+1. Innerhalb eines Laufs genau **einen** kanonischen MIME-Abruf je Item verwenden;
+   Classifier und MD-E2 dürfen nicht zwei unterschiedlich getimte Exporte sehen. Ein
+   transienter Timeout führt zu einem definierten, wiederholbaren Ergebnis (Review
+   mit `attachment_inventory_unavailable`), ohne im selben Lauf nachzulagern.
+2. `attachments[]`, `attachment_status`, `attachment_error` und
+   `attachment_evaluation` müssen zueinander konsistent sein. Ein befülltes
+   `files[]` mit real gefetchter Datei bei gleichzeitigem
+   `attachment_inventory_unavailable`/leerem Inventar ist unzulässig; entweder wird
+   das Inventar vorher erneut aufgelöst oder das MD-E2-Ergebnis verworfen.
+3. `notes` werden ausschließlich aus der **finalen** Entscheidung erzeugt; keine
+   Zuordnungsformulierung bei `unknown`/`unclassified`.
+4. Die FR-15/MD-E2-Idempotenz (deterministischer Run, kein Doppel-Fetch) bleibt
+   erhalten und wird um den Timeout-Fall erweitert (zweiter Lauf erreicht denselben
+   Run).
+
+**Pflichttests:** Timeout-Injektion beim ersten vs. zweiten Export; drei Läufe
+ergeben ein identisches Manifest; Feldkonsistenz-Assertions; Notes-Konsistenz;
+Quarantäne-Reuse ohne Neu-Fetch.
+
+### MD-R4 — Inline-Bild-Policy für die automatische Auswertung
+
+**Scope:** Inline-Parts (`content_disposition: inline` mit `content_id`) und
+Bild-MIME-Typen ohne extrahierbaren Text sind **kein**
+`required_for_decision`-Trigger der automatischen Auswertung. Sie bleiben
+Inventar-Metadaten; ein Fetch erfolgt nur über den bestehenden, menschlich
+freigegebenen MD-A2-Pfad. Die Regel ist eng zu fassen, zu begründen (PII, Quoten,
+Signalarmut) und verändert die MD-A1/MD-A2/MD-A5-Verträge nicht.
+
+**Pflichttests:** 9393/9392-Analoga werden nicht automatisch gefetcht; echte
+routing-relevante Anhänge (Office/PDF mit Extrakt) lösen weiter aus;
+`chars: 0`-Grenzfälle; Human-Approval-Pfad unverändert.
+
+### MD-R5 — Vertragsdokumentation und Laufzeit-Hygiene
+
+**Scope:**
+1. `keep_in_folder` in `references/batch-runner.md` (Schema-Enum plus Semantik
+   „verbleibt im Quellordner, kein Mailbox-Write“) und in
+   `references/folder-rules.md` dokumentieren; ein Contract-Test stellt sicher,
+   dass die dokumentierte Menge exakt der akzeptierten Menge entspricht.
+2. Progress-Temp-Hygiene: `core/progress.py` bzw. der Runner räumen eigene
+   `progress_*.tmp` in jedem Endzustand (success/failed/aborted) auf oder legen sie
+   unter einen git-ignorierten Unterpfad; ein Test deckt die Abbruchpfade ab.
+3. Consumer-Abstimmung (Dokumentation, kein Code): Newsletter-Regel der
+   BOKU-Pipeline und `folder-rules.md`/Katalog auf **eine** Quelle der Wahrheit
+   bringen; eine Abweichung ist ein Review-Grund, kein stiller Sonderfall.
+
+**Pflichttests:** Enum-/Doku-Contract-Test; Temp-Aufräumen nach Erfolg, Fehler und
+Abbruch; keine neue Ignore-Regel nötig, oder die Ignore-Ergänzung ist dokumentiert
+und getestet.
+
+### Gemeinsame Abnahme (FR-17)
+
+- Fokussierte Tests je Paket, vollständige Mail-Desk-Suite, `compileall`,
+  Skill-Katalog-/Workspace-Validierung und `git diff --check` grün.
+- Reproduktionsnachweis: Das 10-Mail-Manifest der Testbatch ist nach `MD-R1`–`MD-R4`
+  über **drei** identische `draft`-Läufe byte-identisch; `9388 → atael`,
+  `9387 → Review mit ATAEL-Kandidat`, `9400 → definierter Newsletter-Pfad`,
+  `9392/9393 → deterministischer, konsistenter Endzustand ohne automatischen
+  Inline-PNG-Fetch`.
+- Nachweis, dass keine neuen Schreibpfade, keine Legacy-Lock-Bypässe und kein
+  Doppel-Fetch entstehen; die FR-15-Tests bleiben grün (Ausnahme: die bewusste
+  MD-R4-Inline-Policy-Erweiterung).
+- Synchronisation: `SKILL.md`, `references/*`, L1/L2-System-Map,
+  `FEATURE-REQUESTS.md`, `FEATURE-REQUEST-PROGRESS.md` konsistent;
+  `classifier_revision`-Rotation dokumentiert.
+
+### Ausführungsprofil und Reihenfolge
+
+- `MD-R1` und `MD-R2` ändern dieselben Classifier-/Matching-Dateien und werden
+  **nicht parallel** umgesetzt; `MD-R2` startet erst nach grünem `MD-R1`.
+- `MD-R3` und `MD-R4` berühren die abgeschlossene FR-15-Fläche
+  (`attachment_reclassification.py`, `attachment_evaluation.py`, Policy) und werden
+  ebenfalls seriell umgesetzt; keine parallelen Writer auf denselben Dateien.
+- `MD-R5` ist unabhängig und kann jederzeit laufen (reine Dokumentations-/
+  Hygieneänderung), darf aber `MD-R3`-Temp-Pfade nicht überschreiben.
+- Jedes Paket: frische Session, Tests zuerst, kleinste Implementierung, fokussierte
+  Tests, Gesamtsuite, unabhängiges Review, dann ein Commit.
+
+### Nachtrag 2026-09-22 — Befunde aus der Execute-/Verify-Phase derselben Testbatch
+
+Nach der Review-Korrektur wurden dieselben 10 Mails real ausgeführt: `execute`
+10/10 erfolgreich, `verify` 10/10 konsistent, `reconcile` (read-only) `completed`
+mit quellengebundenem Handoff (9 Items). Dabei kamen drei weitere, reproduzierbare
+Befunde hinzu.
+
+#### B-8 — Client-Suche ohne Ordnerliste hat keinen begrenzten Gesamt-Timeout
+
+- Aufruf: `mail_desk_himalaya_client.py --input …` mit
+  `{"action": "search", "query": "Besuch von Univ. Kenia"}` **ohne** `folders`.
+- Ergebnis: Lauf hing >5 Minuten (Abbruch durch die aufrufende Shell); die
+  Ausgabedatei blieb 0 Bytes, es gab keinen strukturierten Timeout-Fehler.
+- Folge: Rund 10 Minuten lang scheiterten danach auch einfache Abfragen
+  (`execute`-Readiness-Preflight mit `envelope list -s 1` sowie ein direktes
+  `list_envelopes`) mit `himalaya_timeout`, obwohl TCP auf dem IMAP-Endpunkt
+  erreichbar war; nach ca. 2 Minuten Wartezeit antwortete der Server wieder in 0,9 s.
+- Vermutete Ursache: viele parallele Ordnerabfragen ohne Gesamt-Deadline; eine
+  serverseitige Session-Limitierung wirkt danach kurzzeitig nach. Der Batch selbst
+  blieb fail-closed (Readiness stoppte vor jeder Mutation).
+- Anforderung: begrenzter Gesamt-Timeout (Deadline) für `search` und alle
+  Client-Operationen; Hänger enden als `himalaya_timeout`, nie als stiller Hänger;
+  optional `folders` verpflichtend machen oder den Hinweis dokumentieren; kein Retry.
+
+#### B-9 — Standalone-`verify` kann bei gemischten Batches keinen Handoff freigeben
+
+- `_verified_execute_candidate` (`core/modes/verify.py`) verlangt gleichzeitig
+  `result_ids == verify_scope_ids` **und** bei `pending`-Kandidat
+  `candidate_ids == verify_scope_ids`.
+- Der `synthesis_candidate` enthält konstruktiv nur `project`/`topic`-Items. Ein
+  Batch mit Archiv-/Newsletter-Item (hier Env 9400, `kind: archive`) besitzt daher
+  keine Scope-Menge, die beide Gleichheiten erfüllt:
+  - Scope = alle 10 Items → Kandidat 9 ≠ 10 → `synthesis_handoff: not_required`,
+    kein `completion_report`.
+  - Scope = Kandidat 9 Items → `results` 10 ≠ 9 → ebenfalls `not_required`.
+- Beide Läufe sind im Consumer-Archiv belegt
+  (`2026-09-22-batch-1-batch-verify.json` und
+  `2026-09-22-batch-1-batch-verify-candidate-scope.json`). Nur `reconcile` — bzw.
+  der interne `pipeline`-Pfad, der diesen Gate nicht durchläuft — setzt den Handoff
+  auf `pending` (9 Items, `completion_report: completed`).
+- Zusätzlich: Der Runner-Envelope trägt im `data`-Objekt kein `mode`/`ok`; ein
+  gespeichertes Execute-Ergebnis wird daher auch über `batch_file` nicht als
+  Provenienz akzeptiert (`batch_data.get("mode") == "execute"`).
+- Anforderung: Teilmengen-Semantik (`candidate_ids ⊆ verify_scope_ids ==
+  result_ids`) oder explizite, dokumentierte Scope-Bildung; Tests für gemischte
+  Batches; der Runner-Envelope soll als Provenienz nutzbar sein oder seine exakt
+  erwartete Form ist zu dokumentieren.
+
+**Paket-Zuordnung der Nachträge:** B-8 → neues Paket `MD-R6` (Client-Deadlines und
+Hänger-Freiheit), B-9 und B-10 → neues Paket `MD-R7` (Standalone-Verify-Provenienz,
+Scope-Bildung und Evidence-Prüfung). Beide Pakete sind unabhängig von `MD-R1`–
+`MD-R5` (keine gemeinsamen Dateien mit `MD-R1`/`MD-R2`; `MD-R7` berührt `verify.py`)
+und werden in die gemeinsame Abnahme aufgenommen.
+
+#### B-10 — `verify`-Evidence-Fallback prüft einen leeren Root und kann nicht `False` melden
+
+- Ohne explizite `evidence`-Spezifikation (z. B. bei reinen `message_ids`) globt
+  `core/modes/verify.py` `memory/references/**/evidence/*.md` und liefert
+  `in_evidence = None`, wenn nichts gefunden wird.
+- Im consumerenden Workspace existiert unter `memory/references/` **kein**
+  `evidence`-Ordner (0 Dateien); die kanonische Evidenz liegt unter
+  `memory/evidence/**`.
+- Folge: Ein `verify` mit reinen Message-IDs meldete 10/10 „consistent“, ohne die
+  Evidence-Ebene zu prüfen (`in_evidence: None` für alle Items). Die
+  `reconcile`-Referenz führte denselben Batch anschließend korrekt mit `ev: True`.
+- Anforderung: Fallback an das kanonische Evidenz-Layout angleichen (oder eine
+  explizite `evidence`-Map verlangen); fehlende kanonische Evidenz muss `False`
+  ergeben und `consistent` beeinflussen; Test.
+
+### Out of Scope
+
+- Änderung realer Mailbox-Ordner oder Umlabeln bereits gerouteter Mails.
+- Neue Katalogfelder jenseits der vorhandenen `routing_priority`/`do_not_route_if`.
+- Promotions-, Cloud-, Task- oder Dispositionspfade (FR-09/FR-10/FR-16 bleiben
+  unberührt); `attachment_evaluation` bleibt ohne Promotion-/Export-Seiteneffekt.
+- Automatische Bereinigung bestehender Quarantäne-Runs (weiterhin explizite
+  Control-Plane-Aktion).
