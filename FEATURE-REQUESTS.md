@@ -25,7 +25,7 @@ verbindliche Paketkarten.
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ✅ Abgeschlossen; MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims) implementiert, getestet und paketabgenommen; **FR-13 geschlossen** | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation; Quarantäne-Paketierung: sechs Owner unter `core/quarantine/`, `sys.modules`-aliasende Shims an alten Pfaden, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, 804 Tests grün | keins |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
-| `FR-16` | ⬜ geplant; reine Dokumentations-/Metrik-Hygiene aus der MD-M2-Retrospektive | Identifikation der Metrik-Vervielfältigung und des monolithischen Tabellenzellen-Anti-Patterns | `DOC-M1` (Metrik-SSOT), `DOC-M2` (Zellen-Splitting); siehe Paketkarte unten |
+| `FR-16` | ⬜ geplant; reine Dokumentations-/Metrik-Hygiene aus der MD-M2-Retrospektive | Identifikation der Metrik-Vervielfältigung, des monolithischen Tabellenzellen-Anti-Patterns und des realen Metrik-Drifts durch FR-17 (128→141 Dateien, 48→57 Testmodule, 804→896 Tests) | `DOC-M1` (Metrik-SSOT + Drift-Korrektur), `DOC-M2` (Zellen-Splitting), `DOC-M3` (Stale-Reference-Fix); Paketkarte unten |
 | `FR-17` | ✅ Abgeschlossen für B-1–B-10; MD-R1–R7 vollständig implementiert, getestet und paketabgenommen; **Nachtrag B-11 offen** | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
 
 
@@ -997,6 +997,17 @@ FR-13 ist mit MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung) abgeschlosse
 **Status:** ⬜ Geplant. Reine Dokumentationsmaßnahme ohne Verhaltens- oder
 Schnittstellenänderung. Quelle: Retrospektive des Runs
 `daedalus/runs/2026-09-22-office-intelligence-fr13-md-m2` (FR-13/MD-M2).
+
+**Planungsupdate (2026-09-22, nach FR-17):** Die ursprüngliche Spezifikation
+nannte als Zielmetrik „128 Dateien, 804 Tests, 17 Pflichtfelder" (Stand nach
+MD-M2). FR-17 hat seither 9 Produktions-/Testdateien ergänzt und die Suite auf
+896 Tests gebracht. FR-16 setzt daher die **zum Umsetzungszeitpunkt reale
+Git-Index-Metrik** als kanonischen Wert ein (per `git ls-files` vor jedem
+Dokumentations-Commit frisch erhoben): aktuell **141 getrackte Dateien
+(mail-desk), 65 unter `scripts/` (55 unter `scripts/core`, 6 Quarantäne-Owner),
+57 Testmodule, 896 Tests**. Die DOC-M1-Checkliste verpflichtet künftig auf
+Frische-Erhebung statt auf eingefrorene Literale; historische Snapshots in
+Ledgern bleiben als bewusst eingefrorene Abnahmewerte gekennzeichnet.
 
 ### Problem & Motivation
 
