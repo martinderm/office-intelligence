@@ -27,7 +27,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (128 Dateien)│       │ (65 Dateien) │       │ - project-catalog-entry  │
+│ (141 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -47,13 +47,51 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 
 | Sub-Skill | Komplexitäts-Klasse | Dateien / Tests | Dokumentationspfad | Primäre Aufgabe |
 | :--- | :--- | :--- | :--- | :--- |
-| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | 128 getrackte Dateien (`git ls-files`)<br>65 getrackte Dateien unter `scripts/` (davon 55 unter `scripts/core` inkl. `core/quarantine/`)<br>48 Testmodule<br>896 Tests | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, versionierter Quarantäneindex (MD-Q1/MD-Q2/MD-C1 Schema 1 mit additiven Coverage-Feldern), Coverage-Vertrag (MD-C1), Disposition, Verifiable Receipts & Discard-Recovery-Journal (MD-Q3), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundene Anhang-Evaluierung mit linearer Fetch/Extraktions/Handoff-Komposition (FR-15/MD-E1-T05) und fail-closed Fehler-/Reason-Matrix (FR-15/MD-E1-T06), MD-E1-Paketabnahme mit hermetischem End-to-End-Nachweis Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07), standardmäßig aktive `draft`-Integration mit fail-closed-Härtung, kanonischer Handoff-Revalidierung und deterministischer `already_fetched`-Idempotenz (FR-15/MD-E2-T01/T02), opt-in `inspect`-`manifest_proposal` (FR-15/MD-E2-T03), MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` (FR-15/MD-E2-T04), Classifier-Entflechtung mit kanonischen Matching-Ownern und kontrahierter Facade (FR-13/MD-M1-T01–T04), Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims (FR-13/MD-M2, FR-13 geschlossen), katalogtreues Routing mit `routing_priority`, Exaktcode-vor-Kontakt und `do_not_route_if` für Projekte und Topics inkl. Newsletter-Mapping (FR-17/MD-R1), DNR-gegatete Sibling-Kohärenz (FR-17/MD-R2), begrenzte Client-Deadlines für mehrordrige Himalaya-Operationen (FR-17/MD-R6), teilmengenfähiger Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback (FR-17/MD-R7), deterministische MIME-Inventarkette mit Feldkonsistenz-Gate (FR-17/MD-R3), Inline-Bild-Policy für die automatische Auswertung (FR-17/MD-R4), Vertragsdokumentation und Laufzeit-Hygiene (FR-17/MD-R5), Himalaya-Adapter, Dossier-Synthese. |
-| [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | 65 Dateien<br>41 Tests | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), Cloud-Sync. |
+| [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | Kurzstatus: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) · aktuelle Metrik: [§3](#3-navigationsmatrix-der-paket-map) | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, Quarantäne, Receipts, Draft-/Evaluierungs-Pipeline, Classifier-Routing, Himalaya-Adapter, Dossier-Synthese — Detailstatus je FR-Paket: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) |
+| [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | 28 Dateien<br>138 Tests | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), Cloud-Sync. |
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
 | [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 2 Dateien | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung. |
 | [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Evidenz-Überführung einzelner Meetings (Fireflies, Zoom). |
 | [`event-documentation`](../../skills/event-documentation/SKILL.md) | Schlank (Paket-Map) | 9 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Umfassende Dokumentation von Konferenzen und Symposien. |
+
+
+#### 2.1 Mail-Desk – Verantwortlichkeits-Detail (Status je FR-Paket)
+
+Kanonische Langfassung der mail-desk-Zelle der Komplexitätsmatrix (§2). Die Zelle
+in §2 nennt nur Kurzstatus + Anker; Änderungen an Verantwortlichkeiten erfolgen
+ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
+
+- **Mail-Ingest, Klassifikation, versionierter Quarantäneindex** (MD-Q1/MD-Q2/MD-C1
+  Schema 1 mit additiven Coverage-Feldern), **Coverage-Vertrag** (MD-C1),
+  **Disposition, Verifiable Receipts & Discard-Recovery-Journal** (MD-Q3).
+- **Kontextgebundene Receipt-Klassen-Grenze** mit interner Maschinen-Autorisierung
+  (FR-15/MD-E1-T03).
+- **Policygebundene Anhang-Evaluierung** mit linearer Fetch/Extraktions/Handoff-
+  Komposition (FR-15/MD-E1-T05) und **fail-closed Fehler-/Reason-Matrix**
+  (FR-15/MD-E1-T06).
+- **MD-E1-Paketabnahme** mit hermetischem End-to-End-Nachweis
+  Inspect → Fetch → Extract → Handoff und Zero-Write-Garantie (FR-15/MD-E1-T07).
+- **Standardmäßig aktive `draft`-Integration** mit fail-closed-Härtung, kanonischer
+  Handoff-Revalidierung und deterministischer `already_fetched`-Idempotenz
+  (FR-15/MD-E2-T01/T02).
+- **Opt-in `inspect`-`manifest_proposal`** (FR-15/MD-E2-T03).
+- **MD-E2-Paketabnahme** mit hermetischem Real-Pfad-Nachweis bis zum persistierten
+  Projekt-`DraftManifest` (FR-15/MD-E2-T04).
+- **Classifier-Entflechtung** mit kanonischen Matching-Ownern und kontrahierter
+  Facade (FR-13/MD-M1-T01–T04).
+- **Quarantäne-Paketierung** unter `core/quarantine/` mit identitätserhaltenden
+  Legacy-Shims (FR-13/MD-M2, FR-13 geschlossen).
+- **Katalogtreues Routing** mit `routing_priority`, Exaktcode-vor-Kontakt und
+  `do_not_route_if` für Projekte und Topics inkl. Newsletter-Mapping (FR-17/MD-R1).
+- **DNR-gegatete Sibling-Kohärenz** (FR-17/MD-R2).
+- **Begrenzte Client-Deadlines** für mehrordrige Himalaya-Operationen (FR-17/MD-R6).
+- **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
+  Evidence-Fallback (FR-17/MD-R7).
+- **Deterministische MIME-Inventarkette** mit Feldkonsistenz-Gate (FR-17/MD-R3).
+- **Inline-Bild-Policy** für die automatische Auswertung (FR-17/MD-R4).
+- **Vertragsdokumentation und Laufzeit-Hygiene** (FR-17/MD-R5).
+- Himalaya-Adapter, Dossier-Synthese.
 
 ---
 
@@ -64,6 +102,35 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 | **Nomen** (Struktur & Zustand) | [`objects.md`](objects.md) | Konsumierende Datenzonen, globale Kataloge (`projects.json`, `topics.json`), Lock-Leases, CLI-Envelopes. |
 | **Verben** (Ablauf & Transformation) | [`processes.md`](processes.md) | Desk-übergreifende Workflows, Handoffs (Mail → Task, Meeting → Katalog, Cloud → Mirror). |
 | **Seiteneffekte** (Umwelt & Grenzen) | [`effects.md`](effects.md) | Bundle-weite Invarianten, Lock-Zwang, Data-Zone-Containment, Zero-Mutation im Bundle. |
+
+### 3.1 Metrik-SSOT: Kanonische Stellen und Änderungscheckliste (DOC-M1, FR-16)
+
+Die Git-Index-Metrik (getrackte Dateien je Sub-Skill, `scripts/`- bzw. `core`-Zerlegung,
+Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepflegt**:
+
+- **SSOT je Ebene:** Die L2-Subsystem-Map (`skills/<desk>/docs/system-map/README.md`,
+  Kopfzeile) ist die kanonische Stelle für die Sub-Skill-Metrik. Die L1-Komplexitätsmatrix
+  (§2) referenziert die L2-Karte oder nennt keine Zerlegung; historische Snapshots in den
+  FR-Ledgern (`FEATURE-REQUESTS.md`, `FEATURE-REQUEST-PROGRESS.md`) sind **bewusst
+  eingefrorene Abnahmewerte** und werden nicht fortgeschrieben (sie tragen den
+  Zeitstempel ihrer Paketabnahme).
+- **Frische-Erhebungsregel:** Vor jedem Dokumentations-Commit, der eine Metrik nennt,
+  wird der Wert frisch per `git ls-files` bzw. Testlauf erhoben — nie aus einer anderen
+  Dokumentstelle kopiert.
+
+**Änderungscheckliste (alle Stellen je Metrik-Änderung, deterministisch abzuarbeiten):**
+
+1. L2-Subsystem-Map, Kopfzeile (z. B. `skills/mail-desk/docs/system-map/README.md` §Kopf).
+2. L2-Subsystem-Map, ASCII-Diagramm in §1 (Datei-/Mode-Zerlegung), falls die Zerlegung
+   sich ändert.
+3. L1 `docs/system-map/README.md` §2-Komplexitätsmatrix: nur die Zelle „Dateien / Tests"
+   des betroffenen Sub-Skills (Zerlegung nur via Anker auf die L2-Karte).
+4. L1 §1-Systemübersicht-Diagramm (Sub-Skill-Datei-Anzahl in Box-Labels).
+5. `SKILL.md`-Stellen mit Feld-/Schemazählern (z. B. Pflichtfelder des Quarantäneindex).
+6. FR-Ledger **nur für den neuen Paketabschluss** als neuer, mit Datum eingefrorener
+   Snapshot; keine Altzeilen umbiegen.
+7. Verifikation: `git grep` über die neuen Literale muss genau die Stellen der Checkliste
+   treffen; historische Snapshots bleiben absichtlich unangetastet.
 
 ---
 

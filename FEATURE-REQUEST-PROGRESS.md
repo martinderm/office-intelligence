@@ -247,11 +247,15 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
   abgeschlossen und paketabgenommen (siehe oben).
-- **FR-16:** geplant — Dokumentations- und Metrik-Hygiene aus der MD-M2-Retrospektive
-  (`DOC-M1` Metrik-SSOT, `DOC-M2` Zellen-Splitting, `DOC-M3` Stale-Reference-Fix der
-  Daedalus-`memory/references/office-intelligence.md`). Reine Dokumentationsmaßnahme;
-  Paketkarte in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md). Wird **nach FR-17** umgesetzt,
-  da die MD-R-Pakete dieselben Metrik-/Map-Stellen bewegen.
+- **FR-16:** abgeschlossen (2026-09-22) - `DOC-M1` Metrik-SSOT (L2-Kopfzeile kanonisch,
+  Änderungscheckliste in L1 §3.1, Frische-Erhebung + Freeze-Marker für historische
+  Snapshots; L2 auf 141/65/55/57/896), `DOC-M2` Zellen-Splitting (L1-mail-desk-Zelle
+  2.159 → 509 Zeichen, L2-Quarantäne-Zelle 3.744 → 1.465 Zeichen; Langfassungen als
+  §2.1 mit Ankern, Null-Informationsverlust), `DOC-M3` Daedalus-Referenz korrigiert
+  (141/896/17 bzw. 28/138; keine „257/>489/16"-Vorkommnisse mehr in aktiven Stellen);
+  `SKILL.md` nennt 17 Pflichtfelder. Verifikation: Mail-Desk 896/896, Cloud-Atlas
+  138/138, compileall, `git diff --check` grün. Reine Dokumentationsmaßnahme; Paketkarte
+  und Umsetzungsnachweis in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
   `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
   `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in

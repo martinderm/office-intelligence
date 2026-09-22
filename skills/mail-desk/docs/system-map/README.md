@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 896 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-16/MD-D2): 141 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner); 57 Testmodule; 896 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -20,12 +20,12 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py                                │
-│  ├─ Core Domain: scripts/core/ (48 getrackte Dateien)                  │
+│  ├─ Core Domain: scripts/core/ (55 getrackte .py-Dateien)              │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
 │  │   ├─ quarantine/ (6 kanonische Quarantäne-Owner + Legacy-Shims)      │
 │  │   └─ sent_indexer.py (Sent-Mails & Reply-Erkennung)                 │
-│  └─ Modes: scripts/core/modes/ (14 Workflow-Treiber)                   │
+│  └─ Modes: scripts/core/modes/ (13 Workflow-Treiber)                   │
 │      ├─ pipeline.py / execute.py / verify.py                           │
 │      ├─ dossier.py / dossier_apply.py / dossier_synthesis.py           │
 │      └─ reconcile.py (Read-Only Drift-Erkennung)                       │
@@ -48,7 +48,51 @@
 
 | Komponente | Dateipfade | Primäre Verantwortlichkeit |
 | :--- | :--- | :--- |
-| **Quarantäne-, Coverage- & Recovery-Engine** | [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py)<br>[`scripts/core/quarantine/attachment_handoff.py`](../scripts/core/quarantine/attachment_handoff.py)<br>[`scripts/core/quarantine/attachment_filing.py`](../scripts/core/quarantine/attachment_filing.py)<br>[`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)<br>[`scripts/mail_desk_attachment_quarantine_index.py`](../scripts/mail_desk_attachment_quarantine_index.py)<br>[`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py)<br>[`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py)<br>[`scripts/core/quarantine/attachment_extract.py`](../scripts/core/quarantine/attachment_extract.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py)<br>[`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py)<br>[`scripts/core/attachment_authorization.py`](../scripts/core/attachment_authorization.py)<br>[`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py) | Schema 1 (17 Pflichtfelder + bis zu 6 additive optionale Coverage-Felder) Quarantäneindex, Trennung von technischem Status (`analysis_status: "completed"`) und inhaltlicher Deckung (`analysis_completeness`, `truncation_stage`), Append-only Dispositionslog, verifizierbare Receipt-Contracts, persistiertes Apply-/Recovery-Journal mit monotoner Zustandsmaschine (`prepared` bis `completed`), Fehler-Resumability via `last_successful_state`, atomare Inventar-Mutation via `_QuarantineInventoryLock`, SHA-256 Disk-Verifikation, Symlink- & 0x400-Reparse-Point-Blockade, 10-Vorbedingungen Discard-Apply, bounded read-only Tracked-Quarantäne-Preflight vor jedem Quarantäne-/Derivat-Write (FR-15/MD-E1-T02), kontextgebundene Receipt-Klassen-Grenze mit interner Maschinen-Autorisierung (FR-15/MD-E1-T03), policygebundener Anhang-Evaluierungs-Orchestrator `attachment_evaluate` mit staged `attachment_evaluation`, linearer Fetch/Extraktions/Handoff-Komposition und validiertem `attachment_analysis_handoff` (FR-15/MD-E1-T05) sowie geschlossener Fail-closed-Fehler-/Reason-Matrix (FR-15/MD-E1-T06). MD-E1 ist mit **FR-15/MD-E1-T07** als Paket abgenommen: ein hermetischer End-to-End-Test belegt Inspect → policygebundenen Fetch → Extraktion → validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; Promotion und Export besitzen weiterhin keinen MD-E1-Laufzeitpfad. **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation**; mit **FR-15/MD-E2-T01** sind die `draft`-Happy-Path-Verdrahtung, `--evaluate-attachments`/`--no-evaluate-attachments` und die einmalige Neuklassifikation samt additiver `DraftManifest`-Installation implementiert, und mit **FR-15/MD-E2-T02** ist diese Grenze fail-closed gehärtet (bounded Outcome-Matrix, kanonische Handoff-Revalidierung, AST-/Katalog-/Hash-gebundene `classifier_revision`, deterministische `already_fetched`-Idempotenz) sowie der opt-in `inspect`-`manifest_proposal` mit wiederverwendetem Item-Flow und `manifest_file`-Grenze (FR-15/MD-E2-T03) und die MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` (FR-15/MD-E2-T04) implementiert; **FR-15 geschlossen**. Seit **FR-13/MD-M2** sind die sechs Quarantäne-Owner kanonisch unter `scripts/core/quarantine/` paketiert; die alten `scripts/core/attachment_*.py`-Pfade sind dünne `sys.modules`-aliasende Shims (Objektidentität, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, `classifier_revision` unrotiert). |
+| **Quarantäne-, Coverage- & Recovery-Engine** | [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py)<br>[`scripts/core/quarantine/attachment_handoff.py`](../scripts/core/quarantine/attachment_handoff.py)<br>[`scripts/core/quarantine/attachment_filing.py`](../scripts/core/quarantine/attachment_filing.py)<br>[`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)<br>[`scripts/mail_desk_attachment_quarantine_index.py`](../scripts/mail_desk_attachment_quarantine_index.py)<br>[`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py)<br>[`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py)<br>[`scripts/core/quarantine/attachment_extract.py`](../scripts/core/quarantine/attachment_extract.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py)<br>[`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py)<br>[`scripts/core/attachment_authorization.py`](../scripts/core/attachment_authorization.py)<br>[`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py) | Kurzstatus: Schema-1-Quarantäneindex (17 Pflichtfelder), Coverage-Vertrag, Receipts & Recovery-Journal, MD-E1/MD-E2-Grenzen, Quarantäne-Paketierung — Langfassung: [§2.1](#21-quarantine-coverage--recovery-engine--verantwortlichkeits-detail) |
+
+
+#### 2.1 Quarantäne-, Coverage- & Recovery-Engine – Verantwortlichkeits-Detail
+
+Kanonische Langfassung der Quarantäne-Zelle der Modul-Topographie (§2). Die Zelle
+in §2 nennt nur Kurzstatus + Anker; Änderungen an Verantwortlichkeiten erfolgen
+ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
+
+- **Schema 1 (17 Pflichtfelder + bis zu 6 additive optionale Coverage-Felder)**
+  Quarantäneindex; Trennung von technischem Status (`analysis_status: "completed"`)
+  und inhaltlicher Deckung (`analysis_completeness`, `truncation_stage`).
+- **Append-only Dispositionslog, verifizierbare Receipt-Contracts**, persistiertes
+  Apply-/Recovery-Journal mit monotoner Zustandsmaschine (`prepared` bis
+  `completed`), Fehler-Resumability via `last_successful_state`.
+- **Atomare Inventar-Mutation** via `_QuarantineInventoryLock`, SHA-256
+  Disk-Verifikation, Symlink- & 0x400-Reparse-Point-Blockade, 10-Vorbedingungen
+  Discard-Apply.
+- **Bounded read-only Tracked-Quarantäne-Preflight** vor jedem
+  Quarantäne-/Derivat-Write (FR-15/MD-E1-T02).
+- **Kontextgebundene Receipt-Klassen-Grenze** mit interner Maschinen-Autorisierung
+  (FR-15/MD-E1-T03).
+- **Policygebundener Anhang-Evaluierungs-Orchestrator `attachment_evaluate`** mit
+  staged `attachment_evaluation`, linearer Fetch/Extraktions/Handoff-Komposition
+  und validiertem `attachment_analysis_handoff` (FR-15/MD-E1-T05) sowie geschlossener
+  Fail-closed-Fehler-/Reason-Matrix (FR-15/MD-E1-T06).
+- **MD-E1 ist mit FR-15/MD-E1-T07 als Paket abgenommen:** ein hermetischer
+  End-to-End-Test belegt Inspect → policygebundenen Fetch → Extraktion → validierten
+  Handoff bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes;
+  Promotion und Export besitzen weiterhin keinen MD-E1-Laufzeitpfad.
+- **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation;**
+  mit FR-15/MD-E2-T01 sind die `draft`-Happy-Path-Verdrahtung,
+  `--evaluate-attachments`/`--no-evaluate-attachments` und die einmalige
+  Neuklassifikation samt additiver `DraftManifest`-Installation implementiert, und mit
+  FR-15/MD-E2-T02 ist diese Grenze fail-closed gehärtet (bounded Outcome-Matrix,
+  kanonische Handoff-Revalidierung, AST-/Katalog-/Hash-gebundene
+  `classifier_revision`, deterministische `already_fetched`-Idempotenz) sowie der
+  opt-in `inspect`-`manifest_proposal` mit wiederverwendetem Item-Flow und
+  `manifest_file`-Grenze (FR-15/MD-E2-T03) und die MD-E2-Paketabnahme mit hermetischem
+  Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest`
+  (FR-15/MD-E2-T04) implementiert; **FR-15 geschlossen**.
+- **Seit FR-13/MD-M2** sind die sechs Quarantäne-Owner kanonisch unter
+  `scripts/core/quarantine/` paketiert; die alten `scripts/core/attachment_*.py`-Pfade
+  sind dünne `sys.modules`-aliasende Shims (Objektidentität, Monkeypatch-Seams und
+  `core.__init__`-Re-Exports unverändert, `classifier_revision` unrotiert).
 
 ---
 
