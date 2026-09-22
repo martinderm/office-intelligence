@@ -160,6 +160,10 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
   abgeschlossen und paketabgenommen (siehe oben).
+- **FR-16:** geplant — Dokumentations- und Metrik-Hygiene aus der MD-M2-Retrospektive
+  (`DOC-M1` Metrik-SSOT, `DOC-M2` Zellen-Splitting, `DOC-M3` Stale-Reference-Fix der
+  Daedalus-`memory/references/office-intelligence.md`). Reine Dokumentationsmaßnahme;
+  Paketkarte in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
   `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
   `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in

@@ -25,6 +25,7 @@ verbindliche Paketkarten.
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` |
 | `FR-13` | ✅ Abgeschlossen; MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims) implementiert, getestet und paketabgenommen; **FR-13 geschlossen** | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation; Quarantäne-Paketierung: sechs Owner unter `core/quarantine/`, `sys.modules`-aliasende Shims an alten Pfaden, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, 804 Tests grün | keins |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
+| `FR-16` | ⬜ geplant; reine Dokumentations-/Metrik-Hygiene aus der MD-M2-Retrospektive | Identifikation der Metrik-Vervielfältigung und des monolithischen Tabellenzellen-Anti-Patterns | `DOC-M1` (Metrik-SSOT), `DOC-M2` (Zellen-Splitting); siehe Paketkarte unten |
 
 
 ```text
@@ -987,3 +988,75 @@ Operator-Docs, beide System-Map-Ebenen sowie diese Status-/Fortschrittsdatei syn
 nachgezogen; die Git-Index-Metrik ist auf 111 getrackte Dateien / 54 unter `scripts/`
 (43 unter `scripts/core`) / 42 Testmodule / 706 Tests aktualisiert. **FR-15 ist geschlossen;
 FR-13 ist mit MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung) abgeschlossen und geschlossen.**
+
+---
+
+## FR-16: Dokumentations- und Metrik-Hygiene aus der MD-M2-Retrospektive
+
+**Status:** ⬜ Geplant. Reine Dokumentationsmaßnahme ohne Verhaltens- oder
+Schnittstellenänderung. Quelle: Retrospektive des Runs
+`daedalus/runs/2026-09-22-office-intelligence-fr13-md-m2` (FR-13/MD-M2).
+
+### Problem & Motivation
+
+Während der MD-M2-Paketierung offenbarte die System-Map- und Ledger-Pflege drei
+systematische Dokumentationsrisiken, die Fehlversuche und Copy-Paste-Fehler
+verursachen:
+
+1. **Metrik-Vervielfältigung ohne SSOT:** Die Git-Index-Metrik (Dateien,
+   `scripts/`-Anzahl, `scripts/core`-Anzahl, Testmodule, Testanzahl; aktuell
+   128/65/55/48/804) steht in mindestens sechs Dateien (L1 `docs/system-map/README.md`
+   §2, L2 `skills/mail-desk/docs/system-map/README.md` Kopfzeile, beide FR-Ledger,
+   Progress-Datei). Jede Änderung ist manuelles Copy-Paste-Roulette über alle Stellen;
+   im MD-M2-Run mussten sechs Stellen einzeln gefunden und synchronisiert werden, ohne
+   Checkliste.
+2. **Monolithische Tabellenzellen:** Die L1/L2-README-Komplexitätsmatrizen enthalten
+   Zellen mit >2.000 Zeichen (L1 §2 mail-desk-Zelle, L2 §2 Quarantäne-Engine-Zelle).
+   Sie widersprechen dem eigenen Anti-Context-Bloat-Ziel der System Map, sind mit
+   Editier-Tools kaum atomar editierbar (im MD-M2-Run vier fehlgeschlagene Edit-Versuche
+   an einer einzigen Zeile) und verschleiern die Struktur (Verantwortlichkeiten als
+   Fließtext-Wand statt zitierbarer Sub-Abschnitte).
+3. **Bekannter Stale-Verweis im Konsumenten-Workspace:** Daedalus'
+   `memory/references/office-intelligence.md` (föderierte Referenz auf dieses Bundle)
+   nennt weiterhin „257 Dateien, >489 Tests, 16 Pflichtfelder" für den Mail-Desk;
+   real sind es 128 Dateien, 804 Tests, 17 Pflichtfelder. Der Verweis wurde von zwei
+   unabhängigen Subagenten-Reviews als driftend gemeldet, aber nie korrigiert. Ein
+   Konsumenten-Workspace, der von dieser Datei ausgeht, trifft Fehlentscheidungen.
+
+### Ziel & Invarianten
+
+- **DOC-M1 — Metrik-SSOT:** Die Git-Index-Metrik erhält eine einzige kanonische
+  Definition pro Ebene (L1-Kopfzeile referenziert die L2-Kopfzeile oder umgekehrt;
+  Ledger referenzieren „siehe System Map" statt Literalwerte, außer in
+  paketabnahme-spezifischen historischen Snapshots, die bewusst eingefroren sind).
+  Dazu eine Checkliste aller Metrik-Stellen (mindestens: L1 README §2, L2 README
+  Kopfzeile, `FEATURE-REQUESTS.md` Statuszeilen, `FEATURE-REQUEST-PROGRESS.md`) im
+  L1-README §3 (Navigationsmatrix), damit jede künftige Metrik-Änderung deterministisch
+  nachvollziehbar ist.
+- **DOC-M2 — Zellen-Splitting:** Die >2.000-Zeichen-Zellen der L1- und L2-Komplexitätsmatrizen
+  werden gekappt: Die Tabellenzelle behält maximal einen Kurzstatus (≤ 200 Zeichen) plus
+  Link auf einen eigenen Sub-Abschnitt im selben Dokument, der die Verantwortlichkeiten
+  strukturiert (ggf. eigene Liste statt Fließtext). Keine Informationslöschung —
+  Umstrukturierung mit identischem Informationsgehalt, zitierfähigen Ankern.
+- **DOC-M3 — Stale-Reference-Fix:** Korrektur der Daedalus-seitigen
+  `memory/references/office-intelligence.md` auf die realen Werte
+  (128/804/17); da diese Datei außerhalb dieses Repositories liegt, wird sie als
+  Orchestrator-Aktion im Daedalus-Workspace durchgeführt und hier nur als erledigt
+  vermerkt (Föderations-Disziplin: Quell-Map ist SSOT, Referenz folgt).
+
+### Abnahme
+
+- Alle Metrik-Stellen zeigen identische Werte; die Stellen-Checkliste existiert und
+  deckt alle Vorkommnisse ab (per `git grep` über die Zahlen nachweisbar).
+- Keine Tabellenzelle der L1/L2-Komplexitätsmatrizen überschreitet ~200 Zeichen
+  Status plus Link.
+- Die Daedalus-Referenz zeigt 128/804/17; nachweislich keine „257/>489/16"-Vorkommnisse
+  mehr.
+- Dokumentations-Validierung, Skill-Katalog, Workspace-Validator und
+  `git diff --check` grün; keine Code- oder Teständerungen.
+
+### Out of Scope
+
+- Jede inhaltliche Neuschreibung von Verantwortlichkeitsbeschreibungen.
+- Änderungen an Test- oder Produktionscode.
+- Automatische Metrik-Generierung per Skript (möglicher künftiger FR).
