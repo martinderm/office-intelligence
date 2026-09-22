@@ -176,6 +176,17 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   jedem In-Process-Endzustand aufgeräumt, Atomarität erhalten (B-7 behoben);
   Newsletter-Regel konsistent. Review `approve`. Commit folgt im Paket-Commit.
   **FR-17 ist mit MD-R5 geschlossen.** Mail-Desk-Suite: 896/896 grün.
+  **Reale Verifikation (User, 2026-09-22):** 3× identischer `draft 10` über
+  die nachfolgenden 10 Mails — kein stiller Hänger (B-8), kein Inline-PNG-Fetch
+  (B-5, `IMAGE.png` korrekt als `no_allowed_attachments` ausgeschlossen),
+  Feldkonsistenz und Notes-Wortwahl sauber, keine `progress_*.tmp`-Rückstände
+  (B-7). Der B-3-Timeout-Fall blieb fail-closed in Review ohne MD-E2-Fetch und
+  wurde im Folgelauf korrekt aufgelöst; der Determinismus-Vertrag ist
+  entsprechend präzisiert (Lauf-In-Determinismus verbindlich, Byte-Gleichheit
+  über transiente Infrastruktur-Unterschiede hinweg bewusst nicht). Drei
+  beobachtete Grenzrouten (9408 eucen Highlights, 9419 BeyondTrust, 9412
+  LE-LLL) sind Consumer-Katalog-Pflege, kein Bundle-Defekt. **FR-17 ist
+  abnahmebestätigt.**
 
   `compileall`, `validate-skills-catalog.py`, `validate_workspace.py --json` und
   `git diff --check` sauber. Git-Index-Metrik: 128 getrackte Dateien

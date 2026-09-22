@@ -1360,6 +1360,29 @@ und getestet.
 
 ### Gemeinsame Abnahme (FR-17)
 
+**Determinismus-Vertrag (Präzisiert nach dem realen BOKU-Verifikationslauf
+2026-09-22, 3× `--draft 10` über die nachfolgenden 10 Mails):**
+
+- Verbindlich ist **Lauf-In-Determinismus**: gleicher Lauf-Input (Mailbox-Zustand,
+  Kataloge, Quoten) ergibt ein byte-identisches Manifest; Receipts binden an genau
+  das Manifest, gegen das reviewt wurde; `already_fetched`-Idempotenz gilt je
+  Nachricht; Item-Felder sind innerhalb eines Laufs konsistent.
+- **Nicht** verbindlich ist Byte-Gleichheit über Läufe mit unterschiedlichen
+  transienten Infrastruktur-Ergebnissen (z. B. ein Full-Read-Timeout in Lauf 1,
+  Erfolg in Lauf 2): ein transienter Infrastrukturfehler erzeugt ein fail-closed
+  Review-Item (kein Same-Run-Nachlagern, kein widersprüchliches Item) und wird im
+  Folgelauf regulär aufgelöst. Retries bleiben verboten (B-8-Klasse). Der reale
+  Lauf bestätigte beide Seiten: der Timeout-Fall blieb sauber in Review ohne
+  MD-E2-Fetch (Trigger-Gate wirksam), der Folgelauf klassifizierte korrekt.
+- Reale Reproduktion 2026-09-22: kein stiller Hänger (B-8 wirksam), kein
+  Inline-PNG-Fetch (B-5 wirksam), Feldkonsistenz und Notes-Wortwahl sauber, keine
+  `progress_*.tmp`-Rückstände (B-7 wirksam). Katalog-/Pflichtabstimmungen der
+  drei beobachteten Fehl- bzw. Grenzrouten (9408 „eucen Highlights" →
+  `netzwerke`; 9419 BeyondTrust → `BOKU-Organisation`; 9412 „LE-LLL" → `AIxLLL`)
+  sind **Consumer-Katalog-Pflege** im konsumierenden Workspace und kein
+  Bundle-Code-Defekt.
+
+
 - Fokussierte Tests je Paket, vollständige Mail-Desk-Suite, `compileall`,
   Skill-Katalog-/Workspace-Validierung und `git diff --check` grün.
 - Reproduktionsnachweis: Das 10-Mail-Manifest der Testbatch ist nach `MD-R1`–`MD-R4`
