@@ -14,7 +14,10 @@ import time
 from typing import Any, Callable, Mapping
 
 from ..attachment_evaluation import attachment_evaluate, decision_triggers_evaluation
-from ..attachment_reclassification import install_draft_attachment_evaluations
+from ..attachment_reclassification import (
+    discard_inventory_contradicting_evaluations,
+    install_draft_attachment_evaluations,
+)
 from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
 from ..himalaya import fetch_raw_message_eml, get_single_email_details, run_himalaya
@@ -195,6 +198,10 @@ def run_inspect_mode(
             lease_id=config.get("lease_id"),
             conversation_id=config.get("conversation_id"),
         )
+        # Field-consistency gate (FR-17/MD-R3): the proposal manifest carries the same
+        # attachments[]/attachment_status/attachment_error and attachment_evaluation/files[]
+        # contract as a written draft manifest, so it receives the same invariant.
+        discard_inventory_contradicting_evaluations(manifest.get("items", []))
         output_data["manifest_proposal"] = manifest
         if manifest_file:
             manifest_path = Path(manifest_file).expanduser().resolve()

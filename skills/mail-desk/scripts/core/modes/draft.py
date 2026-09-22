@@ -7,7 +7,10 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..attachment_evaluation import attachment_evaluate, decision_triggers_evaluation
-from ..attachment_reclassification import install_draft_attachment_evaluations
+from ..attachment_reclassification import (
+    discard_inventory_contradicting_evaluations,
+    install_draft_attachment_evaluations,
+)
 from ..classifier import classify_email, draft_manifest
 from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
@@ -142,6 +145,11 @@ def run_draft_mode(
         lease_id=config.get("lease_id"),
         conversation_id=config.get("conversation_id"),
     )
+    # Field-consistency gate (FR-17/MD-R3): keep attachments[]/attachment_status/
+    # attachment_error and attachment_evaluation/files[] mutually consistent before the
+    # manifest contract is attached.  The MD-E2 trigger gate already prevents a
+    # contradiction; this guard keeps the invariant true for every composed manifest.
+    discard_inventory_contradicting_evaluations(manifest.get("items", []))
     manifest = add_draft_contract(
         manifest,
         expected_count=expected_count,

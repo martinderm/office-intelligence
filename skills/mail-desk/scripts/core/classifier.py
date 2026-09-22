@@ -711,7 +711,11 @@ def classify_email(
             "review_reason": "attachment_inventory_unavailable",
         }
         att_err = inventory_error or email.get("attachment_error") or "MIME attachment inventory unavailable"
-        notes = f"[Review: Anhangs-Inventarisierung nicht verfügbar ({att_err})] {notes}".strip()
+        # ``notes`` must derive exclusively from the final decision.  The decision was just
+        # overwritten with a fail-closed ``unknown``/``unclassified`` Review outcome, so any
+        # project/topic assignment wording accumulated by an earlier match is discarded and
+        # only the review reason wording survives.
+        notes = f"[Review: Anhangs-Inventarisierung nicht verfügbar ({att_err})]"
         evidence_spec = None
         synthesis_targets = []
         bound_attachments = []

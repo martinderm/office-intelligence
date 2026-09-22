@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 871 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 879 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -297,3 +297,27 @@ inkonsistent (Befund B-10 behoben), fehlender Root bleibt der H5-None-Fall. Nach
 [`tests/test_verify_scope_and_evidence.py`](../tests/test_verify_scope_and_evidence.py)
 (7 Tests, Red-Gate `MD-R7-red-001`: 4 Assertion-Failures).
 Mail-Desk-Suite: 871/871 grün.
+
+## 12. FR-17/MD-R3 — Deterministische MIME-Inventarkette und Feldkonsistenz (MD-R3 abgeschlossen)
+
+Mit **FR-17/MD-R3** gilt je Item und Lauf genau ein kanonischer MIME-Export:
+der MD-E2-Trigger-Gate ([`_evaluate_item`](../scripts/core/attachment_reclassification.py),
+nach dem Deaktiviert-Guard) überspringt Items mit
+`attachment_status == attachment_inventory_unavailable` oder gesetztem
+`attachment_error` und liefert ein begrenztes
+`failed/fetch_failed/not_applicable`-Terminal **vor** Source-Pairing und
+`read_raw_mime` — ein transienter Export-Timeout erzeugt damit ein
+definiertes, wiederholbares Review-Ergebnis ohne Same-Run-Nachlagern (Befund B-3
+behoben). Der Konsistenz-Gate
+[`discard_inventory_contradicting_evaluations`](../scripts/core/attachment_reclassification.py)
+läuft nach der Installation und vor `add_draft_contract` (draft) bzw.
+`manifest_proposal` (inspect) und ersetzt eine widersprüchliche
+`completed`+nicht-leere `files[]`-Evaluation neben unverfügbarer
+Inventur durch denselben begrenzten Terminal (Befund B-4-Fläche behoben; kein
+`AttachmentReclassificationContractError` für Policy-Inkonsistenz). Notes
+entstehen ausschließlich aus der finalen Entscheidung: unbekannte Items tragen nur
+die Review-Wortwahl, keine Zuordnungsformulierung. `derive_evaluation_run_id`
+und die `already_fetched`-Idempotenz sind unverändert. Nachweis:
+[`tests/test_draft_mime_inventory_determinism.py`](../tests/test_draft_mime_inventory_determinism.py)
+(8 Tests, Red-Gate `MD-R3-red-001`: 5 Assertion-Failures).
+Mail-Desk-Suite: 879/879 grün.

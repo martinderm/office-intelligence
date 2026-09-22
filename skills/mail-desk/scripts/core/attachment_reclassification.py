@@ -115,6 +115,11 @@ _EVAL_RUN_ID_PREFIX = "eval"
 _EVAL_RUN_ID_DIGEST_CHARS = 32
 _EVAL_RUN_ID_MAX_LENGTH = 100
 
+#: The classifier-level status for a mail whose MIME inventory could not be verified.
+#: Such an item is already a bounded, fail-closed Review outcome: it carries no trusted
+#: inventory, so MD-E2 must not run a second canonical export for it in the same run.
+ATTACHMENT_INVENTORY_UNAVAILABLE = "attachment_inventory_unavailable"
+
 
 # ==============================================================================
 # Bounded contract exceptions
@@ -413,6 +418,46 @@ def _force_review_inbox(item: dict[str, Any], reason: str) -> None:
     decision["confidence"] = "low"
 
 
+def _inventory_is_unavailable(item: Mapping[str, Any]) -> bool:
+    """True when the item's MIME inventory could not be verified (fail-closed review item).
+
+    The classifier marks such an item with ``attachment_inventory_unavailable`` and/or an
+    ``attachment_error``.  The state is item-local and needs no second MIME export.
+    """
+    if str(item.get("attachment_status") or "").strip() == ATTACHMENT_INVENTORY_UNAVAILABLE:
+        return True
+    return bool(item.get("attachment_error"))
+
+
+def discard_inventory_contradicting_evaluations(
+    items: Sequence[dict[str, Any]],
+) -> None:
+    """Discard a completed MD-E2 install that contradicts an unavailable inventory in place.
+
+    ``attachments[]``/``attachment_status``/``attachment_error`` and
+    ``attachment_evaluation``/``files[]`` must stay mutually consistent: a fail-closed item
+    (``attachment_inventory_unavailable`` or an ``attachment_error``) must never coexist with
+    a completed ``attachment_evaluation`` that carries a non-empty ``files[]``.  The MD-E2
+    trigger gate in :func:`_evaluate_item` already prevents the contradiction from arising;
+    this post-install invariant keeps the field contract true for every caller that composes
+    a manifest from the installed items.  The result stays a bounded, item-local terminal
+    (never a contract error), so no batch is ever aborted by a policy inconsistency.
+    """
+    for item in items:
+        if not isinstance(item, dict) or not _inventory_is_unavailable(item):
+            continue
+        evaluation = item.get("attachment_evaluation")
+        if not isinstance(evaluation, Mapping):
+            continue
+        if (
+            str(evaluation.get("status") or "") == STATUS_COMPLETED
+            and list(evaluation.get("files") or [])
+        ):
+            item["attachment_evaluation"] = _terminal(
+                STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE
+            )
+
+
 # ==============================================================================
 # Item-source pairing
 # ==============================================================================
@@ -487,6 +532,17 @@ def _evaluate_item(
     if not evaluate_attachments:
         return (
             _terminal(STATUS_SKIPPED, REASON_EVALUATION_DISABLED, AUTHORIZATION_NOT_APPLICABLE),
+            None,
+        )
+
+    # A classifier-level fail-closed item whose MIME inventory could not be verified already
+    # carries a bounded Review decision and no trusted inventory.  A second canonical export
+    # inside the same run would only repeat the failing I/O, so the trigger gate short-circuits
+    # to a bounded, non-completed terminal and leaves the item's review decision untouched
+    # (exactly one canonical MIME export per item per run).
+    if _inventory_is_unavailable(item):
+        return (
+            _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE),
             None,
         )
 
@@ -714,11 +770,13 @@ def install_draft_attachment_evaluations(
 
 __all__ = [
     "ALLOWED_DRAFT_ATTACHMENT_EVALUATION_REASONS",
+    "ATTACHMENT_INVENTORY_UNAVAILABLE",
     "AttachmentReclassificationContractError",
     "CLASSIFIER_RULES_VERSION",
     "REASON_EVALUATION_DISABLED",
     "classifier_rules_fingerprint",
     "compute_classifier_revision",
     "derive_evaluation_run_id",
+    "discard_inventory_contradicting_evaluations",
     "install_draft_attachment_evaluations",
 ]
