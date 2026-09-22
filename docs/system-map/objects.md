@@ -86,7 +86,7 @@ Zentrale Registrierung aller aktiven und archivierten Projekte.
 * **Schema-Version:** `Schema v3`
 * **Schema-Kern (Projekt-Ebene):**
   * Pflichtfelder: `id` (Lowercase Slug), `title`, `mailbox_folder` (Pfad im Mailbox-Account).
-  * Root-Felder: `kuerzel`, `project_website`, `project_reference`, `laufzeit`, `gesamtbudget`, `institution_budget`, `boku_budget`, `reference_md`, `description`, `updated_at`.
+  * Root-Felder: `kuerzel`, `project_website`, `project_reference`, `laufzeit`, `gesamtbudget`, `institution_budget`, `boku_budget`, `reference_md`, `aliases`, `keywords`, `domains`, `contacts`, `typical_subject_patterns`, `routing_priority` (Zahl), `do_not_route_if` (String-Array), `description`, `updated_at`.
 * **Workpackages (`workpackages`):**
   * Pflichtfelder: `id` (Slug, z. B. `wp1-management`), `title`, `status` (Enum: `active`, `completed`, `planned`, `paused`).
   * Felder: `number` (positive Zahl), `lead`, `boku_role`, `aliases`, `keywords`, `contacts`, `tasks`, `deliverables`.
@@ -101,13 +101,11 @@ Zentrale Registrierung aller aktiven und archivierten Projekte.
 Hierarchisches Wissensregister über Themengebiete, Technologien und Domänen.
 
 * **Dateipfad:** `memory/references/topics/topics.json`
-* **Schema-Kern:**
-  * `topics`: Array von Topic-Objekten:
-    * `id`: Eindeutiger Identifier
-    * `name`: Fachbegriff
-    * `aliases`: Array von alternativen Bezeichnungen / Schreibweisen
-    * `subtopics`: Hierarchische Unterthemen
-    * `tags`: Semantische Schlagworte zur Klassifikation
+* **Validierungsskript:** *(kein eigenes Skript; `topics.json` hat keinen Validator)*
+* **Schema-Kern (Topic-Ebene):**
+  * Pflichtfelder: `id` (Lowercase Slug), `title`, `mailbox_folder`.
+  * Root-Felder: `reference_md`, `aliases`, `keywords`, `domains`, `contacts`, `typical_subject_patterns`, `subtopics`, `description`, `routing_priority` (Zahl), `do_not_route_if` (String-Array), `updated_at`, `schema_version`.
+  * `subtopics`: Array von Subtopic-Objekten mit `id`, `title`, optional `aliases`, `keywords`, `typical_subject_patterns`, `contacts`, `status` (`active` oder statuslos = aktiv).
 
 ---
 
