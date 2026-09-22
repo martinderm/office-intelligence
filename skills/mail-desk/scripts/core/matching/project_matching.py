@@ -43,6 +43,7 @@ from .date_parser import parse_date_to_year_month
 __all__ = [
     "select_project_match",
     "evaluate_do_not_route_signal",
+    "evaluate_thread_sibling_do_not_route",
     "match_thread_project_inheritance",
     "resolve_full_read_project_evidence",
     "_artifact_text_matches",
@@ -519,6 +520,51 @@ def select_project_match(
             best_match = {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
 
     return best_match
+
+
+def evaluate_thread_sibling_do_not_route(
+    projects: list[dict[str, Any]],
+    parent_folder: str,
+    *,
+    subject: str,
+    from_str: str,
+    to_str: str,
+    cc_str: str = "",
+) -> dict[str, Any] | None:
+    """Return the catalog-only suppression row for a do-not-route references sibling.
+
+    Only an unambiguous parent folder -- exactly one catalog project whose
+    ``mailbox_folder`` equals it -- is evaluated, so an ambiguous mapping can never
+    suppress a sibling auto-route.  The current mail's subject and from/to/cc headers
+    are matched through the shared :func:`evaluate_do_not_route_signal` predicate; body
+    and preview text are never consulted.  ``None`` means the sibling is not gated, so
+    the facade keeps the DNR-free parent-folder inheritance.  A match returns the
+    bounded, catalog-data-only ``{"kind", "id", "suppression_reason"}`` row that the
+    facade surfaces on ``suppressed_candidates``.
+    """
+    requested = parent_folder.lower()
+    owners: list[dict[str, Any]] = []
+    for project in projects or []:
+        project_id = str(project.get("id", "")).strip()
+        kuerzel = str(project.get("kuerzel", "")).strip()
+        mailbox_folder = project.get("mailbox_folder") or f"Projekte/{kuerzel or project_id.upper()}"
+        if str(mailbox_folder).lower() == requested:
+            owners.append(project)
+    if len(owners) != 1:
+        return None
+    exclusion = evaluate_do_not_route_signal(
+        owners[0],
+        subject=subject,
+        header_text=_header_scope_text(from_str, to_str, cc_str),
+        from_str=from_str,
+    )
+    if exclusion is None:
+        return None
+    return {
+        "kind": "project",
+        "id": str(owners[0].get("id", "")).strip(),
+        "suppression_reason": exclusion["reason"],
+    }
 
 
 def match_thread_project_inheritance(

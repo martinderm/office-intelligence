@@ -191,3 +191,47 @@ def topic_hochschule_international(**overrides: Any) -> dict[str, Any]:
 def boku_analog_projects() -> list[dict[str, Any]]:
     """Return the B-1 catalog order in which usage-ng precedes atael."""
     return [project_usage_ng(), project_atael()]
+
+
+#: Mailbox folders reused by the thread/sibling final-index builders.
+ATAEL_MAILBOX_FOLDER = "Projekte/In Ausarbeitung/ATAEL"
+USAGE_NG_MAILBOX_FOLDER = "Projekte/In Ausarbeitung/USAGE-NG"
+ORION_MAILBOX_FOLDER = "Projekte/ORION"
+UNOWNED_MAILBOX_FOLDER = "Projekte/Archiv/Unbekannt"
+
+#: Reference message ids for the hermetic thread/sibling chains.
+PARENT_MESSAGE_ID = "parent.9388@example.test"
+SIBLING_MESSAGE_ID = "sibling.9387@example.test"
+UNKNOWN_MESSAGE_ID = "unknown.9999@example.test"
+
+
+def _normalized_message_id(value: str) -> str:
+    """Strip surrounding angle brackets and lowercase, mirroring the index owner."""
+    token = str(value).strip()
+    while token.startswith("<") and token.endswith(">") and len(token) >= 2:
+        token = token[1:-1].strip()
+    return token.lower()
+
+
+def final_location_entry(
+    message_id: str,
+    final_folder: str,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Return one final-location-index entry in the schema the classifier reads."""
+    value: dict[str, Any] = {
+        "message_id": _normalized_message_id(message_id),
+        "final_folder": final_folder,
+        "backend": "himalaya",
+    }
+    value.update(overrides)
+    return value
+
+
+def final_location_index(*entries: dict[str, Any]) -> dict[str, Any]:
+    """Return a final-location-index dict keyed by normalized message_id."""
+    items = {
+        _normalized_message_id(str(entry.get("message_id", ""))): entry
+        for entry in entries
+    }
+    return {"schema_version": 1, "updated_at": None, "items": items}

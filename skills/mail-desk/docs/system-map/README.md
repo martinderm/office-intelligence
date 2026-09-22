@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 836 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`: 128 getrackte Dateien; 65 getrackte Dateien unter `scripts/`, davon 55 unter `scripts/core` inkl. `scripts/core/quarantine/`; 48 Testmodule; 848 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -214,14 +214,14 @@ Mit **FR-17/MD-R1** ist die Routing-Ordnung katalogtreu und deterministisch
 ([matching/project_matching.py](../scripts/core/matching/project_matching.py),
 [matching/topic_matching.py](../scripts/core/matching/topic_matching.py)):
 select_project_match bewertet alle nicht-unterdrückten Kandidaten, gewichtet sie
-(subject-exact = 3, pattern = 2, body-contact = 1) und wählt nach
+(subject-exact = 3, pattern = 2, body-contact = 1) und wählt nach
 (strength desc, routing_priority desc, catalog_index asc) —
 routing_priority ist damit
 erstmals wirksam (Befund B-1 behoben), fehlende oder ungültige Werte (string/bool) gelten
 als neutral-niedrigste und fallen auf die stabile Katalogreihenfolge zurück. Exaktcode-/
 Betrefftreffer schlagen reine Kontakt-/Domänentreffer anderer Projekte unabhängig von der
 Priorität (Stärke dominiert). Der do_not_route_if-Prädikatsblock ist als
-evaluate_do_not_route_signal kanonischer Owner in project_matching.py und wird von
+`evaluate_do_not_route_signal` kanonischer Owner in `project_matching.py` und wird von
 topic_matching.py importiert: do_not_route_if gilt nun für **Projekte und Topics** mit
 identischer Semantik — einmal vor der Root-Schleife (2a) und einmal vor der
 Subtopic-Fallback-Schleife. Das
@@ -234,8 +234,8 @@ werden deterministisch auf classifier.NEWSLETTER_TARGET_FOLDER (Newsletter,
 copy_as_move,
 review_required: false) abgebildet, außer ein starker nicht-unterdrückter
 Kandidat gewinnt; nicht-Newsletter-Unterdrückung endet mit Review-Grund
-(do_not_route_suppressed) in INBOX (keep_in_folder). Thread-Vererbung und die
-ambiguity-Policy bleiben unverändert. Struktureller Nachweis:
+(`do_not_route_suppressed`) in INBOX (keep_in_folder). Thread-Vererbung und die
+`ambiguity`-Policy bleiben unverändert. Struktureller Nachweis:
 [tests/test_classifier_routing_priority.py](../tests/test_classifier_routing_priority.py)
 (18 Tests) und [tests/test_classifier_do_not_route.py](../tests/test_classifier_do_not_route.py)
 (14 Tests) mit hermetischen BOKU-Analog-Fixtures
@@ -244,3 +244,21 @@ Kandidat gewinnt; nicht-Newsletter-Unterdrückung endet mit Review-Grund
 daedalus/runs/2026-09-22-office-intelligence-fr17-routing-determinism dokumentiert.
 Die classifier_revision-Rotation (ASTs von drei der fünf gebundenen Regelmodule geändert)
 ist genau einmal und genehmigt. Mail-Desk-Suite: 836/836 grün.
+
+## 9. FR-17/MD-R2 — Thread-/Sibling-Kohärenz (MD-R2 abgeschlossen)
+
+Mit **FR-17/MD-R2** ist die Thread-Kohärenz DNR-gegate: Direkte
+`in_reply_to`-Elternvererbung bleibt unverändert DNR-frei; nur die
+
+`references`-Ketten-Auflösung eines Siblings (Final-Location-Elternordner →
+exakter, eindeutiger Katalogcode) wird über
+[`evaluate_thread_sibling_do_not_route`](../scripts/core/matching/project_matching.py)
+(DNR-Owner `project_matching.py`) geprüft. Ein unterdrückter Sibling bleibt
+unbekannt/`INBOX`/`keep_in_folder` mit `review_reason`
+(`do_not_route_suppressed`), genau einer katalogdaten-only `suppressed_candidates`-Zeile und ohne Thread-Vererbungsanspruch — kein Reroute.
+Saubere Siblings erben unverändert; widersprüchliche Ketten, unbekannte/
+INBOX-/unowned Eltern und body-only-Tokens verhalten sich wie zuvor; aus
+Mailinhalt wird nie ein Ziel abgeleitet. Struktureller Nachweis:
+[`tests/test_classifier_thread_sibling_coherence.py](../tests/test_classifier_thread_sibling_coherence.py)
+(12 Tests, Red-Gate `MD-R2-red-001`: 4 Assertion-Failures).
+Mail-Desk-Suite: 848/848 grün.

@@ -157,6 +157,25 @@ def _full_read_failure(
     return preview_item
 
 
+def _reference_message_ids(raw: object) -> list[str]:
+    """Extract the ordered, unique normalized message ids from one reference header."""
+    values: list[str] = []
+    if isinstance(raw, str) and raw:
+        values.append(raw)
+    elif isinstance(raw, list):
+        values.extend(str(value) for value in raw if str(value))
+    mids: list[str] = []
+    combined = " ".join(values)
+    if combined:
+        for match in re.finditer(r"<([^>]+)>|([^\s<>]+@[^\s<>]+)", combined):
+            candidate = match.group(1) or match.group(2)
+            if candidate:
+                normalized = normalize_message_id(candidate)
+                if normalized and normalized not in mids:
+                    mids.append(normalized)
+    return mids
+
+
 def classify_email_two_pass(
     email: dict[str, Any],
     *,
@@ -359,83 +378,81 @@ def classify_email(
     # 0. Thread-Inheritance Fast-Path (In-Reply-To & References against Master Index)
     # --------------------------------------------------------------------------
     thread_matched = False
-    in_reply_to_raw = email.get("in_reply_to", "")
-    references_raw = email.get("references", "")
-
-    raw_ref_strs = []
-    if isinstance(in_reply_to_raw, str) and in_reply_to_raw:
-        raw_ref_strs.append(in_reply_to_raw)
-    elif isinstance(in_reply_to_raw, list):
-        raw_ref_strs.extend([str(x) for x in in_reply_to_raw if str(x)])
-
-    if isinstance(references_raw, str) and references_raw:
-        raw_ref_strs.append(references_raw)
-    elif isinstance(references_raw, list):
-        raw_ref_strs.extend([str(x) for x in references_raw if str(x)])
-
-    ref_mids: list[str] = []
-    combined_refs = " ".join(raw_ref_strs)
-    if combined_refs:
-        for match in re.finditer(r"<([^>]+)>|([^\s<>]+@[^\s<>]+)", combined_refs):
-            cand = match.group(1) or match.group(2)
-            if cand:
-                nc = normalize_message_id(cand)
-                if nc and nc not in ref_mids:
-                    ref_mids.append(nc)
+    sibling_blocked = False
+    in_reply_to_mids = _reference_message_ids(email.get("in_reply_to", ""))
+    references_mids = _reference_message_ids(email.get("references", ""))
 
     indexed_items = (final_index or {}).get("items", {})
     parent_item = None
     parent_mid = None
-    for r_mid in ref_mids:
-        if r_mid in indexed_items:
-            cand_parent = indexed_items[r_mid]
-            cand_folder = cand_parent.get("final_folder")
-            if cand_folder and cand_folder != "INBOX":
-                parent_item = cand_parent
-                parent_mid = r_mid
-                break
+    parent_via_references = False
+    for source_mids, via_references in ((in_reply_to_mids, False), (references_mids, True)):
+        for r_mid in source_mids:
+            if r_mid in indexed_items:
+                cand_parent = indexed_items[r_mid]
+                cand_folder = cand_parent.get("final_folder")
+                if cand_folder and cand_folder != "INBOX":
+                    parent_item = cand_parent
+                    parent_mid = r_mid
+                    parent_via_references = via_references
+                    break
+        if parent_item:
+            break
 
     if parent_item:
         parent_folder = parent_item.get("final_folder", "")
-        # Parent-folder mapping stays ordered project-before-topic; owners build the state.
-        thread_context = {
-            "workspace_root": ws,
-            "email": email,
-            "needs_reply": needs_reply,
-            "parent_mid": str(parent_mid or ""),
-        }
-        inheritance = project_matching.match_thread_project_inheritance(
-            projects or [], parent_folder, **thread_context
-        )
-        if inheritance is None:
-            inheritance = topic_matching.match_thread_topic_inheritance(
-                topics or [], parent_folder, **thread_context
+        if parent_via_references:
+            sibling_candidate = project_matching.evaluate_thread_sibling_do_not_route(
+                projects or [],
+                parent_folder,
+                subject=subject,
+                from_str=from_str,
+                to_str=to_str,
+                cc_str=cc_str,
             )
-        if inheritance is not None:
-            selected_project = inheritance.get("project")
-            selected_topic = inheritance.get("topic")
-            target_folder = inheritance["target_folder"]
-            decision = inheritance["decision"]
-            notes = inheritance["notes"]
-            evidence_spec = inheritance["evidence"]
-            thread_matched = True
-        else:
-            target_folder = parent_folder
-            decision = {
-                "kind": "other",
-                "id": parent_folder,
-                "confidence": "high",
+            if sibling_candidate is not None:
+                suppressed_candidates.append(sibling_candidate)
+                sibling_blocked = True
+        if not sibling_blocked:
+            # Parent-folder mapping stays ordered project-before-topic; owners build the state.
+            thread_context = {
+                "workspace_root": ws,
+                "email": email,
                 "needs_reply": needs_reply,
+                "parent_mid": str(parent_mid or ""),
             }
-            notes = f"Thread-Vererbung via In-Reply-To ({str(parent_mid or '')[:20]}...) zu {parent_folder}."
-            thread_matched = True
+            inheritance = project_matching.match_thread_project_inheritance(
+                projects or [], parent_folder, **thread_context
+            )
+            if inheritance is None:
+                inheritance = topic_matching.match_thread_topic_inheritance(
+                    topics or [], parent_folder, **thread_context
+                )
+            if inheritance is not None:
+                selected_project = inheritance.get("project")
+                selected_topic = inheritance.get("topic")
+                target_folder = inheritance["target_folder"]
+                decision = inheritance["decision"]
+                notes = inheritance["notes"]
+                evidence_spec = inheritance["evidence"]
+                thread_matched = True
+            else:
+                target_folder = parent_folder
+                decision = {
+                    "kind": "other",
+                    "id": parent_folder,
+                    "confidence": "high",
+                    "needs_reply": needs_reply,
+                }
+                notes = f"Thread-Vererbung via In-Reply-To ({str(parent_mid or '')[:20]}...) zu {parent_folder}."
+                thread_matched = True
 
     # --------------------------------------------------------------------------
     # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     matched_project = None
 
-    if not thread_matched:
+    if not thread_matched and not sibling_blocked:
         # Root project-catalog matching is owned by core.matching.project_matching.
         root_project_match = select_project_match(
             projects or [],
@@ -481,7 +498,7 @@ def classify_email(
     # --------------------------------------------------------------------------
     # 2. Dynamic Topic Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
-    if not thread_matched and not matched_project:
+    if not thread_matched and not sibling_blocked and not matched_project:
         # Root topic-catalog matching and the unique-subtopic fallback/override are owned
         # by core.matching.topic_matching.  The exact winning catalog object crosses the
         # seam so the detail step below needs no second inline topic-catalog lookup.
@@ -511,7 +528,7 @@ def classify_email(
     # --------------------------------------------------------------------------
     # 2-sys. Automated System Notifications & Junk Filtering
     # --------------------------------------------------------------------------
-    if not thread_matched and not matched_project and not matched_topic:
+    if not thread_matched and not sibling_blocked and not matched_project and not matched_topic:
         if (
             re.search(r"ist dem Meeting beigetreten|has joined the meeting", subject, re.IGNORECASE)
             and ("zoom.us" in from_str.lower() or "zoom" in full_text_lower)
