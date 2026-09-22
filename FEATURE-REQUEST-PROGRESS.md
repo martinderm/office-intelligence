@@ -159,7 +159,31 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 - **FR-17 (aktiv, 2026-09-22 gestartet):** Routing-Katalogtreue, Batch-Determinismus und
   Vertragshygiene — 10 reproduzierte Befunde (B-1 bis B-10) aus der BOKU-Testbatch
   (10 Mails, Envelope 9387–9404, Account `BOKU-MARTIN`), Paketkarte in
-  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) § FR-17. Verbindliche Ausführungsentscheidungen
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) § FR-17.
+  **`MD-R1` (abgeschlossen und paketabgenommen):** `select_project_match` wählt nach
+  `(Signalstärke desc, routing_priority desc, Katalogreihenfolge)` — `routing_priority`
+  ist wirksam (B-1 behoben: Exaktcode schlägt Kontakttreffer unabhängig von der
+  Priorität), fehlende/ungültige Werte gelten als neutral-niedrigste. Der
+  `do_not_route_if`-Prädikatsblock ist als `evaluate_do_not_route_signal` kanonischer
+  Owner in `core/matching/project_matching.py` und von `topic_matching.py` importiert;
+  `do_not_route_if` gilt für Projekte und Topics (einmal vor 2a, einmal vor dem
+  Subtopic-Fallback); das `newsletter`-Prädikat ist strikt Betreff-/Header-scoped
+  (der `list.`-Token bleibt from/to-only); unterdrückte Kandidaten erscheinen als
+  `decision.suppressed_candidates[]` (Katalogdaten only); Newsletter-unterdrückte Mails
+  mappen deterministisch auf `classifier.NEWSLETTER_TARGET_FOLDER` (`Newsletter`,
+  `copy_as_move`, `review_required: false`), außer ein starker nicht-unterdrückter
+  Kandidat gewinnt; nicht-Newsletter-Unterdrückung endet mit Review-Grund
+  (`do_not_route_suppressed`) in `INBOX` (`keep_in_folder`). Thread-Vererbung und
+  `ambiguity`-Policy unverändert. TDD-Nachweis: Red-Gate `MD-R1-red-001` (7+6
+  Assertion-Failures in `test_classifier_routing_priority.py` /
+  `test_classifier_do_not_route.py`, hermetische BOKU-Analog-Fixtures in
+  `routing_fixtures.py`), nach `MD-R1-prod-001` und Fix-Runde 1 (`MD-R1-fix1-prod-001`,
+  `list.`-Token header-only zurückgestuft, Strength-dominates-Priority-Regressionstest,
+  Intent-revealing Rename) Review `MD-R1-fix1-review-001` = `approve` mit null Findings.
+  Vollständige Mail-Desk-Suite 836/836 grün (aktueller Nachweis, kein permanenter
+  Abnahmewert); Compileall, Skill-Katalog, Workspace-Validator und `git diff --check`
+  sauber. `classifier_revision` rotierte genau einmal (genehmigt). Verbleibende FR-17-
+  Pakete: MD-R2 → MD-R6 → MD-R7 → MD-R3 → MD-R4 → MD-R5. Verbindliche Ausführungsentscheidungen
   (Human-Gate-Protokoll 2026-09-22, Orchestrator): (1) Newsletter-Zielpfad **deterministisch**
   — durch `newsletter`-DNR unterdrückte Mails werden auf den bestehenden `Newsletter`-Pfad
   abgebildet (`copy_as_move`), im Zweifel/fall-abhängig Review-Grund + `suppressed_candidates`
@@ -174,7 +198,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   — null Mailbox-Zugriffe in Tests. (6) Write-Scope-Pfade seit MD-M2: `core/quarantine/`-
   Owner; alte `core/attachment_*.py`-Pfade sind Shims. (7) Metrik-Stellen werden pro Paket
   synchron nachgezogen (128/65/55/48/804-Baseline); FR-16 konsolidiert danach.
-- **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-09:** MD-P1 — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md).
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
   abgeschlossen und paketabgenommen (siehe oben).

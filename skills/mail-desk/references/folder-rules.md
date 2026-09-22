@@ -21,6 +21,21 @@ Do not invent permanent folder names if a catalog entry exists. If a catalog ent
 | Unclear, no reply | leave in INBOX + review |
 | Spam quarantine notification, no legit signal visible in listed quarantined mail | `Junk` |
 | Spam quarantine notification, plausible legit signal visible in listed quarantined mail | leave in `INBOX` + review |
+| Newsletter-suppressed (topic/project `do_not_route_if` matches `newsletter` in subject/headers) | `Newsletter` (`copy_as_move`); review only if another strong candidate exists |
+| Other `do_not_route_if` suppression (`no-reply`, `mailing list`, automatic replies) | leave in `INBOX` + review |
+
+## Suppression (do_not_route_if)
+
+Catalog entries can declare `do_not_route_if` predicates (project and topic level). A
+declared predicate that matches the mail's subject or header signals (subject, from, to,
+cc — never body text) suppresses that candidate; suppressed candidates are surfaced as
+`decision.suppressed_candidates[]` (catalog data: `kind`, `id`, `suppression_reason`) and
+never silently dropped. A `mailing list` declaration intentionally still suppresses on a
+subject that literally contains the phrase "mailing list"; the bare `list.` token matches
+only from/to headers, never the subject. Newsletter-suppressed mails map deterministically
+to the `Newsletter` folder (`copy_as_move`, `review_required: false`) unless a strong
+non-suppressed candidate wins; all other suppressions keep the mail in `INBOX` with a
+review reason. Thread (parent-folder) inheritance never consults `do_not_route_if`.
 
 ## Backend mapping
 

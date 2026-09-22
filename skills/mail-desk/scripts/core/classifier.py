@@ -73,6 +73,11 @@ FULL_BODY_ACTION_REQUEST = re.compile(
     re.IGNORECASE,
 )
 
+#: The one documented special routing target for newsletter-suppressed mail (FR-17/MD-R1).
+#: No project/topic catalog entry declares it; a ``newsletter`` ``do_not_route_if``
+#: suppression with no stronger candidate maps deterministically onto this existing folder.
+NEWSLETTER_TARGET_FOLDER = "Newsletter"
+
 
 def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load projects and topics from catalogs in workspace memory."""
@@ -333,6 +338,7 @@ def classify_email(
     selected_topic: dict[str, Any] | None = None
     synthesis_targets: list[dict[str, str]] = []
     preselected_subtopic_resolution: dict[str, Any] | None = None
+    suppressed_candidates: list[dict[str, Any]] = []
 
     # Check for reply requirement directed at Martin
     needs_reply = False
@@ -439,6 +445,8 @@ def classify_email(
             from_str=from_str,
             to_str=to_str,
             parties=parties,
+            cc_str=cc_str,
+            suppressed_candidates=suppressed_candidates,
         )
         if root_project_match:
             matched_project = root_project_match
@@ -485,6 +493,8 @@ def classify_email(
             from_str=from_str,
             to_str=to_str,
             parties=parties,
+            cc_str=cc_str,
+            suppressed_candidates=suppressed_candidates,
         )
         if matched_topic:
             target_folder = matched_topic["folder"]
@@ -539,6 +549,31 @@ def classify_email(
                 "needs_reply": False,
             }
             notes = f"Spam/Phishing-Klassifikation: {subject}"
+
+    # --------------------------------------------------------------------------
+    # 2-dnr. Catalog do_not_route_if outcome (FR-17 / MD-R1)
+    # --------------------------------------------------------------------------
+    if decision.get("kind") == "unknown" and suppressed_candidates:
+        if any(row.get("suppression_reason") == "newsletter" for row in suppressed_candidates):
+            target_folder = NEWSLETTER_TARGET_FOLDER
+            decision = {
+                "kind": "unknown",
+                "id": "unclassified",
+                "confidence": "low",
+                "needs_reply": needs_reply,
+                "review_required": False,
+            }
+        else:
+            target_folder = "INBOX"
+            decision = {
+                "kind": "unknown",
+                "id": "unclassified",
+                "confidence": "low",
+                "needs_reply": needs_reply,
+                "review_required": True,
+                "review_reason": "do_not_route_suppressed",
+            }
+        notes = ""
 
     # --------------------------------------------------------------------------
     # 2a. Project artifact matching (FR-02a)
@@ -663,6 +698,9 @@ def classify_email(
         evidence_spec = None
         synthesis_targets = []
         bound_attachments = []
+
+    if suppressed_candidates:
+        decision["suppressed_candidates"] = suppressed_candidates
 
     action = {
         "type": "copy_as_move" if target_folder != "INBOX" else "keep_in_folder",

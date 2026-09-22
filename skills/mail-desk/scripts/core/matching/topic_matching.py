@@ -45,7 +45,12 @@ from typing import Any, Mapping
 from ..common import normalize_message_id, resolve_evidence_dir
 from . import ambiguity
 from .date_parser import parse_date_to_year_month
-from .project_matching import _artifact_text_matches, _evidence_read_escalation
+from .project_matching import (
+    _artifact_text_matches,
+    _evidence_read_escalation,
+    _header_scope_text,
+    evaluate_do_not_route_signal,
+)
 
 __all__ = [
     "select_topic_match",
@@ -625,14 +630,20 @@ def select_topic_match(
     from_str: str,
     to_str: str,
     parties: str,
+    cc_str: str = "",
+    suppressed_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """Run the ordered root topic-catalog loop plus the unique-subtopic fallback/override.
 
     Extracted verbatim from the inline ``classify_email`` logic so the facade keeps the
     same catalog order, first-match semantics, high/medium confidence policy and the
-    unique-subtopic fallback/override.  Returns
-    ``{"id", "folder", "title", "confidence", "catalog", "preselected_subtopic"}`` for the
-    winning catalog entry, where ``catalog`` is the exact matched topic object and
+    unique-subtopic fallback/override.  Before stage 2a and before the fallback loop each
+    topic is checked against the shared, subject/header-scoped ``do_not_route_if``
+    predicate, so a suppressed topic can never win through either path; suppressed topics
+    are reported on ``suppressed_candidates`` as catalog-only
+    ``{"kind", "id", "suppression_reason"}`` rows when a collector list is supplied.
+    Returns ``{"id", "folder", "title", "confidence", "catalog", "preselected_subtopic"}``
+    for the winning catalog entry, where ``catalog`` is the exact matched topic object and
     ``preselected_subtopic`` is the resolved subtopic selection (or ``None``), or ``None``
     when no entry matches.
     """
@@ -643,7 +654,27 @@ def select_topic_match(
     matched_catalog: dict[str, Any] | None = None
     subj_norm = re.sub(r"[-_]+", " ", subject)
 
-    for top in (topics or []):
+    suppressed_reasons: dict[int, str] = {}
+    header_text = _header_scope_text(from_str, to_str, cc_str)
+    for catalog_index, top in enumerate(topics or []):
+        if not isinstance(top, dict):
+            continue
+        exclusion = evaluate_do_not_route_signal(
+            top, subject=subject, header_text=header_text, from_str=from_str
+        )
+        if exclusion is None:
+            continue
+        suppressed_reasons[catalog_index] = exclusion["reason"]
+        if suppressed_candidates is not None:
+            suppressed_candidates.append({
+                "kind": "topic",
+                "id": str(top.get("id", "")).strip(),
+                "suppression_reason": exclusion["reason"],
+            })
+
+    for catalog_index, top in enumerate(topics or []):
+        if catalog_index in suppressed_reasons:
+            continue
         t_id = top.get("id", "").strip()
         title = top.get("title", "").strip()
         aliases = [str(a).strip() for a in top.get("aliases", []) if str(a).strip()]
@@ -717,7 +748,9 @@ def select_topic_match(
     # keyword from another topic; explicit parent names always remain stronger.
     fallback_matches: list[tuple[int, tuple[dict[str, Any], dict[str, Any], int]]] = []
     fallback_ambiguity = False
-    for top in (topics or []):
+    for catalog_index, top in enumerate(topics or []):
+        if catalog_index in suppressed_reasons:
+            continue
         if not isinstance(top, dict):
             continue
         resolution = _select_topic_subtopic(

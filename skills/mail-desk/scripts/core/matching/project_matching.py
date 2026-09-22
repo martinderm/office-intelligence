@@ -9,14 +9,22 @@ slice that previously lived inline in :mod:`core.classifier`:
   titles/context labels it feeds (:func:`_catalog_artifact_title`,
   :func:`_project_context_label`);
 * the shared, bounded evidence-read escalation helper (:func:`_evidence_read_escalation`)
-  that the topic evidence builders also reuse; and
+  that the topic evidence builders also reuse;
+* the shared subject/header-scoped ``do_not_route_if`` predicate
+  (:func:`evaluate_do_not_route_signal`) that the topic owner also imports; and
 * the neutral project evidence spec builder (:func:`_build_project_evidence`).
 
-:func:`select_project_match` additionally extracts the existing inline root
-project-catalog loop behind one owner callable.  Catalog order, first-match semantics,
-confidence and the observable match shape are preserved: the caller passes the derived
-subject/body inputs and receives either ``None`` or a
-``{"id", "folder", "name", "confidence", "catalog"}`` match.
+:func:`select_project_match` additionally owns the root project-catalog loop behind one
+owner callable.  It selects by ``(signal strength, routing priority, catalog order)``: an
+entry that matches on an exact subject ID/kuerzel/alias outranks one that matches only a
+typical subject pattern, which outranks a pure body/contact/domain match.  Numerically
+higher ``routing_priority`` orders equally strong candidates; missing or invalid values
+(including booleans and strings) are treated as neutral-lowest, and stable catalog order
+breaks the remaining ties.  The caller passes the derived subject/body inputs and receives
+either ``None`` or a ``{"id", "folder", "name", "confidence", "catalog"}`` match.  Entries
+excluded by their ``do_not_route_if`` declaration never match; when a collector list is
+supplied, each matched exclusion is surfaced as a catalog-only
+``{"kind", "id", "suppression_reason"}`` row.
 
 ``core.classifier`` remains the compatibility facade and re-exports every callable here by
 object identity.  This module never imports ``classifier.py`` (no import cycle) and performs
@@ -34,6 +42,7 @@ from .date_parser import parse_date_to_year_month
 
 __all__ = [
     "select_project_match",
+    "evaluate_do_not_route_signal",
     "match_thread_project_inheritance",
     "resolve_full_read_project_evidence",
     "_artifact_text_matches",
@@ -44,6 +53,7 @@ __all__ = [
     "_project_context_label",
     "_evidence_read_escalation",
     "_build_project_evidence",
+    "_header_scope_text",
 ]
 
 #: Short/ambiguous acronyms that only match a project name as an exact subject token.
@@ -280,6 +290,98 @@ def _build_project_evidence(
     return spec
 
 
+#: ``do_not_route_if`` predicates restricted to subject/header signals and their tokens.
+#: The newsletter predicate never inspects body or preview text, so a body-only
+#: occurrence of one of these words cannot suppress routing.
+_HEADER_ONLY_DNR_TOKENS: dict[str, tuple[str, ...]] = {
+    "newsletter": ("newsletter", "verteilerliste", "mailing list", "list."),
+    "mailing list": ("verteilerliste", "mailing list", "list."),
+    "automatic reply": ("abwesenheitsnotiz", "out of office", "automatische antwort"),
+    "out of office": ("abwesenheitsnotiz", "out of office", "automatische antwort"),
+}
+
+#: Automated-sender tokens that the ``no-reply`` predicate recognises in the from header.
+_NO_REPLY_SENDER_TOKENS = ("no-reply", "do_not_reply", "quarantine", "mailer-daemon")
+
+#: ``do_not_route_if`` tokens that stay scoped to the from/to headers at HEAD.  They never
+#: match the subject, so a subject-only ``list.`` mention (e.g. "distribution list.") cannot
+#: suppress routing.
+_DNR_HEADER_SCOPE_ONLY_TOKENS = frozenset({"list."})
+
+
+def _header_scope_text(from_str: str, to_str: str, cc_str: str) -> str:
+    """Fold the from/to/cc headers into the single text the DNR predicate scans."""
+    return f"{from_str}\n{to_str}\n{cc_str}"
+
+
+def _header_signal_scope(subject_lower: str, header_lower: str, tokens: tuple[str, ...]) -> str:
+    """Return the first field scope carrying a header-scoped predicate token, else ``""``.
+
+    Tokens in :data:`_DNR_HEADER_SCOPE_ONLY_TOKENS` are matched against the folded headers
+    only (their HEAD semantics); every other token may also match the subject.
+    """
+    for token in tokens:
+        if token in _DNR_HEADER_SCOPE_ONLY_TOKENS:
+            if token in header_lower:
+                return "header"
+            continue
+        if token in subject_lower:
+            return "subject"
+        if token in header_lower:
+            return "header"
+    return ""
+
+
+def evaluate_do_not_route_signal(
+    entry: Mapping[str, Any],
+    *,
+    subject: str,
+    header_text: str,
+    from_str: str,
+) -> dict[str, Any] | None:
+    """Return the first matching ``do_not_route_if`` exclusion for one catalog entry.
+
+    Only subject and header signals are consulted: ``header_text`` folds the from/to/cc
+    and list headers, so a predicate word that occurs only in the body or preview never
+    suppresses routing.  ``no-reply`` stays from-only.  The result is
+    ``{"reason": <predicate>, "scope": <field>}`` (``scope`` is ``"subject"``, ``"header"``
+    or ``"from"``) or ``None`` when the entry declares no matching exclusion.
+    """
+    declarations = entry.get("do_not_route_if")
+    if not isinstance(declarations, list):
+        return None
+    subject_lower = subject.casefold()
+    header_lower = header_text.casefold()
+    from_lower = from_str.casefold()
+    for declaration in declarations:
+        reason = str(declaration).strip().casefold()
+        if not reason:
+            continue
+        if reason == "no-reply":
+            if any(token in from_lower for token in _NO_REPLY_SENDER_TOKENS):
+                return {"reason": "no-reply", "scope": "from"}
+            continue
+        tokens = _HEADER_ONLY_DNR_TOKENS.get(reason)
+        if tokens is None:
+            continue
+        scope = _header_signal_scope(subject_lower, header_lower, tokens)
+        if scope:
+            return {"reason": reason, "scope": scope}
+    return None
+
+
+def _routing_priority(entry: Mapping[str, Any]) -> float:
+    """Return the numeric ``routing_priority``, treating missing/invalid types as neutral.
+
+    ``bool`` is an ``int`` subclass, so booleans (like strings and other non-numeric
+    values) are treated as missing/neutral-lowest instead of being coerced into a rank.
+    """
+    value = entry.get("routing_priority")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return float("-inf")
+    return float(value)
+
+
 def select_project_match(
     projects: list[dict[str, Any]],
     *,
@@ -289,15 +391,26 @@ def select_project_match(
     from_str: str,
     to_str: str,
     parties: str,
+    cc_str: str = "",
+    suppressed_candidates: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """Run the root project-catalog matching loop and return the first match.
+    """Run the root project-catalog matching loop and return the strongest match.
 
-    Extracted verbatim from the inline ``classify_email`` loop so the facade keeps the
-    same catalog order, first-match semantics and high/medium confidence policy.  Returns
+    Entries are evaluated by signal strength first (an exact subject ID/kuerzel/alias
+    before a typical subject pattern before a body/contact/domain match), then by
+    numerically higher ``routing_priority`` and finally by stable catalog order, so an
+    exact subject code beats a pure contact match of another project.  Non-numeric
+    ``routing_priority`` values are treated as missing/neutral-lowest.  Returns
     ``{"id", "folder", "name", "confidence", "catalog"}`` for the winning catalog entry,
     where ``catalog`` is the matched project object, or ``None`` when no entry matches.
+    Entries excluded by their ``do_not_route_if`` declaration never match and are
+    reported on ``suppressed_candidates`` as catalog-only
+    ``{"kind", "id", "suppression_reason"}`` rows when a collector list is supplied.
     """
-    for proj in projects or []:
+    best_key: tuple[float, float, int] | None = None
+    best_match: dict[str, Any] | None = None
+    header_text = _header_scope_text(from_str, to_str, cc_str)
+    for catalog_index, proj in enumerate(projects or []):
         p_id = proj.get("id", "").strip()
         kuerzel = proj.get("kuerzel", "").strip()
         aliases = [str(a).strip() for a in proj.get("aliases", []) if str(a).strip()]
@@ -311,29 +424,21 @@ def select_project_match(
         ]
         mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
 
-        # Check do_not_route_if conditions from catalog
-        do_not_route = False
-        for dnr in proj.get("do_not_route_if", []) if isinstance(proj.get("do_not_route_if"), list) else []:
-            dnr_clean = str(dnr).strip().lower()
-            if not dnr_clean:
-                continue
-            if dnr_clean == "newsletter" and ("newsletter" in full_text_lower or "verteilerliste" in full_text_lower or "mailing list" in full_text_lower or "list." in from_str.lower() or "list." in to_str.lower()):
-                do_not_route = True
-                break
-            if dnr_clean == "mailing list" and ("verteilerliste" in full_text_lower or "mailing list" in full_text_lower or "list." in from_str.lower() or "list." in to_str.lower()):
-                do_not_route = True
-                break
-            if dnr_clean == "no-reply" and ("no-reply" in from_str.lower() or "do_not_reply" in from_str.lower() or "quarantine" in from_str.lower() or "mailer-daemon" in from_str.lower()):
-                do_not_route = True
-                break
-            if dnr_clean in ("automatic reply", "out of office") and any(ph in full_text_lower for ph in ("abwesenheitsnotiz", "out of office", "automatische antwort")):
-                do_not_route = True
-                break
-        if do_not_route:
+        exclusion = evaluate_do_not_route_signal(
+            proj, subject=subject, header_text=header_text, from_str=from_str
+        )
+        if exclusion is not None:
+            if suppressed_candidates is not None:
+                suppressed_candidates.append({
+                    "kind": "project",
+                    "id": p_id,
+                    "suppression_reason": exclusion["reason"],
+                })
             continue
 
         matched_project: dict[str, Any] | None = None
         matched_proj_confidence = "low"
+        matched_strength = 0
 
         # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
         names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
@@ -355,58 +460,65 @@ def select_project_match(
             if matched_name:
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
+                matched_strength = 3
                 break
-        if matched_project:
-            return {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
 
         # 1b. Typical Subject Patterns in Subject
-        for pat in typical_patterns:
-            pat_norm = re.sub(r"[-_]+", " ", pat)
-            is_short_pat = len(pat) <= 4 or pat.upper() in _COMMON_WORD_ACRONYMS or (pat.isupper() and len(pat) <= 6)
-            matched_pat = False
-            if is_short_pat:
-                pat_upper = pat.upper()
-                if re.search(r"\b" + re.escape(pat_upper) + r"\b", subject) or re.search(r"\b" + re.escape(pat_norm.upper()) + r"\b", subj_norm):
-                    matched_pat = True
-                elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(pat) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
-                    matched_pat = True
-            else:
-                if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
-                    matched_pat = True
+        if matched_project is None:
+            for pat in typical_patterns:
+                pat_norm = re.sub(r"[-_]+", " ", pat)
+                is_short_pat = len(pat) <= 4 or pat.upper() in _COMMON_WORD_ACRONYMS or (pat.isupper() and len(pat) <= 6)
+                matched_pat = False
+                if is_short_pat:
+                    pat_upper = pat.upper()
+                    if re.search(r"\b" + re.escape(pat_upper) + r"\b", subject) or re.search(r"\b" + re.escape(pat_norm.upper()) + r"\b", subj_norm):
+                        matched_pat = True
+                    elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(pat) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
+                        matched_pat = True
+                else:
+                    if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
+                        matched_pat = True
 
-            if matched_pat:
-                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-                matched_proj_confidence = "high"
-                break
-        if matched_project:
-            return {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
+                if matched_pat:
+                    matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                    matched_proj_confidence = "high"
+                    matched_strength = 2
+                    break
 
         # 1c. Name in body with matching domain/contact or project keyword
-        external_contacts = [c for c in contacts if c and not c.endswith("@boku.ac.at")]
-        external_domains = [d for d in domains if d and d != "boku.ac.at"]
-        has_name_in_body = any(
-            (re.search(r"\b" + re.escape(n.upper()) + r"\b", full_text) if (len(n) <= 4 or n.upper() in _COMMON_WORD_ACRONYMS or (n.isupper() and len(n) <= 6))
-             else re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE))
-            for n in names
-        )
-        has_contact_match = any(c in parties for c in external_contacts if c)
-        has_domain_match = any(d in parties for d in external_domains if d)
-        has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
+        if matched_project is None:
+            external_contacts = [c for c in contacts if c and not c.endswith("@boku.ac.at")]
+            external_domains = [d for d in domains if d and d != "boku.ac.at"]
+            has_name_in_body = any(
+                (re.search(r"\b" + re.escape(n.upper()) + r"\b", full_text) if (len(n) <= 4 or n.upper() in _COMMON_WORD_ACRONYMS or (n.isupper() and len(n) <= 6))
+                 else re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE))
+                for n in names
+            )
+            has_contact_match = any(c in parties for c in external_contacts if c)
+            has_domain_match = any(d in parties for d in external_domains if d)
+            has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
 
-        if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
-            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-            matched_proj_confidence = "high"
-        elif has_contact_match or (has_domain_match and not any(gen in parties for gen in ["boku.ac.at", "gmail.com", "outlook.com", "yahoo.com"])):
-            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-            matched_proj_confidence = "high"
-        elif has_kw_match and (has_contact_match or has_domain_match):
-            matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
-            matched_proj_confidence = "medium"
+            if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "high"
+                matched_strength = 1
+            elif has_contact_match or (has_domain_match and not any(gen in parties for gen in ["boku.ac.at", "gmail.com", "outlook.com", "yahoo.com"])):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "high"
+                matched_strength = 1
+            elif has_kw_match and (has_contact_match or has_domain_match):
+                matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
+                matched_proj_confidence = "medium"
+                matched_strength = 1
 
-        if matched_project:
-            return {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
+        if matched_project is None:
+            continue
+        candidate_key = (float(matched_strength), _routing_priority(proj), -catalog_index)
+        if best_key is None or candidate_key > best_key:
+            best_key = candidate_key
+            best_match = {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
 
-    return None
+    return best_match
 
 
 def match_thread_project_inheritance(

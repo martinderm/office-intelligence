@@ -231,7 +231,7 @@ class ProjectRootMatchOwnerContractTests(unittest.TestCase):
 
         self.assertIsNone(_match([project], "Totally unrelated"))
 
-    def test_first_catalog_entry_wins_over_a_later_stronger_name(self) -> None:
+    def test_exact_subject_code_beats_earlier_catalog_contact_entry(self) -> None:
         first = _project("alpha", "ALPHA", contacts=[{"email": "coord@example.test"}])
         second = _project("orion", "ORION")
 
@@ -240,7 +240,7 @@ class ProjectRootMatchOwnerContractTests(unittest.TestCase):
         )
 
         self.assertIsNotNone(result)
-        self.assertEqual("alpha", result["id"])
+        self.assertEqual("orion", result["id"])
         self.assertEqual("high", result["confidence"])
 
     def test_do_not_route_catalog_entry_is_skipped(self) -> None:
