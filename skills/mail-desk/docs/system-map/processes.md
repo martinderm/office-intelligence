@@ -65,7 +65,7 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 
 ## 3. Die Attachment-Quarantäne-Pipeline (MD-Q1 / MD-Q2)
 
-Implementiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py) und [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py):
+Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py) und [`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py):
 
 ```
 [MIME-Part Erkennung] ──► [Symlink / Reparse Check] ──► [Download in attachments/<run_id>/]

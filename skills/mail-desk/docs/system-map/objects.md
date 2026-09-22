@@ -12,7 +12,7 @@
 Der Quarantäneindex ist die zentrale Buchführung über alle isolierten Dateianhänge.
 
 * **Dateipfad:** `data/mail-desk/attachment-quarantine-index.json`
-* **Implementierungsdatei:** [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py)
+* **Implementierungsdatei:** [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py)
 * **CLI-Fassade:** [`scripts/mail_desk_attachment_quarantine_index.py`](../scripts/mail_desk_attachment_quarantine_index.py)
 * **Aktuelle Schema-Version:** `1`
 
@@ -68,7 +68,7 @@ Schema 1 normalisiert 17 kanonische Basisfelder; `contract_hash` bleibt optional
 * **Fail-Closed-Invariante:** Ein Status `analysis_completeness: "full"` darf niemals mit einem gesetzten `truncation_reason` oder `truncation_stage != "none"` kombiniert werden (`AttachmentIndexSchemaError`).
 
 ### 1.4 Ableitung der deterministischen `attachment_id`
-Definiert in [`scripts/core/attachment_quarantine_index.py`](../scripts/core/attachment_quarantine_index.py):
+Definiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py):
 ```python
 canonical_dict = {
     "inventory_sha256": norm_sha,
@@ -180,7 +180,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 ## 4. Quarantäne-Inventar (`.quarantine-inventory.json`)
 
 * **Speicherort:** `data/mail-desk/attachments/<run_id>/.quarantine-inventory.json`
-* **Implementierungsdatei:** [`scripts/core/attachment_fetch.py`](../scripts/core/attachment_fetch.py) und [`attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)
+* **Implementierungsdatei:** [`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py) und [`attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)
 * **Zweck:** Dient als physischer Bindungsnachweis zwischen extrahierter Datei auf Disk und Index. Bevor ein Eintrag in den Quarantäneindex geschrieben wird, prüft `verify_quarantine_attachment_artifact()` physisch, ob:
   1. Die Datei auf Disk existiert.
   2. Sie weder Symlink noch Windows-Reparse-Point ist (`os.lstat().st_file_attributes & 0x400`).
@@ -227,12 +227,12 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `DispositionRequest` (`build_disposition_request`): Bindet kanonisch `attachment_id`, `index_entry_sha256`, `decision`, `review_after`, `rationale`, `candidate_review_hash`, `promotion_id`, `promotion_status`.
   * `ApplyRequest` (`build_apply_request`): Bindet den exakten, unteilbaren Löschumfang (`action: "discard"`, `attachment_id`, `decision_id`, `index_entry_sha256`, `quarantine_path`, `sha256`, `size_bytes`, `run_id`, `schema_version: 1`). Bulk-Apply ist strikt verboten (`attachment_id` zwingend).
   * `canonical_apply_request_sha256()`: Deterministischer SHA-256 Hash des serialisierten JSON-Objekts zur kryptographischen Bindung des Apply-Receipts.
-* **Attachment Analysis Handoff (MD-A4 / MD-C1)** ([`scripts/core/attachment_handoff.py`](../scripts/core/attachment_handoff.py)):
+* **Attachment Analysis Handoff (MD-A4 / MD-C1)** ([`scripts/core/quarantine/attachment_handoff.py`](../scripts/core/quarantine/attachment_handoff.py)):
   * Bereinigtes Übergabe-Envelope für Downstream-Analysen (LLM-Dossier-Synthese).
   * Trennt strikt technischen Abschluss (`analysis_status: "completed"`) von inhaltlicher Abdeckung (`analysis_completeness: "full" | "truncated" | "partial" | "unavailable"`).
   * Bindet alle 6 Coverage-Felder (`analysis_completeness`, `truncation_reason`, `truncation_stage`, `handoff_character_count`, `analysis_character_budget`, `source_character_count`) kanonisch in `compute_handoff_hash()`.
   * Verhindert Drift über `HandoffDriftError` (`handoff_character_count != len(text)`).
-* **Attachment Filing Candidate (MD-A5 / MD-C1)** ([`scripts/core/attachment_filing.py`](../scripts/core/attachment_filing.py)):
+* **Attachment Filing Candidate (MD-A5 / MD-C1)** ([`scripts/core/quarantine/attachment_filing.py`](../scripts/core/quarantine/attachment_filing.py)):
   * Vorschlag für Cloud-Ablage mit `promotion_status: "pending_human_review"`. Rein lesend; führt keine unautorisierten Cloud-Mutationen aus.
   * Bindet `coverage_evidence` deterministisch in `compute_candidate_hash()` ein.
   * Ergänzt bei eingeschränkter Abdeckung (`analysis_completeness != "full"`) einen transparenten Hinweistext im `reason`-Feld.

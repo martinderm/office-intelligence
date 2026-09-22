@@ -112,8 +112,8 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   `classifier_revision` bewahrt absichtlich die Katalog-Listenreihenfolge, weil das
   Classifier-Matching reihenfolge-sensitiv ist. (4) Die bestehende defensive Behandlung
   von Nicht-dict-Items und `files: []`-Fehlerfällen benötigt keine Produktionsänderung.
-- `FR-13` — **`MD-M1` (`MD-M1-T01`–`T04`) ist implementiert und paketabgenommen;
-  `FR-13` bleibt teilweise, `MD-M2` bleibt offen.** Das kanonische Unterpaket
+- `FR-13` — **`MD-M1` (`MD-M1-T01`–`T04`) und `MD-M2` sind implementiert und paketabgenommen;
+  `FR-13` ist geschlossen.** Das kanonische Unterpaket
   `skills/mail-desk/scripts/core/matching/` besitzt die Owner `date_parser.py`,
   `ambiguity.py`, `project_matching.py` und `topic_matching.py`; `classifier.py` bleibt die
   kompatible Facade und ist auf 810 physische Zeilen kontrahiert (≤ 813; Baseline 2.035)
@@ -136,17 +136,30 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   grün, `test_classifier_evidence_context.py` 6/6 grün, `test_batch_runner_modes.py` 21/21
   grün, `test_batch_runner_mde2_acceptance.py` 1/1 grün, vollständige entdeckte
   Mail-Desk-Suite 786/786 grün (aktueller Nachweis, kein permanenter Abnahmewert). Bewusst
-  **nicht** enthalten: jegliche MD-M2-/Quarantäne-Paketierung, Änderungen an
-  FR-15-Anhangssemantik oder neue Matching-Regeln. Git-Index-Metrik: 119 getrackte Dateien
-  / 58 unter `scripts/` (48 unter `scripts/core`) / 46 Testmodule / 786 Tests.
+  **nicht** enthalten: Änderungen an FR-15-Anhangssemantik oder neue Matching-Regeln.
+  **`MD-M2` (Quarantäne-Paketierung, abgenommen):** Die sechs Quarantäne-Owner
+  (`quarantine_index.py` — umbenannt aus `attachment_quarantine_index.py` —,
+  `attachment_fetch.py`, `attachment_extract.py`, `attachment_filing.py`,
+  `attachment_policy.py`, `attachment_handoff.py`) liegen kanonisch unter
+  `skills/mail-desk/scripts/core/quarantine/`; die alten `core/attachment_*.py`-Pfade sind
+  dünne `sys.modules`-aliasende Shims mit Objektidentität für Legacy-Importe,
+  `mock.patch`-Strings, `patch.object`-Seams und alle 33 `core.__init__`-Re-Exports; die
+  17 Schema-1-Pflichtfelder, Hash-Garantien und der `classifier_revision`-Fingerprint sind
+  unverändert (keine Rotation). Struktureller Nachweis mit genuine Red-Tests vor der
+  Implementierung: `test_quarantine_package_structure.py` 9/9 grün (nach Red mit
+  `ModuleNotFoundError: core.quarantine`) und
+  `test_quarantine_compatibility_contract.py` 9/9 grün. Vollständige entdeckte
+  Mail-Desk-Suite 804/804 grün (aktueller Nachweis, kein permanenter Abnahmewert);
+  `compileall`, `validate-skills-catalog.py`, `validate_workspace.py --json` und
+  `git diff --check` sauber. Git-Index-Metrik: 128 getrackte Dateien
+  / 65 unter `scripts/` (55 unter `scripts/core`) / 48 Testmodule / 804 Tests.
 
 ## Nächste Pakete nach Freigabe
 
 - **FR-09:** `MD-P1` — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
-- **FR-13:** `MD-M1` (`T01`–`T04`) ist abgeschlossen und paketabgenommen (siehe oben); offen
-  bleibt **`MD-M2`** — Paketierung der Quarantäne-Module unter
-  `skills/mail-desk/scripts/core/quarantine/` mit transparenten Re-Exports. Paketkarte und
-  Abnahmebedingungen stehen in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
+  `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
+  abgeschlossen und paketabgenommen (siehe oben).
 - **FR-15:** abgeschlossen; `MD-E2-T01`–`T04` (standardmäßig aktive `draft`-Verdrahtung,
   `--evaluate-attachments`/`--no-evaluate-attachments`, einmalige Neuklassifikation, additive
   `DraftManifest`-Installation, fail-closed-Härtung, Revisionsdeterminismus, Idempotenz, opt-in

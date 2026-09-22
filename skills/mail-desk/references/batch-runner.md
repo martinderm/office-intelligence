@@ -1208,7 +1208,7 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 
 ## FR-08 / MD-A4: Materialitäts-Gate und LLM-Handoff (`core/attachment_handoff.py`)
 
-Das Modul `scripts/core/attachment_handoff.py` stellt die gehärtete, deklarative Schnittstelle zwischen Anhangs-Extraktion (MD-A3) und nachgelagertem LLM- bzw. Manifest-Kontext bereit:
+Das Modul `scripts/core/quarantine/attachment_handoff.py` stellt die gehärtete, deklarative Schnittstelle zwischen Anhangs-Extraktion (MD-A3) und nachgelagertem LLM- bzw. Manifest-Kontext bereit:
 
 1. **Rein deklarativer Charakter & Subprocess/LLM-Schutz:**
    - Kein Aufruf von LLMs, externen APIs oder Subprozessen; rein deterministische Standard-Bibliothek-Verarbeitung (`pathlib`, `hashlib`, `json`, `re`).
@@ -1248,7 +1248,7 @@ Das Modul `scripts/core/attachment_handoff.py` stellt die gehärtete, deklarativ
 
 ## FR-08 / MD-A5: Katalog- und Filemap-gestützter Ablagevorschlag (`core/attachment_filing.py`)
 
-Das Modul `scripts/core/attachment_filing.py` erzeugt gehärtete, rein deklarative Ablagevorschläge (`attachment_filing_candidate`) für verifizierte Quarantäne-Anhänge:
+Das Modul `scripts/core/quarantine/attachment_filing.py` erzeugt gehärtete, rein deklarative Ablagevorschläge (`attachment_filing_candidate`) für verifizierte Quarantäne-Anhänge:
 
 1. **Strikte Read-Only-Garantie:**
    - Keine Datei-Uploads, kein Verzeichnisanlegen (`mkdir`), keine Schreiboperationen auf `filemap.json`, Kataloge oder externe Cloud-Storages.
