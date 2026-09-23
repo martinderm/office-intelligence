@@ -2003,6 +2003,21 @@ owner-generierte Trigger; alle Restbestände in diesem FR.
   Gegenindikatoren wirksam (strenger). Alternative: bewusster Verbleib mit
   dokumentierter Begründung. Die Entscheidung wird im Paket mit Befundbasis
   getroffen und im Umsetzungsnachweis begründet.
+- **Analysevorbefund (2026-09-23, verifiziert):** Der Spam-Zweig läuft nur, wenn
+  kein Projekt-/Topic-/Thread-Match existiert (classifier.py:544 — Katalog-Match
+  gewinnt vor Spam); die Gegenindikatoren retteten im realen BOKU-Bestand 0 Mails
+  (34 Keyword-Mails kamen alle von institutionellen Adressen); kein Test pinnt
+  sie. Der Spam-Zweig kombiniert bereits 2 Gates (Phishing-Betreffmuster UND
+  Freemail-Domain), aber **Freemail allein ist kein guter Spam-Indikator** — in
+  anderen Mailboxen können legitime Freemail-Kontakte (@gmail-Professoren,
+  Vereinsmails) solche Muster in harmloser Korrespondenz tragen. Daraus folgt
+  als Arbeitshypothese: **Streichung der Content-Gegenindikatoren** (Option B)
+  mit Ersatz durch ein **absenderbasiertes Vertrauenssignal im Katalog** —
+  kataloggetreue Kontakte/Domains des Workspace gewinnen ohnehin vor dem
+  Spam-Zweig (Zweig-Reihenfolge), und optionale
+  `spam_sender_allowlist`-Einträge (Schema 2) decken den Randfall
+  „Freemail-Kontakt ohne Katalog-Entry" ab. Die finale Streichungsentscheidung
+  fällt im Paket gegen diese Begründungsbasis.
 
 **Abgrenzungen (unverändert):**
 - Die Freemail-Spam-**Domain-Liste** selbst (`@yahoo.` etc.) bleibt
