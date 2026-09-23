@@ -44,6 +44,7 @@ MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 from core import classifier  # noqa: E402
+from core.common import ensure_sentence_end  # noqa: E402
 
 _OWNER_MODULE = "core.matching.project_matching"
 
@@ -339,6 +340,15 @@ class ProjectMatchingParityTests(unittest.TestCase):
 
         self.assertIn("- 2026-05-18 — MESHE WP1.\n", dotted["entry"])
         self.assertNotIn("MESHE WP1..", dotted["entry"])
+
+        # Direct edge pins for the sentence-end helper behind these entry lines.
+        self.assertEqual("", ensure_sentence_end(""))
+        self.assertEqual("", ensure_sentence_end("   "))
+        self.assertEqual("MESHE WP1!", ensure_sentence_end("MESHE WP1!"))
+        self.assertEqual("MESHE WP1?", ensure_sentence_end("MESHE WP1?"))
+        self.assertEqual("MESHE WP1…", ensure_sentence_end("MESHE WP1…"))
+        self.assertEqual("MESHE WP1..", ensure_sentence_end("MESHE WP1.."))
+        self.assertEqual("MESHE WP1.", ensure_sentence_end(" MESHE WP1. "))
 
     def test_classification_target_and_artifact_ambiguity_are_unchanged(self) -> None:
         item = _classify("MESHE WP1 T1.7 D1.2", [_meshe()])
