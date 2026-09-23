@@ -1731,6 +1731,13 @@ nicht angefasst.
 und `...-batch-3-repair-manifest.json` (Consumer-Workspace); manuelle Korrektur als
 Action-Log-Eintrag mit `"reconciled": true` zur o. g. Message-ID.
 
+**Micro-FR (in MD-RC1 enthalten, nicht separat):** Der Repair-Flow führt den
+Batch-Progress-Tracker (`runner-progress.json`) nicht nach — der Status bleibt
+`"failed"` stehen, obwohl der Repair-Lauf erfolgreich abgeschlossen hat. MD-RC1
+setzt den Tracker im Repair-Pfad deterministisch auf das konsistente End-Statum
+(`completed` bzw. dokumentierter Repair-Status) und testet die Nachführung;
+kein separates Ticket.
+
 ## FR-20: Anhang-Quota — Inline-Bilder dürfen echte Anhänge nicht verdrängen
 
 **Status:** ⬜ geplant. Befund aus der Batch-Verarbeitung 2026-W39/3 (2026-09-23,
@@ -1763,6 +1770,13 @@ ausgeblieben (der FR-15/MD-E1-Pfad hätte `no_allowed_attachments` gesehen).
 
 - Hermetischer Test mit 6 Inline-Bildern + 2 erlaubten `.docx` → beide `.docx`
   werden inventarisiert und policy-geprüft (nicht `skipped_count_limit`).
+- **Inline-Quota-Festlegung (Option A):** Die 5 zuerst platzierten Inline-Bilder
+  erhalten weiterhin `policy_status: allowed` bis zum eigenen Inline-Limit
+  (`MD-A3` legt es fest, Vorschlag 3); das 7. und 8. Inline-Bild überschreiten
+  das Inline-Limit und tragen `policy_status: skipped_inline_limit` (neuer,
+  transparenter Reason — nicht `skipped_count_limit`); die beiden `.docx`
+  werden vollständige Datei-Anhänge (inventarisiert + policy-geprüft). Der Test
+  pinnt alle drei Zustände je Teilklasse.
 - Bestehende Quota-/Policy-Tests (FR-17/MD-R4, FR-15) bleiben grün bzw. werden
   bewusst angepasst; das Anzahl-Limit bleibt als Kostenbremse wirksam.
 - Mail-Desk-Suite grün; System-Map/Referenzdoku aktualisiert.
