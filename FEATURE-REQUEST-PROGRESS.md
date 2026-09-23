@@ -194,6 +194,14 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   Downgrade im `_finish`-Punkt beider Pässe (`reply_downgrade`-Provenienz,
   `rule_revision: md-r8`), 7 neue Tests, Suite 903/903 grün. **Damit ist FR-17
   vollständig geschlossen (B-1–B-11).**
+- **Quote-Härtung und Live-Nachweis (2026-09-23):** Der Live-Re-Check von Env 9412
+  zeigte nach MD-R8 weiterhin `needs_reply: true`, weil das Request-Gate die zitierte
+  Vorgängermail mitprüfte („… wird … ergänzen"); zusätzlich leckten
+  `_closing_check_*`-Felder in die Draft-Decision. Fix: `_strip_quoted_history`
+  schneidet zitierte Blöcke und Header-Seperatoren vor der Bewertung ab,
+  `downgrade_if_closing` nimmt den Prüftext explizit als `subject`/`body` an.
+  Re-Check: `needs_reply: false` mit `reply_downgrade`; `test_reply_heuristics.py`
+  um 5 Fälle erweitert, Suite 908/908 grün.
 
   `compileall`, `validate-skills-catalog.py`, `validate_workspace.py --json` und
   `git diff --check` sauber. Git-Index-Metrik: 128 getrackte Dateien
