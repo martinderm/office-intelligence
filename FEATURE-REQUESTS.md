@@ -27,6 +27,7 @@ verbindliche Paketkarten.
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 | `FR-16` | ✅ Abgeschlossen (DOC-M1/M2/M3, reine Dokumentationsmaßnahme); Metrik-SSOT mit Stellen-Checkliste (L1 §3.1), Zellen-Splitting mit Null-Informationsverlust (L1 §2.1, L2 §2.1), Metrik auf 141/65/55/57/896 + 17 Pflichtfelder + Cloud-Atlas 28/138, Daedalus-Referenz korrigiert; 896 Tests grün | Identifikation der Metrik-Vervielfältigung, des monolithischen Tabellenzellen-Anti-Patterns und des realen Metrik-Drifts durch FR-17 (128→141 Dateien, 48→57 Testmodule, 804→896 Tests) | `DOC-M1` (Metrik-SSOT + Drift-Korrektur), `DOC-M2` (Zellen-Splitting), `DOC-M3` (Stale-Reference-Fix); Paketkarte unten |
 | `FR-17` | ✅ Abgeschlossen (B-1–B-10 als MD-R1–R7; **Nachtrag B-11 als MD-R8 implementiert, getestet und paketabgenommen; Live-Nachweis 2026-09-23 an Env 9412 (`reply_downgrade`, `rule_revision: md-r8`)**); 908 Tests grün | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
+| `FR-18` | ⬜ Geplant; Workspace-Agnostizismus des Mail-Desk als Desk-Signals-Katalog (`memory/references/mail-desk/mail-desk.json`) plus zwei Identitäts-/Routing-Hardcode-Entfernungen (MD-S1 Reply-Trigger, MD-S2 sent_indexer-`mailbox`-Literal, MD-S3 Zoom-Topic-Hardcode); Quelle: kritische Durchsicht der Reply-Triggers nach MD-R8 (2026-09-23) und Agnostizismus-Audit | Reply-Bedarf ist Desk-global, nicht Entry-spezifisch; Trigger-Liste, `no_reply_sender_tokens`, das `mailbox`-Literal und das Zoom-Topic sind aktuell hardcodierte Identitäts-/Routing-Annahmen ohne Workspace-/Account-Bezug | Schema-1-Desk-Signals-Katalog, `load_reply_heuristics`-Owner, `account`-gebundener Sent-Index, Katalog-Routing für Zoom-Recordings, hermetische Tests; siehe Paketkarte unten |
 
 
 ```text
@@ -1565,7 +1566,7 @@ werden in die gemeinsame Abnahme aufgenommen.
 
 ---
 
-## FR-18: Workspace-bezogene Reply-Trigger als Desk-Signals-Katalog
+## FR-18: Workspace-Agnostizismus des Mail-Desk — Desk-Signals-Katalog und Identitäts-Bindung
 
 **Status:** ⬜ Geplant. Verhaltensänderung im Reply-Bedarfs-Pfad des Basis-Klassifikators
 plus neue Katalogstruktur im konsumierenden Workspace. Quelle: kritische Durchsicht der
@@ -1611,6 +1612,19 @@ DOC-M1-Problemklasse (Metrik-/Literal-Vervielfältigung) zurückbringen und den
   Desk-Identität gegen `to`/`cc` aus (statt Keyword-Heuristik); `sent_indexer`-Domain-
   Liste wird über `no_reply_sender_tokens`/Desk-Katalog konfigurierbar (keine
   verhaltensändernde Migration bestehender Workspaces ohne Katalogdatei).
+- **MD-S2 — sent_indexer-Account-Bindung:** Das `"mailbox": "BOKU-MARTIN"`-Literal
+  in `sent_indexer.py` wird durch den verifizierten `account`-Parameter ersetzt, der
+  bereits durch `sync_sent_items`/den Batch-Lauf fließt; jeder Sent-Index-Eintrag wird
+  mit dem echten, gebundenen Account getaggt (fehlender Account → fail-loud, konsistent
+  zur Attachment-Bindung). Keine Workspace-Datei nötig; das Literal entfällt.
+- **MD-S3 — Zoom-Recording-Routing in den Katalog:** Der hardcoded Zoom-Recording-
+  Pfad (`target_folder: "Themen/BOKU-Organisation"`, `id: "boku-organisation"`) wird
+  aus dem Bundle entfernt; das Routing gehört in den Topic-Katalog des konsumierenden
+  Workspace (`typical_subject_patterns`/`keywords` am Topic-Entry inkl. Zoom-Signalen,
+  optional `do_not_route_if`-Gegenregeln). Das Bundle behält nur die generische
+  `zoom-join-ping` → `Trash`-Heuristik (workspace-unabhängig). Keine Migration
+  bestehender Mails; ein fehlender Katalog-Eintrag ergibt `unknown`/Review statt
+  stiller Fehlroute.
 - **Schema-Owner:** Validierung analog `project-catalog-entry` (kleiner Abschnitt im
   bestehenden Schema-Owner-Skill oder eigener Desk-Entry-Abschnitt); Drift stoppt
   fail-closed.
@@ -1624,6 +1638,14 @@ DOC-M1-Problemklasse (Metrik-/Literal-Vervielfältigung) zurückbringen und den
   Trigger-Liste); invalide Datei → fail-loud mit strukturiertem Fehler.
 - `no_reply_sender_tokens` und die sent_indexer-Domain-Liste sind aus der Datei
   konfigurierbar; Default-Werte = heutige Konstanten.
+- **MD-S2:** Sent-Index-Einträge tragen den verifizierten Batch-`account`; ein Lauf
+  ohne Account erzeugt fail-loud einen strukturierten Fehler; Regressionstest belegt
+  identische Indexstruktur bei identischem Account.
+- **MD-S3:** Kein `Themen/BOKU-Organisation`-Literal mehr im Bundle (`git grep`-Nachweis);
+  ein konsumierender Workspace mit Zoom-Recording-Topic-Entry routet identisch, ohne
+  Eintrag ergibt sich `unknown`/Review (hermetischer Test).
+- Hermetische Tests, null Mailbox-Zugriffe; Mail-Desk-Suite grün; Metrik-Stellen per
+  L1 §3.1-Checkliste nachgezogen; System-Map-Sync (L1/L2 + ggf. objects.md).
 - Hermetische Tests, null Mailbox-Zugriffe; Mail-Desk-Suite grün; Metrik-Stellen per
   L1 §3.1-Checkliste nachgezogen; System-Map-Sync (L1/L2 + ggf. objects.md).
 
