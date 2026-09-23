@@ -187,6 +187,13 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   beobachtete Grenzrouten (9408 eucen Highlights, 9419 BeyondTrust, 9412
   LE-LLL) sind Consumer-Katalog-Pflege, kein Bundle-Defekt. **FR-17 ist
   abnahmebestätigt.**
+- **FR-18:** geplant — Workspace-bezogene Reply-Trigger als Desk-Signals-Katalog
+  (`memory/references/mail-desk/mail-desk.json`, Schema 1); ersetzt die hartcodierten
+  `martin`-Trigger des Basis-Klassifikators, macht `no_reply_sender_tokens` und die
+  sent_indexer-Domain-Liste konfigurierbar, optional mit echter `owner_address`-
+  Identität. Integrationsvariante „Sub-Array je Projekt-/Topic-Entry" verworfen
+  (Desk-global vs. Entry-Signal). Paketkarte in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md). Wartet auf Umsetzungs-GO.
 - **Nachtrag B-11 / MD-R8 (2026-09-22, abgeschlossen):** Nach dem Katalog-Fix im
   Consumer-Workspace verblieb die Befundklasse „Abschluss-/Dankesmails werden
   reply-pflichtig klassifiziert" (Env 9412). **MD-R8 ist umgesetzt und

@@ -1562,3 +1562,74 @@ werden in die gemeinsame Abnahme aufgenommen.
   unberührt); `attachment_evaluation` bleibt ohne Promotion-/Export-Seiteneffekt.
 - Automatische Bereinigung bestehender Quarantäne-Runs (weiterhin explizite
   Control-Plane-Aktion).
+
+---
+
+## FR-18: Workspace-bezogene Reply-Trigger als Desk-Signals-Katalog
+
+**Status:** ⬜ Geplant. Verhaltensänderung im Reply-Bedarfs-Pfad des Basis-Klassifikators
+plus neue Katalogstruktur im konsumierenden Workspace. Quelle: kritische Durchsicht der
+Reply-Triggers (2026-09-23, Nachbefund zu MD-R8/B-11 und zur Nebenbeobachtung im
+Quote-Härtungs-Review). Keine Mailbox-Mutation, keine Promotion-/Export-/Cloud-Pfade.
+
+### Problem & Motivation
+
+Die Reply-Bedarfsheuristik des Basis-Klassifikators ist **weder workspace- noch
+account-bezogen**: `reply_triggers` (classifier.py, alle 9 Trigger enthalten literal
+`martin`: „martin bitte", „hallo martin", „@martin", …) ist eine Module-Konstante.
+Ein konsumierender Workspace mit anderem Desk-Owner erhält für denselben Mailbestand
+aus dieser Heuristik **niemals** einen Reply-Bedarf — stille Unter-Klassifikation.
+Gleichgelagert: `no_reply_sender_tokens` („no-reply", „quarantine", …) und die
+Fest-Domain-Liste `{"boku.ac.at", "gmail.com", "yahoo.com", "hotmail.com"}` in
+`sent_indexer.py` sind ebenfalls hardcoded Identitätsannahmen. Keine der Stellen ist
+durch Tests vertraglich abgesichert, und der generische Bundle-Claim wird verletzt.
+
+Bewertung der Integrationsvariante „Sub-Array `signals.reply_triggers` je Projekt-/Topic-
+Entry": **verworfen.** Reply-Bedarf ist Desk-global (wird vor der Projekt-/Topic-Match-
+Logik bestimmt und auch für `unknown`-Items gebraucht), Entry-Arrays würden die
+DOC-M1-Problemklasse (Metrik-/Literal-Vervielfältigung) zurückbringen und den
+`unknown`-Fall nicht abdecken.
+
+### Ziel & Invarianten
+
+- **Neuer Desk-Signals-Katalog** im konsumierenden Workspace:
+  `memory/references/mail-desk/mail-desk.json`, Schema 1:
+  `{"schema_version": 1, "reply_heuristics": {"reply_triggers": [...],
+  "no_reply_sender_tokens": [...], "owner_address": null | str}, "updated_at": ...}`.
+  Pflichtfeld `reply_triggers`; `no_reply_sender_tokens` optional mit Default;
+  `owner_address` optional (`null` = Verhalten wie heute).
+- **Bundle liest, konsumiert:** `load_reply_heuristics(workspace_root)` als kanonischer
+  Loader (analog `load_catalogs`); **Datei fehlt → dokumentierter Fallback** auf die
+  bisherigen Default-Trigger (Kompatibilität); **Datei invalide/Schema-Drift →
+  fail-loud** (Konsistenz mit der Katalog-Drift-Behandlung). Bundle bleibt
+  Zero-Mutation: die Datei gehört dem konsumierenden Workspace.
+- **Trigger-Semantik bleibt erhalten:** Substring-Anrede-Trigger mit Wortgrenzen
+  ersetzt die bare Substring-Matches („Smartin?"-Klasse ausgeschlossen);
+  `FULL_BODY_ACTION_REQUEST` und die MD-R8-Quote-Härtung bleiben unverändert
+  zuständig (Escalation-Trigger bzw. Downgrade).
+- **Optional `owner_address`:** wenn gesetzt, wertet der Sent-Reply-Check die echte
+  Desk-Identität gegen `to`/`cc` aus (statt Keyword-Heuristik); `sent_indexer`-Domain-
+  Liste wird über `no_reply_sender_tokens`/Desk-Katalog konfigurierbar (keine
+  verhaltensändernde Migration bestehender Workspaces ohne Katalogdatei).
+- **Schema-Owner:** Validierung analog `project-catalog-entry` (kleiner Abschnitt im
+  bestehenden Schema-Owner-Skill oder eigener Desk-Entry-Abschnitt); Drift stoppt
+  fail-closed.
+
+### Abnahme
+
+- Trigger-Liste ist ausschließlich aus der Workspace-Datei geladen; ein Workspace mit
+  anderem Owner-Namen erhält korrekte Reply-Bedarfe (hermetischer Test mit alternativer
+  Identität).
+- Fehlende Datei → Default-Verhalten unverändert (Regressionstest gegen heutige
+  Trigger-Liste); invalide Datei → fail-loud mit strukturiertem Fehler.
+- `no_reply_sender_tokens` und die sent_indexer-Domain-Liste sind aus der Datei
+  konfigurierbar; Default-Werte = heutige Konstanten.
+- Hermetische Tests, null Mailbox-Zugriffe; Mail-Desk-Suite grün; Metrik-Stellen per
+  L1 §3.1-Checkliste nachgezogen; System-Map-Sync (L1/L2 + ggf. objects.md).
+
+### Out of Scope
+
+- Änderung von `FULL_BODY_ACTION_REQUEST` oder der MD-R8-Closing-/Quote-Semantik.
+- Promotion-/Export-/Cloud-/Task-Pfade (FR-09/FR-10 unberührt).
+- Automatische Identitätsableitung aus dem Mailbestand; `owner_address` wird nur
+  explizit aus der Katalogdatei gelesen.
