@@ -80,6 +80,14 @@ def normalize_message_id(value: str) -> str:
     return s.lower()
 
 
+def ensure_sentence_end(text: str) -> str:
+    """Append a period unless the text already ends with sentence punctuation."""
+    value = str(text).strip()
+    if value and value[-1] not in ".!?…":
+        return f"{value}."
+    return value
+
+
 def resolve_data_dir(custom: str | Path | None = None) -> Path:
     """Resolve data/mail-desk directory path."""
     if custom:

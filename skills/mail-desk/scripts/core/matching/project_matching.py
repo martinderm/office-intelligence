@@ -37,7 +37,7 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
-from ..common import normalize_message_id, resolve_evidence_dir
+from ..common import ensure_sentence_end, normalize_message_id, resolve_evidence_dir
 from .date_parser import parse_date_to_year_month
 
 __all__ = [
@@ -275,7 +275,7 @@ def _build_project_evidence(
         participants = f"{participants}; An: {to_str}"
     context = _project_context_label(project, decision)
     entry_lines = [
-        f"- {date} — {subject}.",
+        f"- {date} — {ensure_sentence_end(subject)}",
         f"  - Message-ID: `{message_id}`",
         f"  - Beteiligte: {participants}",
         f"  - Kontext: [{context}]" if context else "  - Kontext: [Projekt]",
@@ -623,7 +623,7 @@ def match_thread_project_inheritance(
             "type": "project_evidence",
             "file": f"{evidence_dir_rel}/{year_month}.md",
             "entry": (
-                f"- {date_value} — {subject}.\n"
+                f"- {date_value} — {ensure_sentence_end(subject)}\n"
                 f"  - Message-ID: `{message_id}`\n"
                 f"  - Beteiligte: {from_str}\n"
             ),

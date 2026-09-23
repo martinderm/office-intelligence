@@ -15,7 +15,7 @@ from .attachment_handoff import (
     validate_attachment_handoff,
 )
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
-from .common import normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
+from .common import ensure_sentence_end, normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
 from .index import load_final_index
 from .matching import ambiguity, project_matching, reply_heuristics, topic_matching
 from .matching.date_parser import parse_date_to_year_month
@@ -497,7 +497,7 @@ def classify_email(
                 ev_dir_rel = str(ev_dir.as_posix())
             ev_file_rel = f"{ev_dir_rel}/{ym}.md"
             ev_entry = (
-                f"- {ymd} — {subject}.\n"
+                f"- {ymd} — {ensure_sentence_end(subject)}\n"
                 f"  - Message-ID: `{norm_mid}` ({from_str})\n"
                 f"  - Aussagekern: {notes}\n"
                 f"  - Einordnung: Dokumentation der laufenden Projektkommunikation zu {pid.upper()}."

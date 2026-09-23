@@ -322,6 +322,23 @@ class ProjectMatchingParityTests(unittest.TestCase):
             spec["entry"],
         )
         self.assertIn("Message-ID: `t02@example.test`", spec["entry"])
+        self.assertIn("- 2026-05-18 — MESHE WP1.\n", spec["entry"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            dotted = _project_matching()._build_project_evidence(
+                _meshe(),
+                {"workpackage": "wp1", "task": "T1.7", "deliverable": "D1.2"},
+                workspace_root=Path(temporary),
+                year_month="2026-05",
+                date="2026-05-18",
+                subject="MESHE WP1.",
+                message_id="t02@example.test",
+                from_str="a@other.test",
+                to_str="b@other.test",
+            )
+
+        self.assertIn("- 2026-05-18 — MESHE WP1.\n", dotted["entry"])
+        self.assertNotIn("MESHE WP1..", dotted["entry"])
 
     def test_classification_target_and_artifact_ambiguity_are_unchanged(self) -> None:
         item = _classify("MESHE WP1 T1.7 D1.2", [_meshe()])

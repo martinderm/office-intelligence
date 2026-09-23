@@ -487,6 +487,18 @@ class TopicDetailMaterializationOwnerContractTests(unittest.TestCase):
             [{"file": reference, "type": "subtopic_reference"}], result["synthesis_targets"]
         )
 
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            reference = "memory/references/topics/operations/subtopics/course-design.md"
+            _add_file(workspace, reference)
+            topic = _sub_topic(subtopics=[_subtopic_entry(reference_md=reference)])
+            dotted = _materialize(topic, "Operations — Course Redesign.", workspace=workspace)
+
+        self.assertIn(
+            "- 2026-06-10 — Operations — Course Redesign.\n", dotted["evidence"]["entry"]
+        )
+        self.assertNotIn("Course Redesign..", dotted["evidence"]["entry"])
+
     def test_operation_materialization_sets_scoped_evidence_and_index_target(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

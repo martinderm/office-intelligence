@@ -42,7 +42,7 @@ from datetime import date
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from ..common import normalize_message_id, resolve_evidence_dir
+from ..common import ensure_sentence_end, normalize_message_id, resolve_evidence_dir
 from . import ambiguity
 from .date_parser import parse_date_to_year_month
 from .project_matching import (
@@ -453,7 +453,7 @@ def _build_topic_evidence(
     if to_str:
         participants = f"{participants}; An: {to_str}"
     entry_lines = [
-        f"- {date} — {subject}.",
+        f"- {date} — {ensure_sentence_end(subject)}",
         f"  - Message-ID: `{message_id}`",
         f"  - Beteiligte: {participants}",
         f"  - Kontext: [{_topic_context_label(topic, subtopic)}]",
@@ -495,7 +495,7 @@ def _build_operation_evidence(
     if to_str:
         participants = f"{participants}; An: {to_str}"
     entry_lines = [
-        f"- {date} — {subject}.",
+        f"- {date} — {ensure_sentence_end(subject)}",
         f"  - Message-ID: `{message_id}`",
         f"  - Beteiligte: {participants}",
         f"  - Kontext: [{_operation_context_label(topic, subtopic, operation)}]",
@@ -535,7 +535,7 @@ def _build_event_evidence(
         "type": "event_evidence",
         "file": f"memory/evidence/topics/{topic_id}/events/{event_id}/{year_month}.md",
         "entry": "\n".join([
-            f"- {date} — {subject}.",
+            f"- {date} — {ensure_sentence_end(subject)}",
             f"  - Message-ID: `{message_id}`",
             f"  - Beteiligte: {participants}",
             f"  - Kontext: [{_event_context_label(topic, subtopic, event)}]",
@@ -1018,7 +1018,7 @@ def match_thread_topic_inheritance(
             "type": "topic_evidence",
             "file": f"{evidence_dir_rel}/{year_month}.md",
             "entry": (
-                f"- {date_value} — {subject}.\n"
+                f"- {date_value} — {ensure_sentence_end(subject)}\n"
                 f"  - Message-ID: `{message_id}`\n"
                 f"  - Beteiligte: {from_str}\n"
             ),
