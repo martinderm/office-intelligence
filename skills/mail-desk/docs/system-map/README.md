@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-21/MD-S4-S5): 149 getrackte Dateien; 67 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py` sowie `catalog_validator.py`; 63 Testmodule; 980 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-22/MD-ID1-ID4): 151 getrackte Dateien; 67 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py` sowie `catalog_validator.py`; 65 Testmodule; 1015 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -510,3 +510,51 @@ ausführbaren Validator (`load_catalogs` schluckt Drift still).
 **Pflichttests (alle erfüllt):** `tests/test_catalog_docs_contract.py` (13,
 liest die realen Dokumentdateien), `tests/test_catalog_validator.py` (35, je
 Drift-Klasse, Root-vs-Nested, CLI 0/1/2, boku-user-Form). **Suite 980/980 grün.**
+
+## 18. FR-22 — Identity-freier Desk-Signals-Fallback und Katalogisierung der BOKU-Restbestände (MD-ID1–MD-ID4 abgeschlossen)
+
+**Problem:** Der FR-18-Trigger-Fallback trug 9 hardcodierte „martin"-Trigger
+(Identity-Leak im Bundle, toter Code für Katalog-Besitzer); die
+sent_indexer-Domain-Whitelist und das „boku"-Stopwort, das internal-domain-Matching
+(`@boku.ac.at`) und die Freemail-Spam-Gegenindikatoren waren weitere
+Workspace-Spezifika im Bundle-Code; die FR-18-Zielinvariante „sent_indexer-Domain-Liste
+über Desk-Katalog konfigurierbar" war nicht implementiert.
+
+**Umsetzung:**
+- **MD-ID1 — Schema 2 + neutraler Fallback:** Fehlende `mail-desk.json` →
+  **leere** Trigger-Liste (keine Anrede-Trigger ohne Katalog; `needs_reply` bleibt
+  trigger-false). Schema 2 (striktes Gate, bool/float/str abgewiesen): `reply_triggers`
+  optional, wenn `owner_address` gesetzt ist — dann leitet der Loader über
+  `derive_greeting_triggers` die generische Anrede-Klasse aus dem Vorname-Segment des
+  Owner-Local-Parts ab (Wortgrenzen-Predicate byte-identisch); explizite Trigger werden
+  nie gemischt. Schema-1-Dateien bleiben valide (Legacy; der reale `boku-user`-Katalog
+  bleibt unverändert verwendbar). Vier neue optionale Katalogfelder:
+  `sent_sender_domain_whitelist`, `sent_subject_stopwords`, `internal_domains`,
+  `spam_sender_allowlist` (je Liste nicht-leerer Strings, dokumentierte Defaults).
+  Kein „martin"-Literal bleibt als erwarteter Fallback im Bundle.
+- **MD-ID2 — sent_indexer-Katalogisierung:** `check_if_replied` erhält optional
+  `identity_config` (None → Dataclass-Defaults ohne Datei-I/O); die Stopwort- und
+  Domain-Whitelist-Mengen kommen aus dem Katalog (Defaults via Re-Export aus
+  `reply_heuristics` — identische Objekte, `assertIs`-gepinnt); kein „boku"-Literal
+  in `sent_indexer.py`; Standardverhalten byte-identisch.
+- **MD-ID3 — internal-domain-Matching:** `select_project_match`/`select_topic_match`
+  erhalten optional `internal_domains` (Default = Katalog-Default `boku.ac.at`);
+  die generische Freemail-Ausschlussmenge (`gmail.com`, `outlook.com`, `yahoo.com`)
+  ist Bundle-Konstante (`GENERIC_FREEMAIL_DOMAINS`); classifier threadt die
+  Katalogliste in beide Selektoren. Default-Verhalten byte-identisch.
+- **MD-ID4 — Spam-Gegenindikatoren entfernt + Allowlist:** Die 4
+  BOKU-Content-Gegenindikatoren sind aus dem `junk-freemailer`-Zweig entfernt
+  (Zweig = Phishing-Betreffmuster UND Freemail-Domain); optionaler
+  `spam_sender_allowlist`-Gate (Exaktadresse ODER Domain, case-insensitive) als
+  erste Bedingung — kataloggetreue Freemail-Kontakte fallen durch zur normalen
+  Klassifikation. Branch-Reihenfolge und Freemail-Domain-Liste unverändert.
+
+**Pflichttests (alle erfüllt):** `tests/test_reply_trigger_catalog.py` (26,
+Schema-2-Contract), `tests/test_sent_indexer_identity_catalog.py` (8, Identity-Config),
+`tests/test_internal_domain_catalog.py` (9, Domain-Gating),
+`tests/test_classifier_hardening.py` (12, Allowlist + Gegenindikator-Entfernung),
+`tests/test_catalog_validator.py` (38, Schema-1+2-Gate),
+`tests/test_catalog_docs_contract.py` (13, neutraler-Fallback-Wording),
+`tests/test_reply_heuristics.py` (12, MD-R8-Intent mit hermetischen Katalog-Fixtures).
+**Suite 1015/1015 grün.** Fix-Runde MD-ID-fix-001: Validator-Gate für unbenutzbare
+Owner-Local-Parts (reuse `derive_greeting_triggers`, keine duplizierte Logik).

@@ -11,6 +11,27 @@ from typing import Any
 
 from .common import atomic_rewrite_jsonl, normalize_message_id, utc_now_iso, resolve_data_dir
 from .himalaya import run_himalaya, get_single_email_details
+from .matching.reply_heuristics import (
+    DEFAULT_NO_REPLY_SENDER_TOKENS,
+    DEFAULT_SENT_SENDER_DOMAIN_WHITELIST,
+    DEFAULT_SENT_SUBJECT_STOPWORDS,
+    ReplyHeuristicsConfig,
+    load_reply_heuristics,
+)
+
+# Re-exported canonical MD-ID1 identity defaults.  These are the same objects the
+# reply-heuristics owner defines -- imported, never duplicated -- so the sent-index
+# identity stays sourced from the workspace desk-signals catalog owner.
+
+
+def _default_identity_config() -> ReplyHeuristicsConfig:
+    """The documented MD-ID1 default identity, built without any catalog file I/O."""
+    return ReplyHeuristicsConfig(
+        reply_triggers=(),
+        no_reply_sender_tokens=DEFAULT_NO_REPLY_SENDER_TOKENS,
+        sent_sender_domain_whitelist=DEFAULT_SENT_SENDER_DOMAIN_WHITELIST,
+        sent_subject_stopwords=DEFAULT_SENT_SUBJECT_STOPWORDS,
+    )
 
 
 def clean_subject(subj: str) -> str:
@@ -299,8 +320,16 @@ def extract_email_address(s: str) -> str:
 def check_if_replied(
     email: dict[str, Any],
     sent_lookup: dict[str, Any],
+    identity_config: ReplyHeuristicsConfig | None = None,
 ) -> dict[str, Any] | None:
-    """Check whether an incoming email has been replied to according to sent items."""
+    """Check whether an incoming email has been replied to according to sent items.
+
+    ``identity_config`` supplies the workspace-bound sent-index identity: the subject
+    stopwords for keyword extraction and the sender-domain whitelist for the
+    ``domain_to_sender`` heuristic.  ``None`` resolves to the documented MD-ID1
+    default identity (dataclass defaults, no catalog file I/O).
+    """
+    config = identity_config if identity_config is not None else _default_identity_config()
     norm_mid = normalize_message_id(str(email.get("message_id", "")))
     if not norm_mid:
         return None
@@ -359,7 +388,8 @@ def check_if_replied(
 
     if from_addr and all_sent:
         sender_domain = from_addr.split("@")[-1] if "@" in from_addr else ""
-        stopwords = {"antwort", "betreff", "anfrage", "update", "fwd", "wtrlt", "2025", "2026", "boku", "mail"}
+        stopwords = set(config.sent_subject_stopwords)
+        domain_whitelist = set(config.sent_sender_domain_whitelist)
         keywords = [w.lower() for w in re.split(r"[\s\-_:/]+", subj) if len(w) >= 4 and w.lower() not in stopwords]
 
         in_date_raw = str(email.get("date") or email.get("at") or "")
@@ -374,7 +404,7 @@ def check_if_replied(
                 to_addrs = [extract_email_address(t) for t in to_field]
 
             direct_to_sender = from_addr in to_addrs
-            domain_to_sender = bool(sender_domain and sender_domain not in {"boku.ac.at", "gmail.com", "yahoo.com", "hotmail.com"} and any(sender_domain in t for t in to_addrs))
+            domain_to_sender = bool(sender_domain and sender_domain not in domain_whitelist and any(sender_domain in t for t in to_addrs))
 
             if not (direct_to_sender or domain_to_sender):
                 continue
@@ -423,12 +453,23 @@ def check_if_replied(
     return None
 
 
-def auto_resolve_replies_from_sent(data_dir: Path | None = None) -> dict[str, Any]:
-    """Audit replies-needed.jsonl against sent-index.jsonl and resolve answered cases."""
+def auto_resolve_replies_from_sent(
+    data_dir: Path | None = None,
+    workspace_root: Path | None = None,
+) -> dict[str, Any]:
+    """Audit replies-needed.jsonl against sent-index.jsonl and resolve answered cases.
+
+    ``workspace_root`` loads the workspace desk-signals identity catalog once and
+    threads it into every candidate search; ``None`` keeps the documented default
+    identity.
+    """
     from .action_log import resolve_case
 
     dd = data_dir or resolve_data_dir()
     sent_idx = load_sent_index(dd)
+    identity_config = (
+        load_reply_heuristics(workspace_root) if workspace_root is not None else None
+    )
     rn_path = dd / "replies-needed.jsonl"
 
     if not rn_path.exists():
@@ -449,7 +490,7 @@ def auto_resolve_replies_from_sent(data_dir: Path | None = None) -> dict[str, An
     needs_rewrite = False
 
     for entry in entries:
-        reply_info = check_if_replied(entry, sent_idx)
+        reply_info = check_if_replied(entry, sent_idx, identity_config=identity_config)
         if reply_info and reply_info.get("replied"):
             mid = normalize_message_id(entry.get("message_id", ""))
             resolve_case(

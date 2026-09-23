@@ -46,11 +46,13 @@ from ..common import ensure_sentence_end, normalize_message_id, resolve_evidence
 from . import ambiguity
 from .date_parser import parse_date_to_year_month
 from .project_matching import (
+    GENERIC_FREEMAIL_DOMAINS,
     _artifact_text_matches,
     _evidence_read_escalation,
     _header_scope_text,
     evaluate_do_not_route_signal,
 )
+from .reply_heuristics import DEFAULT_INTERNAL_DOMAINS
 
 __all__ = [
     "select_topic_match",
@@ -632,6 +634,7 @@ def select_topic_match(
     parties: str,
     cc_str: str = "",
     suppressed_candidates: list[dict[str, Any]] | None = None,
+    internal_domains: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     """Run the ordered root topic-catalog loop plus the unique-subtopic fallback/override.
 
@@ -646,7 +649,16 @@ def select_topic_match(
     for the winning catalog entry, where ``catalog`` is the exact matched topic object and
     ``preselected_subtopic`` is the resolved subtopic selection (or ``None``), or ``None``
     when no entry matches.
+
+    ``internal_domains`` is the catalog-configured internal-domain boundary (FR-22/MD-ID3):
+    ``None`` resolves to :data:`~core.matching.reply_heuristics.DEFAULT_INTERNAL_DOMAINS`,
+    which is byte-identical to the previous ``boku.ac.at`` literal.  The generic freemail
+    exclusion (:data:`~core.matching.project_matching.GENERIC_FREEMAIL_DOMAINS`) stays
+    invariant regardless of the parameter.
     """
+    resolved_internal_domains = (
+        DEFAULT_INTERNAL_DOMAINS if internal_domains is None else tuple(internal_domains)
+    )
     matched_topic: dict[str, Any] | None = None
     matched_topic_confidence = "low"
     matched_topic_source = ""
@@ -724,7 +736,11 @@ def select_topic_match(
         has_kw_body = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
         has_contact = any(c in parties for c in contacts if c)
         has_domain = any(d in from_str.lower() for d in domains if d) or any(
-            d in parties for d in domains if d and d not in ("boku.ac.at", "gmail.com", "outlook.com", "yahoo.com")
+            d in parties
+            for d in domains
+            if d
+            and d not in resolved_internal_domains
+            and d not in GENERIC_FREEMAIL_DOMAINS
         )
 
         if has_kw_subj:

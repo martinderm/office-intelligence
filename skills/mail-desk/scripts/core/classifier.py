@@ -16,7 +16,7 @@ from .attachment_handoff import (
 )
 from .attachments import AttachmentInventoryValidationError, canonicalize_and_bind_attachments
 from .common import ensure_sentence_end, normalize_message_id, resolve_data_dir, resolve_evidence_dir, resolve_final_index_path
-from .index import load_final_index
+from .index import extract_email_address, load_final_index
 from .matching import ambiguity, project_matching, reply_heuristics, topic_matching
 from .matching.date_parser import parse_date_to_year_month
 # Project/artifact/evidence callables stay importable from the facade by object identity.
@@ -174,6 +174,27 @@ def _reference_message_ids(raw: object) -> list[str]:
                 if normalized and normalized not in mids:
                     mids.append(normalized)
     return mids
+
+
+def _sender_is_allowlisted(from_str: str, allowlist: tuple[str, ...]) -> bool:
+    """True when the sender is exempted by ``spam_sender_allowlist`` (FR-22/MD-ID4).
+
+    Matching is case-insensitive and accepts two entry forms: an exact email
+    address (``trusted@yahoo.com``) or a sender domain with an optional leading
+    ``@`` (``yahoo.com`` / ``@yahoo.com``).  An empty allowlist never exempts, so a
+    workspace without the field keeps the documented default behavior.
+    """
+    address = extract_email_address(from_str)
+    if not address or "@" not in address:
+        return False
+    sender_domain = address.rsplit("@", 1)[1]
+    for entry in allowlist:
+        normalized = str(entry).strip().lower()
+        if not normalized:
+            continue
+        if normalized == address or normalized.lstrip("@") == sender_domain:
+            return True
+    return False
 
 
 def classify_email_two_pass(
@@ -477,6 +498,7 @@ def classify_email(
             parties=parties,
             cc_str=cc_str,
             suppressed_candidates=suppressed_candidates,
+            internal_domains=tuple(reply_config.internal_domains),
         )
         if root_project_match:
             matched_project = root_project_match
@@ -525,6 +547,7 @@ def classify_email(
             parties=parties,
             cc_str=cc_str,
             suppressed_candidates=suppressed_candidates,
+            internal_domains=tuple(reply_config.internal_domains),
         )
         if matched_topic:
             target_folder = matched_topic["folder"]
@@ -555,9 +578,9 @@ def classify_email(
             }
             notes = f"Automatisierte Zoom-Beitrittsbenachrichtigung (ephemer): {subject}"
         elif (
-            re.search(r"\burgent inquiry\b|\bkindly clarify\b|\bconfidential proposal\b|\bfinancial assistance\b|\bbeneficiary\b", subject, re.IGNORECASE)
+            not _sender_is_allowlisted(from_str, reply_config.spam_sender_allowlist)
+            and re.search(r"\burgent inquiry\b|\bkindly clarify\b|\bconfidential proposal\b|\bfinancial assistance\b|\bbeneficiary\b", subject, re.IGNORECASE)
             and any(freemail in from_str.lower() for freemail in ["@yahoo.", "@hotmail.", "@live.", "@aol.", "@mail.ru"])
-            and not any(boku_kw in full_text_lower for boku_kw in ["weiterbildung", "lebenslanges lernen", "focus group", "lehrgang"])
         ):
             target_folder = "Junk"
             decision = {
@@ -652,7 +675,7 @@ def classify_email(
     # 3. Sent Items Reply Check
     # --------------------------------------------------------------------------
     if sent_lookup and (needs_reply or decision.get("needs_reply")):
-        reply_info = check_if_replied(email, sent_lookup)
+        reply_info = check_if_replied(email, sent_lookup, identity_config=reply_config)
         if reply_info:
             if reply_info.get("replied"):
                 needs_reply = False

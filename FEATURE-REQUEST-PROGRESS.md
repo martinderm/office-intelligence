@@ -283,6 +283,21 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   Katalog (MD-ID3), Spam-Gegenindikatoren (MD-ID4, Entscheidung im Paket).
   Strategie B + D per Human-Entscheidung; Paketkarte in
   [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) § FR-22.
+- **FR-22:** abgeschlossen (2026-09-23) — **Identity-freier Desk-Signals-Fallback und
+  Katalogisierung der BOKU-Restbestände** im Kernel-Loop mit Subagenten (12
+  Dispatches, Red-Gates je Ticket, 1 Fix-Runde nach unabhängigem Review):
+  (MD-ID1) neutraler leerer Fallback + `derive_greeting_triggers` aus
+  `owner_address` (Schema 2, Schema-1-Legacy valide, 4 neue optionale Felder);
+  (MD-ID2) sent_indexer-Domain-Whitelist/Stopwörter aus dem Katalog (kein
+  „boku"-Literal); (MD-ID3) internal-domain-Matching aus dem Katalog
+  (`GENERIC_FREEMAIL_DOMAINS` als Bundle-Konstante); (MD-ID4) Gegenindikatoren
+  entfernt + `spam_sender_allowlist`-Gate. Fix-Runde: Validator-Gate für
+  unbenutzbare Owner-Local-Parts (reuse `derive_greeting_triggers`). 35 neue Tests,
+  Suite 1015/1015 grün; Metriken 151/67/56/65/1015 (L2-Kanonik); Live-Lauf
+  boku-user valid (Schema-1-Legacy). Kein Consumer-Zwang: der bestehende
+  BOKU-Katalog bleibt unverändert verwendbar; optionale Schema-2-Migration als
+  Copy-Prompt dokumentiert. Paketkarte und Umsetzungsnachweis in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
   abgeschlossen und paketabgenommen (siehe oben).

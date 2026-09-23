@@ -107,6 +107,15 @@ Hierarchisches Wissensregister über Themengebiete, Technologien und Domänen.
   * Root-Felder: `reference_md`, `aliases`, `keywords`, `domains`, `contacts`, `typical_subject_patterns`, `subtopics`, `description`, `routing_priority` (Zahl), `do_not_route_if` (String-Array), `updated_at`, `schema_version`.
   * `subtopics`: Array von Subtopic-Objekten mit `id`, `title`, optional `aliases`, `keywords`, `typical_subject_patterns`, `contacts`, `status` (`active` oder statuslos = aktiv).
 
+### 3.3 Desk-Signals-Katalog (`mail-desk.json`)
+Reply-Heuristik- und Identitäts-Konfiguration des konsumierenden Workspaces.
+
+* **Dateipfad:** `memory/references/mail-desk/mail-desk.json`
+* **Validierungsskript:** `skills/mail-desk/scripts/catalog_validator.py` (read-only CLI, Exit 0/1/2, kanonischer Envelope `catalog_validator`)
+* **Schema 1 (Legacy) / Schema 2 (FR-22):** striktes `schema_version`-Gate (bool/float/str abgewiesen). Schema 1: `reply_triggers` Pflicht. Schema 2: `reply_triggers` optional, wenn `owner_address` gesetzt ist — der Loader leitet die generische Anrede-Trigger-Klasse aus dem Owner-Local-Part ab (`derive_greeting_triggers`, Wortgrenzen-Predicate unverändert).
+* **Optionale Felder (Schema 1+2):** `no_reply_sender_tokens`, `owner_address` (string|null), `sent_sender_domain_whitelist`, `sent_subject_stopwords`, `internal_domains`, `spam_sender_allowlist` (je Liste nicht-leerer Strings mit dokumentierten Defaults; FR-22/MD-ID1-ID4).
+* **Fallback-Vertrag:** Fehlende Datei = **leere** Trigger-Liste (keine Anrede-Trigger ohne Katalog); Schema-Drift = fail-loud `ValueError`.
+
 ---
 
 ## 4. Sub-Skill-spezifische Objektwelten (Verweise)

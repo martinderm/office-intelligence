@@ -1,15 +1,62 @@
-"""Tests for classifier hardening: acronym safe matching, do_not_route_if, forwarded senders, notifications, spam."""
+"""Tests for classifier hardening: acronym safe matching, do_not_route_if, forwarded senders, notifications, spam.
+
+FR-22/MD-ID4 additionally hardens the junk-freemailer branch (``classifier.py``
+2-sys): the four identity-bearing BOKU content counter-indicators are removed so
+a phishing-pattern subject from a freemail domain is junked unconditionally, and a
+schema-2 ``spam_sender_allowlist`` catalog entry (exact address OR domain,
+case-insensitive) exempts a trusted sender from that branch.  Those contracts are
+pinned by :class:`JunkFreemailerHardeningTests` with hermetic temp-workspace
+catalogs; no real catalog, mailbox or network is touched.
+"""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 from core import classifier  # noqa: E402
+
+
+#: Desk-signals catalog location, relative to a hermetic temp workspace root.
+CATALOG_RELATIVE_PATH = Path("memory") / "references" / "mail-desk" / "mail-desk.json"
+
+
+class _CatalogWorkspace:
+    """Hermetic temp workspace that never touches a real catalog or mailbox."""
+
+    def __init__(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def __enter__(self) -> Path:
+        return Path(self._tmp.name)
+
+    def __exit__(self, *exc: object) -> None:
+        self._tmp.cleanup()
+
+
+def write_catalog(workspace_root: Path, payload: object) -> Path:
+    """Write the desk-signals catalog into a hermetic workspace root."""
+    path = workspace_root / CATALOG_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _schema2_catalog(*, spam_sender_allowlist: tuple[str, ...] = ()) -> dict:
+    """Minimal schema-2 desk-signals catalog carrying the MD-ID4 allowlist."""
+    return {
+        "schema_version": 2,
+        "reply_heuristics": {
+            "owner_address": "desk@example.org",
+            "spam_sender_allowlist": list(spam_sender_allowlist),
+        },
+    }
 
 
 class ClassifierHardeningTests(unittest.TestCase):
@@ -167,6 +214,90 @@ class ClassifierHardeningTests(unittest.TestCase):
         result = classifier.classify_email(email, projects=[], topics=[aixlll_topic, netzwerke_topic])
         self.assertEqual(result["action"]["target_folder"], "Themen/Netzwerke")
         self.assertEqual(result["decision"]["subtopic"], "cedefop")
+
+
+class JunkFreemailerHardeningTests(unittest.TestCase):
+    """FR-22/MD-ID4 junk-freemailer contracts (counter-indicator removal + allowlist).
+
+    The junk-freemailer branch requires a phishing-pattern subject AND a freemail
+    sender domain.  MD-ID4 (a) removes the BOKU content counter-indicators and
+    (b) adds a schema-2 ``spam_sender_allowlist`` exemption (exact address or
+    domain, case-insensitive).  A sender that is not exempted still lands in Junk.
+    """
+
+    #: Phishing subject matching the branch regex ``\burgent inquiry\b``.
+    PHISHING_SUBJECT = "Fw: Urgent Inquiry and Request for Clarification"
+    #: Body text free of any former counter-indicator keyword.
+    PLAIN_PREVIEW = "Urgent inquiry regarding proposal..."
+
+    def _email(self, *, from_: str, preview: str = PLAIN_PREVIEW) -> dict:
+        return {
+            "envelope_id": "md-id4",
+            "folder": "INBOX",
+            "subject": self.PHISHING_SUBJECT,
+            "from": from_,
+            "to": "martin.mayr@boku.ac.at",
+            "preview": preview,
+        }
+
+    def _classify(self, workspace_root: Path, email: dict) -> dict:
+        return classifier.classify_email(
+            email,
+            workspace_root=workspace_root,
+            projects=[],
+            topics=[],
+        )
+
+    def test_freemailer_with_counter_indicator_still_junk(self) -> None:
+        # MD-ID4: the four BOKU content counter-indicators are gone, so a former
+        # rescue keyword in the body no longer suppresses the freemailer junk.
+        with _CatalogWorkspace() as ws:
+            item = self._classify(
+                ws,
+                self._email(
+                    from_="qcpd2055@yahoo.com",
+                    preview="weiterbildung programm fuer interessierte",
+                ),
+            )
+
+        self.assertEqual(item["action"]["target_folder"], "Junk")
+        self.assertEqual(item["decision"]["kind"], "spam")
+
+    def test_allowlisted_sender_not_junked(self) -> None:
+        # An exact-address allowlist entry exempts a freemail phishing sender.
+        with _CatalogWorkspace() as ws:
+            write_catalog(
+                ws,
+                _schema2_catalog(spam_sender_allowlist=("trusted@yahoo.com",)),
+            )
+            item = self._classify(ws, self._email(from_="trusted@yahoo.com"))
+
+        self.assertNotEqual(item["action"]["target_folder"], "Junk")
+        self.assertNotEqual(item["decision"]["kind"], "spam")
+
+    def test_allowlisted_domain_not_junked(self) -> None:
+        # A domain allowlist entry (case-insensitive) exempts any sender on it.
+        with _CatalogWorkspace() as ws:
+            write_catalog(
+                ws,
+                _schema2_catalog(spam_sender_allowlist=("YAHOO.COM",)),
+            )
+            item = self._classify(ws, self._email(from_="person@yahoo.com"))
+
+        self.assertNotEqual(item["action"]["target_folder"], "Junk")
+        self.assertNotEqual(item["decision"]["kind"], "spam")
+
+    def test_non_allowlisted_freemailer_still_junked(self) -> None:
+        # Control: a non-matching allowlist must not exempt an unrelated freemailer.
+        with _CatalogWorkspace() as ws:
+            write_catalog(
+                ws,
+                _schema2_catalog(spam_sender_allowlist=("example.org",)),
+            )
+            item = self._classify(ws, self._email(from_="attacker@hotmail.com"))
+
+        self.assertEqual(item["action"]["target_folder"], "Junk")
+        self.assertEqual(item["decision"]["kind"], "spam")
 
 
 if __name__ == "__main__":

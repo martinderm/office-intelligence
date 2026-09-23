@@ -20,9 +20,15 @@ One standalone, mutation-free CLI validates the workspace catalogs that
   exactly ``3``; every workpackage needs ``id``/``title``/``status``/``tasks``/
   ``deliverables`` (mirroring ``project-catalog-entry`` schema v3).
 * ``mail-desk/mail-desk.json`` -- optional.  When present it mirrors the
-  ``core.matching.reply_heuristics.load_reply_heuristics`` schema-1 gate exactly;
-  a missing file is valid because the loader falls back to the documented
-  compatibility defaults.
+  ``core.matching.reply_heuristics.load_reply_heuristics`` gate exactly for both
+  supported schema revisions (FR-22/MD-ID1): schema 1 keeps the legacy shape with a
+  required non-empty ``reply_triggers`` list; schema 2 makes ``reply_triggers``
+  optional when a derivation-usable ``owner_address`` is set (the greeting class is
+  then derived by the loader's own ``derive_greeting_triggers``, so an address
+  without a usable local part is drift) and adds the optional
+  ``sent_sender_domain_whitelist``, ``sent_subject_stopwords``, ``internal_domains``
+  and ``spam_sender_allowlist`` string lists.  A missing file is valid because the
+  loader falls back to its neutral empty-trigger fallback.
 
 Where ``load_catalogs`` silently swallows a missing or malformed required catalog,
 this validator fails loud with a structured report
@@ -45,6 +51,7 @@ if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 from core import build_error, build_success, emit_json
+from core.matching.reply_heuristics import derive_greeting_triggers
 
 
 ACTION = "catalog_validator"
@@ -57,6 +64,11 @@ MAIL_DESK_RELATIVE_PATH = "memory/references/mail-desk/mail-desk.json"
 #: The only supported catalog schema revisions (mirrored from their owners).
 PROJECTS_SCHEMA_VERSION = 3
 REPLY_HEURISTICS_SCHEMA_VERSION = 1
+REPLY_HEURISTICS_SCHEMA_VERSION_OWNER_DERIVED = 2
+SUPPORTED_REPLY_HEURISTICS_SCHEMA_VERSIONS: tuple[int, ...] = (
+    REPLY_HEURISTICS_SCHEMA_VERSION,
+    REPLY_HEURISTICS_SCHEMA_VERSION_OWNER_DERIVED,
+)
 
 #: Minimum effective length of a *nested* subject signal
 #: (``_subject_signal_matches``); root-level patterns are plain substrings.
@@ -335,10 +347,47 @@ def validate_projects_catalog(
     return errors
 
 
+def _validate_optional_string_list(
+    catalog: str,
+    block: Mapping[str, Any],
+    field: str,
+    errors: list[dict[str, str]],
+) -> None:
+    """Validate one optional list-of-non-empty-strings desk-signals field.
+
+    Absent fields are valid and fall back to the loader's documented defaults.
+    """
+    if field not in block:
+        return
+    value = block.get(field)
+    path = f"{_ROOT}.reply_heuristics.{field}"
+    if not isinstance(value, list):
+        errors.append(_error(catalog, path, f"'{field}' must be a list of non-empty strings"))
+        return
+    for item_index, item in enumerate(value):
+        if not _is_nonempty_str(item):
+            errors.append(
+                _error(
+                    catalog,
+                    f"{path}[{item_index}]",
+                    f"'{field}' must contain only non-empty strings",
+                )
+            )
+
+
 def validate_maildesk_catalog(
     data: object, catalog: str = MAIL_DESK_RELATIVE_PATH
 ) -> list[dict[str, str]]:
-    """Validate a parsed ``mail-desk.json`` exactly like ``load_reply_heuristics``."""
+    """Validate a parsed ``mail-desk.json`` exactly like ``load_reply_heuristics``.
+
+    Mirrors the loader gate for both schema revisions: schema 1 keeps the legacy
+    shape (``reply_triggers`` required); schema 2 accepts a derivation-usable
+    ``owner_address`` without explicit triggers (the greeting class is then derived
+    by the loader's own :func:`derive_greeting_triggers`, so an unusable local part
+    is drift) and requires either field otherwise.  The optional schema-2
+    desk-signals fields are checked as lists of non-empty strings; absent fields use
+    the loader's defaults.
+    """
     errors: list[dict[str, str]] = []
     if not isinstance(data, Mapping):
         return [_error(catalog, _ROOT, "top-level value must be a JSON object")]
@@ -347,13 +396,14 @@ def validate_maildesk_catalog(
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
-        or schema_version != REPLY_HEURISTICS_SCHEMA_VERSION
+        or schema_version not in SUPPORTED_REPLY_HEURISTICS_SCHEMA_VERSIONS
     ):
         errors.append(
             _error(
                 catalog,
                 f"{_ROOT}.schema_version",
-                f"schema_version must be exactly the integer {REPLY_HEURISTICS_SCHEMA_VERSION}",
+                "schema_version must be exactly the integer "
+                f"{REPLY_HEURISTICS_SCHEMA_VERSION} or {REPLY_HEURISTICS_SCHEMA_VERSION_OWNER_DERIVED}",
             )
         )
 
@@ -364,8 +414,38 @@ def validate_maildesk_catalog(
         )
         return errors
 
-    triggers = block.get("reply_triggers")
-    if not isinstance(triggers, list) or not triggers:
+    owner_address = block.get("owner_address")
+    if owner_address is not None and not isinstance(owner_address, str):
+        errors.append(
+            _error(
+                catalog,
+                f"{_ROOT}.reply_heuristics.owner_address",
+                "'owner_address' must be a string or null",
+            )
+        )
+        owner_address = None
+
+    if "reply_triggers" in block:
+        triggers = block.get("reply_triggers")
+        if not isinstance(triggers, list) or not triggers:
+            errors.append(
+                _error(
+                    catalog,
+                    f"{_ROOT}.reply_heuristics.reply_triggers",
+                    "'reply_triggers' must be a non-empty list of strings",
+                )
+            )
+        else:
+            for trigger_index, trigger in enumerate(triggers):
+                if not _is_nonempty_str(trigger):
+                    errors.append(
+                        _error(
+                            catalog,
+                            f"{_ROOT}.reply_heuristics.reply_triggers[{trigger_index}]",
+                            "'reply_triggers' must contain only non-empty strings",
+                        )
+                    )
+    elif schema_version == REPLY_HEURISTICS_SCHEMA_VERSION:
         errors.append(
             _error(
                 catalog,
@@ -373,48 +453,37 @@ def validate_maildesk_catalog(
                 "'reply_triggers' is required and must be a non-empty list of strings",
             )
         )
-    else:
-        for trigger_index, trigger in enumerate(triggers):
-            if not _is_nonempty_str(trigger):
-                errors.append(
-                    _error(
-                        catalog,
-                        f"{_ROOT}.reply_heuristics.reply_triggers[{trigger_index}]",
-                        "'reply_triggers' must contain only non-empty strings",
-                    )
-                )
-
-    if "no_reply_sender_tokens" in block:
-        tokens = block.get("no_reply_sender_tokens")
-        if not isinstance(tokens, list):
-            errors.append(
-                _error(
-                    catalog,
-                    f"{_ROOT}.reply_heuristics.no_reply_sender_tokens",
-                    "'no_reply_sender_tokens' must be a list of non-empty strings",
-                )
+    elif owner_address is None:
+        errors.append(
+            _error(
+                catalog,
+                f"{_ROOT}.reply_heuristics",
+                "schema 2 requires either 'reply_triggers' or 'owner_address'",
             )
-        else:
-            for token_index, token in enumerate(tokens):
-                if not _is_nonempty_str(token):
-                    errors.append(
-                        _error(
-                            catalog,
-                            f"{_ROOT}.reply_heuristics.no_reply_sender_tokens[{token_index}]",
-                            "'no_reply_sender_tokens' must contain only non-empty strings",
-                        )
-                    )
-
-    if "owner_address" in block:
-        owner_address = block.get("owner_address")
-        if owner_address is not None and not isinstance(owner_address, str):
+        )
+    else:
+        # Schema 2 without explicit triggers: reuse the loader's own derivation gate
+        # so an ``owner_address`` with no usable local part (empty/whitespace/
+        # derivation-incompatible) fails loud here exactly as it does during loading.
+        try:
+            derive_greeting_triggers(owner_address)
+        except ValueError as exc:
             errors.append(
                 _error(
                     catalog,
                     f"{_ROOT}.reply_heuristics.owner_address",
-                    "'owner_address' must be a string or null",
+                    str(exc),
                 )
             )
+
+    _validate_optional_string_list(catalog, block, "no_reply_sender_tokens", errors)
+    for field in (
+        "sent_sender_domain_whitelist",
+        "sent_subject_stopwords",
+        "internal_domains",
+        "spam_sender_allowlist",
+    ):
+        _validate_optional_string_list(catalog, block, field, errors)
     return errors
 
 

@@ -1177,13 +1177,16 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 ## Desk-Signals-Katalog (`mail-desk.json`) im Batch-Lauf
 
 - Beim Batch-Lauf lädt der Runner den Desk-Signals-Katalog
-  `memory/references/mail-desk/mail-desk.json` (Workspace-Katalog, Schema 1) über
+  `memory/references/mail-desk/mail-desk.json` (Workspace-Katalog) über
   `load_reply_heuristics` aus `core/matching/reply_heuristics.py`.
 - Pflegevertrag: Reply-Trigger werden **ausschließlich** im Workspace-Katalog
-  gepflegt; der Bundle-Default `DEFAULT_REPLY_TRIGGERS` ist ein reiner
-  Kompatibilitäts-Fallback und niemals ein Erweiterungspunkt.
-- Fehlt die Katalogdatei, greifen die Bundle-Defaults; jede Schema-Drift schlägt
-  fail-loud mit `ValueError` fehl.
+  gepflegt; das Bundle enthält **keinen** Default-Satz mit Anrede-Triggern und ist
+  niemals ein Erweiterungspunkt.
+- Fehlt die Katalogdatei, gilt der **neutrale Fallback** mit **leeren**
+  `reply_triggers` („ohne Katalog keine Anrede-Trigger“). Schema 2 leitet die
+  Anrede-Trigger bei gesetztem `owner_address` aus dessen Local-Part ab; Schema 1
+  bleibt als Kompatibilitätsform für Bestands-Kataloge gültig. Jede Schema-Drift
+  schlägt fail-loud mit `ValueError` fehl.
 - Details, Schema und Owner-Gate: [`../SKILL.md`](../SKILL.md) Abschnitt
   „Desk-Signals-Katalog (`mail-desk.json`)“.
 

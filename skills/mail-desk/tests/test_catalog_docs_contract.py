@@ -92,7 +92,11 @@ class DeskSignalsCatalogSkillDocTests(_DocsContractTestCase):
             "SKILL.md must name the bundle as the non-editable side",
         )
 
-    def test_skill_doc_marks_bundle_default_as_compatibility_fallback(self) -> None:
+    def test_skill_doc_marks_missing_catalog_as_neutral_fallback(self) -> None:
+        # FR-22/MD-ID1: a missing catalog is a *neutral* fallback with an EMPTY
+        # trigger list ("ohne Katalog keine Anrede-Trigger"); there is no bundle
+        # default trigger set.  A set ``owner_address`` alone derives the greeting
+        # class from its local part.
         self.assertIn(
             "mail-desk.json",
             self.text,
@@ -100,25 +104,38 @@ class DeskSignalsCatalogSkillDocTests(_DocsContractTestCase):
         )
         self.assert_any_phrase(
             self.text,
-            ("Fallback", "fallback"),
-            "the bundle default must be documented as a fallback",
+            ("neutraler Fallback", "neutral fallback"),
+            "a missing catalog must be documented as the neutral fallback",
         )
         self.assert_any_phrase(
             self.text,
-            ("Kompatibilität", "compatibility"),
-            "the bundle default must be documented as compatibility-only",
+            ("ohne Katalog keine Anrede-Trigger",),
+            "SKILL.md must document the 'ohne Katalog keine Anrede-Trigger' semantics",
         )
         self.assert_any_phrase(
             self.text,
-            ("Bundle", "bundle"),
-            "the fallback must be attributed to the bundle, not the workspace catalog",
+            ("leeren", "leere"),
+            "the fallback trigger list must be documented as empty",
+        )
+        self.assertIn(
+            "reply_triggers",
+            self.text,
+            "the neutral fallback must be tied to the empty reply_triggers list",
+        )
+        self.assert_any_phrase(
+            self.text,
+            (
+                "Owner-abgeleitete Trigger",
+                "leitet der Loader die generische Anrede-Klasse",
+            ),
+            "SKILL.md must document that owner_address alone derives greeting triggers",
         )
 
     def test_skill_doc_documents_catalog_schema_fields(self) -> None:
         self.assertIn(
             "reply_triggers",
             self.text,
-            "SKILL.md must document the required reply_heuristics.reply_triggers field",
+            "SKILL.md must document the reply_heuristics.reply_triggers field",
         )
         self.assertIn(
             "no_reply_sender_tokens",
@@ -128,7 +145,17 @@ class DeskSignalsCatalogSkillDocTests(_DocsContractTestCase):
         self.assertIn(
             "schema_version",
             self.text,
-            "SKILL.md must document the catalog schema_version (schema 1)",
+            "SKILL.md must document the catalog schema_version",
+        )
+        self.assertIn(
+            "Schema 1",
+            self.text,
+            "SKILL.md must document the legacy schema 1 revision",
+        )
+        self.assertIn(
+            "Schema 2",
+            self.text,
+            "SKILL.md must document the owner-derived schema 2 revision",
         )
 
     def test_skill_doc_explains_owner_address_effect(self) -> None:

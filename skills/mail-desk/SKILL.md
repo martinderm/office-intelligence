@@ -390,46 +390,67 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
 ## Desk-Signals-Katalog (`mail-desk.json`)
 
 Der Desk-Signals-Katalog liegt im konsumierenden **Workspace** unter
-`memory/references/mail-desk/mail-desk.json` (Schema 1) und ist die einzige
+`memory/references/mail-desk/mail-desk.json` und ist die einzige
 Pflegequelle für Reply-Trigger. Er wird über `load_reply_heuristics` aus
 [`scripts/core/matching/reply_heuristics.py`](scripts/core/matching/reply_heuristics.py)
 geladen.
 
 Pflegevertrag:
 
-- Reply-Trigger werden **ausschließlich** im Workspace-Katalog gepflegt. Der
-  Bundle-Default `DEFAULT_REPLY_TRIGGERS` in
-  [`scripts/core/matching/reply_heuristics.py`](scripts/core/matching/reply_heuristics.py)
-  (Zeilen 158–168) ist ein reiner **Kompatibilitäts-Fallback** für Workspaces ohne
-  Katalog und **niemals ein Erweiterungspunkt**. Neue Trigger gehören nie in den
-  Bundle-Code; sie werden im Workspace-Katalog ergänzt. Die Pflege folgt demselben
-  Muster wie `topic-catalog-entry` bzw. `project-catalog-entry`.
-- Nur eine **fehlende** Katalogdatei ist der dokumentierte Fallback auf die
-  Bundle-Defaults; jede vorhandene Datei wird streng validiert.
+- Reply-Trigger werden **ausschließlich** im Workspace-Katalog gepflegt und
+  **niemals** im Bundle-Code. Es gibt **keinen** Bundle-Default-Satz mit
+  Anrede-Triggern und damit keinen Bundle-Erweiterungspunkt; neue Trigger gehören
+  nie in den Bundle-Code, sondern werden im Workspace-Katalog ergänzt. Die Pflege
+  folgt demselben Muster wie `topic-catalog-entry` bzw. `project-catalog-entry`.
+- Nur eine **fehlende** Katalogdatei ist der dokumentierte Fallback; jede
+  vorhandene Datei wird streng validiert.
 
-Schema (Schema 1):
+Neutraler Fallback (FR-22/MD-ID1):
 
-- `schema_version`: strenger `int`, exakt `1`. `bool`, `float`, `string` oder
+- Fehlt die Katalogdatei, gilt ein **neutraler Fallback** mit **leeren**
+  `reply_triggers` („ohne Katalog keine Anrede-Trigger“). Kein Personenname ist je
+  ein erwarteter Fallback. `needs_reply` bleibt in diesem Fall trigger-false;
+  Review- und `FULL_BODY_ACTION_REQUEST`-Semantik bleiben unverändert.
+
+Schema (Schema 1 = Legacy, Schema 2 = aktuell):
+
+- `schema_version`: strenger `int`, `1` oder `2`. `bool`, `float`, `string` oder
   `null` werden abgelehnt (`True == 1` und `1.0 == 1` gelten ausdrücklich nicht).
-- `reply_heuristics.reply_triggers`: **Pflichtfeld**, nicht-leere Liste
-  nicht-leerer Strings.
-- `reply_heuristics.no_reply_sender_tokens`: optional, Liste nicht-leerer Strings;
+- `reply_heuristics.reply_triggers`: in **Schema 1** Pflichtfeld (nicht-leere
+  Liste nichtleerer Strings). In **Schema 2** optional, sofern
+  `reply_heuristics.owner_address` gesetzt ist; explizite Trigger werden wörtlich
+  verwendet und **nie** mit den abgeleiteten gemischt. Fehlen in Schema 2 sowohl
+  `reply_triggers` als auch `owner_address`, schlägt der Loader fail-loud fehl.
+- `reply_heuristics.no_reply_sender_tokens`: optional, Liste nichtleerer Strings;
   fehlt sie, greift der Bundle-Default `DEFAULT_NO_REPLY_SENDER_TOKENS`.
 - `reply_heuristics.owner_address`: optional, `string` oder `null`.
+- Schema-2-Zusatzfelder (jeweils optional, Liste nichtleerer Strings; fehlen sie,
+  greifen die dokumentierten Defaults, die die bisherigen Hardcodes spiegeln):
+  `sent_sender_domain_whitelist`, `sent_subject_stopwords`, `internal_domains`,
+  `spam_sender_allowlist`.
 
-`owner_address` ist heute ein reiner **Katalog-Contract** gemäß FR-18: Der
-Validator prüft das Feld strikt als `string` oder `null` (Schema 1). Zur
-Laufzeit liest das Feld noch **keine** Komponente; es existiert derzeit kein
-Consumer. Die in FR-18 beschriebene Wirkung ist **Target-Verhalten und noch
-nicht implementiert**: Erst dann wertet der Sent-Reply-Check die echte
-Desk-Identität gegen die to/cc-Empfänger aus, statt wie heute allein über die
+Owner-abgeleitete Trigger (Schema 2): Ist `owner_address` gesetzt und fehlen
+explizite `reply_triggers`, leitet der Loader die generische Anrede-Klasse aus dem
+Local-Part des Owners ab — kleingeschrieben, erstes Punktsegment (bzw. der ganze
+Local-Part, wenn er keinen Punkt enthält). Der so gewonnene Name füllt die neun
+Templates `GREETING_TRIGGER_TEMPLATES` (`{X} bitte`, `bitte {X}`, `frage an {X}`,
+`hallo {X}`, `lieber {X}`, `{X} kannst du`, `{X} ?`, `{X}, bitte`, `@{X}`). Damit
+trägt die Desk-Identität selbst die Anrede, ohne dass ein Personenname im
+Bundle-Code steht.
+
+`owner_address` ist weiterhin ein **Katalog-Contract** gemäß FR-18: Der Validator
+prüft das Feld strikt als `string` oder `null`. In **Schema 2** wertet der Loader
+das Feld bereits zur Trigger-Ableitung aus. Die in FR-18 beschriebene
+Sent-Reply-Check-Wirkung ist dagegen **Target-Verhalten und noch nicht
+implementiert**: Erst dann wertet der Sent-Reply-Check die echte Desk-Identität
+gegen die to/cc-Empfänger aus, statt wie heute allein über die
 Keyword-Heuristik (`reply_triggers`/`no_reply_sender_tokens`) zu entscheiden.
 Ist `owner_address` `null`, bleibt es bei der bisherigen Keyword-Heuristik.
 
 Fail-loud: Jede Schema-Drift oder ein ungültiger Wert lässt
 `load_reply_heuristics` mit einem `ValueError` fehlschlagen (siehe
 [`scripts/core/matching/reply_heuristics.py`](scripts/core/matching/reply_heuristics.py),
-Zeilen 210–269) – niemals ein stiller Fallback.
+`load_reply_heuristics`) – niemals ein stiller Fallback.
 
 ## Review, Abschluss und Detailreferenzen
 

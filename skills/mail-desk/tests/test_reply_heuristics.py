@@ -9,8 +9,10 @@ are unchanged.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import Mock
 
@@ -20,6 +22,50 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 from core import classifier  # noqa: E402
 from core.matching import reply_heuristics  # noqa: E402
+
+
+#: Canonical workspace-relative desk-signals catalog path (FR-18/MD-S1).
+CATALOG_RELATIVE_PATH = Path("memory") / "references" / "mail-desk" / "mail-desk.json"
+
+#: The MD-R8 facade fixtures below exercise the closing/thanks downgrade, which
+#: requires an asserted ``needs_reply``.  Since FR-22/MD-ID1 removed the
+#: identity-bearing fallback, the fixtures now seed a hermetic schema-2 catalog
+#: whose ``owner_address`` derives the greeting class (``hallo martin`` /
+#: ``lieber martin``) from the desk owner's local part -- no personal name remains
+#: a bundle fallback.
+CLOSING_FIXTURE_OWNER_ADDRESS = "martin.mayr@example.org"
+
+
+class _CatalogWorkspace:
+    """Hermetic temp workspace that never touches real catalogs or mailboxes."""
+
+    def __init__(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+
+    def __enter__(self) -> Path:
+        return Path(self._tmp.name)
+
+    def __exit__(self, *exc: object) -> None:
+        self._tmp.cleanup()
+
+
+def write_catalog(workspace_root: Path, payload: object) -> Path:
+    """Write the desk-signals catalog into a hermetic workspace."""
+    path = workspace_root / CATALOG_RELATIVE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def seed_closing_catalog(workspace_root: Path) -> Path:
+    """Seed the schema-2 owner-derived catalog that restores ``needs_reply``."""
+    return write_catalog(
+        workspace_root,
+        {
+            "schema_version": 2,
+            "reply_heuristics": {"owner_address": CLOSING_FIXTURE_OWNER_ADDRESS},
+        },
+    )
 
 
 class ReplyHeuristicOwnerTests(unittest.TestCase):
@@ -115,9 +161,10 @@ class ClosingDowngradeTests(unittest.TestCase):
             mail["preview"] = body
         return mail
 
-    def two_pass(self, email: dict, reader) -> dict:
+    def two_pass(self, email: dict, reader, workspace_root: Path | None = None) -> dict:
         return classifier.classify_email_two_pass(
             email,
+            workspace_root=workspace_root,
             projects=[self.project()],
             topics=[],
             sent_lookup={},
@@ -167,7 +214,11 @@ class ClosingDowngradeTests(unittest.TestCase):
         )
         email = self.email("AW: ATAEL Lieferung", body=body)
         email["in_reply_to"] = "<parent@example.test>"
-        item = self.two_pass(email, lambda *args, **kwargs: dict(email))
+        with _CatalogWorkspace() as ws:
+            seed_closing_catalog(ws)
+            item = self.two_pass(
+                email, lambda *args, **kwargs: dict(email), workspace_root=ws
+            )
         decision = item["decision"]
         self.assertFalse(decision["needs_reply"])
         self.assertEqual(decision["reply_downgrade"]["rule_revision"], "md-r8")
@@ -184,7 +235,9 @@ class ClosingDowngradeTests(unittest.TestCase):
             "Hallo Martin, kannst du mir das Protokoll bitte senden? "
             "Vielen Dank im Voraus."
         )
-        item = self.two_pass(email, Mock(return_value=full))
+        with _CatalogWorkspace() as ws:
+            seed_closing_catalog(ws)
+            item = self.two_pass(email, Mock(return_value=full), workspace_root=ws)
         decision = item["decision"]
         self.assertTrue(decision["needs_reply"])
         self.assertEqual([key for key in decision if key.startswith("_")], [])
@@ -201,7 +254,9 @@ class ClosingDowngradeTests(unittest.TestCase):
             "Vielen Dank im Voraus."
         )
         reader = Mock(return_value=full)
-        item = self.two_pass(email, reader)
+        with _CatalogWorkspace() as ws:
+            seed_closing_catalog(ws)
+            item = self.two_pass(email, reader, workspace_root=ws)
         self.assertTrue(item["decision"]["needs_reply"])
 
 

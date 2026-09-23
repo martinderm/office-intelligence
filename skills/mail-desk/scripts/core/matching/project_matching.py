@@ -39,9 +39,11 @@ from typing import Any, Mapping
 
 from ..common import ensure_sentence_end, normalize_message_id, resolve_evidence_dir
 from .date_parser import parse_date_to_year_month
+from .reply_heuristics import DEFAULT_INTERNAL_DOMAINS
 
 __all__ = [
     "select_project_match",
+    "GENERIC_FREEMAIL_DOMAINS",
     "evaluate_do_not_route_signal",
     "evaluate_thread_sibling_do_not_route",
     "match_thread_project_inheritance",
@@ -56,6 +58,12 @@ __all__ = [
     "_build_project_evidence",
     "_header_scope_text",
 ]
+
+#: Generic freemail domains the root matchers never accept as a domain gate on
+#: their own, independent of the configurable internal-domain boundary (FR-22/MD-ID3).
+#: This mirrors the HEAD-observable project/topic guard exactly (``outlook.com`` in,
+#: ``hotmail.com`` out; the latter belongs to the separate sent-indexer whitelist).
+GENERIC_FREEMAIL_DOMAINS: tuple[str, ...] = ("gmail.com", "outlook.com", "yahoo.com")
 
 #: Short/ambiguous acronyms that only match a project name as an exact subject token.
 _COMMON_WORD_ACRONYMS = {"WEEK", "LATEST", "USAGE", "PILOT", "START"}
@@ -394,6 +402,7 @@ def select_project_match(
     parties: str,
     cc_str: str = "",
     suppressed_candidates: list[dict[str, Any]] | None = None,
+    internal_domains: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
     """Run the root project-catalog matching loop and return the strongest match.
 
@@ -407,7 +416,15 @@ def select_project_match(
     Entries excluded by their ``do_not_route_if`` declaration never match and are
     reported on ``suppressed_candidates`` as catalog-only
     ``{"kind", "id", "suppression_reason"}`` rows when a collector list is supplied.
+
+    ``internal_domains`` is the catalog-configured internal-domain boundary (FR-22/MD-ID3):
+    ``None`` resolves to :data:`~core.matching.reply_heuristics.DEFAULT_INTERNAL_DOMAINS`,
+    which is byte-identical to the previous ``@boku.ac.at`` literal.  The generic freemail
+    exclusion (:data:`GENERIC_FREEMAIL_DOMAINS`) stays invariant regardless of the parameter.
     """
+    resolved_internal_domains = (
+        DEFAULT_INTERNAL_DOMAINS if internal_domains is None else tuple(internal_domains)
+    )
     best_key: tuple[float, float, int] | None = None
     best_match: dict[str, Any] | None = None
     header_text = _header_scope_text(from_str, to_str, cc_str)
@@ -488,8 +505,14 @@ def select_project_match(
 
         # 1c. Name in body with matching domain/contact or project keyword
         if matched_project is None:
-            external_contacts = [c for c in contacts if c and not c.endswith("@boku.ac.at")]
-            external_domains = [d for d in domains if d and d != "boku.ac.at"]
+            external_contacts = [
+                c
+                for c in contacts
+                if c and not any(c.endswith("@" + d) for d in resolved_internal_domains)
+            ]
+            external_domains = [
+                d for d in domains if d and d not in resolved_internal_domains
+            ]
             has_name_in_body = any(
                 (re.search(r"\b" + re.escape(n.upper()) + r"\b", full_text) if (len(n) <= 4 or n.upper() in _COMMON_WORD_ACRONYMS or (n.isupper() and len(n) <= 6))
                  else re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE))
@@ -503,7 +526,13 @@ def select_project_match(
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 matched_strength = 1
-            elif has_contact_match or (has_domain_match and not any(gen in parties for gen in ["boku.ac.at", "gmail.com", "outlook.com", "yahoo.com"])):
+            elif has_contact_match or (
+                has_domain_match
+                and not any(
+                    gen in parties
+                    for gen in (*resolved_internal_domains, *GENERIC_FREEMAIL_DOMAINS)
+                )
+            ):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 matched_strength = 1

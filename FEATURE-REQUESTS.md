@@ -31,7 +31,7 @@ verbindliche Paketkarten.
 | `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428): `apply_local_repairs` füllt nur fehlende Records; stale Index-/Log-Records nach transienter Ziel-Verifikation bleiben stehen (manuell korrigiert) | `MD-RC1` (Repair-Härtung: stale Records nachverifizieren); Paketkarte unten |
 | `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438): Inline-Signaturbilder verbrauchen das Anhang-Zählquota (5); echte `.docx`-Anhänge werden `skipped_count_limit` und nie policy-geprüft | `MD-A3` (Anhang-Quota: Inline vs. Datei); Paketkarte unten |
 | `FR-21` | ✅ Abgeschlossen (MD-S4: Desk-Signals-Doku in SKILL.md/batch-runner.md + Pattern-Semantik in topic-catalog-entry; MD-S5: `catalog_validator.py` + 48 Tests, Live-Lauf boku-user valid; 1 Fix-Runde Root-vs-Nested Min-3 + owner_address-Contract-Wording; 980 Tests grün) | FR-18-Nachtrag-Analyse (2026-09-23, Consumer-Migration boku-user): Desk-Signals-Katalog funktional, aber SKILL.md/batch-runner.md dokumentieren ihn nicht; Match-Semantik der Subject-Patterns undokumentiert; kein Workspace-Katalog-Validator | `MD-S4` (Desk-Signals-Doku + Pflegevertrag), `MD-S5` (Katalog-Validator); Paketkarte unten |
-| `FR-22` | ⬜ geplant | Befund-Analyse (2026-09-23): `DEFAULT_REPLY_TRIGGERS`-Fallback (9 Trigger, alle mit „martin") ist Identity-Leak im Bundle und für `boku-user` toter Code (eigener Katalog überschreibt); 7 weitere boku-Spezifika-Stellen in 4 Dateien (sent_indexer-Domain-Liste + „boku"-Stopwort, project/topic internal-domain-Matching, Spam-Gegenindikatoren); die sent_indexer-Domain-Katalogisierung war FR-18-Zielinvariante, wurde aber nie implementiert | `MD-ID1` (neutraler Fallback + owner-generierte Trigger, Schema 2), `MD-ID2` (sent_indexer-Domain-Liste + Stopwörter → Katalog), `MD-ID3` (internal-domain-Matching → Katalog), `MD-ID4` (Spam-Gegenindikatoren → Katalog oder bewusster Verbleib); Paketkarte unten |
+| `FR-22` | ✅ Abgeschlossen (MD-ID1: Schema 2 + neutraler leerer Fallback + owner-generierte Trigger; MD-ID2: sent_indexer-Domain-Liste/Stopwörter → Katalog; MD-ID3: internal-domain-Matching aus dem Katalog; MD-ID4: Gegenindikatoren entfernt + `spam_sender_allowlist`; 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün; 12 Dispatches mit Red-Gates) | Befund-Analyse (2026-09-23): `DEFAULT_REPLY_TRIGGERS`-Fallback (9 Trigger, alle mit „martin") ist Identity-Leak im Bundle und für `boku-user` toter Code (eigener Katalog überschreibt); 7 weitere boku-Spezifika-Stellen in 4 Dateien (sent_indexer-Domain-Liste + „boku"-Stopwort, project/topic internal-domain-Matching, Spam-Gegenindikatoren); die sent_indexer-Domain-Katalogisierung war FR-18-Zielinvariante, wurde aber nie implementiert | `MD-ID1` (neutraler Fallback + owner-generierte Trigger, Schema 2), `MD-ID2` (sent_indexer-Domain-Liste + Stopwörter → Katalog), `MD-ID3` (internal-domain-Matching → Katalog), `MD-ID4` (Spam-Gegenindikatoren → Katalog oder bewusster Verbleib); Paketkarte unten |
 
 
 ```text
@@ -1924,7 +1924,7 @@ und Workspace-Kataloge haben keinen ausführbaren Validator.
 
 ## FR-22: Identity-freier Desk-Signals-Fallback und Katalogisierung der BOKU-Restbestände
 
-**Status:** ⬜ geplant. Analysequelle: Fallback-Befund-Analyse vom 2026-09-23
+**Status:** ✅ Abgeschlossen (2026-09-23; MD-ID1-ID4 im Kernel-Loop mit Subagenten: 12 Dispatches mit Red-Gates, 1 Fix-Runde nach unabhängigem Review — Validator-Gate für unbenutzbare Owner-Local-Parts; 1015 Tests grün; Umsetzungsnachweis unten). Analysequelle: Fallback-Befund-Analyse vom 2026-09-23
 (Orchestrator); es wurde keine Codeänderung vorgenommen. Die Analyse folgte der
 Frage, inwiefern der `reply_needed`-Trigger-Fallback von den boku-user-Spezifika
 entfernt und durch einen generischen Fallback ersetzt werden sollte. Ausgewählte
@@ -2041,9 +2041,56 @@ owner-generierte Trigger; alle Restbestände in diesem FR.
   ggf. catalog-entry-Skill.
 - Mail-Desk-Suite grün; Metrik-Stellen per FR-16-Checkliste; System-Map-Sync
   (L1/L2 + objects.md-Desk-Signals-Eintrag).
-- Consumer-Migrationshinweis: boku-user-Katalogerweiterung (neue Schema-2-Felder)
-  bleibt Workspace-Eigentum; Migration erfolgt als Copy-Prompt an den
-  Workspace-Owner (analog FR-18/FR-21), nicht durch das Bundle.
+
+### Umsetzungsnachweis (2026-09-23)
+
+- **MD-ID1 (Schema 2 + neutraler Fallback):** `load_reply_heuristics` liefert ohne
+  Katalogdatei eine **leere** Trigger-Liste; `DEFAULT_REPLY_TRIGGERS` entfernt
+  (dokumentierende Konstante `GREETING_TRIGGER_TEMPLATES` verbleibt);
+  `derive_greeting_triggers(owner_address)` leitet die 9er-Anrede-Klasse aus dem
+  Vorname-Segment des Local-Parts ab (fail-loud bei unbenutzbarem Local-Part).
+  Schema 2 (striktes Gate) mit `reply_triggers` optional-wenn-owner;
+  Schema-1-Dateien bleiben valide Legacy. Vier neue optionale Felder auf der
+  frozen `ReplyHeuristicsConfig`: `sent_sender_domain_whitelist`,
+  `sent_subject_stopwords`, `internal_domains`, `spam_sender_allowlist` (je
+  dokumentierte Defaults = bisherige Bundle-Konstanten). Predicate
+  `matches_reply_trigger` byte-identisch. SKILL.md/batch-runner.md auf neutralen
+  Fallback + Schema 2 umgeschrieben; `catalog_validator.py` akzeptiert Schema 1+2.
+- **MD-ID2 (sent_indexer):** Stopwort- und Domain-Whitelist-Mengen kommen aus der
+  Konfiguration (Re-Export der Defaults via `assertIs`-identische Objekte);
+  `check_if_replied` optionaler `identity_config`-Parameter (None = Defaults ohne
+  Datei-I/O); `auto_resolve_replies_from_sent` threadt `workspace_root`; classifier
+  übergibt die geladene Konfiguration. Kein „boku"-Literal in `sent_indexer.py`.
+- **MD-ID3 (internal-domain-Matching):** `select_project_match`/`select_topic_match`
+  erhalten optional `internal_domains` (Default = Katalog-Default `boku.ac.at`);
+  generische Freemail-Menge als `GENERIC_FREEMAIL_DOMAINS`-Konstante; classifier
+  threadt die Katalogliste in beide Selektoren. Default-Verhalten byte-identisch.
+- **MD-ID4 (Spam-Zweig):** Die 4 Content-Gegenindikatoren entfernt (Zweig =
+  Phishing-Betreffmuster UND Freemail-Domain); `_sender_is_allowlisted`
+  (Exaktadresse ODER Domain, case-insensitive, `extract_email_address`-basiert) als
+  erste Bedingung des Zweigs. Branch-Reihenfolge und Freemail-Domain-Liste
+  unverändert. `focus group` verbleibt in `FULL_BODY_ARTIFACT_SIGNALS` (frozen
+  Baseline-Konstante, separater Vertrag).
+- **Fix-Runde MD-ID-fix-001:** Validator-Gate für unbenutzbare Owner-Local-Parts —
+  `derive_greeting_triggers` wiederverwendet (keine duplizierte Logik); 5 Subtests
+  („", „   ", „@", „.", „   @example.org") fail-loud.
+- **Verifikation:** 1015/1015 Tests grün (7 geänderte/2 neue Testmodule); compileall,
+  `git diff --check`, Index clean; Live-Lauf
+  `catalog_validator.py --workspace boku-user` exit 0 (Schema-1-Legacy akzeptiert).
+  Metriken 151/67/56/65/1015 (L2-Kanonik, FR-16-Checkliste nachgezogen).
+
+**Consumer-Migrationshinweis (boku-user):** Der bestehende Schema-1-Katalog bleibt
+vollständig valide — **keine Migration zwingend erforderlich**. Optionale Schema-2-
+Erweiterung für neue Freiheiten (Copy-Prompt an den Workspace-Owner):
+1. `schema_version` auf `2` setzen (eröffnet `reply_triggers`-Optionalität und die
+   neuen Felder),
+2. `reply_triggers`-Block optional entfernen (dann generiert der Loader die
+   Anrede-Trigger aus `owner_address: martin.mayr@boku.ac.at` automatisch — die
+   9 bisherigen Trigger entstehen identisch aus der Ableitung),
+3. neue Felder nur bei Bedarf pflegen (alle optional mit dokumentierten Defaults:
+   `sent_sender_domain_whitelist`, `sent_subject_stopwords`, `internal_domains`,
+   `spam_sender_allowlist`).
+Ohne Änderung bleibt das Verhalten byte-identisch (Schema-1-Legacy-Pfad).
 
 ### Out of Scope (FR-22)
 
@@ -2052,3 +2099,6 @@ owner-generierte Trigger; alle Restbestände in diesem FR.
 - Verhaltensänderung des Trigger-Matching-Prädikats selbst (Wortgrenzen-Predicate
   bleibt byte-identisch).
 - Promotion-/Export-/Cloud-/Task-Pfade (FR-09/FR-10 unberührt).
+- Threading des Desk-Signals-Katalogs in `core/modes/resolve.py`
+  (`auto_resolve_replies_from_sent` läuft dort weiter mit Defaults —
+  byte-identisch zu HEAD; dokumentierter Follow-up-Kandidat).

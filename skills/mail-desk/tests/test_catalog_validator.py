@@ -30,9 +30,14 @@ The contract pinned by this suite (the implementation must satisfy it):
   or string ``3`` is drift); every workpackage needs ``id``/``title``/``status``/
   ``tasks``/``deliverables``.
 * ``mail-desk.json`` mirrors ``load_reply_heuristics`` exactly: strict integer
-  ``schema_version`` 1 (bool/float/string rejected), a ``reply_heuristics``
-  object, a non-empty string list ``reply_triggers``, an optional string list
-  ``no_reply_sender_tokens`` and an optional string-or-null ``owner_address``.
+  ``schema_version`` 1 or 2 (bool/float/string rejected), a ``reply_heuristics``
+  object and an optional string-or-null ``owner_address``.  Schema 1 requires a
+  non-empty string list ``reply_triggers``; schema 2 makes ``reply_triggers``
+  optional when a derivation-usable ``owner_address`` is set (the greeting class is
+  then derived by the loader's own ``derive_greeting_triggers``; an address without a
+  usable local part is drift).
+  The optional string list ``no_reply_sender_tokens`` and the four schema-2
+  desk-signals fields follow the loader's documented defaults.
 * The CLI ``python -B skills/mail-desk/scripts/catalog_validator.py --workspace
   <dir> --json`` exits ``0`` (valid), ``1`` (drift) or ``2`` (input/runtime) and
   prints one canonical JSON envelope on stdout.
@@ -438,11 +443,15 @@ class MailDeskCatalogValidationTests(_ValidatorTestCase):
         self.assert_valid(report)
 
     def test_schema_version_drift_is_rejected(self) -> None:
+        # Strict gate: ``True == 1`` / ``1.0 == 1`` would pass a loose ``==``, and a
+        # string ``"1"`` must never masquerade as a supported revision.  Schema 1 and
+        # schema 2 are the only accepted revisions; ``0`` and ``3`` are drift.
         payloads = {
             "boolean schema_version": valid_mail_desk(schema_version=True),
             "float schema_version": valid_mail_desk(schema_version=1.0),
             "string schema_version": valid_mail_desk(schema_version="1"),
-            "wrong schema_version": valid_mail_desk(schema_version=2),
+            "zero schema_version": valid_mail_desk(schema_version=0),
+            "out-of-range schema_version": valid_mail_desk(schema_version=3),
         }
         for label, payload in payloads.items():
             with self.subTest(case=label), _Workspace() as ws:
@@ -450,6 +459,65 @@ class MailDeskCatalogValidationTests(_ValidatorTestCase):
                 write_catalog(ws, MAIL_DESK_RELATIVE_PATH, payload)
                 report = validate_workspace_catalogs(ws)
                 self.assert_drift(report, "mail-desk.json", "schema_version")
+
+    def test_schema2_owner_address_without_reply_triggers_is_valid(self) -> None:
+        # FR-22/MD-ID1: schema 2 accepts an ``owner_address`` without explicit
+        # triggers; the greeting class is then derived from the owner's local part.
+        with _Workspace() as ws:
+            seed_valid_workspace(ws)
+            write_catalog(
+                ws,
+                MAIL_DESK_RELATIVE_PATH,
+                {
+                    "schema_version": 2,
+                    "reply_heuristics": {"owner_address": "klaus.weber@example.org"},
+                },
+            )
+            report = validate_workspace_catalogs(ws)
+        self.assert_valid(report)
+
+    def test_schema2_unusable_owner_address_without_reply_triggers_is_rejected(self) -> None:
+        # The loader fails loud when ``derive_greeting_triggers`` finds no usable
+        # local part (empty/whitespace/derivation-incompatible), so schema 2 without
+        # explicit triggers must reject such an ``owner_address`` as drift instead of
+        # accepting any non-null string.
+        payloads = {
+            "empty owner_address": "",
+            "whitespace owner_address": "   ",
+            "bare at-sign": "@",
+            "dot-only local part": ".",
+            "whitespace local part": "   @example.org",
+        }
+        for label, owner_address in payloads.items():
+            with self.subTest(case=label), _Workspace() as ws:
+                seed_valid_workspace(ws)
+                write_catalog(
+                    ws,
+                    MAIL_DESK_RELATIVE_PATH,
+                    {
+                        "schema_version": 2,
+                        "reply_heuristics": {"owner_address": owner_address},
+                    },
+                )
+                report = validate_workspace_catalogs(ws)
+                self.assert_drift(report, "mail-desk.json", "owner_address")
+
+    def test_schema2_without_reply_triggers_or_owner_address_is_rejected(self) -> None:
+        # Schema 2 needs either explicit ``reply_triggers`` or an ``owner_address``.
+        payloads = {
+            "empty reply_heuristics": {},
+            "null owner_address": {"owner_address": None},
+        }
+        for label, block in payloads.items():
+            with self.subTest(case=label), _Workspace() as ws:
+                seed_valid_workspace(ws)
+                write_catalog(
+                    ws,
+                    MAIL_DESK_RELATIVE_PATH,
+                    {"schema_version": 2, "reply_heuristics": block},
+                )
+                report = validate_workspace_catalogs(ws)
+                self.assert_drift(report, "mail-desk.json", "reply_triggers")
 
     def test_missing_reply_heuristics_block_is_rejected(self) -> None:
         payloads = {
