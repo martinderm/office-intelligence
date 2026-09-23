@@ -203,13 +203,13 @@ def classify_email_two_pass(
         # text of the effective source and routes the reclassified decision.
         decision = item.get("decision")
         if isinstance(decision, dict) and decision.get("needs_reply"):
-            closing_context = dict(decision)
-            closing_context["_closing_check_subject"] = str(source.get("subject", "") or item.get("subject", ""))
-            closing_context["_closing_check_body"] = str(source.get("preview", "") or item.get("notes", ""))
             downgraded, notes = reply_heuristics.downgrade_if_closing(
-                closing_context, str(item.get("notes", ""))
+                decision,
+                str(item.get("notes", "")),
+                subject=str(source.get("subject", "") or item.get("subject", "")),
+                body=str(source.get("preview", "") or item.get("notes", "")),
             )
-            if downgraded is not decision:
+            if decision.get("needs_reply") and not downgraded.get("needs_reply"):
                 item["decision"] = downgraded
                 item["notes"] = notes
         if source_sink is not None:

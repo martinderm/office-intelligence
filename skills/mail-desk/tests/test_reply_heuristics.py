@@ -52,6 +52,41 @@ class ReplyHeuristicOwnerTests(unittest.TestCase):
         self.assertFalse(reply_heuristics.is_closing_or_thanks(""))
         self.assertFalse(reply_heuristics.needs_reply_review(""))
 
+    def test_quoted_predecessor_request_does_not_block_closing(self) -> None:
+        # Live case B-11 (Env 9412): the thanks is the new content; the quoted
+        # predecessor announces a delivery ("wird ... ergänzen") and must not
+        # keep the reply requirement alive.
+        text = (
+            "Liebe Christina, lieber Martin,\n\n"
+            "vielen Dank für das Zusammenstellen der Unterlagen.\n\n"
+            "Liebe Grüße\nClaus\n"
+            ">>> Martin Mayr <martin.mayr@boku.ac.at> 30.07.2026 14:26 >>>\n\n"
+            "Lieber Claus,\n\nunter dem Link findest du ausgewählte Aktivitäten:\n"
+            "Christina wird morgen noch eine Präsentation ergänzen.\n"
+        )
+        self.assertTrue(reply_heuristics.is_closing_or_thanks(text))
+        self.assertFalse(reply_heuristics.needs_reply_review(text))
+
+    def test_quote_boundary_variants_are_stripped(self) -> None:
+        for separator in (
+            "Am 30.07.2026 schrieb Martin Mayr <martin.mayr@boku.ac.at>:",
+            "-----Ursprüngliche Nachricht-----",
+            "________________________________",
+            "> Bitte ergänze noch den Link.",
+        ):
+            with self.subTest(separator=separator):
+                text = f"Vielen Dank für die Unterlagen.\n{separator}\nBitte ergänze den Link bis Freitag.\n"
+                self.assertTrue(reply_heuristics.is_closing_or_thanks(text))
+
+    def test_request_in_new_part_blocks_closing_with_quoted_farewell(self) -> None:
+        text = (
+            "Hallo Martin, bitte sende mir noch das Protokoll.\n\n"
+            ">>> Martin Mayr <martin.mayr@boku.ac.at> 30.07.2026 14:26 >>>\n\n"
+            "Vielen Dank und liebe Grüße\nClaus\n"
+        )
+        self.assertFalse(reply_heuristics.is_closing_or_thanks(text))
+        self.assertTrue(reply_heuristics.needs_reply_review(text))
+
 
 class ClosingDowngradeTests(unittest.TestCase):
     """Facade contracts: the closing/thanks downgrade applies in both passes."""
@@ -119,6 +154,40 @@ class ClosingDowngradeTests(unittest.TestCase):
         item = self.two_pass(email, reader)
         self.assertTrue(reader.called)
         self.assertFalse(item["decision"]["needs_reply"])
+
+    def test_closing_with_quoted_predecessor_downgrades(self) -> None:
+        # Live case B-11: closing thanks plus the quoted delivery predecessor.
+        body = (
+            "Liebe Christina, lieber Martin,\n\n"
+            "vielen Dank für das Zusammenstellen der Unterlagen.\n\n"
+            "Liebe Grüße\nClaus\n"
+            ">>> Martin Mayr <martin.mayr@boku.ac.at> 30.07.2026 14:26 >>>\n\n"
+            "Lieber Claus,\n\nunter dem Link findest du ausgewählte Aktivitäten:\n"
+            "Christina wird morgen noch eine Präsentation ergänzen.\n"
+        )
+        email = self.email("AW: ATAEL Lieferung", body=body)
+        email["in_reply_to"] = "<parent@example.test>"
+        item = self.two_pass(email, lambda *args, **kwargs: dict(email))
+        decision = item["decision"]
+        self.assertFalse(decision["needs_reply"])
+        self.assertEqual(decision["reply_downgrade"]["rule_revision"], "md-r8")
+        self.assertEqual([key for key in decision if key.startswith("_")], [])
+
+    def test_facade_decision_has_no_closing_check_debug_keys(self) -> None:
+        email = self.email(
+            "AW: ATAEL Lieferung",
+            preview="Hallo Martin, kannst du mir das Protokoll bitte senden?",
+            body=None,
+        )
+        full = dict(email)
+        full["preview"] = (
+            "Hallo Martin, kannst du mir das Protokoll bitte senden? "
+            "Vielen Dank im Voraus."
+        )
+        item = self.two_pass(email, Mock(return_value=full))
+        decision = item["decision"]
+        self.assertTrue(decision["needs_reply"])
+        self.assertEqual([key for key in decision if key.startswith("_")], [])
 
     def test_real_request_body_is_never_downgraded(self) -> None:
         email = self.email(

@@ -55,9 +55,38 @@ def _contains_request_signal(text: str) -> bool:
     return bool(_REQUEST_SIGNAL.search(text))
 
 
+#: Start of a quoted predecessor thread.  Everything from the first matching line
+#: on is history and never a request of the current mail.
+_QUOTE_BOUNDARY: tuple[re.Pattern[str], ...] = (
+    re.compile(r"^\s*>"),
+    re.compile(r"^\s*_{10,}\s*$"),
+    re.compile(r"^\s*-{5,}\s*(?:original|urspr(?:ü|ue)ngliche)", re.IGNORECASE),
+    re.compile(r"^\s*(?:am|on)\s+.{3,120}?(?:schrieb|wrote)\b.*:\s*$", re.IGNORECASE),
+)
+
+
+def _strip_quoted_history(text: str) -> str:
+    """Return only the newly written part of a plain-text mail body.
+
+    The closing/request decision must consider the mail's own content.  Quoted
+    ``>``/``>>>`` blocks, header separators and ``Am ... schrieb`` blocks are
+    predecessor history and must not keep an asserted reply requirement alive.
+    """
+    kept: list[str] = []
+    for line in str(text or "").splitlines():
+        if any(marker.search(line) for marker in _QUOTE_BOUNDARY):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def is_closing_or_thanks(text: str) -> bool:
-    """True when the text is a pure closing/thank-you message without any request."""
-    normalized = str(text or "").strip()
+    """True when the text is a pure closing/thank-you message without any request.
+
+    Only the newly written part counts: a quoted predecessor with a request or a
+    closing stays history.
+    """
+    normalized = _strip_quoted_history(text)
     if not normalized:
         return False
     return not _contains_request_signal(normalized) and bool(
@@ -67,25 +96,34 @@ def is_closing_or_thanks(text: str) -> bool:
 
 
 def needs_reply_review(text: str) -> bool:
-    """True when the text still carries a concrete request signal (review semantics)."""
-    normalized = str(text or "").strip()
+    """True when the text still carries a concrete request signal (review semantics).
+
+    Quoted predecessor history is ignored, matching ``is_closing_or_thanks``.
+    """
+    normalized = _strip_quoted_history(text)
     if not normalized:
         return False
     return _contains_request_signal(normalized)
 
 
-def downgrade_if_closing(decision: dict, notes: str) -> tuple[dict, str]:
+def downgrade_if_closing(
+    decision: dict,
+    notes: str,
+    *,
+    subject: str = "",
+    body: str = "",
+) -> tuple[dict, str]:
     """Downgrade one asserted ``needs_reply`` to ``false`` for a pure closing mail.
 
     Returns the (possibly unchanged) decision and notes.  Only a currently asserted
     truthy ``needs_reply`` is affected; already-false values and review semantics
-    stay untouched.
+    stay untouched.  ``subject``/``body`` carry the closing-check text of the
+    effective source (supplied explicitly by the facade; they never enter the
+    decision dict).
     """
     if not decision.get("needs_reply"):
         return decision, notes
-    subject = str(decision.get("_closing_check_subject", "") or "")
-    body = str(decision.get("_closing_check_body", "") or "")
-    combined = f"{subject}\n{body}".strip()
+    combined = f"{str(subject or '')}\n{str(body or '')}".strip()
     if not combined or not is_closing_or_thanks(combined):
         return decision, notes
     downgraded = dict(decision)
