@@ -28,6 +28,9 @@ verbindliche Paketkarten.
 | `FR-16` | ✅ Abgeschlossen (DOC-M1/M2/M3, reine Dokumentationsmaßnahme); Metrik-SSOT mit Stellen-Checkliste (L1 §3.1), Zellen-Splitting mit Null-Informationsverlust (L1 §2.1, L2 §2.1), Metrik auf 141/65/55/57/896 + 17 Pflichtfelder + Cloud-Atlas 28/138, Daedalus-Referenz korrigiert; 896 Tests grün | Identifikation der Metrik-Vervielfältigung, des monolithischen Tabellenzellen-Anti-Patterns und des realen Metrik-Drifts durch FR-17 (128→141 Dateien, 48→57 Testmodule, 804→896 Tests) | `DOC-M1` (Metrik-SSOT + Drift-Korrektur), `DOC-M2` (Zellen-Splitting), `DOC-M3` (Stale-Reference-Fix); Paketkarte unten |
 | `FR-17` | ✅ Abgeschlossen (B-1–B-10 als MD-R1–R7; **Nachtrag B-11 als MD-R8 implementiert, getestet und paketabgenommen; Live-Nachweis 2026-09-23 an Env 9412 (`reply_downgrade`, `rule_revision: md-r8`)**); 908 Tests grün | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
 | `FR-18` | ✅ Abgeschlossen (MD-S1–S3: Desk-Signals-Katalog `mail-desk.json`, sent_indexer-Account-Bindung, Zoom-Routing im Topic-Katalog; 3 Subagenten-Pakete mit Red-Gates und unabhängigen Reviews, 1 Fix-Runde bei MD-S1); 932 Tests grün | Workspace-Agnostizismus des Mail-Desk: hartcodierte Identitäts-/Routing-Annahmen ersetzt durch Workspace-Konfiguration mit fail-loud Drift-Behandlung | `MD-S1` (Desk-Signals-Katalog), `MD-S2` (Sent-Index-Account-Bindung), `MD-S3` (Zoom-Katalog-Routing); Paketkarte unten |
+| `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428): `apply_local_repairs` füllt nur fehlende Records; stale Index-/Log-Records nach transienter Ziel-Verifikation bleiben stehen (manuell korrigiert) | `MD-RC1` (Repair-Härtung: stale Records nachverifizieren); Paketkarte unten |
+| `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438): Inline-Signaturbilder verbrauchen das Anhang-Zählquota (5); echte `.docx`-Anhänge werden `skipped_count_limit` und nie policy-geprüft | `MD-A3` (Anhang-Quota: Inline vs. Datei); Paketkarte unten |
+| `FR-21` | ⬜ geplant | FR-18-Nachtrag-Analyse (2026-09-23, Consumer-Migration boku-user): Desk-Signals-Katalog funktional, aber SKILL.md/batch-runner.md dokumentieren ihn nicht; Match-Semantik der Subject-Patterns undokumentiert; kein Workspace-Katalog-Validator | `MD-S4` (Desk-Signals-Doku + Pflegevertrag), `MD-S5` (Katalog-Validator); Paketkarte unten |
 
 
 ```text
@@ -1670,3 +1673,208 @@ Trigger; ohne die Datei greifen die Kompatibilitäts-Defaults.
   explizit aus der Katalogdatei gelesen.
 - Freemail-Spam-Domain-Heuristik (`@yahoo.` etc.): bewusst workspace-unabhängige
   Anti-Phishing-Policy, bleibt im Bundle.
+
+## FR-19: Reconcile-Repair-Härtung — stale Records nachverifizieren
+
+**Status:** ⬜ geplant. Befund aus der Batch-Verarbeitung 2026-W39/3 (2026-09-23,
+Env 9428, GroupWise-Backend). Keine Codeänderung im Befundlauf; der Drift wurde
+lokal manuell korrigiert. Quelle: Betriebslauf `pipelines/mail-desk-batch.md`
+(Consumer-Workspace `boku-user`).
+
+### Problem & Motivation
+
+`reconcile --apply_local_repairs` füllt bewusst nur **fehlende** Index-/Action-Log-/
+Evidence-Records nach frischer Ziel-Verifikation (`core/modes/reconcile.py`:
+`if not in_index` / `if not in_log`). Ist ein Record vorhanden, aber **stale**,
+unterbleibt jede Korrektur. Beobachteter Ablauf (Env 9428,
+`Re: Antw: THE CALL DOCUMENT`, Message-ID
+`1954756627.1848513.1785929416691@mail.yahoo.com`):
+
+1. Erster Lauf: Item als `keep_in_folder`/`INBOX` ausgeführt → Index- und
+   Log-Eintrag mit `final_folder: INBOX`, `envelope_id: 9428` (korrekt für
+   diesen Lauf).
+2. Repair-Lauf (freigegebene Zieländerung nach `Projekte/In Ausarbeitung/ATAEL`):
+   `message copy` wirkt auf dem GroupWise-Backend als Move, die anschließende
+   Ziel-Verifikation läuft in den Timeout → `RuntimeError: Target verification
+   failed after copy.` (routing fail, keine lokale Persistenz im Repair-Lauf).
+3. Reconcile verifiziert die Mail im Ziel (`folder_verified: true`,
+   `current_envelope_id: 82`), `apply_local_repairs` repariert aber nur die
+   fehlende Evidence; Index und Action-Log bleiben auf `INBOX`/`9428` stehen,
+   obwohl die Mail in `Projekte/In Ausarbeitung/ATAEL`/`82` liegt.
+
+Verwandte Beobachtung: `runner-progress.json` bleibt nach dem Repair-Flow auf
+`status: "failed"` stehen (Tracker wird nicht nachgeführt); im Befundlauf bewusst
+nicht angefasst.
+
+### Ziel & Invarianten
+
+- `apply_local_repairs` vergleicht vorhandene Records mit dem verifizierten
+  Zustand und aktualisiert mindestens `final_folder`, `envelope_id` (verifizierte
+  Ziel-Env) und `updated_at`; weicht der geloggte `target_folder`/
+  `new_envelope_id` ab, wird ein kanonischer `reconciled: true`-Action-Log-Eintrag
+  angehängt.
+- Keine Mutation ohne frische Ziel-Verifikation (`check_folders: true`) und ohne
+  expliziten Approval-Receipt; weiterhin null Mailbox-Mutationen.
+- Idempotenz: ein zweiter Repair-Lauf ohne Drift schreibt nichts.
+- Der beobachtete Fall (Record vorhanden + verifiziertes Ziel ≠ Record) ist als
+  Testfall abgedeckt.
+
+### Abnahme
+
+- Hermetischer Test: stale Index-/Log-Record + verifiziertes Ziel → Repair
+  korrigiert beide; unveränderte Records bleiben unangetastet; ohne Verifikation
+  kein Write.
+- `repaired`-Report weist `index`/`action_log` auch im Stale-Fall aus.
+- Mail-Desk-Suite grün; System-Map/Referenzdoku aktualisiert.
+
+**Befundnachweis:** `data/mail-desk/archive/2026-W39/2026-09-23-batch-3-batch-reconcile.json`
+und `...-batch-3-repair-manifest.json` (Consumer-Workspace); manuelle Korrektur als
+Action-Log-Eintrag mit `"reconciled": true` zur o. g. Message-ID.
+
+## FR-20: Anhang-Quota — Inline-Bilder dürfen echte Anhänge nicht verdrängen
+
+**Status:** ⬜ geplant. Befund aus der Batch-Verarbeitung 2026-W39/3 (2026-09-23,
+Env 9438, `Wtrlt: FW: Reaching out to our partners.`). Keine Verhaltensänderung
+im Befundlauf.
+
+### Problem & Motivation
+
+Das Anhang-Zählquota (Default 5) wird in Inventar-Reihenfolge auf **alle**
+MIME-Teile angewandt, einschließlich Inline-Signaturbilder. Bei Env 9438 standen
+6 Inline-`image/png`-Teile vor den echten Dateien; die drei relevanten Anhänge
+(`.EVOLVE_Partner_Communication.docx`, `.PIN_Secondments_Malta.docx`, Logo)
+erhielten `policy_status: skipped_count_limit` und wurden nie policy-geprüft
+(`attachment_evaluation.status: not_needed`). Die Klassifikation war hier
+katalogseitig klar; bei einem unklaren Item wäre materiale `.docx`-Evidenz stumm
+ausgeblieben (der FR-15/MD-E1-Pfad hätte `no_allowed_attachments` gesehen).
+
+### Ziel & Invarianten (Optionen, Auswahl im Paket)
+
+- **Option A (bevorzugt):** Inline-Teile (`content_disposition: inline` mit
+  `content_id`) zählen nicht auf das Datei-Anhang-Quota; sie erhalten ein eigenes,
+  kleineres Limit.
+- **Option B:** Das Quota wird auf nicht-inline Teile angewandt, bevor Inline-Teile
+  inventarisiert werden (Order-Garantie für echte Anhänge).
+- In jedem Fall: `policy_reason` bleibt transparent; keine Extraktion außerhalb
+  bestehender Policy-/Quarantäne-Gates; deterministische Inventar-Reihenfolge
+  unverändert.
+
+### Abnahme
+
+- Hermetischer Test mit 6 Inline-Bildern + 2 erlaubten `.docx` → beide `.docx`
+  werden inventarisiert und policy-geprüft (nicht `skipped_count_limit`).
+- Bestehende Quota-/Policy-Tests (FR-17/MD-R4, FR-15) bleiben grün bzw. werden
+  bewusst angepasst; das Anzahl-Limit bleibt als Kostenbremse wirksam.
+- Mail-Desk-Suite grün; System-Map/Referenzdoku aktualisiert.
+
+**Befundnachweis:** `data/mail-desk/archive/2026-W39/2026-09-23-batch-3-executed-manifest.json`
+(Item 9438, `attachment_status: available`, drei `skipped_count_limit`-Einträge).
+
+## FR-21: FR-18-Nachtrag — dynamische Desk-Signals-Pflege und Katalog-Validator
+
+**Status:** ⬜ geplant. Aus der Consumer-Migration von FR-18 im Workspace `boku-user`
+(2026-09-23): der Desk-Signals-Katalog (`memory/references/mail-desk/mail-desk.json`)
+wurde angelegt und die Zoom-Recording-Routing-Signale per `topics.json`-Entry migriert.
+Dabei zeigten sich zwei strukturelle Lücken: die Katalogpflege ist undokumentiert,
+und Workspace-Kataloge haben keinen ausführbaren Validator.
+
+### Problem & Motivation
+
+1. **Skill-Doku fehlt:** `skills/mail-desk/SKILL.md` und
+   `skills/mail-desk/references/batch-runner.md` nennen den Desk-Signals-Katalog
+   nicht (`git grep mail-desk.json skills/mail-desk/SKILL.md` leer). Der Loader
+   (`load_reply_heuristics`, `core/matching/reply_heuristics.py`) ist implementiert
+   und fail-loud, aber Pflegeinstruktionen fehlen: Agents wissen nicht, dass
+   Reply-Trigger **nur** im Workspace-Katalog ergänzt werden (Bundle-Default =
+   reiner Kompatibilitäts-Fallback), welches Schema gilt und was `owner_address`
+   bewirkt. Risiko: Trigger werden im Bundle-Code geändert oder das Schema wird
+   erraten.
+2. **Match-Semantik undokumentiert:** `typical_subject_patterns` werden in
+   `core/matching/topic_matching.py` (`_subject_signal_matches` /
+   `_topic_subject_signal_matches`) als **Literal-Signale mit Wortgrenzen**
+   verarbeitet (`re.escape(signal)`, `(?<!\w)…(?!\w)`, Minimum 3 Zeichen,
+   `[-_]`-Normalisierung) — **keine Regex**. `skills/topic-catalog-entry/SKILL.md`
+   dokumentiert das Feld, nicht die Semantik. Ein Migrationsprompt nutzte
+   „Meeting-Objekte für .* sind bereit" regex-artig; solche Patterns matchen
+   niemals (der `.*` wird literal gesucht).
+3. **Kein Workspace-Katalog-Validator:** `topic-catalog-entry` und
+   `project-catalog-entry` definieren Schemata in SKILL.md, aber es existiert kein
+   ausführbares Prüfwerkzeug für die Consumer-Kataloge
+   (`topics.json`, `projects.json`, `mail-desk.json`). Schema-Drift in
+   `mail-desk.json` wird erst beim nächsten Draft-Lauf fail-loud sichtbar; Drift in
+   Topic-/Projektkatalogen wird vom Classifier je nach Feld still oder spät
+   bemerkt. FR-18 hatte den Schema-Owner („Validierung analog
+   project-catalog-entry") in den Zielinvarianten, aber nicht umgesetzt.
+
+### Ziel & Invarianten
+
+**MD-S4 — Doku + Skill (Pflegevertrag statt Auto-Learning):**
+- `skills/mail-desk/SKILL.md` (+ bei Bedarf `references/batch-runner.md`): neuer
+  Abschnitt „Desk-Signals-Katalog": Pfad
+  `memory/references/mail-desk/mail-desk.json`, Schema 1, Pflichtfeld
+  `reply_heuristics.reply_triggers`, optionale `no_reply_sender_tokens`/
+  `owner_address`, Missing-File-Fallback auf die dokumentierten Defaults,
+  fail-loud-Drift-Behandlung. Pflegeinstruktion: Trigger und Desk-Patterns werden
+  **ausschließlich** im Workspace-Katalog ergänzt/angepasst (dynamisch ohne
+  Bundle-Änderung); Bundle-Code wird nicht angefasst.
+- `owner_address`-Semantik: gesetzt → Sent-Reply-Check wertet die echte Desk-
+  Identität gegen `to`/`cc` aus; `null` = Keyword-Heuristik wie bisher. Empfehlung
+  für Desk-Owner dokumentiert (z. B. die eigene BOKU-Adresse), ohne Verhalten zu
+  ändern.
+- `skills/topic-catalog-entry/SKILL.md` (und analog `project-catalog-entry`):
+  Match-Semantik der Subject-Patterns dokumentieren — Literal-Signale mit
+  Wortgrenzen, kein Regex, ≥3 Zeichen, `[-_]`-Normalisierung, case-insensitive;
+  ein Gegenbeispiel („… .* …" matcht nie) als Warnung.
+- Consumer-Hinweis: Workspace-AGENTS/Router-Dokumentation verweist auf den
+  Katalog als Pflegeort (Consumer-Dateien gehören dem Workspace; das Bundle
+  dokumentiert nur).
+- **Hermetischer Migrationstest:** ein Topic-Entry mit den vier Live-Patterns
+  (`Meeting-Objekte`, `Cloud-Aufzeichnung`, `Zoom-Aufzeichnung`,
+  `recording is now available`) routet die drei BOKU-Notification-Serien
+  („Meeting-Objekte für … sind bereit", „Cloud-Aufzeichnung … verfügbar",
+  englisches „recording is now available") identisch zum entfernten FR-18-Zoom-
+  Zweig; null Mailbox-Zugriffe.
+
+**MD-S5 — Katalog-Validator:**
+- Ein read-only CLI (z. B. `skills/mail-desk/scripts/mail_desk_validate_catalogs.py`)
+  validiert **alle drei** Workspace-Kataloge in einem Lauf:
+  - `mail-desk.json` gegen exakt die `load_reply_heuristics`-Regeln
+    (Schema-1-Strict-Gate inkl. bool/float-Abweisung, Pflichtfeld, String-Listen),
+  - `topics.json` gegen das Topic-Schema (Pflichtfelder `id`/`title`/
+    `mailbox_folder`/`reference_md`, Listen-Typen, `schema_version`,
+    Slug-Einheitlichkeit),
+  - `projects.json` analog zum Projekt-Schema.
+- Strukturierte Fehlerausgabe (Datei, Entry-ID, Feld, Erwartung, Ist-Wert-Pfad),
+  Exit-Code fail-closed; kein Mailbox-/Netzwerkzugriff; keine Mutation.
+- Fehlende optionale Datei (`mail-desk.json`) = Hinweis mit Default-Verweis, kein
+  Failure; fehlende Pflichtkataloge = Failure.
+- Optionale Verdrahtung in den Draft-Preflight (Warn-only oder Gate) wird im Paket
+  entschieden; Minimalvariante ist Standalone-CLI plus Doku.
+- Hermetische Tests: valide Beispielkataloge grün; je Drift-Klasse (bool
+  `schema_version`, leere Trigger-Liste, Nicht-String-Pattern, fehlendes
+  Pflichtfeld, Regex-förmiges Pattern) → strukturiertes Failure.
+
+### Abnahme
+
+- `git grep -n "mail-desk.json" skills/mail-desk/SKILL.md` liefert den
+  Dokumentationsabschnitt; Reply-Trigger sind nur noch am Katalog dokumentiert,
+  Bundle-Default ausschließlich als Fallback-Verweis.
+- Pattern-Semantik mit Gegenbeispiel ist in beiden Katalog-Entry-Skills
+  dokumentiert.
+- Der Migrationstest belegt identisches Routing der drei Notification-Serien
+  über den Katalogpfad.
+- Validator über alle drei Kataloge: hermetische Grün-/Fail-Matrix; Standalone-
+  Aufruf im Workspace `boku-user` gegen den realen Bestand grün (mit Hinweisspalte
+  für optionale Datei).
+- Mail-Desk-Suite grün; Metrik-Stellen per FR-16-Checkliste nachgezogen;
+  System-Map-Sync (L1/L2).
+
+### Out of Scope (FR-21)
+
+- Automatisches Lernen von Reply-Triggern/Patterns aus Sent-/Reply-Verhalten oder
+  Batch-Korrekturen (Verhaltensdrift ohne Review-Gate; bei Bedarf separater FR mit
+  Vorschlags- statt Auto-Apply-Modus).
+- Verhaltensänderungen am Trigger-/Pattern-Matching selbst
+  (FR-18/MD-S1-Semantik unverändert; nur Doku/Validierung).
+- Änderungen an Consumer-Dateien durch das Bundle (Workspace-Dateien bleiben
+  Workspace-Eigentum).
