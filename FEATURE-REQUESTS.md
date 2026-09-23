@@ -31,6 +31,7 @@ verbindliche Paketkarten.
 | `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428): `apply_local_repairs` füllt nur fehlende Records; stale Index-/Log-Records nach transienter Ziel-Verifikation bleiben stehen (manuell korrigiert) | `MD-RC1` (Repair-Härtung: stale Records nachverifizieren); Paketkarte unten |
 | `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438): Inline-Signaturbilder verbrauchen das Anhang-Zählquota (5); echte `.docx`-Anhänge werden `skipped_count_limit` und nie policy-geprüft | `MD-A3` (Anhang-Quota: Inline vs. Datei); Paketkarte unten |
 | `FR-21` | ✅ Abgeschlossen (MD-S4: Desk-Signals-Doku in SKILL.md/batch-runner.md + Pattern-Semantik in topic-catalog-entry; MD-S5: `catalog_validator.py` + 48 Tests, Live-Lauf boku-user valid; 1 Fix-Runde Root-vs-Nested Min-3 + owner_address-Contract-Wording; 980 Tests grün) | FR-18-Nachtrag-Analyse (2026-09-23, Consumer-Migration boku-user): Desk-Signals-Katalog funktional, aber SKILL.md/batch-runner.md dokumentieren ihn nicht; Match-Semantik der Subject-Patterns undokumentiert; kein Workspace-Katalog-Validator | `MD-S4` (Desk-Signals-Doku + Pflegevertrag), `MD-S5` (Katalog-Validator); Paketkarte unten |
+| `FR-22` | ⬜ geplant | Befund-Analyse (2026-09-23): `DEFAULT_REPLY_TRIGGERS`-Fallback (9 Trigger, alle mit „martin") ist Identity-Leak im Bundle und für `boku-user` toter Code (eigener Katalog überschreibt); 7 weitere boku-Spezifika-Stellen in 4 Dateien (sent_indexer-Domain-Liste + „boku"-Stopwort, project/topic internal-domain-Matching, Spam-Gegenindikatoren); die sent_indexer-Domain-Katalogisierung war FR-18-Zielinvariante, wurde aber nie implementiert | `MD-ID1` (neutraler Fallback + owner-generierte Trigger, Schema 2), `MD-ID2` (sent_indexer-Domain-Liste + Stopwörter → Katalog), `MD-ID3` (internal-domain-Matching → Katalog), `MD-ID4` (Spam-Gegenindikatoren → Katalog oder bewusster Verbleib); Paketkarte unten |
 
 
 ```text
@@ -1920,3 +1921,119 @@ und Workspace-Kataloge haben keinen ausführbaren Validator.
   (FR-18/MD-S1-Semantik unverändert; nur Doku/Validierung).
 - Änderungen an Consumer-Dateien durch das Bundle (Workspace-Dateien bleiben
   Workspace-Eigentum).
+
+## FR-22: Identity-freier Desk-Signals-Fallback und Katalogisierung der BOKU-Restbestände
+
+**Status:** ⬜ geplant. Analysequelle: Fallback-Befund-Analyse vom 2026-09-23
+(Orchestrator); es wurde keine Codeänderung vorgenommen. Die Analyse folgte der
+Frage, inwiefern der `reply_needed`-Trigger-Fallback von den boku-user-Spezifika
+entfernt und durch einen generischen Fallback ersetzt werden sollte. Ausgewählte
+Strategie (Human-Entscheidung 2026-09-23): **B + D** — neutraler Fallback plus
+owner-generierte Trigger; alle Restbestände in diesem FR.
+
+### Problem & Motivation
+
+1. **Identity-Leak im Fallback:** `DEFAULT_REPLY_TRIGGERS`
+   ([`reply_heuristics.py:158-168`](skills/mail-desk/scripts/core/matching/reply_heuristics.py)
+   enthält 9 Trigger, **alle** mit dem literalen „martin" („martin bitte",
+   „hallo martin", „@martin", …). Der Fallback ist der dokumentierte
+   Kompatibilitäts-Pfad für Workspaces **ohne** Desk-Signals-Katalog
+   (FR-18/MD-S1) — er trägt aber einen personen- statt workspace-bezogenen
+   Identitätsnamen und verletzt damit denselben generischen Bundle-Claim, den
+   FR-18 für die hartcodierten Stellen festgestellt hat.
+2. **Toter Code für den einzigen Consumer:** `boku-user` ist der einzige echte
+   Mail-Desk-Consumer (2026-09-23 verifiziert: kein anderer Agent-Workspace hat
+   `data/mail-desk`) und besitzt eine eigene `mail-desk.json` mit exakt denselben
+   9 Triggern — der Fallback wird dort nie konsultiert.
+3. **`needs_reply` hat genau eine Quelle:** Der Reply-Bedarf entsteht
+   ausschließlich über `matches_reply_trigger(full_text, reply_triggers)`
+   ([`classifier.py:364-367`](skills/mail-desk/scripts/core/classifier.py)); es
+   gibt keine zweite Trigger-Quelle. Ein neutraler Fallback ist damit vollständig
+   vorhersagbar (keine verdeckte Kompensation).
+4. **FR-18-Restlücke:** Die FR-18-Zielinvariante „`sent_indexer`-Domain-Liste wird
+   über `no_reply_sender_tokens`/Desk-Katalog konfigurierbar" wurde im
+   Umsetzungsnachweis nicht realisiert — der Umsetzungsnachweis deckt nur die
+   Account-Bindung (MD-S2) ab. Die Fest-Domain-Liste
+   `{"boku.ac.at", "gmail.com", "yahoo.com", "hotmail.com"}` steht unverändert
+   hardcoded in [`sent_indexer.py:377`](skills/mail-desk/scripts/core/sent_indexer.py).
+5. **Weitere BOKU-Restbestände (7 Stellen in 4 Dateien, 2026-09-23 inventarisiert):**
+   - `sent_indexer.py:362` — Stopwort „boku" in der Subject-Keyword-Zerlegung.
+   - `sent_indexer.py:377` — Fest-Domain-Liste (Whitelist „keine
+     Fremd-Domain-Heuristik").
+   - [`project_matching.py:491-492,506`](skills/mail-desk/scripts/core/matching/project_matching.py)
+     — `@boku.ac.at` als internal/external-Grenze im Contact-Matching (3 Stellen).
+   - [`topic_matching.py:727`](skills/mail-desk/scripts/core/matching/topic_matching.py)
+     — `boku.ac.at` in der generischen Domain-Ausschlussliste.
+   - [`classifier.py:560`](skills/mail-desk/scripts/core/classifier.py) —
+     Freemail-Spam-Gegenindikatoren („weiterbildung", „lebenslanges lernen",
+     „focus group", „lehrgang") als BOKU-Content im Anti-Phishing-Zweig.
+
+### Ziel & Invarianten
+
+**MD-ID1 — Neutraler Fallback + owner-generierte Trigger (Schema 2):**
+- `load_reply_heuristics` ohne Katalogdatei → `reply_triggers` = **leere Liste**
+  (dokumentierte Semantik: „ohne Katalog keine Anrede-Trigger"; `needs_reply`
+  bleibt in diesem Fall durch Trigger false — Review- und
+  FULL_BODY_ACTION_REQUEST-Semantik unverändert).
+- Katalog mit `owner_address`, aber ohne `reply_triggers` → der Loader generiert
+  aus dem lokalen Teil der Owner-Adresse (Vorname) die generische Anrede-Trigger-
+  Klasse („hallo <vorname>", „<vorname>, bitte", „@<vorname>", …) mit unveränderter
+  Wortgrenzen-Predicate (`matches_reply_trigger` bleibt Owner).
+- **Schema 2** mit striktem Gate (bool/float/str-Abweisung wie Schema 1,
+  fail-loud): `reply_triggers` optional, wenn `owner_address` gesetzt ist;
+  Schema-1-Dateien bleiben valide (Migration kompatibel — der reale
+  `boku-user`-Katalog bleibt unverändert verwendbar).
+- `catalog_validator.py` (MD-S5) wird synchron auf Schema 2 erweitert (inkl.
+  Schema-1-Akzeptanz als Legacy).
+
+**MD-ID2 — sent_indexer-Domain-Liste und Stopwörter → Katalog:**
+- Die Domain-Whitelist (Zeile 377) und das „boku"-Stopwort (Zeile 362) wandern
+  in konfigurierbare Desk-Signals-Katalogfelder (neu in Schema 2); fehlende
+  Felder = dokumentierte Defaults (identisches Verhalten für Bestandskataloge).
+
+**MD-ID3 — Internal-domain-Matching → Katalog:**
+- `project_matching.py:491-492,506` und `topic_matching.py:727` konsumieren die
+  internal-domain-Liste aus dem Desk-Signals-Katalog statt der
+  `@boku.ac.at`-Literale; die generic-freemail-Ausschlussliste
+  (gmail/outlook/yahoo/hotmail) bleibt als generische Bundle-Konstante.
+
+**MD-ID4 — Spam-Gegenindikatoren (Entscheidung im Paket):**
+- `classifier.py:560`: Die 4 BOKU-Content-Gegenindikatoren wandern in ein
+  optionales Katalogfeld; fehlt es, bleibt die Freemail-Spam-Heuristik ohne
+  Gegenindikatoren wirksam (strenger). Alternative: bewusster Verbleib mit
+  dokumentierter Begründung. Die Entscheidung wird im Paket mit Befundbasis
+  getroffen und im Umsetzungsnachweis begründet.
+
+**Abgrenzungen (unverändert):**
+- Die Freemail-Spam-**Domain-Liste** selbst (`@yahoo.` etc.) bleibt
+  workspace-unabhängige Anti-Phishing-Policy im Bundle (FR-18-Out-of-Scope).
+- `FULL_BODY_ACTION_REQUEST` und die MD-R8-Closing-/Quote-Semantik bleiben
+  unangetastet.
+- Kein Verhaltenswechsel für Workspaces mit vorhandenem Katalog (Trigger
+  identisch aus der Datei).
+- Kein Auto-Learning; die Katalogpflege bleibt explizit (FR-21-Vertrag).
+
+### Abnahme
+
+- Hermetische Tests: leerer Fallback (kein Trigger, `needs_reply: false`),
+  owner-generierte Trigger (Vornamen-Klasse mit Wortgrenzen-Gegenprobe),
+  Schema-1-Dateien weiterhin grün (Legacy-Migration), je Drift-Klasse ein
+  Fail-loud-Test, internal-domain-Matching mit alternativer Domain.
+- `test_reply_trigger_catalog.py`: der Default-Regressionstest wird auf den
+  neutralen Fallback umgeschrieben (kein „martin"-Literal mehr als erwarteter
+  Fallback); Docs-Contract-Tests sync SKILL.md/batch-runner.md.
+- Docs: SKILL.md (Fallback-Semantik + Schema 2), batch-runner.md-Verweis,
+  ggf. catalog-entry-Skill.
+- Mail-Desk-Suite grün; Metrik-Stellen per FR-16-Checkliste; System-Map-Sync
+  (L1/L2 + objects.md-Desk-Signals-Eintrag).
+- Consumer-Migrationshinweis: boku-user-Katalogerweiterung (neue Schema-2-Felder)
+  bleibt Workspace-Eigentum; Migration erfolgt als Copy-Prompt an den
+  Workspace-Owner (analog FR-18/FR-21), nicht durch das Bundle.
+
+### Out of Scope (FR-22)
+
+- Automatische Identitätsableitung aus dem Mailbestand (Owner-Adresse kommt
+  ausschließlich explizit aus dem Katalog; FR-18-Invariante).
+- Verhaltensänderung des Trigger-Matching-Prädikats selbst (Wortgrenzen-Predicate
+  bleibt byte-identisch).
+- Promotion-/Export-/Cloud-/Task-Pfade (FR-09/FR-10 unberührt).

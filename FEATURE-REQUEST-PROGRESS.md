@@ -275,7 +275,14 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   — null Mailbox-Zugriffe in Tests. (6) Write-Scope-Pfade seit MD-M2: `core/quarantine/`-
   Owner; alte `core/attachment_*.py`-Pfade sind Shims. (7) Metrik-Stellen werden pro Paket
   synchron nachgezogen (128/65/55/48/804-Baseline); FR-16 konsolidiert danach.
-- **FR-09:** MD-P1 — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md).
+ - **FR-09:** MD-P1 — hashgebundene Approval-Receipt und read-only Promotion-Preflight (nach ausdrücklicher Human-Freigabe). Paketkarte und Abnahmebedingungen stehen in [FEATURE-REQUESTS.md](FEATURE-REQUESTS.md).
+- **FR-22 (neu, 2026-09-23, geplant):** Identity-freier Desk-Signals-Fallback und
+  Katalogisierung der BOKU-Restbestände — neutraler `reply_triggers`-Fallback plus
+  owner-generierte Trigger (Schema 2, MD-ID1), sent_indexer-Domain-Liste/Stopwörter
+  in den Katalog (MD-ID2, FR-18-Restlücke), internal-domain-Matching aus dem
+  Katalog (MD-ID3), Spam-Gegenindikatoren (MD-ID4, Entscheidung im Paket).
+  Strategie B + D per Human-Entscheidung; Paketkarte in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md) § FR-22.
 - **FR-13:** geschlossen — `MD-M1` (`T01`–`T04`) und `MD-M2` (Quarantäne-Paketierung unter
   `skills/mail-desk/scripts/core/quarantine/` mit identitätserhaltenden Legacy-Shims) sind
   abgeschlossen und paketabgenommen (siehe oben).
