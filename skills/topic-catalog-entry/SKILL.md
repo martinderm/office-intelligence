@@ -155,6 +155,45 @@ Frontmatter-Regel:
 }
 ```
 
+## Betreffmuster-Semantik (`typical_subject_patterns`)
+
+`typical_subject_patterns` sind auf jeder Ebene **literale Signale, kein Regex**.
+Ihre Semantik ist exakt an
+[`../mail-desk/scripts/core/matching/topic_matching.py`](../mail-desk/scripts/core/matching/topic_matching.py)
+(`_subject_signal_matches`) gebunden:
+
+- **Literal, kein Regex:** Das Pattern wird über `re.escape` escaped und wörtlich
+  gesucht; Regex-Metazeichen haben keine Sonderbedeutung.
+- **Wortgrenzen per Lookaround:** Ein Treffer verlangt die Lookaround-Grenzen
+  `(?<!\w)` vor und `(?!\w)` nach dem Signal. Ein Signal matcht damit nur an
+  Wortgrenzen (`Wortgrenze`), nicht als Fragment eines längeren Wortes.
+- **Groß-/Kleinschreibung egal:** Der Vergleich läuft mit `re.IGNORECASE`
+  (case-insensitive).
+- **Mindestlänge 3 Zeichen:** Nach `strip()` werden Signale mit **weniger als 3
+  Zeichen** verworfen, kürzere matchen nie.
+- **Normalisierung:** `[-_]+` (Bindestriche/Unterstriche) werden zu einem
+  Leerzeichen normalisiert. Der Match läuft gegen den **rohen** Betreff *oder*
+  gegen den **normalisierten** Betreff.
+- Gilt identisch für `subtopics[]`, `operations[]` und `events[]`.
+
+**Gegenbeispiel:** Ein regex-artiges Pattern wie
+`"Meeting-Objekte fuer .* sind bereit"` matcht nie, weil `.*` nicht als Wildcard,
+sondern wörtlich (literal) gesucht wird. Betreffmuster niemals als Regex
+formulieren.
+
+**Unterschied zum Root-Topic (wichtig):** Für `typical_subject_patterns` auf
+Root-Topic-Ebene gilt eine andere Semantik als für Subtopics/Operations/Events.
+Root-Patterns werden in `select_topic_match` als **plain Substring**
+(case-insensitive, `pat.lower() in subject.lower()`) oder als `\b`-begrenzter,
+normalisierter Treffer geprüft – **nicht** mit der Lookaround-Semantik
+`(?<!\w)`/`(?!\w)` der Subtopics. Wer ein Subtopic-Muster auf ein Root-Topic
+überträgt (oder umgekehrt), ändert damit unbemerkt das Matching-Verhalten.
+Zusätzlich speisen Root-Patterns (neben Titel, ID und Alias) das Parent-Signal
+`_topic_parent_subject_signal`, das als Gate für Kontakt-Matches von Subtopics
+dient: Dort gilt Lookaround plus Mindestlänge 3, und kürzere Signale werden
+still übersprungen. Ein kurzes Root-Pattern (z. B. `QC`) routet damit zwar über
+den Substring-Pfad, zählt aber **nicht** als Parent-Signal.
+
 ## Questionnaire-Mode
 
 Frage in dieser Reihenfolge, kurz und präzise:

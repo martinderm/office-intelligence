@@ -30,7 +30,7 @@ verbindliche Paketkarten.
 | `FR-18` | ✅ Abgeschlossen (MD-S1–S3: Desk-Signals-Katalog `mail-desk.json`, sent_indexer-Account-Bindung, Zoom-Routing im Topic-Katalog; 3 Subagenten-Pakete mit Red-Gates und unabhängigen Reviews, 1 Fix-Runde bei MD-S1); 932 Tests grün | Workspace-Agnostizismus des Mail-Desk: hartcodierte Identitäts-/Routing-Annahmen ersetzt durch Workspace-Konfiguration mit fail-loud Drift-Behandlung | `MD-S1` (Desk-Signals-Katalog), `MD-S2` (Sent-Index-Account-Bindung), `MD-S3` (Zoom-Katalog-Routing); Paketkarte unten |
 | `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428): `apply_local_repairs` füllt nur fehlende Records; stale Index-/Log-Records nach transienter Ziel-Verifikation bleiben stehen (manuell korrigiert) | `MD-RC1` (Repair-Härtung: stale Records nachverifizieren); Paketkarte unten |
 | `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438): Inline-Signaturbilder verbrauchen das Anhang-Zählquota (5); echte `.docx`-Anhänge werden `skipped_count_limit` und nie policy-geprüft | `MD-A3` (Anhang-Quota: Inline vs. Datei); Paketkarte unten |
-| `FR-21` | ⬜ geplant | FR-18-Nachtrag-Analyse (2026-09-23, Consumer-Migration boku-user): Desk-Signals-Katalog funktional, aber SKILL.md/batch-runner.md dokumentieren ihn nicht; Match-Semantik der Subject-Patterns undokumentiert; kein Workspace-Katalog-Validator | `MD-S4` (Desk-Signals-Doku + Pflegevertrag), `MD-S5` (Katalog-Validator); Paketkarte unten |
+| `FR-21` | ✅ Abgeschlossen (MD-S4: Desk-Signals-Doku in SKILL.md/batch-runner.md + Pattern-Semantik in topic-catalog-entry; MD-S5: `catalog_validator.py` + 48 Tests, Live-Lauf boku-user valid; 1 Fix-Runde Root-vs-Nested Min-3 + owner_address-Contract-Wording; 980 Tests grün) | FR-18-Nachtrag-Analyse (2026-09-23, Consumer-Migration boku-user): Desk-Signals-Katalog funktional, aber SKILL.md/batch-runner.md dokumentieren ihn nicht; Match-Semantik der Subject-Patterns undokumentiert; kein Workspace-Katalog-Validator | `MD-S4` (Desk-Signals-Doku + Pflegevertrag), `MD-S5` (Katalog-Validator); Paketkarte unten |
 
 
 ```text
@@ -1786,7 +1786,7 @@ ausgeblieben (der FR-15/MD-E1-Pfad hätte `no_allowed_attachments` gesehen).
 
 ## FR-21: FR-18-Nachtrag — dynamische Desk-Signals-Pflege und Katalog-Validator
 
-**Status:** ⬜ geplant. Aus der Consumer-Migration von FR-18 im Workspace `boku-user`
+**Status:** ✅ Abgeschlossen (2026-09-23; MD-S4 + MD-S5 im Kernel-Loop mit Subagenten, 1 Fix-Runde nach unabhängigem Review; Umsetzungsnachweis unten). Aus der Consumer-Migration von FR-18 im Workspace `boku-user`
 (2026-09-23): der Desk-Signals-Katalog (`memory/references/mail-desk/mail-desk.json`)
 wurde angelegt und die Zoom-Recording-Routing-Signale per `topics.json`-Entry migriert.
 Dabei zeigten sich zwei strukturelle Lücken: die Katalogpflege ist undokumentiert,
@@ -1850,13 +1850,18 @@ und Workspace-Kataloge haben keinen ausführbaren Validator.
   Zweig; null Mailbox-Zugriffe.
 
 **MD-S5 — Katalog-Validator:**
-- Ein read-only CLI (z. B. `skills/mail-desk/scripts/mail_desk_validate_catalogs.py`)
+- Ein read-only CLI (Beispielname `skills/mail-desk/scripts/mail_desk_validate_catalogs.py`;
+  der Dateiname ist **nicht bindend** — implementiert als
+  `skills/mail-desk/scripts/catalog_validator.py`)
   validiert **alle drei** Workspace-Kataloge in einem Lauf:
   - `mail-desk.json` gegen exakt die `load_reply_heuristics`-Regeln
     (Schema-1-Strict-Gate inkl. bool/float-Abweisung, Pflichtfeld, String-Listen),
-  - `topics.json` gegen das Topic-Schema (Pflichtfelder `id`/`title`/
-    `mailbox_folder`/`reference_md`, Listen-Typen, `schema_version`,
-    Slug-Einheitlichkeit),
+  - `topics.json`: geprüft werden die Arbeitsmodus-Pflichtfelder `id`/`title`/
+    `mailbox_folder`, `typical_subject_patterns` (Liste nicht-leerer Strings;
+    verschachtelte Sub-/Operation-/Event-Patterns zusätzlich ≥ 3 Zeichen nach
+    `strip()`) und Listen-Typen. `reference_md`, `schema_version` und
+    Slug-Einheitlichkeit sind dokumentierter Folge-Scope (der reale Bestand würde
+    sie bestehen),
   - `projects.json` analog zum Projekt-Schema.
 - Strukturierte Fehlerausgabe (Datei, Entry-ID, Feld, Erwartung, Ist-Wert-Pfad),
   Exit-Code fail-closed; kein Mailbox-/Netzwerkzugriff; keine Mutation.
@@ -1882,6 +1887,29 @@ und Workspace-Kataloge haben keinen ausführbaren Validator.
   für optionale Datei).
 - Mail-Desk-Suite grün; Metrik-Stellen per FR-16-Checkliste nachgezogen;
   System-Map-Sync (L1/L2).
+
+### Umsetzungsnachweis (2026-09-23)
+
+- **MD-S4 (Doku):** `skills/mail-desk/SKILL.md` (Desk-Signals-Katalog, Schema,
+  Pflegevertrag, `owner_address`-Contract), `skills/mail-desk/references/
+  batch-runner.md` (Katalog-Verweis) und `skills/topic-catalog-entry/SKILL.md`
+  (Literal-/Lookaround-Semantik, Root-vs-Nested-Unterschied, Gegenbeispiel) sind
+  dokumentiert; `skills/mail-desk/tests/test_catalog_docs_contract.py` pinnt die
+  drei Abschnitte mit 13 grünen Tests.
+- **MD-S5 (Validator):** `skills/mail-desk/scripts/catalog_validator.py` (read-only,
+  kein Mailbox-/Netzwerkzugriff) validiert `topics.json`, `projects.json` und das
+  optionale `mail-desk.json`; kanonischer Envelope mit Aktion `catalog_validator`
+  und Exit `0` (valide) / `1` (Drift) / `2` (Input/Runtime). Testmodul
+  `skills/mail-desk/tests/test_catalog_validator.py`: 31 grün zum MD-S5-Abschluss.
+- **Fix-Runde MD-S4-S5-fix-001:** Min-3-Gate korrekt auf verschachtelte Patterns
+  (`subtopics[]`/`operations[]`/`events[]`) begrenzt, Root-Patterns nur noch
+  Nicht-Leer-String (der reale `boku-user`-`QC`-Fall war ein False Positive);
+  `owner_address`-Doku auf Contract-Semantik korrigiert (Consumer ist FR-18-
+  Target-Verhalten, nicht implementiert). Testmodul danach 35 grün.
+- **Realer Bestand:** `python -B skills/mail-desk/scripts/catalog_validator.py
+  --workspace boku-user --json` liefert nach dem Fix `valid: true` und Exit `0`.
+- **Metriken:** Die berührten Metrik-Stellen (Testzahlen, Validator-Objekt) werden
+  im L2-System-Map-Sync durch den Orchestrator nachgezogen.
 
 ### Out of Scope (FR-21)
 

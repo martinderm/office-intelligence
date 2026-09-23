@@ -1174,6 +1174,21 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 
 ---
 
+## Desk-Signals-Katalog (`mail-desk.json`) im Batch-Lauf
+
+- Beim Batch-Lauf lädt der Runner den Desk-Signals-Katalog
+  `memory/references/mail-desk/mail-desk.json` (Workspace-Katalog, Schema 1) über
+  `load_reply_heuristics` aus `core/matching/reply_heuristics.py`.
+- Pflegevertrag: Reply-Trigger werden **ausschließlich** im Workspace-Katalog
+  gepflegt; der Bundle-Default `DEFAULT_REPLY_TRIGGERS` ist ein reiner
+  Kompatibilitäts-Fallback und niemals ein Erweiterungspunkt.
+- Fehlt die Katalogdatei, greifen die Bundle-Defaults; jede Schema-Drift schlägt
+  fail-loud mit `ValueError` fehl.
+- Details, Schema und Owner-Gate: [`../SKILL.md`](../SKILL.md) Abschnitt
+  „Desk-Signals-Katalog (`mail-desk.json`)“.
+
+---
+
 ## Live-Fortschritts-Monitoring & Zeitschätzung (`core/progress.py`)
 
 - Bei allen Batch-Läufen (`--draft`, `--execute`, `--pipeline`, `--inspect`) führt der Runner eine atomare Statusdatei `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) mit Zählern, Prozentwert, aktuellen Arbeitsschritten und deterministischer Restzeitschätzung (ETA).

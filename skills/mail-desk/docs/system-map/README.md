@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-18/MD-S3): 146 getrackte Dateien; 66 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`; 61 Testmodule; 932 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-21/MD-S4-S5): 149 getrackte Dateien; 67 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py` sowie `catalog_validator.py`; 63 Testmodule; 980 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -19,7 +19,7 @@
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
-│  ├─ CLI Facades: scripts/mail_desk_*.py                                │
+│  ├─ CLI Facades: scripts/mail_desk_*.py + catalog_validator.py         │
 │  ├─ Core Domain: scripts/core/ (56 getrackte .py-Dateien)              │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
@@ -478,3 +478,35 @@ inkl. Schema-Drift bool/'1'/1.0), `tests/test_sent_indexer_account_binding.py` (
 inkl. Fail-loud vor Write und Entry-Struktur-Regression),
 `tests/test_zoom_recording_catalog_routing.py` (5, inkl. Katalog-Charakterisierung,
 Fehlroute-frei ohne Entry und Join-Ping-Regression). **Suite 932/932 grün.**
+
+## 17. FR-21 — Desk-Signals-Doku + Workspace-Katalog-Validator (MD-S4/MD-S5 abgeschlossen)
+
+**Problem:** Der FR-18-Desk-Signals-Katalog war implementiert, aber undokumentiert
+(SKILL.md/batch-runner.md); die Literal-/Lookaround-Semantik von
+`typical_subject_patterns` war nirgends dokumentiert (Migrationsprompts nutzten
+regex-artige Patterns, die nie matchen); Workspace-Kataloge hatten keinen
+ausführbaren Validator (`load_catalogs` schluckt Drift still).
+
+**Umsetzung:**
+- **MD-S4 — Dokumentation:** SKILL.md-Abschnitt „Desk-Signals-Katalog
+  (mail-desk.json)" (Pflegevertrag: Trigger nur im Workspace-Katalog, Bundle-Default
+  = Kompatibilitäts-Fallback, Schema-1-Gate, `owner_address` als reiner
+  Katalog-Contract — die Auswertung im Sent-Reply-Check ist FR-18-Target-Verhalten,
+  es existiert heute kein Consumer); batch-runner.md-Verweis;
+  topic-catalog-entry-Abschnitt „Betreffmuster-Semantik" (Literal + Lookaround
+  `(?<!\w)`/`(?!\w)`, IGNORECASE, Mindestlänge 3, `[-_]+`-Normalisierung,
+  Gegenbeispiel; Root-Topic-Unterschied: plain Substring/``, zusätzlich
+  Parent-Signal-Gate `_topic_parent_subject_signal`).
+- **MD-S5 — Katalog-Validator:** [`catalog_validator.py`](../../scripts/catalog_validator.py)
+  (read-only CLI, kanonischer Envelope `catalog_validator`, Exit 0/1/2) validiert
+  `topics.json`, `projects.json` und das optionale `mail-desk.json` (fehlend =
+  dokumentierter Fallback). Root-Patterns brauchen nur Nicht-Leer-String
+  (Root-Routing per plain Substring ohne Längen-Gate, `select_topic_match`);
+  nested Patterns (`subtopics[]`/`operations[]`/`events[]`) behalten
+  Nicht-Leer-String + Mindestlänge 3 (`_subject_signal_matches`). Live-Lauf gegen
+  `boku-user`: valid (der anfängliche `QC`-Treffer war ein False Positive der
+  Root-Ebene).
+
+**Pflichttests (alle erfüllt):** `tests/test_catalog_docs_contract.py` (13,
+liest die realen Dokumentdateien), `tests/test_catalog_validator.py` (35, je
+Drift-Klasse, Root-vs-Nested, CLI 0/1/2, boku-user-Form). **Suite 980/980 grün.**

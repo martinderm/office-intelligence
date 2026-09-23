@@ -27,7 +27,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (146 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
+│ (149 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -100,7 +100,11 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
   mail-desk.json`, Schema 1, fail-loud bei Drift); Sent-Index-Einträge tragen den
   verifizierten Batch-Account; das Zoom-Recording-Routing gehört dem Topic-Katalog
   (FR-18/MD-S1–S3).
-- Himalaya-Adapter, Dossier-Synthese.
+- **Desk-Signals-Doku + Katalog-Validator:** Pflegevertrag/Semantik dokumentiert
+  (SKILL.md, batch-runner.md, topic-catalog-entry, FR-21/MD-S4); read-only
+  Workspace-Katalog-Validator `skills/mail-desk/scripts/catalog_validator.py`
+  (topics/projects/mail-desk, kanonischer Envelope, Exit 0/1/2, FR-21/MD-S5).
+ - Himalaya-Adapter, Dossier-Synthese.
 
 ---
 

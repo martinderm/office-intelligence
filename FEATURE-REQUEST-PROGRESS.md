@@ -199,6 +199,18 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   abweisen) nach unabhängigem Review. 24 neue Tests, Suite 932/932 grün,
   Metriken 146/66/56/61/932. Paketkarte und Umsetzungsnachweis in
   [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
+- **FR-21:** abgeschlossen (2026-09-23) — **Desk-Signals-Doku + Workspace-Katalog-Validator**
+  im Kernel-Loop mit Subagenten: (MD-S4) Pflegevertrag + Schema des Desk-Signals-Katalogs
+  in SKILL.md/batch-runner.md, Literal-/Lookaround-Semantik der Subject-Patterns
+  (mit Root-vs-Nested-Unterschied und Gegenbeispiel) in topic-catalog-entry, gepinnt
+  durch ein Docs-Contract-Testmodul (13 Tests); (MD-S5) `catalog_validator.py`
+  (read-only, kanonischer Envelope, Exit 0/1/2) validiert topics/projects/mail-desk-Kataloge,
+  Root-Patterns ohne Min-3-Gate, nested mit Min-3 (35 Tests). Fix-Runde
+  MD-S4-S5-fix-001 nach unabhängigem Review (Root-vs-Nested-Split: boku-user-QC war
+  False Positive; owner_address-Doku auf Contract-Semantik korrigiert — Consumer ist
+  FR-18-Target-Verhalten ohne heutigen Consumer). Live-Lauf gegen boku-user: valid.
+  48 neue Tests, Suite 980/980 grün; Metriken 149/67/56/63/980 (L2-Kanonik).
+  Paketkarte und Umsetzungsnachweis in [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **Nachtrag B-11 / MD-R8 (2026-09-22, abgeschlossen):** Nach dem Katalog-Fix im
   Consumer-Workspace verblieb die Befundklasse „Abschluss-/Dankesmails werden
   reply-pflichtig klassifiziert" (Env 9412). **MD-R8 ist umgesetzt und

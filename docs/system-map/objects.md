@@ -101,7 +101,7 @@ Zentrale Registrierung aller aktiven und archivierten Projekte.
 Hierarchisches Wissensregister über Themengebiete, Technologien und Domänen.
 
 * **Dateipfad:** `memory/references/topics/topics.json`
-* **Validierungsskript:** *(kein eigenes Skript; `topics.json` hat keinen Validator)*
+* **Validierungsskript:** `skills/mail-desk/scripts/catalog_validator.py` (FR-21/MD-S5; read-only CLI, validiert zusätzlich `projects.json` und `mail-desk.json`; Root-Patterns = Nicht-Leer-String, nested Patterns ≥ 3 Zeichen)
 * **Schema-Kern (Topic-Ebene):**
   * Pflichtfelder: `id` (Lowercase Slug), `title`, `mailbox_folder`.
   * Root-Felder: `reference_md`, `aliases`, `keywords`, `domains`, `contacts`, `typical_subject_patterns`, `subtopics`, `description`, `routing_priority` (Zahl), `do_not_route_if` (String-Array), `updated_at`, `schema_version`.
