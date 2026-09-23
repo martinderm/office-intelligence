@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-17/MD-R8): 143 getrackte Dateien; 66 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`; 58 Testmodule; 908 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-18/MD-S3): 146 getrackte Dateien; 66 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`; 61 Testmodule; 932 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -435,3 +435,46 @@ Vorgänger eine Anforderung enthält); Quote-Grenz-Varianten (`>`, `>>>`,
 Review-Fall bleibt erhalten; Decisions enthalten keine `_closing_check_*`-Debugfelder.
 **Live-Nachweis 2026-09-23 (Env 9412):** Re-Klassifikation ergibt `needs_reply: false`
 mit `reply_downgrade` (`rule_revision: md-r8`). **Suite 908/908 grün.**
+
+---
+
+## 16. FR-18 — Workspace-Agnostizismus: Desk-Signals-Katalog und Identitäts-Bindung (MD-S1–MD-S3 abgeschlossen)
+
+**Problem:** Der Basis-Klassifikator und `sent_indexer` trugen hartcodierte
+Identitäts-/Routing-Annahmen ohne Workspace-/Account-Bezug: die `martin`-Reply-Trigger,
+die `no_reply_sender_tokens`, das `"mailbox": "BOKU-MARTIN"`-Literal je Sent-Index-Eintrag
+und der Zoom-Recording-Hardcode (`Themen/BOKU-Organisation`). Ein konsumierender
+Workspace mit anderem Desk-Owner erhielt aus dieser Heuristik niemals einen Reply-Bedarf
+(stille Unter-Klassifikation), und Sent-Indexe/Zoom-Routings waren an einen konkreten
+Workspace gebunden.
+
+**Umsetzung:**
+- **MD-S1 — Desk-Signals-Katalog:** Kanonischer Loader
+  [`load_reply_heuristics`](../scripts/core/matching/reply_heuristics.py) liest
+  `memory/references/mail-desk/mail-desk.json` (Schema 1: `reply_heuristics` mit
+  pflichtigem `reply_triggers`, optionalem `no_reply_sender_tokens`, optionalem
+  `owner_address`). Fehlende Datei → dokumentierte Kompatibilitäts-Defaults (die
+  bisherige Trigger-Liste); invalides JSON oder Schema-Drift (inkl. `schema_version`
+  als bool/float/str) → fail-loud, nie stiller Fallback. Trigger-Matching mit
+  Wortgrenzen (`matches_reply_trigger`); `classify_email` konsumiert die geladene
+  Konfiguration statt der hartcodierten Liste, inklusive für `unknown`-Items.
+- **MD-S2 — Sent-Index-Account-Bindung:**
+  [`sync_sent_items_by_date`](../scripts/core/sent_indexer.py) verlangt einen
+  gebundenen Account: ohne (`None`/blank) → strukturiertes fail-loud `ValueError`
+  (Account-Bindung, konsistent zur Attachment-Bindung), bevor irgendein Write oder
+  Himalaya-Aufruf erfolgt; jeder Eintrag trägt `"mailbox": <verifizierter Account>`.
+  `draft_manifest` reicht seinen `account`-Parameter durch (eine Zeile).
+- **MD-S3 — Zoom-Recording-Routing im Katalog:** Der hardcoded Recording-Pfad
+  (`Themen/BOKU-Organisation`/`boku-organisation`) ist aus dem Bundle entfernt;
+  das Routing gehört in den Topic-Katalog des konsumierenden Workspace
+  (`typical_subject_patterns`/`keywords` am Topic-Entry). Ohne Katalog-Eintrag ergibt
+  sich `unknown`/Review statt stiller Fehlroute. Die generische
+  `zoom-join-ping` → `Trash`-Heuristik bleibt (workspace-unabhängig). Der Such-Fallback-
+  Ordnerliste in [`himalaya.py`](../scripts/core/himalaya.py) wurde der workspace-
+  spezifische Eintrag entzogen (neutral: INBOX, Junk, Trash, Newsletter).
+
+**Pflichttests (alle erfüllt):** `tests/test_reply_trigger_catalog.py` (15,
+inkl. Schema-Drift bool/'1'/1.0), `tests/test_sent_indexer_account_binding.py` (4,
+inkl. Fail-loud vor Write und Entry-Struktur-Regression),
+`tests/test_zoom_recording_catalog_routing.py` (5, inkl. Katalog-Charakterisierung,
+Fehlroute-frei ohne Entry und Join-Ping-Regression). **Suite 932/932 grün.**

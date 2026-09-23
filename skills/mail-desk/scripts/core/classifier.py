@@ -358,13 +358,26 @@ def classify_email(
     )
     parties = f"{from_str} {to_str} {cc_str} {' '.join(forwarded_senders)}".lower()
 
+    # Reply requirement is desk-global and workspace-bound (FR-18/MD-S1): the trigger
+    # list and the no-reply sender tokens come from the desk-signals catalog, defaulting
+    # to the documented compatibility list when the workspace has no catalog yet.
+    reply_config = reply_heuristics.load_reply_heuristics(ws)
+    needs_reply = reply_heuristics.matches_reply_trigger(
+        full_text_lower, reply_config.reply_triggers
+    )
+
+    # Automated / no-reply senders never require a manual reply
+    from_lower = from_str.lower()
+    if any(token.lower() in from_lower for token in reply_config.no_reply_sender_tokens):
+        needs_reply = False
+
     # Default fallback
     target_folder = "INBOX"
     decision = {
         "kind": "unknown",
         "id": "unclassified",
         "confidence": "low",
-        "needs_reply": False,
+        "needs_reply": needs_reply,
     }
     notes = ""
     evidence_spec: dict[str, Any] | None = None
@@ -373,21 +386,6 @@ def classify_email(
     synthesis_targets: list[dict[str, str]] = []
     preselected_subtopic_resolution: dict[str, Any] | None = None
     suppressed_candidates: list[dict[str, Any]] = []
-
-    # Check for reply requirement directed at Martin
-    needs_reply = False
-    reply_triggers = [
-        "martin bitte", "bitte martin", "frage an martin", "hallo martin", "lieber martin",
-        "martin kannst du", "martin ?", "martin, bitte", "@martin"
-    ]
-    for trigger in reply_triggers:
-        if trigger in full_text_lower:
-            needs_reply = True
-            break
-
-    # Automated / no-reply senders never require a manual reply
-    if "no-reply" in from_str.lower() or "do_not_reply" in from_str.lower() or "quarantine" in from_str.lower() or "mailer-daemon" in from_str.lower():
-        needs_reply = False
 
     # --------------------------------------------------------------------------
     # 0. Thread-Inheritance Fast-Path (In-Reply-To & References against Master Index)
@@ -556,18 +554,6 @@ def classify_email(
                 "needs_reply": False,
             }
             notes = f"Automatisierte Zoom-Beitrittsbenachrichtigung (ephemer): {subject}"
-        elif (
-            re.search(r"Meeting-Objekte für .* sind bereit|Cloud-Aufzeichnung.*verfügbar|recording.*is now available", subject, re.IGNORECASE)
-            and ("zoom.us" in from_str.lower() or "zoom" in full_text_lower)
-        ):
-            target_folder = "Themen/BOKU-Organisation"
-            decision = {
-                "kind": "topic",
-                "id": "boku-organisation",
-                "confidence": "medium",
-                "needs_reply": False,
-            }
-            notes = f"Zoom-Aufzeichnungsbenachrichtigung zu BOKU-Organisation: {subject}"
         elif (
             re.search(r"\burgent inquiry\b|\bkindly clarify\b|\bconfidential proposal\b|\bfinancial assistance\b|\bbeneficiary\b", subject, re.IGNORECASE)
             and any(freemail in from_str.lower() for freemail in ["@yahoo.", "@hotmail.", "@live.", "@aol.", "@mail.ru"])
@@ -854,7 +840,7 @@ def draft_manifest(
             try:
                 batch_dates = [parse_date_to_year_month(str(e.get("date", "")))[1] for e in emails if e.get("date")]
                 if batch_dates:
-                    sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws)
+                    sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws, account=account)
             except Exception:
                 pass
         try:

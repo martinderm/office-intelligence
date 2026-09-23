@@ -27,7 +27,7 @@ verbindliche Paketkarten.
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 | `FR-16` | ✅ Abgeschlossen (DOC-M1/M2/M3, reine Dokumentationsmaßnahme); Metrik-SSOT mit Stellen-Checkliste (L1 §3.1), Zellen-Splitting mit Null-Informationsverlust (L1 §2.1, L2 §2.1), Metrik auf 141/65/55/57/896 + 17 Pflichtfelder + Cloud-Atlas 28/138, Daedalus-Referenz korrigiert; 896 Tests grün | Identifikation der Metrik-Vervielfältigung, des monolithischen Tabellenzellen-Anti-Patterns und des realen Metrik-Drifts durch FR-17 (128→141 Dateien, 48→57 Testmodule, 804→896 Tests) | `DOC-M1` (Metrik-SSOT + Drift-Korrektur), `DOC-M2` (Zellen-Splitting), `DOC-M3` (Stale-Reference-Fix); Paketkarte unten |
 | `FR-17` | ✅ Abgeschlossen (B-1–B-10 als MD-R1–R7; **Nachtrag B-11 als MD-R8 implementiert, getestet und paketabgenommen; Live-Nachweis 2026-09-23 an Env 9412 (`reply_downgrade`, `rule_revision: md-r8`)**); 908 Tests grün | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
-| `FR-18` | ⬜ Geplant; Workspace-Agnostizismus des Mail-Desk als Desk-Signals-Katalog (`memory/references/mail-desk/mail-desk.json`) plus zwei Identitäts-/Routing-Hardcode-Entfernungen (MD-S1 Reply-Trigger, MD-S2 sent_indexer-`mailbox`-Literal, MD-S3 Zoom-Topic-Hardcode); Quelle: kritische Durchsicht der Reply-Triggers nach MD-R8 (2026-09-23) und Agnostizismus-Audit | Reply-Bedarf ist Desk-global, nicht Entry-spezifisch; Trigger-Liste, `no_reply_sender_tokens`, das `mailbox`-Literal und das Zoom-Topic sind aktuell hardcodierte Identitäts-/Routing-Annahmen ohne Workspace-/Account-Bezug | Schema-1-Desk-Signals-Katalog, `load_reply_heuristics`-Owner, `account`-gebundener Sent-Index, Katalog-Routing für Zoom-Recordings, hermetische Tests; siehe Paketkarte unten |
+| `FR-18` | ✅ Abgeschlossen (MD-S1–S3: Desk-Signals-Katalog `mail-desk.json`, sent_indexer-Account-Bindung, Zoom-Routing im Topic-Katalog; 3 Subagenten-Pakete mit Red-Gates und unabhängigen Reviews, 1 Fix-Runde bei MD-S1); 932 Tests grün | Workspace-Agnostizismus des Mail-Desk: hartcodierte Identitäts-/Routing-Annahmen ersetzt durch Workspace-Konfiguration mit fail-loud Drift-Behandlung | `MD-S1` (Desk-Signals-Katalog), `MD-S2` (Sent-Index-Account-Bindung), `MD-S3` (Zoom-Katalog-Routing); Paketkarte unten |
 
 
 ```text
@@ -1568,7 +1568,7 @@ werden in die gemeinsame Abnahme aufgenommen.
 
 ## FR-18: Workspace-Agnostizismus des Mail-Desk — Desk-Signals-Katalog und Identitäts-Bindung
 
-**Status:** ⬜ Geplant. Verhaltensänderung im Reply-Bedarfs-Pfad des Basis-Klassifikators
+**Status:** ✅ Abgeschlossen (2026-09-23, MD-S1–MD-S3 im Kernel-Loop mit Subagenten umgesetzt; ein unabhängiges Review verlangte eine Fix-Runde am MD-S1-Schema-Drift-Gate, nachgezogen und re-approviert). Verhaltensänderung im Reply-Bedarfs-Pfad des Basis-Klassifikators
 plus neue Katalogstruktur im konsumierenden Workspace. Quelle: kritische Durchsicht der
 Reply-Triggers (2026-09-23, Nachbefund zu MD-R8/B-11 und zur Nebenbeobachtung im
 Quote-Härtungs-Review). Keine Mailbox-Mutation, keine Promotion-/Export-/Cloud-Pfade.
@@ -1641,7 +1641,7 @@ DOC-M1-Problemklasse (Metrik-/Literal-Vervielfältigung) zurückbringen und den
 - **MD-S2:** Sent-Index-Einträge tragen den verifizierten Batch-`account`; ein Lauf
   ohne Account erzeugt fail-loud einen strukturierten Fehler; Regressionstest belegt
   identische Indexstruktur bei identischem Account.
-- **MD-S3:** Kein `Themen/BOKU-Organisation`-Literal mehr im Bundle (`git grep`-Nachweis);
+- **MD-S3:** Kein `Themen/BOKU-Organisation`-Literal mehr in Produktionsskripten (`git grep`-Nachweis über `skills/mail-desk/scripts/`; Test-Fixtures dokumentieren das Muster bewusst);
   ein konsumierender Workspace mit Zoom-Recording-Topic-Entry routet identisch, ohne
   Eintrag ergibt sich `unknown`/Review (hermetischer Test).
 - Hermetische Tests, null Mailbox-Zugriffe; Mail-Desk-Suite grün; Metrik-Stellen per
@@ -1649,9 +1649,24 @@ DOC-M1-Problemklasse (Metrik-/Literal-Vervielfältigung) zurückbringen und den
 - Hermetische Tests, null Mailbox-Zugriffe; Mail-Desk-Suite grün; Metrik-Stellen per
   L1 §3.1-Checkliste nachgezogen; System-Map-Sync (L1/L2 + ggf. objects.md).
 
-### Out of Scope
+**Umsetzungsnachweis (2026-09-23):** MD-S1 — Loader `load_reply_heuristics` + fester
+`ReplyHeuristicsConfig`-Vertrag (frozen), Wortgrenzen-Predicate
+`matches_reply_trigger`, fail-loud Schema-Gate (bool/float/str abgewiesen), Classifier
+konsumiert die Konfiguration für `unknown`-Items mit; MD-S2 — fail-loud Account-Bindung
+vor Write/Himalaya-Aufruf, `mailbox` = verifizierter Account, `draft_manifest`-Pass-
+through; MD-S3 — Recording-Branch entfernt, himalaya-Such-Fallback neutral, Join-Ping-
+Regression unverändert. 24 neue Tests über drei Module; Suite 932/932 grün; Metriken
+146/66/56/61/932 (L2-Kanonik). Consumer-Migrationshinweis: BOKU-User-Workspace braucht
+für Zoom-Recordings den `boku-organisation`-Topic-Entry in `topics.json` (bereits
+vorhanden) und optional `memory/references/mail-desk/mail-desk.json` für individuelle
+Trigger; ohne die Datei greifen die Kompatibilitäts-Defaults.
 
-- Änderung von `FULL_BODY_ACTION_REQUEST` oder der MD-R8-Closing-/Quote-Semantik.
+### Out of Scope (FR-18)
+
+- Änderung von `FULL_BODY_ACTION_REQUEST` oder der MD-R8-Closing-/Quote-Semantik
+  (beide unangetastet).
 - Promotion-/Export-/Cloud-/Task-Pfade (FR-09/FR-10 unberührt).
 - Automatische Identitätsableitung aus dem Mailbestand; `owner_address` wird nur
   explizit aus der Katalogdatei gelesen.
+- Freemail-Spam-Domain-Heuristik (`@yahoo.` etc.): bewusst workspace-unabhängige
+  Anti-Phishing-Policy, bleibt im Bundle.

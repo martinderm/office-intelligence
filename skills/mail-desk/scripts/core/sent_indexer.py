@@ -130,7 +130,18 @@ def sync_sent_items_by_date(
     account: str | None = None,
     data_dir: Path | None = None,
 ) -> int:
-    """Fetch envelopes for a specific date (YYYY-MM-DD) from Sent Items and stream into sent-index.jsonl."""
+    """Fetch envelopes for a specific date (YYYY-MM-DD) from Sent Items and stream into sent-index.jsonl.
+
+    Fails loud with a ``ValueError`` before any file write if ``account`` is
+    missing: every indexed entry must be bound to the verified workspace account
+    rather than a hardcoded mailbox.
+    """
+    if account is None or not str(account).strip():
+        raise ValueError(
+            "Missing account: cannot bind sent-index entries to a mailbox without "
+            "a verified account. Bind an account before syncing Sent Items."
+        )
+
     dd = data_dir or resolve_data_dir()
     existing_index = load_sent_index(dd)
     existing_eids = {str(e.get("sent_envelope_id", "")) for e in existing_index["all_entries"] if e.get("sent_envelope_id")}
@@ -185,7 +196,7 @@ def sync_sent_items_by_date(
                 "schema_version": 1,
                 "at": email_res.get("date") or now_iso,
                 "updated_at": now_iso,
-                "mailbox": "BOKU-MARTIN",
+                "mailbox": account,
                 "message_id": f"<{raw_mid}>" if not raw_mid.startswith("<") else raw_mid,
                 "in_reply_to": f"<{raw_irt}>" if raw_irt and not raw_irt.startswith("<") else (raw_irt or ""),
                 "references": [f"<{r}>" if not str(r).startswith("<") else str(r) for r in raw_refs],

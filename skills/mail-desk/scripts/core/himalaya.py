@@ -604,7 +604,7 @@ def search_mailbox(
                 f_out = f_out[f_out.find("["):]
             folders = [f["name"] for f in json.loads(f_out)]
         except Exception:
-            folders = ["INBOX", "Junk", "Trash", "Newsletter", "Themen/BOKU-Organisation"]
+            folders = ["INBOX", "Junk", "Trash", "Newsletter"]
 
     matches: list[dict[str, Any]] = []
 

@@ -27,7 +27,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (141 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
+│ (146 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -95,6 +95,11 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
   auf `needs_reply: false` herabgestuft, in beiden Klassifikationspässen; zitierte
   Thread-Historie zählt dabei nicht als Anforderung; kanonischer Owner
   `core/matching/reply_heuristics.py` (FR-17/MD-R8).
+- **Workspace-Agnostizismus:** Reply-Trigger und Desk-Policies kommen aus dem
+  Desk-Signals-Katalog des konsumierenden Workspace (`memory/references/mail-desk/
+  mail-desk.json`, Schema 1, fail-loud bei Drift); Sent-Index-Einträge tragen den
+  verifizierten Batch-Account; das Zoom-Recording-Routing gehört dem Topic-Katalog
+  (FR-18/MD-S1–S3).
 - Himalaya-Adapter, Dossier-Synthese.
 
 ---

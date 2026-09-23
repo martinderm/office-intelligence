@@ -187,17 +187,18 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   beobachtete Grenzrouten (9408 eucen Highlights, 9419 BeyondTrust, 9412
   LE-LLL) sind Consumer-Katalog-Pflege, kein Bundle-Defekt. **FR-17 ist
   abnahmebestätigt.**
-- **FR-18:** geplant — **Workspace-Agnostizismus des Mail-Desk** (erweitert
-  2026-09-23 nach Agnostizismus-Audit): (MD-S1) Desk-Signals-Katalog
-  `memory/references/mail-desk/mail-desk.json` (Schema 1) ersetzt die hartcodierten
-  `martin`-Trigger und macht `no_reply_sender_tokens`/Domain-Liste konfigurierbar,
-  optional mit echter `owner_address`-Identität; (MD-S2) das `"mailbox": "BOKU-MARTIN"`-
-  Literal in `sent_indexer.py` wird durch den verifizierten Batch-`account` ersetzt
-  (fail-loud ohne Account); (MD-S3) der Zoom-Recording-Hardcode
-  (`Themen/BOKU-Organisation`) wandert in den Topic-Katalog des konsumierenden
-  Workspace. Integrationsvariante „Sub-Array je Projekt-/Topic-Entry" verworfen
-  (Desk-global vs. Entry-Signal). Paketkarte in
-  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md). Wartet auf Umsetzungs-GO.
+- **FR-18:** abgeschlossen (2026-09-23) — **Workspace-Agnostizismus des Mail-Desk**
+  im Kernel-Loop mit Subagenten umgesetzt: (MD-S1) Desk-Signals-Katalog
+  `memory/references/mail-desk/mail-desk.json` (Schema 1) mit kanonischem Loader
+  `load_reply_heuristics` (Defaults bei fehlender Datei, fail-loud bei Drift,
+  Wortgrenzen-Predicate), Classifier konsumiert die Konfiguration; (MD-S2)
+  `sent_indexer` bindet Sent-Index-Einträge an den verifizierten Batch-`account`
+  (fail-loud ohne Account, vor Write/Himalaya); (MD-S3) Zoom-Recording-Routing aus
+  dem Bundle entfernt, im Topic-Katalog des konsumierenden Workspace verwaltet,
+  himalaya-Such-Fallback neutral. Ein Fix-Runde (MD-S1-Schema-Gate: bool/float/str
+  abweisen) nach unabhängigem Review. 24 neue Tests, Suite 932/932 grün,
+  Metriken 146/66/56/61/932. Paketkarte und Umsetzungsnachweis in
+  [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md).
 - **Nachtrag B-11 / MD-R8 (2026-09-22, abgeschlossen):** Nach dem Katalog-Fix im
   Consumer-Workspace verblieb die Befundklasse „Abschluss-/Dankesmails werden
   reply-pflichtig klassifiziert" (Env 9412). **MD-R8 ist umgesetzt und

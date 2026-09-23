@@ -8,7 +8,9 @@ completes the domain verticals with the canonical topic/subtopic/operation/event
 project/topic domain evaluation (thread-folder inheritance and full-body evidence
 rebuilding) to those same owners. Every owner is bound to the facade by object identity.
 FR-17/MD-R8 adds the canonical reply-heuristics owner (``reply_heuristics.py``) that owns
-the closing/thank-you downgrade of an asserted ``needs_reply``.
+the closing/thank-you downgrade of an asserted ``needs_reply``. FR-18/MD-S1 extends that
+owner with the workspace-bound reply-trigger catalog (``load_reply_heuristics``) and the
+word-boundary predicate ``matches_reply_trigger``.
 Importing this package has no side effects and never imports ``classifier.py``.
 """
 
