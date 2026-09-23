@@ -26,7 +26,7 @@ verbindliche Paketkarten.
 | `FR-13` | ✅ Abgeschlossen; MD-M1 (T01–T04) und MD-M2 (Quarantäne-Paketierung unter `core/quarantine/` mit identitätserhaltenden Legacy-Shims) implementiert, getestet und paketabgenommen; **FR-13 geschlossen** | Domänenorientierte Classifier-Entflechtung: kanonisches `core/matching/`-Paket, kontrahierte Facade (810 Zeilen ≤ 813), Kompatibilitätsvertrag und einmalige `classifier_revision`-Rotation; Quarantäne-Paketierung: sechs Owner unter `core/quarantine/`, `sys.modules`-aliasende Shims an alten Pfaden, Monkeypatch-Seams und `core.__init__`-Re-Exports unverändert, 804 Tests grün | keins |
 | `FR-15` | ✅ Abgeschlossen; MD-E1 (T01–T07) und MD-E2 (T01–T04) vollständig implementiert, getestet und paketabgenommen; FR-15 geschlossen | FR-08, FR-11 und FR-14 liefern Inventar, Fetch, Extraktion, Handoff und Coverage; MD-E1 (`attachment_evaluate`) liefert das staged `attachment_evaluation` plus validierten Handoff bei null Mailbox-/Promotion-/Export-/Dispositionswrites; MD-E2 verdrahtet die standardmäßig aktive `draft`-Auswertung, die einmalige `untrusted_external`-Neuklassifikation, den opt-in `inspect`-Vorschlag und die finale `DraftManifest`-Installation | keins; nächstes Paket ist `FR-13`/`MD-M1` |
 | `FR-16` | ✅ Abgeschlossen (DOC-M1/M2/M3, reine Dokumentationsmaßnahme); Metrik-SSOT mit Stellen-Checkliste (L1 §3.1), Zellen-Splitting mit Null-Informationsverlust (L1 §2.1, L2 §2.1), Metrik auf 141/65/55/57/896 + 17 Pflichtfelder + Cloud-Atlas 28/138, Daedalus-Referenz korrigiert; 896 Tests grün | Identifikation der Metrik-Vervielfältigung, des monolithischen Tabellenzellen-Anti-Patterns und des realen Metrik-Drifts durch FR-17 (128→141 Dateien, 48→57 Testmodule, 804→896 Tests) | `DOC-M1` (Metrik-SSOT + Drift-Korrektur), `DOC-M2` (Zellen-Splitting), `DOC-M3` (Stale-Reference-Fix); Paketkarte unten |
-| `FR-17` | ✅ Abgeschlossen (B-1–B-10 als MD-R1–R7; **Nachtrag B-11 als MD-R8 implementiert, getestet und paketabgenommen**); 903 Tests grün | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
+| `FR-17` | ✅ Abgeschlossen (B-1–B-10 als MD-R1–R7; **Nachtrag B-11 als MD-R8 implementiert, getestet und paketabgenommen; Live-Nachweis 2026-09-23 an Env 9412 (`reply_downgrade`, `rule_revision: md-r8`)**); 908 Tests grün | Alle zehn ursprünglichen Befunde behoben: katalogtreues Routing mit `routing_priority` und DNR für Projekte+Topics inkl. Newsletter-Mapping, DNR-gegatete Sibling-Kohärenz, begrenzte Client-Deadlines, Subset-Verify-Scope mit Runner-Provenienz und kanonischem Evidence-Fallback, deterministische MIME-Inventarkette mit Konsistenz-Gate, Inline-Bild-Policy, `keep_in_folder`-Vertragsdokumentation, `progress_*.tmp`-Hygiene; 896 Tests grün | `MD-R8` (Reply-Heuristik, B-11) |
 
 
 ```text
@@ -1532,6 +1532,20 @@ Befunde hinzu.
   Dankes-/Abschlussmails → `false`; echte Bitten/Fragen/Fristen → nie herabgestuft;
   Thread-Abschluss → `false`; Review-Semantik bei verbleibender Unklarheit
   unverändert. 7 neue Tests (`test_reply_heuristics.py`); Suite 903/903 grün.
+- **Live-Nachweis und Quote-Härtung (2026-09-23):** Die Live-Re-Klassifikation von
+  Env 9412 (Ablage `Themen/Lifelong-Learning`) zeigte nach MD-R8 weiterhin
+  `needs_reply: true`: Das Request-Gate prüfte den gesamten Plaintext inklusive der
+  zitierten Vorgängermail („… wird morgen noch eine Präsentation **ergänzen**“) und
+  blockierte das Downgrade; außerdem leckten die internen `_closing_check_*`-Felder
+  in die Draft-Decision. Fix im kanonischen Owner: `_strip_quoted_history` schneidet
+  zitierte `>`/`>>>`-Blöcke, Header-Seperatoren (`-----Ursprüngliche Nachricht-----`,
+  `____…`) und `Am … schrieb …:`-Zeilen ab, bevor Closing-/Request-Gate greift;
+  `downgrade_if_closing` nimmt den Prüftext jetzt explizit als `subject`/`body` an
+  (keine Debug-Felder mehr in der Decision). Gegengeprüft: Live-Draft 2026-09-23 von
+  Env 9412 → `needs_reply: false` mit
+  `reply_downgrade: {reason: closing_or_thanks, rule_revision: md-r8}`;
+  `test_reply_heuristics.py` um 5 Fälle erweitert (Live-Body mit Zitat,
+  Quote-Grenz-Varianten, Request im Neutext, Debug-Key-Freiheit); Suite 908/908 grün.
 
 **Paket-Zuordnung der Nachträge:** B-8 → neues Paket `MD-R6` (Client-Deadlines und
 Hänger-Freiheit), B-9 und B-10 → neues Paket `MD-R7` (Standalone-Verify-Provenienz,
