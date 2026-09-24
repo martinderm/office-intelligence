@@ -61,8 +61,8 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
   Full-Reader-I/O, Thread-Referenzparsing/-Parent-Lookup, Anhangsbindung und
   Manifest-Drafting. Die kanonischen Domänen-Owner liegen unter `core/matching/`
   (`date_parser.py`, `ambiguity.py`, `project_matching.py`, `topic_matching.py`) und sind
-  per Objektidentität gebunden (FR-13/MD-M1-T01–T04; die einmalige MD-M1-Revision rotiert
-  vorhandene `classifier_revision`-Werte genau einmal).
+  per Objektidentität gebunden (die einmalige Revision rotiert vorhandene
+  `classifier_revision`-Werte genau einmal).
 - `core/envelope.py`: Zentraler Envelope-Builder für kanonische JSON-Ausgabe.
 - `core/progress.py`: Atomare Fortschritts- und ETA-Statusdatei für
   Batch-Läufe.
@@ -123,7 +123,7 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    ```
 
 8. **Katalog-Inspector (`catalog_inspect.py`):**
-   Read-seitiges Gegenstück zum `catalog_validator.py` (MD-S5): liest
+   Read-seitiges Gegenstück zum `catalog_validator.py`: liest
    `topics.json`, `projects.json` oder `mail-desk.json` aus dem Workspace und
    gibt ausgewählte Felder als kanonischen Envelope zurück. Rein lesend; die
    Pflege der Kataloge bleibt bei `topic-catalog-entry`/`project-catalog-entry`.
@@ -206,7 +206,7 @@ den Top-Level-Account wiederholen; Abweichung, fehlende Message-ID oder ungülti
 MIME-Metadaten sind fail-closed Fehler. Der Inventarschritt lädt noch keinen
 Anhang in eine Arbeits- oder Cloud-Ablage herunter.
 
-`attachment_fetch` ruft einen verifizierten MD-A1-Anhangskandidaten sicher und isoliert
+`attachment_fetch` ruft einen verifizierten Anhangskandidaten sicher und isoliert
 in den temporären Quarantäneordner `data/mail-desk/attachments/<run-id>/` ab.
 Erfordert zwingend eine gültige `approval_receipt` mit passendem `request_hash` gegen
 den deterministischen `review_hash`. Erzwingt Preflight-Drift-Prüfung, Quoten (15 MB einzeln,
@@ -216,10 +216,10 @@ dem ersten Quarantäne-Write stoppt ein bounded read-only Git-Preflight fail-clo
 falls unter `data/mail-desk/attachments/` bereits etwas getrackt ist (siehe
 Stop-Bedingung unten).
 
-## FR-15 / MD-E1: Policygebundene Anhang-Auswertung (Inspect → Fetch → Extract → Handoff)
+## Policygebundene Anhang-Auswertung (Inspect → Fetch → Extract → Handoff)
 
 Der `attachment_evaluate`-Orchestrator (`scripts/core/attachment_evaluation.py`) ist der
-separat aufrufbare, abgenommene MD-E1-Seam (FR-15/MD-E1-T01–T07). Er verarbeitet eine
+separat aufrufbare, abgenommene Seam. Er verarbeitet eine
 bereits als unklar klassifizierte Einzelmail und führt in einem Lauf aus:
 
 1. **Inspect:** `inspect_attachments` (`scripts/mail_desk_himalaya_client.py`) exportiert
@@ -230,7 +230,7 @@ bereits als unklar klassifizierte Einzelmail und führt in einem Lauf aus:
    Parts (`fetch_status: "available"`, `policy_status: "allowed"`) in die Quarantäne
    `data/mail-desk/attachments/<run-id>/` ab. Autorisierung ist die intern erzeugte,
    kontextgebundene Maschinen-Autorisierung (`receipt_class: "machine"`,
-   `receipt_type: "attachment_auto_evaluation"`); sie gilt nur für den MD-E1-Flow und wird
+   `receipt_type: "attachment_auto_evaluation"`); sie gilt nur für den Anhang-Auswertungs-Flow und wird
    von Human-Approval-Pfaden fail-closed abgewiesen. Lock-Ownership (`allow_legacy=False`),
    der bounded read-only Tracked-Quarantäne-Preflight, aktiver Inhalts-Blocker,
    Extension-/MIME-Konsistenz und die Quoten (15 MB einzeln, 25 MB kumulativ, max. 5
@@ -258,20 +258,20 @@ validierten `attachment_analysis_handoff`.
   (inkl. Extraktions-Timeout) und `handoff_invalid`. Langlebige Outputs enthalten nie
   Exception-Text, Rohinhalt oder absolute Pfade.
 
-**Zero-Write-Garantie:** MD-E1 führt keine Mailbox-Schreiboperation (`copy`/`move`/`delete`),
+**Zero-Write-Garantie:** Die Anhang-Auswertung führt keine Mailbox-Schreiboperation (`copy`/`move`/`delete`),
 keine Promotion, Export, Filing, Disposition, Evidence-, Katalog-, Cloud-, Classifier- oder
-Cleanup-/GC-Mutation aus. Verifizierte Quarantäne-Artefakte und Inventar bleiben für MD-E2
+Cleanup-/GC-Mutation aus. Verifizierte Quarantäne-Artefakte und Inventar bleiben für den nachgelagerten Draft-Pfad
 erhalten.
 
-**MD-E2-Fortsetzung:** Mit **FR-15/MD-E2-T01** ist die standardmäßig aktive
+**Draft-Fortsetzung:** Die standardmäßig aktive
 `draft`-Aufrufverdrahtung umgesetzt (`core/attachment_reclassification.py`): nur ein unklares
 Item durchläuft `attachment_evaluate`, ein validierter `ready`-Handoff wird genau einmal als
 getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein
 additives finales `attachment_evaluation` (`completed/classification_clear` mit
 `used_for_classification: true` und 64-Hex-`classifier_revision` nur bei eindeutigem Erfolg).
 Die direkten, gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments`
-sind nur für `draft`/`inspect` gültig (`draft` default an, `inspect` default aus). Mit
-**FR-15/MD-E2-T02** ist die Grenze fail-closed gehärtet: jede bounded MD-E1-Fehler-/No-Op-Ursache
+sind nur für `draft`/`inspect` gültig (`draft` default an, `inspect` default aus). Die
+Grenze ist fail-closed gehärtet: jede bounded Fehler-/No-Op-Ursache
 bleibt item-lokal in Review/`INBOX` (`lock_unavailable`, `policy_blocked`, `quota_exceeded`,
 `fetch_failed`, `extraction_failed`, `handoff_invalid`), Identitäts-/Quellen-Pairing-Fehler sind
 Bindungsfehler (`handoff_invalid`), ein `ready`-Handoff wird vor der Klassifikation kanonisch mit
@@ -280,23 +280,23 @@ Bindungsfehler (`handoff_invalid`), ein `ready`-Handoff wird vor der Klassifikat
 bindet den normalisierten AST des Classifier-Regelmoduls plus Kataloge und konsumierte Hashes,
 unerwartete Backend-/Programmiervertragsfehler schlagen über
 `AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer, PII-freier
-Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched` ohne Doppel-Fetch.
-Mit **FR-15/MD-E2-T03** ist der opt-in `inspect`-Vorschlag verdrahtet: `inspect` bleibt
+Run-ID je Nachricht erreicht im zweiten Default-Lauf `already_fetched` ohne Doppel-Fetch.
+Der opt-in `inspect`-Vorschlag ist verdrahtet: `inspect` bleibt
 standardmäßig rein lesend; nur `--evaluate-attachments` (`evaluate_attachments: true`) ergänzt
 einen top-level, **nicht ausführbaren** `manifest_proposal` über denselben
 `draft_manifest`- + `install_draft_attachment_evaluations`-Flow wie `draft`, und eine
 ausführbare Batch-Manifest-Datei entsteht weiterhin nur bei explizit konfiguriertem
 `manifest_file`. Ein gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed)
-bleibt geordnet und item-lokal. Die Paketabnahme (**FR-15/MD-E2-T04**) ist abgeschlossen:
+bleibt geordnet und item-lokal. Die Paketabnahme ist abgeschlossen:
 `tests/test_batch_runner_mde2_acceptance.py` beweist in einem einzigen hermetischen realen
 Pfad Body/Full-Read → mehrdeutig → realer `text/plain`-Anhang → genau eine
 `untrusted_external`-Neuklassifikation → persistiertes Projekt-`DraftManifest` mit
 bounded `attachment_evaluation` (`used_for_classification: true`, 64-Hex-`classifier_revision`
 gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei null Mailbox-/Netzwerk-
 und null Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
-**FR-15 ist damit geschlossen**; MD-E1 endet weiterhin am validierten Handoff.
+Die Anhang-Auswertung endet weiterhin am validierten Handoff.
 
-**FR-23/MD-L1 Lease-Delegation:** Die optionalen Flags `--workspace-lease-id <ID>` und
+**Lease-Delegation:** Die optionalen Flags `--workspace-lease-id <ID>` und
 `--workspace-conversation-id <ID>` sind nur mit direktem `--draft`/`--inspect` gültig und
 reichen eine von der Agent-Session gehaltene Consumer-Workspace-Lease an die Anhang-Bewertung
 weiter, damit diese unter Agent-Lock nicht fail-closed mit `lock_unavailable` endet. Sie
@@ -308,7 +308,7 @@ noch Fetch.
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag
 > `mail_desk_inspect_manifest.py --reclassify` (siehe oben) reklassifiziert erstellte
 > Batch-Manifeste offline gegen `projects.json`/`topics.json`. Es ist **nicht** die
-> MD-E2-Neuklassifikation und hat mit FR-15/MD-E1 nichts zu tun.
+> Draft-Neuklassifikation und hat mit der Anhang-Auswertung nichts zu tun.
 
 ## Workspace-Integration: Attachment-Quarantäne (Integrationsempfehlung)
 
@@ -343,7 +343,7 @@ direkt nach der bestehenden Negation `!data/mail-desk/**` anzufügen, statt best
 
 - **Empfehlung für Consumer-Workspaces:** Die obigen Blöcke sind Integrationsvorschläge zur Übernahme in den jeweiligen Consumer-Workspace. Der Skill verändert Consumer-`.gitignore`-Dateien nie autonom. Vor Übernahme bestehende Regeln prüfen; keine vorhandenen Regeln ersetzen.
 - **Flüchtige Laufzeitdaten:** Der gesamte Unterbaum `data/mail-desk/attachments/<run_id>/` inklusive Binärdateien (z. B. PDF, Bilder, Office-Dokumente), run-lokalen Inventaren (`.quarantine-inventory.json`), Lock-Dateien (`.quarantine-inventory.lock`), temporären Sibling-Dateien (`.*.tmp`) und Extraktions-Derivaten (`derivatives/`) sind rein lokale Laufzeitdaten und bleiben strikt ignoriert. Sie werden weder als Evidence noch als Final-Index-Inhalt behandelt.
-- **Versionierbare Metadaten:** Sämtliche Mail-Desk-Metadaten außerhalb des `attachments/`-Unterbaums — insbesondere `action-log.jsonl`, `replies-needed.jsonl`, `pending-review.jsonl`, `final-location-index.json`, Batch-Manifeste, `batch-recovery-journal.json`, `runner-progress.json` sowie der geplante versionierte `data/mail-desk/attachment-quarantine-index.json` (MD-Q2) — bleiben versionierbar und trackbar.
+- **Versionierbare Metadaten:** Sämtliche Mail-Desk-Metadaten außerhalb des `attachments/`-Unterbaums — insbesondere `action-log.jsonl`, `replies-needed.jsonl`, `pending-review.jsonl`, `final-location-index.json`, Batch-Manifeste, `batch-recovery-journal.json`, `runner-progress.json` sowie der geplante versionierte `data/mail-desk/attachment-quarantine-index.json` — bleiben versionierbar und trackbar.
 - **Stop-Bedingung bei getrackten Quarantänedateien:** Bereits versehentlich getrackte Quarantänedateien im Git-Index sind eine strikte Fail-Closed-Stop-Bedingung. Ein bounded, strikt read-only Produktions-Preflight (`quarantine_preflight.py`: `git ls-files` ohne Shell, mit Timeout) prüft dies am vertrauenswürdigen `workspace_root` nach der Lock-Ownership-Prüfung und vor dem ersten Quarantäne-Write bzw. vor dem ersten mutierenden OCR-Derivat-Write; jede getrackte Datei unter `data/mail-desk/attachments/` (inklusive `**/.quarantine-inventory.json`/`.lock`) sowie Non-Zero-Exit, Timeout oder unlesbarer Index stoppen fail-closed. Der Skill entfernt solche Dateien nie autonom aus dem Git-Index und verändert `.gitignore` nie autonom; sie erfordern manuelle Klärung vor der weiteren Ausführung.
 
 Clientzweck und Aufrufregel stehen im
@@ -381,3 +381,5 @@ Vor Abschluss eines Mail-Schritts:
 
 Fachliche Verifikations- und Quellenpflichtschritte stehen in der
 Abschluss-Checkliste im [`SKILL.md`](../SKILL.md).
+
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; Ticket-IDs sind dort kanonisch.

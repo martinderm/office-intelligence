@@ -5,7 +5,9 @@ description: Projektkatalog- und Projektarbeitsstruktur-Pflege innerhalb von off
 
 # project-catalog-entry
 
-Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`. `mail-processor` nutzt die Strukturen für Root-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. FR-01a erweitert `mail-desk` nicht funktional.
+Pflege projektmanagement-relevante Projektdaten, Projekt-Routingdaten und Projektdokumentation getrennt, konsistent und reviewbar, als Teil von `office-intelligence`. `mail-processor` nutzt die Strukturen für Root-Matching und Routing, ist aber nicht der gesamte fachliche Rahmen. Dieser Skill erweitert `mail-desk` nicht funktional.
+
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; Ticket-IDs sind dort kanonisch.
 
 ## Zielbild (verbindlich — Dual Evidence Standard)
 
@@ -174,6 +176,6 @@ python skills/project-catalog-entry/scripts/migrate_project_wps.py --catalog mem
 
 ## Backlog
 
-FR-01a liefert v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. **FR-01b1** liefert zusätzlich `migrate_project_wps.py`: standardmäßig read-only Dry-run, nur eindeutig strukturierte Markdown-Quellen, `PendingReview` bei Mehrdeutigkeit und Apply ausschließlich mit kanonisch verifizierter Lock-Ownership. **FR-01b2 ist abgeschlossen:** Der produktive BOKU-Katalog wurde nach Human Review auf v3 migriert; Details und die bewusst akzeptierte EVOLVE-Warnung stehen in der FR-01-Historik im Archiv [`../../docs/features/_archive.md`](../../docs/features/_archive.md). Jeder spätere reale Backfill bleibt ein eigener, erneut freizugebender Lauf.
+Dieses Paket liefert den v3-Vertrag, Validator, Vorlagen, Tests und den generischen Beispielkatalog. Zusätzlich steht `migrate_project_wps.py` bereit: standardmäßig read-only Dry-run, nur eindeutig strukturierte Markdown-Quellen, `PendingReview` bei Mehrdeutigkeit und Apply ausschließlich mit kanonisch verifizierter Lock-Ownership. Der produktive BOKU-Katalog wurde nach Human Review auf v3 migriert; Details und die bewusst akzeptierte EVOLVE-Warnung stehen in der Historik im Archiv [`../../docs/features/_archive.md`](../../docs/features/_archive.md). Jeder spätere reale Backfill bleibt ein eigener, erneut freizugebender Lauf.
 
 Ein menschlich freigegebener, konkreter Warning-Code kann für einen Apply explizit dokumentiert werden, etwa `--accept-warning unstable_checkpoint`. Der Code muss im selben Lauf tatsächlich auftreten; unbekannte Codes, Blocking-Diagnostics und pauschale Ignore-/Force-Mechanismen sind nicht zulässig.

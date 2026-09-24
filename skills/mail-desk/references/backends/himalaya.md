@@ -5,7 +5,7 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 ## Preconditions and minimal reading
 
 - Read the local `HIMALAYA.md`, if present, before concrete commands; it owns command syntax and installation-specific constraints. The machine-enforced account binding for batch operations is instead the credentials-free workspace file `.agents/mail-desk-backend.json`; it contains exactly `{"schema_version": 1, "backend": "himalaya", "account": "<configured-name-or-null>"}`. `null` explicitly selects the local Himalaya default account. It contains no credentials.
-- The batch runner never derives its backend from available apps/connectors and does not accept `--account` as an override for mailbox modes. A manifest account may be review evidence (MD-H2/FR-04), but must exactly equal the workspace-bound account.
+- The batch runner never derives its backend from available apps/connectors and does not accept `--account` as an override for mailbox modes. A manifest account may be review evidence, but must exactly equal the workspace-bound account.
 - Before `execute` and explicit autonomous `pipeline`, the runner performs one bounded, read-only `envelope list -s 1` on the configured source folder (10 seconds). A timeout, unavailable adapter, account mismatch, malformed configuration, or non-list JSON response is a canonical `mailbox_readiness` failure and occurs before any local or mailbox mutation.
 - Use the mailbox-specific skill for listing, reading, copying, and verifying messages.
 - Begin with the smallest suitable folder listing or preview, then read only the message material required by the core flow.
@@ -65,7 +65,7 @@ normal processing. Do not approve arbitrary Himalaya commands or a blanket
 `himalaya`/`python` command prefix. Read operations may cross this boundary;
 copy, move, delete and send still require their existing operation-specific human
 approval, workspace lock, identity/location preconditions and verification. This
-is a temporary compatibility path pending FR-10's least-privilege gateway.
+is a temporary compatibility path pending a least-privilege gateway.
 
 - The existing `himalaya-op.json` manifest shape is documented in [`references/cli-operations.md`](../cli-operations.md); its batch lifecycle is documented in [`references/batch-runner.md`](../batch-runner.md).
 - `inspect_attachments` requires the manifest-bound account and a verified RFC
@@ -73,9 +73,9 @@ is a temporary compatibility path pending FR-10's least-privilege gateway.
   exactly match the manifest-bound account. Inventory or drift failures are
   errors, never an empty successful attachment result.
 
-### Attachment evaluation boundary (FR-15 / MD-E1)
+### Attachment evaluation boundary
 
-The MD-E1 attachment-evaluation flow reuses the client's read-only RFC-822 inspection and the
+The attachment-evaluation flow reuses the client's read-only RFC-822 inspection and the
 canonical fetch/extract/handoff seams; it never issues a mailbox write.
 
 - **Raw-MIME / fetch boundary:** `inspect_attachments` exports the message read-only as an
@@ -92,31 +92,30 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
 - **Extraction timeout:** extraction is bounded and reuses the canonical extractor; the
   terminal extraction status `extraction_failed` (including a timeout) maps to the bounded
   staged `failed` / `extraction_failed` envelope. There is **no automatic retry**.
-- **No automatic write / reclassification:** MD-E1 performs no mailbox write, no promotion,
+- **No automatic write / reclassification:** The attachment evaluation performs no mailbox write, no promotion,
   no export, no filing, no disposition and no cleanup, and it does **not** reclassify the mail
   or install the staged result into a `DraftManifest`.
-- **MD-E2 continuation:** with **FR-15/MD-E2-T01** the default-on `draft` path fetches raw
+- **Draft continuation:** the default-on `draft` path fetches raw
   MIME only for an ambiguous item, runs `attachment_evaluate`, consumes a validated `ready`
   handoff exactly once as a distinct `untrusted_external` classifier input, and installs the
   additive final `attachment_evaluation`. The mutually exclusive
   `--evaluate-attachments`/`--no-evaluate-attachments` options are valid only for direct
-  `draft`/`inspect` (`draft` defaults on, `inspect` defaults off). With **FR-15/MD-E2-T02**
-  the ready handoff is revalidated canonically before any classification, every bounded
-  MD-E1 failure stays item-local in Review/`INBOX`, a deterministic PII-free per-message
-  run-id reaches MD-E1 `already_fetched` on a repeated default invocation (no duplicate
+  `draft`/`inspect` (`draft` defaults on, `inspect` defaults off). The
+  ready handoff is revalidated canonically before any classification, every bounded
+  failure stays item-local in Review/`INBOX`, a deterministic PII-free per-message
+  run-id reaches `already_fetched` on a repeated default invocation (no duplicate
   attachment fetch, no cross-run cache), and unexpected backend contract errors fail loud
-  instead of being relabelled. With **FR-15/MD-E2-T03** the opt-in `inspect` proposal is
+  instead of being relabelled. The opt-in `inspect` proposal is
   wired: plain `inspect` stays read-only, and only `--evaluate-attachments` (default off)
   adds a top-level, non-executable `manifest_proposal` through the same item flow as
   `draft`; an executable batch manifest is still written only to an explicitly configured
-  `manifest_file`. The package acceptance (**FR-15/MD-E2-T04**) is complete: a hermetic
+  `manifest_file`. The package acceptance is complete: a hermetic
   package-acceptance test (`tests/test_batch_runner_mde2_acceptance.py`) proves the single
   real path Body/Full Read -> ambiguous -> real `text/plain` attachment -> one
   `untrusted_external` reclassification -> persisted project `DraftManifest` with a bounded
   `attachment_evaluation` (`used_for_classification: true`, 64-hex `classifier_revision`
   bound to the classifier rules plus the consumed attachment hash) at zero mailbox/network
-  and zero execute/promote/export/filing/disposition/catalog/cloud side effects. FR-15 is
-  closed.
+  and zero execute/promote/export/filing/disposition/catalog/cloud side effects.
 
 ## Envelope IDs
 
@@ -134,3 +133,5 @@ canonical fetch/extract/handoff seams; it never issues a mailbox write.
 - `scripts/mailbox_preflight.py` validates catalog target folders before routing.
 - `scripts/mail_desk_move_and_patch.py` performs the verified routing and final-location-index update described above.
 - `scripts/mail_desk_himalaya_client.py` is the JSON-input-only client for concrete Himalaya/IMAP operations.
+
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; Ticket-IDs sind dort kanonisch.

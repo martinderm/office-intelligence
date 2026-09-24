@@ -24,25 +24,25 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   Review-Hash; ohne passende explizite Review-Receipt führt `execute` keine
   Mailbox- oder lokalen Batch-Mutationen aus. `allow_fewer` ist nie eine Erlaubnis
   für mehr Kandidaten als `expected_count`.
-- Ein FR-04b-`dossier_apply` ist kein autonomer Batch: Er benötigt eine separat
+- Ein `dossier_apply` ist kein autonomer Batch: Er benötigt eine separat
   erteilte Human Review als hash-gebundenen Receipt für den exakten kanonischen
   Execute-Request einschließlich eines optionalen `execute_request.account`.
   Ein äußerer Account darf nur exakt diesem reviewten Wert entsprechen. Nach vollständigem Preflight der Projekt-, INBOX- und
   katalogisierten Zielordner-Grenzen delegiert er ausschließlich an den bestehenden
   `execute`→`verify`-Pfad; Fehl- oder Teilfehler bleiben Review und löschen den
   Approval-Manifest nicht.
-- FR-04c-`dossier_synthesis` nimmt ausschließlich einen hash-gebundenen Snapshot
+- `dossier_synthesis` nimmt ausschließlich einen hash-gebundenen Snapshot
   eines vollständig erfolgreichen `dossier_apply` inklusive Verify und eines exakt
-  kanonischen FR-06-`synthesis_handoff` an. Er prüft Projekt-, Execute-, Verify-
+  kanonischen `synthesis_handoff` an. Er prüft Projekt-, Execute-, Verify-
   und Message-ID-Bezüge und schreibt nur einen reviewbaren Arbeitsauftrag mit
   EVID-Ankern. Er ruft kein LLM auf, wählt fehlende Targets nicht, ändert keine
   Wissensdatei und startet weder Cloud- noch Task-Synchronisation.
-- FR-04d ergänzt zwei reine Empfangs-Handoffs: Bereits `dossier` legt für die
+- Zwei reine Empfangs-Handoffs ergänzen den Ablauf: Bereits `dossier` legt für die
   exakt katalogisierte Projekt-ID einen Cloud-Atlas-Preflight an (`pending_review`,
   bei fehlendem `project.cloud_sync` ausdrücklich `not_configured`) und
   `dossier_handoff` akzeptiert nach einer abgeschlossenen Synthese nur
-  hash-gebundene, exakt kanonische FR-04c-Work-Orders plus separat reviewte,
-  mail-EVID-verankerte Action-Candidates. Auch leere FR-04c-Targets mit
+  hash-gebundene, exakt kanonische Work-Orders plus separat reviewte,
+  mail-EVID-verankerte Action-Candidates. Auch leere Synthese-Targets mit
   `target_selection_required` bleiben nur im separat reviewten Synthese-Schritt
   zulässig. Er ruft weder
   Cloud-Atlas noch Task-Desk auf, erfindet weder Pfade, Storage, Priorität,
@@ -51,7 +51,7 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
 - Backend-Zugriff, Locator und Transport bleiben beim gewählten Adapter;
   Projekt-/Topic-Katalogpflege bei `project-catalog-entry` bzw.
   `topic-catalog-entry`.
-- Das FR-08-`MD-A1`-Inventar verwendet ausschließlich die reale RFC-822-MIME-
+- Das kanonische Attachment-Inventar verwendet ausschließlich die reale RFC-822-MIME-
   Struktur. Fehlende Inventarisierung, Account-/Message-ID-Drift oder ungültige
   Part-Metadaten halten das einzelne Item fail-closed in `INBOX` zur Review.
   Ein Abruf, eine Extraktion oder Cloud-Ablage ist dadurch noch nicht autorisiert.
@@ -66,7 +66,7 @@ explizite Freigabe. Der sichtbare Single-Session-Legacy-Modus ist nur eine
 ausdrückliche Ausnahme, nie ein stiller Fallback.
 
 Für die Attachment-Fetch-, Extraktions- und Quarantäne-Pfade ist Lock-Ownership
-unbedingt (FR-15/MD-E1-T01): der shared Guard wird ausnahmslos mit
+unbedingt: der shared Guard wird ausnahmslos mit
 `allow_legacy=False` aufgerufen, und weder `WORKSPACE_LOCK_ALLOW_LEGACY` noch ein
 `allow_legacy`-Parameter oder Manifest-Wert öffnen dort einen Schreibpfad. Zulässig
 bleibt ausschließlich die eigene Lease-/Conversation-ID der Harness-Control-Plane.
@@ -83,7 +83,7 @@ reviewte Manifest und `HIMALAYA_CONFIG` aus der vertrauenswürdigen Host-Konfigu
 und gibt nur das strukturierte Ergebnis zurück. Freie Himalaya-Kommandos und eine
 pauschale dauerhafte Freigabe für `himalaya` oder `python` sind verboten.
 Mailbox-Schreibaktionen behalten unabhängig davon Human Approval, Lock,
-Preconditions und Verify. Diese Übergangslösung wird durch FR-10 abgelöst.
+Preconditions und Verify. Diese Übergangslösung ist ausdrücklich befristet bis zu einem Least-Privilege-Gateway.
 
 Vor dem Fach-Skript prüft der ausführende Harness seine Ownership über
 `workspace-lock/scripts/workspace_lock_guard.py` mit `require_workspace_lock()` und
@@ -143,10 +143,10 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    eindeutige Zuordnung) und liegt mindestens ein kanonisch erlaubter, verfügbarer
    MIME-Anhang vor, stößt `attachment_evaluate` die policygebundene Auswertung an.
    Der Aufruf revalidiert ausschließlich die echte MIME-Struktur, prüft vorab den
-   Workspace-Lock und erzeugt die interne Maschinen-Autorisierung
-   (FR-15/MD-E1-T03); Caller-seitige Kandidaten-, Policy-, Fetch-Status-, Receipt-,
-   Materiality- oder Handoff-Werte sind keine Autorität. Mit **FR-15/MD-E1-T05**
-   komponiert der Orchestrator die bestehenden kanonischen Seams linear
+   Workspace-Lock und erzeugt die interne Maschinen-Autorisierung;
+   Caller-seitige Kandidaten-, Policy-, Fetch-Status-, Receipt-,
+   Materiality- oder Handoff-Werte sind keine Autorität. Der Orchestrator
+   komponiert die bestehenden kanonischen Seams linear
    (`op_attachment_fetch` → `extract_attachment_content` →
    `build_attachment_analysis_handoff` → `validate_attachment_handoff`) unter einer
    `run_id` je Mail und gibt das staged Zwischenergebnis `attachment_evaluation`
@@ -155,8 +155,8 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    `status: "completed"`, `reason: "handoff_ready"`, `authorization:
    "auto_evaluated"` mit befüllten sicheren `files[]`; ein validierter
    `blocked_on_required_attachment`-Handoff bleibt `completed`/`still_ambiguous`
-   (nie `supplementary`). Mit **FR-15/MD-E1-T06** ist die negative Fehler-/Reason-
-   Matrix fail-closed geschlossen: fehlender/fremder Lock, aktiver Inhalt,
+   (nie `supplementary`). Die negative Fehler-/Reason-Matrix ist fail-closed
+   geschlossen: fehlender/fremder Lock, aktiver Inhalt,
    disallowed Extension, MIME-/Extension-Drift, getrackte Quarantäne, Einzel-/
    Gesamt-/Anzahl-Quoten, Identity-/Hash-/Inventar-Drift, Extraktions-Timeout und
    ungültiger Handoff werden exakt auf bounded `failed`-Envelopes (`lock_unavailable`,
@@ -166,10 +166,10 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    absolute Pfade. Kanonisch gültige, aber unvollständige erforderliche Evidenz
    (`corrupt_attachment`, `attachment_conversion_unavailable`) bleibt dagegen
    `required_for_decision` und endet `completed`/`still_ambiguous`. Die
-   `DraftManifest`-Installation bleibt MD-E2. Ein klarer Entscheid wird durch eine
-   frühere Eskalation nicht erneut ausgewertet. Der `attachment_evaluate`-Seam ist mit
-   FR-15/MD-E1 (T01–T07) vollständig und als Paket abgenommen. Mit **FR-15/MD-E2-T01** ist
-   die standardmäßig aktive `draft`-Auswertung verdrahtet: nur ein unklares Item durchläuft
+   `DraftManifest`-Installation bleibt dem nachgelagerten Draft-Pfad vorbehalten. Ein klarer
+   Entscheid wird durch eine frühere Eskalation nicht erneut ausgewertet. Der
+   `attachment_evaluate`-Seam ist vollständig und als Paket abgenommen. Die
+   standardmäßig aktive `draft`-Auswertung ist verdrahtet: nur ein unklares Item durchläuft
    `attachment_evaluate`, ein validierter `ready`-Handoff wird genau einmal als getrenntes
    `untrusted_external` an die bestehenden Classifier-Regeln übergeben (ohne neue Ziele zu
    erfinden), und jedes Draft-Item erhält genau ein additives finales
@@ -178,9 +178,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    Neuklassifikation; klar/`skipped`/`failed`/`still_ambiguous` bleiben `false`/`null`. Die
    gegenseitig exklusiven Optionen `--evaluate-attachments`/`--no-evaluate-attachments`
    gelten nur für direktes `draft`/`inspect` (`draft` default an, `inspect` default aus); die
-   JSON-Konfiguration akzeptiert `evaluate_attachments` nur als Boolean. Mit
-   **FR-15/MD-E2-T02** ist diese Grenze fail-closed gehärtet: jede bounded
-   MD-E1-Fehler-/No-Op-Ursache bleibt item-lokal in Review/`INBOX` (`lock_unavailable`,
+   JSON-Konfiguration akzeptiert `evaluate_attachments` nur als Boolean. Diese
+   Grenze ist fail-closed gehärtet: jede bounded Fehler-/No-Op-Ursache bleibt
+   item-lokal in Review/`INBOX` (`lock_unavailable`,
    `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`,
    `handoff_invalid`), Identitäts-/Quellen-Pairing-Fehler sind Bindungsfehler, ein
    `ready`-Handoff wird vor der Klassifikation kanonisch revalidiert, fortbestehende
@@ -189,19 +189,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    Classifier-Regelmoduls plus Kataloge und konsumierte Hashes, unerwartete
    Backend-/Programmiervertragsfehler schlagen über
    `AttachmentReclassificationContractError` fail-loud fehl, und ein deterministischer,
-   PII-freier Run-ID je Nachricht erreicht im zweiten Default-Lauf MD-E1 `already_fetched`
-    ohne Doppel-Fetch. Mit **FR-15/MD-E2-T03** ist der opt-in `inspect`-Vorschlag
+   PII-freier Run-ID je Nachricht erreicht im zweiten Default-Lauf `already_fetched`
+    ohne Doppel-Fetch. Der opt-in `inspect`-Vorschlag ist
     verdrahtet: `inspect` bleibt ohne Opt-in rein lesend; nur `evaluate_attachments: true`
     ergänzt einen top-level, nicht ausführbaren `manifest_proposal` über denselben
     Item-Flow wie `draft`, und eine ausführbare Batch-Manifest-Datei entsteht weiterhin nur
-    bei explizit konfiguriertem `manifest_file`. Die Paketabnahme (**FR-15/MD-E2-T04**) ist
+    bei explizit konfiguriertem `manifest_file`. Die Paketabnahme ist
     abgeschlossen: `tests/test_batch_runner_mde2_acceptance.py` beweist in einem einzigen
     hermetischen realen Pfad Body/Full-Read -> mehrdeutig -> realer `text/plain`-Anhang ->
     genau eine `untrusted_external`-Neuklassifikation -> persistiertes Projekt-`DraftManifest`
     mit bounded `attachment_evaluation` (`used_for_classification: true`, 64-Hex-
     `classifier_revision` gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei
     null Mailbox-/Netzwerk- und null Execute-/Promote-/Export-/Filing-/Dispositions-/
-    Katalog-/Cloud-Seiteneffekten. **FR-15 ist geschlossen.** Details stehen in
+    Katalog-/Cloud-Seiteneffekten. Details stehen in
     [`references/batch-runner.md`](references/batch-runner.md).
 4. `message_id` oder dokumentierten Fallback erfassen und **aktive wie archivierte**
    Mail-Desk-Daten auf Dubletten prüfen, bevor ein Fall angelegt wird.
@@ -250,22 +250,22 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     quellengebunden aktualisieren; Logs ersetzen das nicht. Jede Erkenntnis trägt
     `message_id`/dokumentierten Fallback, Datum, Absender, Betreff und knappen
     Kontext. Bei Batch-Läufen folgt nach dem physischen Transfer (`execute`) eine
-    **Post-Batch Projekt-Synthese (FR-06)** durch das LLM: Alle berührten Projekte
+    **Post-Batch Projekt-Synthese** durch das LLM: Alle berührten Projekte
     und Topics werden auf inhaltliche Fortschritte geprüft. Die zuständigen
     Steuerungsdateien (`statusampel-*.md`, `signals.md`, `contacts.md`,
     `workpackages/*.md`, `events/*.md`) werden nur bei belastbaren, mit der Mail
     verknüpften neuen Erkenntnissen geändert. Ergibt die Prüfung keinen solchen
     Erkenntnisgewinn, ist ein No-op zulässig und im Abschlussbericht zu nennen;
     Dateien werden nie nur wegen eines Batchlaufs verändert. Der Runner emittiert
-    nach `execute` und `pipeline` die deterministische FR-06a-`telemetry` mit
+    nach `execute` und `pipeline` die deterministische `telemetry` mit
     `affected_projects`, `affected_topics` und `synthesis_required`; sie ist eine
     Aufforderung zur LLM-Synthese, löst diese aber weder aus noch verändert sie
-    Wissensdateien. `synthesis_targets` (FR-06b) können einen reviewbaren,
+    Wissensdateien. `synthesis_targets` können einen reviewbaren,
     konkreten Prüfauftrag je erfolgreichem Item übergeben. Die autonome Pipeline
     leitet diese Ziele nicht aus untrusted Mailfeldern ab und liefert in ihren
     Drafts daher kanonisch `synthesis_targets: []`; ein Mensch oder LLM reichert
     den Draft zwischen `draft` und `execute` quellengebunden an; davon ausgenommen
-    ist der deterministische FR-03a-Fall einer vorhandenen, kanonisch im aktiven
+    ist der deterministische Fall einer vorhandenen, kanonisch im aktiven
     Subtopic-Katalog deklarierten `reference_md`-Datei. Jedes Target
     benennt nur eine sichere Markdown-Datei unter dem zum Project-/Topic-Slug
     passenden `memory/references/`-Root und ein stabiles `type`-Label. Der
@@ -275,7 +275,7 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     noch nicht freigegebenen `synthesis_candidate`. Ausschließlich ein vollständig
     erfolgreicher, quellengebundener `verify`-Schritt (direkt oder in `pipeline`)
     oder ein abgeschlossener
-    `reconcile` setzt den versionierten FR-06c-`synthesis_handoff` auf `pending`
+    `reconcile` setzt den versionierten `synthesis_handoff` auf `pending`
     und liefert den maschinenlesbaren `completion_report`. Partial-, Abort- und
     Verify-Fehler liefern `recovery_required` und den kanonisch leeren Handoff.
     Bei `status: "pending"` führt
@@ -311,10 +311,10 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   `decision.artifact_candidates` ausgegeben; es wird kein Einzelwert geraten.
   Thread-Vererbung übernimmt nur das Projektziel, die Artefakte kommen weiter
   aus der aktuellen Mail. Legacy-Kataloge ohne v3-Struktur bleiben beim
-  bisherigen Root-Matching. Diese FR-02a-Ergänzung eskaliert keinen Lesegrad
-  und ändert weder Evidence- noch FR-06-Handoff-Formate.
-- FR-02b ergänzt einen deterministischen Zwei-Pass-Read: Zuerst wird das
-  kompatible Preview klassifiziert. Nur bei sichtbaren Artefakt-Signalen
+  bisherigen Root-Matching. Diese Ergänzung eskaliert keinen Lesegrad
+  und ändert weder Evidence- noch Handoff-Formate.
+- Ein deterministischer Zwei-Pass-Read klassifiziert zuerst das
+  kompatible Preview. Nur bei sichtbaren Artefakt-Signalen
   (`QM Plan`, `Draft`, `Handbook`, `Deliverable`, `Agreement`, `Red Flags`,
   `Audit`, `Focus Group`, `Fokusgruppe`), einem im Preview eindeutig
   aufgelösten Artefaktcode (etwa `wp2`, `t2.2`, `d1.2`, `ms5`), einer sichtbaren
@@ -325,8 +325,8 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   Triggern. Ein Full-Read-Fehler senkt die Confidence auf `low`, hält die Mail
   in `INBOX` zur Review zurück und dokumentiert den Fehler strukturiert. Ein
   aus dem Preview abgeleitetes `needs_reply` ist ausdrücklich kein alleiniger
-  Trigger. FR-06 bleibt unverändert.
-- FR-02c erzeugt Projekt-Evidence über einen zentralen, writer-kompatiblen
+  Trigger. Die Synthese bleibt unverändert.
+- Projekt-Evidence entsteht über einen zentralen, writer-kompatiblen
   Spec mit `file` und `entry`. Der Kontext enthält nur den Projekt-Kürzel und
   eindeutig entschiedene WP-/Task-/Deliverable-/Milestone-Scalars samt
   Katalogtiteln; `artifact_candidates` erzeugen keinen scheinbar eindeutigen
@@ -336,8 +336,8 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   ohne Rohbody als begrenzte Maschinenmetadaten am Spec geführt. Für Thread-
   Evidence gilt derselbe `file`-Vertrag wie für normale Project- und Topic-
   Evidence; Dedupe und atomare Writer bleiben unverändert.
-- FR-03a löst nach der Parent-Topic-Zuordnung ausschließlich aktive
-  `subtopics` separat auf: `typical_subject_patterns`, exakte Subtopic-
+- Nach der Parent-Topic-Zuordnung werden ausschließlich aktive
+  `subtopics` separat aufgelöst: `typical_subject_patterns`, exakte Subtopic-
   IDs/Titel/Aliase und Betreff-Keywords haben Vorrang vor Preview-Keywords.
   Ein Kontakt verfeinert nur ein unabhängig im Betreff identifiziertes Parent
   Topic und nur, wenn er genau einem aktiven Subtopic gehört. Eindeutige
@@ -350,9 +350,9 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   Event-/Abschnittspfaden. Ein eindeutiges Subtopic-`subject_pattern` darf eine
   schwächere generische Root-Pattern-/Keyword-Zuordnung eines anderen Topics
   überstimmen; explizite Parent-Namen sowie Gleichstände bleiben konservativ.
-  FR-06-Preflight und Handoff bleiben unverändert.
-- FR-03b2b ergänzt unter einem bereits eindeutig entschiedenen Subtopic eine
-  optionale `operations[]`-Auflösung für wiederkehrende Dauerprozesse. Sie wertet
+  Synthese-Preflight und Handoff bleiben unverändert.
+- Unter einem bereits eindeutig entschiedenen Subtopic wird eine
+  optionale `operations[]`-Auflösung für wiederkehrende Dauerprozesse ergänzt. Sie wertet
   nur aktive (oder Legacy-statuslose) Operations anhand von dokumentierten
   Betreffmustern, IDs/Titeln/Aliasen und Keywords aus; Betreffsignale haben
   Vorrang vor Preview-Keywords, Kontakte sind kein Operationssignal. Eindeutige
@@ -364,7 +364,7 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   Operation-Evidence landet quellengebunden unter
   `memory/evidence/topics/<topic>/subtopics/<subtopic>/operations/<operation>/YYYY-MM.md`.
   Mailtext kann keine Pfade oder Ziele einschleusen.
-- FR-03b2c ergänzt getrennte, terminierte `events[]` unter einem bereits eindeutig
+- Getrennte, terminierte `events[]` entstehen unter einem bereits eindeutig
   entschiedenen Subtopic. Ein Event benötigt ein gültiges ISO-Startdatum, ein
   optionales Ende nicht vor dem Start und ein kanonisches vorhandenes Dossier.
   Es besitzt und benötigt keinen Cloud-Speicher. Ein optionaler `cloud_storage`-
@@ -378,7 +378,7 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
   sowie doppelte IDs bleiben `event_candidates`; ein gleichzeitiger
   Operations-/Event-Treffer erzeugt
   nie zwei Scalars, sondern reviewbare Kandidaten beider Arten. Parent-Routing,
-  FR-06-Target-Preflight und Handoff bleiben unverändert.
+  Target-Preflight und Handoff bleiben unverändert.
 - Antwortbedarf folgt einer konkreten Bitte, Frage, Frist, Entscheidung, Freigabe
   oder einem Beitrag; Newsletter, reine Information und no-reply gewöhnlich nicht.
 - Interner Forward mit starkem Fachbetreff (z. B. MC, Micro-Credentials, KI/AI Tutor,
@@ -405,7 +405,7 @@ Pflegevertrag:
 - Nur eine **fehlende** Katalogdatei ist der dokumentierte Fallback; jede
   vorhandene Datei wird streng validiert.
 
-Neutraler Fallback (FR-22/MD-ID1):
+Neutraler Fallback:
 
 - Fehlt die Katalogdatei, gilt ein **neutraler Fallback** mit **leeren**
   `reply_triggers` („ohne Katalog keine Anrede-Trigger“). Kein Personenname ist je
@@ -438,10 +438,9 @@ Templates `GREETING_TRIGGER_TEMPLATES` (`{X} bitte`, `bitte {X}`, `frage an {X}`
 trägt die Desk-Identität selbst die Anrede, ohne dass ein Personenname im
 Bundle-Code steht.
 
-`owner_address` ist weiterhin ein **Katalog-Contract** gemäß FR-18: Der Validator
+`owner_address` ist weiterhin ein **Katalog-Contract**: Der Validator
 prüft das Feld strikt als `string` oder `null`. In **Schema 2** wertet der Loader
-das Feld bereits zur Trigger-Ableitung aus. Die in FR-18 beschriebene
-Sent-Reply-Check-Wirkung ist dagegen **Target-Verhalten und noch nicht
+das Feld bereits zur Trigger-Ableitung aus. Die Sent-Reply-Check-Wirkung ist dagegen **Target-Verhalten und noch nicht
 implementiert**: Erst dann wertet der Sent-Reply-Check die echte Desk-Identität
 gegen die to/cc-Empfänger aus, statt wie heute allein über die
 Keyword-Heuristik (`reply_triggers`/`no_reply_sender_tokens`) zu entscheiden.
@@ -477,8 +476,7 @@ nie manuell**; die kanonischen CLI-, Compliance- und Pfadregeln stehen in
 Übergangsadapter ist nur bei nachgewiesenem historischen Konsumenten relevant:
 [`references/legacy-cli-adapter.md`](references/legacy-cli-adapter.md).
 
-Seit **FR-13/MD-M1 (T01–T04, abgeschlossen)** sind die Klassifikationsregeln
-domänenorientiert entflochten: die kompatible Facade
+Die Klassifikationsregeln sind domänenorientiert entflochten: die kompatible Facade
 [`scripts/core/classifier.py`](scripts/core/classifier.py) (810 physische Zeilen, ≤ 813;
 Baseline 2.035) hält Katalog-I/O, Full-Reader-I/O, Zwei-Pass-Orchestrierung,
 Thread-Referenzparsing und Final-Index-Parent-Lookup, Anhangsbindung und
@@ -488,9 +486,9 @@ Manifest-Drafting, während die kanonischen Owner unter
 Topic-Vertikale besitzen und per Objektidentität an die Facade gebunden sind. Der
 `classifier_revision`-Fingerprint bindet die geordnete AST-Quelle `classifier.py`,
 `matching/ambiguity.py`, `matching/date_parser.py`, `matching/project_matching.py` und
-`matching/topic_matching.py`; da sich diese Quellen in MD-M1 einmalig geändert haben,
-rotieren vorhandene `classifier_revision`-Werte genau einmal (genehmigt). MD-M1 ist
-damit abgeschlossen; MD-M2 (Quarantäne-Paketierung unter `core/quarantine/`) bleibt offen.
+`matching/topic_matching.py`; da sich diese Quellen einmalig geändert haben,
+rotieren vorhandene `classifier_revision`-Werte genau einmal (genehmigt). Die
+Quarantäne-Paketierung unter `core/quarantine/` bleibt offen.
 Detail: [`docs/system-map/README.md`](docs/system-map/README.md) §6.
 
 Verifiziere nur mit dem kleinstmöglichen belastbaren Nachweis; keine breiten
@@ -504,3 +502,5 @@ Review; keine langen Mailinhalte ohne Anfrage.
 Offene Verbesserungen: FR-Katalog [`../../FEATURE-REQUESTS.md`](../../FEATURE-REQUESTS.md);
 historisches Backlog und Meilensteine im Archiv
 [`../../docs/features/_archive.md`](../../docs/features/_archive.md).
+
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; Ticket-IDs sind dort kanonisch.
