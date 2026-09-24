@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-24/MD-R9): 156 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 68 Testmodule; 1037 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-23/MD-L1): 157 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 69 Testmodule; 1045 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -609,3 +609,26 @@ selbst aus („führt keine Massenpipeline aus").
 **Pflichttests (alle erfüllt):** `tests/test_skill_routing_contract.py` (5,
 Routing-Präsenz: Description-Anker, Pflicht-Ladeblock, Migrationshinweis).
 **Suite 1037/1037 grün.**
+
+## 21. MD-L1 — Workspace-Lock-Delegation an Runner-Subprozesse (FR-23, abgeschlossen)
+
+**Problem:** Die Anhang-Bewertung endete fail-closed `lock_unavailable`
+(Befund Env 9451), obwohl die Agent-Session das Workspace-Lock hielt — der
+Runner-Subprozess startete ohne Lease-Argument und konnte die gehaltene Lease
+weder erkennen noch benutzen. `attachment_evaluation.py:600-608` prüft
+korrekt fail-closed; es fehlte nur der legitime Übergabepfad.
+
+**Umsetzung (MD-L1):**
+- Runner akzeptiert `--workspace-lease-id` / `--workspace-conversation-id`
+  (optional, nur mit `--draft`/`--inspect`, sonst `ArgumentParseError`); die
+  Flags befüllen `cfg["lease_id"]`/`cfg["conversation_id"]` nur bei gesetztem
+  Flag (Config ohne Flags byte-identisch).
+- Bestehende Kette unangetastet: draft/inspect →
+  `install_draft_attachment_evaluations` → `evaluate_attachment` →
+  `verify_workspace_lock` (Eigentumsprüfung; fremde/abgelaufene Leases
+  bleiben fail-closed `lock_unavailable`; kein Fetch ohne Lock).
+- Doku: `cli-operations.md` + `batch-runner.md` dokumentieren die Flags.
+
+**Pflichttests (alle erfüllt):** `tests/test_runner_lease_delegation.py` (8,
+Flag-Threading, Byte-identität ohne Flags, Reject außerhalb draft/inspect,
+fail-closed-Regression-Pins). **Suite 1045/1045 grün.**

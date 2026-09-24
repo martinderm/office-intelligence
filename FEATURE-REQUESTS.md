@@ -36,9 +36,8 @@ trägt keinen Content.
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` | [`docs/features/FR-12.md`](docs/features/FR-12.md) |
 | `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428) dokumentiert | `MD-RC1` (stale Records nachverifizieren) | [`docs/features/FR-19.md`](docs/features/FR-19.md) |
 | `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438) dokumentiert; Inline-Quota-Festlegung präzisiert | `MD-A3` (Inline vs. Datei) | [`docs/features/FR-20.md`](docs/features/FR-20.md) |
-| `FR-23` | ⬜ geplant | Befund Batch 2026-W39/4 (Env 9451) dokumentiert | `MD-L1` (Lease-Delegation) | [`docs/features/FR-23.md`](docs/features/FR-23.md) |
 
-Vollständig abgeschlossene FRs (FR-01–08, 11, 13–18, 21, 22, 24) stehen im
+Vollständig abgeschlossene FRs (FR-01–08, 11, 13–18, 21–24) stehen im
 Archiv [`docs/features/_archive.md`](docs/features/_archive.md); ihre Paketkarten sind
 dort Teil der Sektionen.
 

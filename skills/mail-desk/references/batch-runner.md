@@ -136,6 +136,8 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabe-Files bei Erfolg. |
 | `--reconcile` | | Erstellt einen read-only Recovery-Report für den neuesten Journal-Lauf. |
+| `--workspace-lease-id <ID>` | | Delegiert die von der Agent-Session gehaltene Consumer-Workspace-Lease an die Anhang-Bewertung; nur mit `--draft`/`--inspect` (FR-23/MD-L1). |
+| `--workspace-conversation-id <ID>` | | Optionaler Conversation-Kontext für die delegierte Lease; nur mit `--draft`/`--inspect` (FR-23/MD-L1). |
 
 ---
 
@@ -1553,6 +1555,16 @@ gegenseitig exklusiv und nur mit direktem `--draft`/`--inspect` gültig. Ohne Fl
 `evaluate_attachments` für `draft` `true` und für `inspect` `false`. Die JSON-Konfiguration
 akzeptiert `evaluate_attachments` nur als Boolean; ein Nicht-Boolean stoppt vor jeder
 Auswertung. `--pipeline` und die übrigen Modi bleiben unverändert.
+
+**Lease-Delegation (FR-23/MD-L1):** `--workspace-lease-id` und `--workspace-conversation-id`
+sind optional und nur mit direktem `--draft`/`--inspect` gültig (sonst `ArgumentParseError`).
+Sie setzen die Config-Keys `lease_id`/`conversation_id` nur, wenn gesetzt; ohne Flag bleibt
+die Config-Form byte-identisch. Zweck: Die von der Agent-Session gehaltene Consumer-Workspace-
+Lease wird an die Anhang-Bewertung (`install_draft_attachment_evaluations` →
+`evaluate_attachment` → `verify_workspace_lock`) weitergereicht, damit der Runner-Subprozess
+unter Agent-Lock nicht fail-closed mit `lock_unavailable` endet. Der Guard bleibt fail-closed:
+fremde oder abgelaufene Leases enden weiterhin `lock_unavailable`, und ohne Flag wird keine
+Lease beschafft.
 
 **Opt-in `inspect`-Vorschlag (T03):** `scripts/core/modes/inspect.py` bleibt ohne
 `evaluate_attachments`/`propose_manifest` rein lesend und ruft weder `attachment_evaluate`

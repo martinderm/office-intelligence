@@ -296,6 +296,15 @@ gebunden an Classifier-Regeln plus konsumierten Anhangs-Hash) bei null Mailbox-/
 und null Execute-/Promote-/Export-/Filing-/Dispositions-/Katalog-/Cloud-Seiteneffekten.
 **FR-15 ist damit geschlossen**; MD-E1 endet weiterhin am validierten Handoff.
 
+**FR-23/MD-L1 Lease-Delegation:** Die optionalen Flags `--workspace-lease-id <ID>` und
+`--workspace-conversation-id <ID>` sind nur mit direktem `--draft`/`--inspect` gültig und
+reichen eine von der Agent-Session gehaltene Consumer-Workspace-Lease an die Anhang-Bewertung
+weiter, damit diese unter Agent-Lock nicht fail-closed mit `lock_unavailable` endet. Sie
+setzen die Config-Keys `lease_id`/`conversation_id` ausschließlich, wenn gesetzt; ohne Flag
+bleibt die Config-Form byte-identisch und das Verhalten wie bisher. Fremde oder abgelaufene
+Leases bleiben fail-closed `lock_unavailable`, und ohne Flag erfolgt weder Lease-Beschaffung
+noch Fetch.
+
 > **Nicht verwechseln:** Das vorbestehende, unabhängige Offline-Flag
 > `mail_desk_inspect_manifest.py --reclassify` (siehe oben) reklassifiziert erstellte
 > Batch-Manifeste offline gegen `projects.json`/`topics.json`. Es ist **nicht** die

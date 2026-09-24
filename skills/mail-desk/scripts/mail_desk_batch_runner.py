@@ -972,10 +972,28 @@ def _build_parser() -> EnvelopeArgumentParser:
         default=None,
         help="Disable attachment evaluation for --draft/--inspect",
     )
+    parser.add_argument(
+        "--workspace-lease-id",
+        dest="workspace_lease_id",
+        default=None,
+        help="Optional agent-session lease delegation for attachment evaluation (FR-23/MD-L1)",
+    )
+    parser.add_argument(
+        "--workspace-conversation-id",
+        dest="workspace_conversation_id",
+        default=None,
+        help="Optional agent-session conversation id for the delegated workspace lease (FR-23/MD-L1)",
+    )
     return parser
 
 
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
+    lease_id = getattr(args, "workspace_lease_id", None)
+    conversation_id = getattr(args, "workspace_conversation_id", None)
+    if (lease_id is not None or conversation_id is not None) and args.draft is None and args.inspect is None:
+        raise ArgumentParseError(
+            "--workspace-lease-id/--workspace-conversation-id are valid only with --draft or --inspect"
+        )
     if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
         raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
     if args.evaluate_attachments is not None and args.draft is None and args.inspect is None:
@@ -1041,6 +1059,10 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["query"] = args.query
         if args.date:
             cfg["date"] = args.date
+        if lease_id is not None:
+            cfg["lease_id"] = lease_id
+        if conversation_id is not None:
+            cfg["conversation_id"] = conversation_id
         return cfg
     if args.inspect is not None:
         cfg = {
@@ -1056,6 +1078,10 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["query"] = args.query
         if args.date:
             cfg["date"] = args.date
+        if lease_id is not None:
+            cfg["lease_id"] = lease_id
+        if conversation_id is not None:
+            cfg["conversation_id"] = conversation_id
         return cfg
     return None
 

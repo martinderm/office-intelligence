@@ -29,6 +29,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-21` | ✅ | Desk-Signals-Doku (SKILL.md/batch-runner.md) + Pattern-Semantik (topic-catalog-entry) + Workspace-Katalog-Validator `catalog_validator.py` | MD-S4/MD-S5 im Kernel-Loop (Docs-Contract-Test + 35 Validator-Tests), 1 Fix-Runde Root-vs-Nested Min-3 |
 | `FR-22` | ✅ | Identity-freier Desk-Signals-Fallback: neutraler leerer Fallback + owner-generierte Trigger (Schema 2 mit Schema-1-Legacy), sent_indexer/internal-domain/Spam-Gegenindikatoren → Katalog bzw. entfernt, `spam_sender_allowlist`-Gate | MD-ID1–ID4 im Kernel-Loop (12 Dispatches mit Red-Gates), 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün |
 | `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
+| `FR-23` | ✅ 2026-09-24 | Workspace-Lock-Delegation an Runner-Subprozesse: `--workspace-lease-id`/`--workspace-conversation-id` reichen die Agent-Lease an die Anhang-Bewertung weiter; fremde/abgelaufene Leases bleiben fail-closed | MD-L1 im Kernel-Loop (8 Tests, fail-closed-Regression gepinnt); 1045 Tests grün |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -1720,6 +1721,43 @@ statt des JSON-Manifest-Client `mail_desk_himalaya_client.py`, (3)
   Suite 1037/1037 grün.
 - Der vollständige Migrationsbaustein ist über die Git-Historie
   (`docs/features/FR-24.md` vor der Archivierung) nachvollziehbar.
+
+## FR-23: Workspace-Lock-Delegation an Batch-Runner-Subprozesse
+
+**Status:** ✅ Abgeschlossen (2026-09-24; MD-L1 im Kernel-Loop mit Subagenten,
+1 unabhängiges Review). Befund Batch 2026-W39/4 Draft (Env 9451, boku-user):
+die Anhang-Bewertung endete fail-closed `lock_unavailable`, obwohl ein
+Workspace-Lock aktiv bestand — der Runner-Subprozess besaß die Lease nicht
+und konnte die Agent-Session-Lease weder erkennen noch benutzen.
+
+### Kernergebnis
+
+- Runner akzeptiert `--workspace-lease-id` / `--workspace-conversation-id`
+  (optional, nur valid mit `--draft`/`--inspect`, sonst `ArgumentParseError`
+  mit Flag-Nennung).
+- Flags befüllen `cfg["lease_id"]`/`cfg["conversation_id"]` nur bei gesetztem
+  Flag; ohne Flags bleibt die Config byte-identisch (kein Verhaltenswechsel
+  für Offline-/Test-Runs).
+- Bestehende Threading-Kette unangetastet: draft/inspect →
+  `install_draft_attachment_evaluations` → `evaluate_attachment` →
+  `verify_workspace_lock` — Eigentumsprüfung (Lease-ID passt, Lease aktiv);
+  fremde oder abgelaufene Leases bleiben fail-closed `lock_unavailable`;
+  kein Fetch ohne Lock (auch mit Flag).
+- Doku: `references/cli-operations.md` + `references/batch-runner.md`
+  dokumentieren die Flags und die fail-closed-Semantik.
+
+### Umsetzungsnachweis
+
+- Doku-Contract-Test `skills/mail-desk/tests/test_runner_lease_delegation.py`
+  (8 Tests: Flag-Threading draft/inspect, Byte-Identität ohne Flags,
+  Reject außerhalb draft/inspect inkl. reconcile, fail-closed-Regression-
+  Pins); Suite 1045/1045 grün.
+- Unabhängiges Review: 1 Major (Red-Gate-Historie-Docstring) + 2 Minors —
+  alle adjudiziert; Testkorrektur-Runde 1 (dokumentiert): Docstring korrigiert
+  (5 von 8 roten am Red-Gate, 3 Source-Pins grün), ungenutzter Import
+  entfernt, `tempfile_namespace`-Helfer nach oben gezogen; Help-Text-Divergenz
+  des `--workspace-conversation-id`-Flags als bewusste Präzisierung
+  adjudiziert (dokumentiert im Run-Manifest).
 
 ## Archivierungsregel
 
