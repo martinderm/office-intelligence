@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand MD-BC-Fix): 155 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 67 Testmodule; 1032 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-24/MD-R9): 156 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 68 Testmodule; 1037 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -585,3 +585,27 @@ Schema-2-Contract), `tests/test_sent_indexer_identity_catalog.py` (8, Identity-C
 `tests/test_reply_heuristics.py` (12, MD-R8-Intent mit hermetischen Katalog-Fixtures).
 **Suite 1015/1015 grün.** Fix-Runde MD-ID-fix-001: Validator-Gate für unbenutzbare
 Owner-Local-Parts (reuse `derive_greeting_triggers`, keine duplizierte Logik).
+
+## 20. MD-R9 — Pflicht-Skill-Routing für Batch-Läufe (FR-24, abgeschlossen)
+
+**Problem:** Ein Consumer-Batch-Lauf (2026-W39/4, `boku-user`) arbeitete nur über
+die Pipeline-SOP und verletzte drei Werkzeug-Hardrules (Final-Index ad-hoc,
+Himalaya ad-hoc, Katalogpflege inline), weil die Routing-Oberfläche die
+Fachverträge nicht anzeigt: Die SKILL.md-Description schloss Batch-Work
+selbst aus („führt keine Massenpipeline aus").
+
+**Umsetzung (Doku/Routing-only):**
+- SKILL.md-Description: selbst-ausschließende Phrase entfernt; Batch-/Stapel-
+  verarbeitung (draft→execute→verify) läuft fachlich **durch** diesen Skill
+  (Körper trägt die Batch-Verträge: Draft-Bindung, Final-Index-Hardrules,
+  JSON-Manifest-Client, Katalogpflege-Router).
+- `docs/features/FR-24.md` trägt den kanonischen Pflicht-Ladeblock (SKILL.md,
+  Adapter-Referenz, cli-operations.md, bei Bedarf batch-runner/folder-rules/
+  log-schema) und den Consumer-Migrationsbaustein (Phase 0 in der
+  Consumer-Pipeline-SOP; „Pipeline und Fachvertrag"-Wording) als
+  kopierbare Migrationsartefakte (workspace-owned im Consumer).
+- Kein Produktionscode-Change (nur SKILL.md-Description).
+
+**Pflichttests (alle erfüllt):** `tests/test_skill_routing_contract.py` (5,
+Routing-Präsenz: Description-Anker, Pflicht-Ladeblock, Migrationshinweis).
+**Suite 1037/1037 grün.**

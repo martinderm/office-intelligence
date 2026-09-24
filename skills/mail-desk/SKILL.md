@@ -1,6 +1,6 @@
 ---
 name: mail-desk
-description: Agentische Einzelmail-Verarbeitung innerhalb von office-intelligence. Verwende diesen Skill, wenn Mails über einen unterstützten Mailbox-Backend einzeln beurteilt, Projekt- oder Topic-Kontext zugeordnet, Antwortbedarf und Todos getrennt entschieden sowie leichte Arbeitslogs unter data/mail-desk/ gepflegt werden sollen. Unterstützt Gmail sowie Himalaya-/IMAP-Backends; führt keine Massenpipeline aus.
+description: Agentische Einzelmail-Verarbeitung innerhalb von office-intelligence. Verwende diesen Skill, wenn Mails über einen unterstützten Mailbox-Backend einzeln beurteilt, Projekt- oder Topic-Kontext zugeordnet, Antwortbedarf und Todos getrennt entschieden sowie leichte Arbeitslogs unter data/mail-desk/ gepflegt werden sollen. Unterstützt Gmail sowie Himalaya-/IMAP-Backends. Auch Batch- und Stapelverarbeitung (batch pipelines, draft→execute→verify) läuft fachlich durch diesen Skill, dessen Körper die Batch-Verträge trägt — Draft bindet expected_count/allow_fewer/Review-Hash, Final-Index-Hardrules, JSON-Manifest-Client und Katalogpflege-Router.
 ---
 
 # mail-desk

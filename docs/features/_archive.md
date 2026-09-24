@@ -28,6 +28,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-18` | ✅ | Workspace-Agnostizismus: Desk-Signals-Katalog `mail-desk.json` (Schema 1, fail-loud), sent_indexer-Account-Bindung, Zoom-Routing im Topic-Katalog | MD-S1–S3 mit Red-Gates und unabhängigen Reviews; 1 Fix-Runde (Schema-Gate) |
 | `FR-21` | ✅ | Desk-Signals-Doku (SKILL.md/batch-runner.md) + Pattern-Semantik (topic-catalog-entry) + Workspace-Katalog-Validator `catalog_validator.py` | MD-S4/MD-S5 im Kernel-Loop (Docs-Contract-Test + 35 Validator-Tests), 1 Fix-Runde Root-vs-Nested Min-3 |
 | `FR-22` | ✅ | Identity-freier Desk-Signals-Fallback: neutraler leerer Fallback + owner-generierte Trigger (Schema 2 mit Schema-1-Legacy), sent_indexer/internal-domain/Spam-Gegenindikatoren → Katalog bzw. entfernt, `spam_sender_allowlist`-Gate | MD-ID1–ID4 im Kernel-Loop (12 Dispatches mit Red-Gates), 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün |
+| `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -1678,6 +1679,47 @@ Ohne Änderung bleibt das Verhalten byte-identisch (Schema-1-Legacy-Pfad).
 - Threading des Desk-Signals-Katalogs in `core/modes/resolve.py`
   (`auto_resolve_replies_from_sent` läuft dort weiter mit Defaults —
   byte-identisch zu HEAD; dokumentierter Follow-up-Kandidat).
+
+## FR-24: Pflicht-Skill-Routing für Mail-Desk-Batches
+
+**Status:** ✅ Abgeschlossen (2026-09-24; MD-R9 im Kernel-Loop mit Subagenten,
+Doku/Routing-only). Befund Batch 2026-W39/4 (boku-user): der Batch-Lauf
+arbeitete ausschließlich über die Pipeline-SOP; `skills/mail-desk/SKILL.md`, die
+Adapter-Referenz und `references/cli-operations.md` wurden nicht geladen. Folge:
+drei Werkzeugregel-Verletzungen in einem einzigen Lauf - (1) Final-Index-Prüfung
+per ad-hoc-JSON-Lesen statt ausschließlich kanonischem
+`mail_desk_final_location_index.py`, (2) direkte `himalaya envelope list`-Aufrufe
+statt des JSON-Manifest-Client `mail_desk_himalaya_client.py`, (3)
+`projects.json`-Katalogedit inline per JSON-Roundtrip statt über das
+`project-catalog-entry`-Muster.
+
+### Kernergebnis
+
+- **SKILL.md-Description:** die selbst-ausschließende Phrase "führt keine
+  Massenpipeline aus" ist entfernt; Batch-/Stapelverarbeitung
+  (batch pipelines, draft→execute→verify) läuft fachlich **durch** diesen Skill
+  (Körper trägt die Batch-Verträge: Draft-Bindung expected_count/allow_fewer/
+  Review-Hash, Final-Index-Hardrules, JSON-Manifest-Client, Katalogpflege-Router).
+- **Kanonischer Pflicht-Ladeblock** (kopierbarer Migrationsbaustein, Reihenfolge
+  bindend): 1. `skills/mail-desk/SKILL.md` vollständig, 2. gewählte
+  Adapter-Referenz (`references/backends/himalaya.md`) vollständig,
+  3. `references/cli-operations.md`, 4. bei Bedarf `references/batch-runner.md`,
+  `references/folder-rules.md`, `references/log-schema.md`.
+- **Consumer-Migrationsbaustein (workspace-owned, boku-user):** Phase 0
+  "Pflicht-Referenzen" in `pipelines/mail-desk-batch.md` **vor** Phase 1
+  (lädt den Pflicht-Ladeblock, bevor Kommandos laufen); Wording-Schärfung in
+  `CONTEXT.md`/`AGENTS.md` von "Pipeline **oder** Fachanleitung" zu
+  "**Pipeline und Fachvertrag**".
+
+### Umsetzungsnachweis
+
+- Bundle: `skills/mail-desk/SKILL.md`-Description (Doku/Routing-only, kein
+  Produktionscode-Change).
+- Doku-Contract-Test `skills/mail-desk/tests/test_skill_routing_contract.py`
+  (5 Tests: Description-Anker, Pflicht-Ladeblock, Migrationshinweis);
+  Suite 1037/1037 grün.
+- Der vollständige Migrationsbaustein ist über die Git-Historie
+  (`docs/features/FR-24.md` vor der Archivierung) nachvollziehbar.
 
 ## Archivierungsregel
 

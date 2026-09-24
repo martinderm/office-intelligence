@@ -37,9 +37,8 @@ trägt keinen Content.
 | `FR-19` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9428) dokumentiert | `MD-RC1` (stale Records nachverifizieren) | [`docs/features/FR-19.md`](docs/features/FR-19.md) |
 | `FR-20` | ⬜ geplant | Befund Batch 2026-W39/3 (Env 9438) dokumentiert; Inline-Quota-Festlegung präzisiert | `MD-A3` (Inline vs. Datei) | [`docs/features/FR-20.md`](docs/features/FR-20.md) |
 | `FR-23` | ⬜ geplant | Befund Batch 2026-W39/4 (Env 9451) dokumentiert | `MD-L1` (Lease-Delegation) | [`docs/features/FR-23.md`](docs/features/FR-23.md) |
-| `FR-24` | ⬜ geplant | Befund Batch 2026-W39/4: Batch-Lauf ohne Fachvertrags-Ladung — drei Werkzeugverletzungen (Final-Index ad-hoc, Himalaya ad-hoc, Katalogpflege inline); Pipeline-SOP verweist nicht auf SKILL.md/Adapter/cli-operations.md; Skill-Description routet Batch-Work weg | `MD-R9` (Pflicht-Skill-Routing: Description-Schärfung + Pflicht-Ladeblock + Consumer-Migration) | [`docs/features/FR-24.md`](docs/features/FR-24.md) |
 
-Vollständig abgeschlossene FRs (FR-01–08, 11, 13–18, 21, 22) stehen im
+Vollständig abgeschlossene FRs (FR-01–08, 11, 13–18, 21, 22, 24) stehen im
 Archiv [`docs/features/_archive.md`](docs/features/_archive.md); ihre Paketkarten sind
 dort Teil der Sektionen.
 
