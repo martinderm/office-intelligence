@@ -683,3 +683,29 @@ inkl. Inline-Signaturbilder; bei Env 9438 verdrängten 6 Inline-Bilder 3 echte
 Env-9438-Fall: 3 inline allowed / 3 inline skipped_inline_limit / beide .docx
 allowed — drei Zustände je Teilklasse). **Suite 1056/1056 grün.**
 Fix-Runde (dokumentiert): is_inline-Typvalidierung fail-closed.
+## 24. Deduco — Operative Fachverträge ohne Ticket-Labels (DOC-R1, abgeschlossen)
+
+**Problem:** FR-/MD-Ticket-Labels (204) standen in den operativen Fachverträgen
+(SKILL.md 55, batch-runner.md 91, cli-operations.md 32, himalaya.md 19,
+refactor-map.md 2, project-catalog-entry SKILL.md 5) — Rauschen für frische
+Agenten, verlockende Nachlese-Fallen, Token-Ballast. Funktion + py-File +
+Vertragsverhalten zählen; die Herkunft lebt in dieser Map, im FR-Archiv und in
+Git.
+
+**Umsetzung (Doku-only, kein Code-Change):**
+- Alle FR-/MD-Labels aus den 6 operativen Docs entfernt; Regeltexte semantisch
+  identisch (hunkweise reviewt); Modus-/Abschnitts-Überschriften funktional
+  umgestellt (z. B. „### MD-H3: Workspace-Bindung…" → „### Workspace-Bindung…",
+  „### FR-06a-Telemetrie" → „### Post-Batch-Telemetrie"); Querverweise
+  umgeschrieben, keine toten Referenzen.
+- Je operativem Doc genau eine Provenance-Zeile
+  („Vertragshistorie: System Map L2 … und docs/features/_archive.md …").
+- `H4-Recovery` bleibt (code-verankerte interne Bezeichnung, kein Ticket-Residuum).
+- Guard: `tests/test_docs_no_ticket_labels.py` (3 Tests: Regex-Gate je Datei,
+  Provenance-Zeile, L2-Map-Label-Erhalt) pinnt den Zustand dauerhaft.
+- 2 dokumentierte Fix-Runden: Grammatik-Artefakte des Label-Streichs (SKILL.md
+  Zwei-Pass-/Subtopic-Sätze) + Präzisierungen (Befristung, Draft-Neuklassifikation).
+
+**Pflichttests (alle erfüllt):** `tests/test_docs_no_ticket_labels.py` (3),
+`tests/test_catalog_docs_contract.py` (13), `tests/test_skill_routing_contract.py`
+(5). **Suite 1059/1059 grün.**
