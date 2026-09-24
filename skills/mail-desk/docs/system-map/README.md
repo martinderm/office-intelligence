@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-22/MD-ID1-ID4): 151 getrackte Dateien; 67 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py` sowie `catalog_validator.py`; 65 Testmodule; 1015 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand MD-BC-Fix): 155 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 67 Testmodule; 1032 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -20,6 +20,7 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py + catalog_validator.py         │
+│  │   + mail_desk_batch_cli.py + catalog_inspect.py                     │
 │  ├─ Core Domain: scripts/core/ (56 getrackte .py-Dateien)              │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
@@ -510,6 +511,32 @@ ausführbaren Validator (`load_catalogs` schluckt Drift still).
 **Pflichttests (alle erfüllt):** `tests/test_catalog_docs_contract.py` (13,
 liest die realen Dokumentdateien), `tests/test_catalog_validator.py` (35, je
 Drift-Klasse, Root-vs-Nested, CLI 0/1/2, boku-user-Form). **Suite 980/980 grün.**
+
+## 19. MD-BC — Harness-Ausgabe-Boundaries: Batch-CLI-Wrapper und Katalog-Inspector (abgeschlossen)
+
+**Problem:** Der Batch-Runner emittiert seinen vollständigen Envelope auf stdout;
+bei `draft`-Läufen mit Anhängen sprengt das Harness-Output-Fenster (opencode
+schneidet ab und leitet in eine Datei um). Der Katalog-Feld-Inspekt per rohem
+`jq`/JSON-Lesen erzeugte dasselbe Problem auf der Read-Seite.
+
+**Umsetzung:**
+- **`mail_desk_batch_cli.py` (Wrapper):** Persistiert Runner-stdout/-stderr nach
+  `<workspace>/tmp/mail-batch/` und emittiert einen kompakten kanonischen
+  Summary-Envelope (Exit-Code, Zustand, Review-Hash, draft-/execute-Zähler).
+  `--reconcile` wird korrekt ohne `--input` durchgereicht (reconcile liest das
+  Recovery-Journal); `--account` optional (Default: Workspace-Backend-Binding,
+  kein Workspace-Literal); `--keep N` prunt die ältesten Envelope-/Progress-Paare.
+- **`catalog_inspect.py` (read-only):** Feld-Inspektion der drei
+  Workspace-Kataloge als kanonischer Envelope; `--id` respektiert `--fields`
+  (bounded Output); Fehler (fehlende Datei, defektes JSON, unbekannte Payload)
+  enden kanonisch (`CatalogError`, Exit 2), nie bare `SystemExit`.
+- Beide Skripte nutzen `core.envelope` (kanonischer Vertrag) und wurden aus dem
+  Consumer-Betrieb adoptiert und gehärtet (Fix-Runde MD-BC-fix-001).
+
+**Pflichttests (alle erfüllt):** `tests/test_batch_cli_wrapper.py` (11,
+Argument-Threading, Account-Neutralität, Prune-Hygiene, Envelope-Fehlerpfad),
+`tests/test_catalog_inspect.py` (6, Payload-Klassen, Field-Bounds, Envelope).
+**Suite 1032/1032 grün.**
 
 ## 18. FR-22 — Identity-freier Desk-Signals-Fallback und Katalogisierung der BOKU-Restbestände (MD-ID1–MD-ID4 abgeschlossen)
 

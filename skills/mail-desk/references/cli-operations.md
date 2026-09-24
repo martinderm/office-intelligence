@@ -102,6 +102,41 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Validiert die Erreichbarkeit und Authentifizierung des konfigurierten
    Mailkontos vor komplexen Operationen.
 
+7. **Batch-CLI-Wrapper (`mail_desk_batch_cli.py`):**
+   Harness-freundlicher Wrapper um den Batch-Runner: persistiert Runner-Envelope
+   (stdout) und Progress-Log (stderr) unter `<workspace>/tmp/mail-batch/` und
+   emittiert stattdessen einen kompakten kanonischen Summary-Envelope. Für
+   Harnesses mit Output-Fenster-Limits (z. B. `draft` mit großen Anhängen).
+   Modi und Parameter wie beim Batch-Runner (`draft`/`execute`/`reconcile`).
+
+   `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen
+   `execute`-Laufs und erwartet **kein** `--input`-Manifest. `--account` ist
+   optional; ohne Angabe bindet der Runner den Account automatisch aus der
+   Workspace-Backend-Datei. `--keep N` (Default 10, Minimum 1) steuert die
+   Persistenz-Hygiene: pro Dateimuster bleiben nur die neuesten N
+   Envelope-/Progress-Dateien in `tmp/mail-batch/` erhalten.
+
+   ```bash
+   python3 scripts/mail_desk_batch_cli.py draft --count 10
+   python3 scripts/mail_desk_batch_cli.py execute
+   python3 scripts/mail_desk_batch_cli.py reconcile
+   ```
+
+8. **Katalog-Inspector (`catalog_inspect.py`):**
+   Read-seitiges Gegenstück zum `catalog_validator.py` (MD-S5): liest
+   `topics.json`, `projects.json` oder `mail-desk.json` aus dem Workspace und
+   gibt ausgewählte Felder als kanonischen Envelope zurück. Rein lesend; die
+   Pflege der Kataloge bleibt bei `topic-catalog-entry`/`project-catalog-entry`.
+   `--fields` begrenzt die Ausgabe sowohl in der Listen-/Summary-Ansicht als
+   auch im Einzeleintrag-Modus (`--id`): emittiert werden nur `id` plus die im
+   Eintrag vorhandenen ausgewählten Felder (z. B. ohne `workpackages`).
+
+   ```bash
+   python3 scripts/catalog_inspect.py topics --id lifelong-learning
+   python3 scripts/catalog_inspect.py projects --id meshe --fields id,mailbox_folder,typical_subject_patterns
+   python3 scripts/catalog_inspect.py mail-desk
+   ```
+
 ## Harte Regel: kein manueller Final-Index-Write
 
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert
