@@ -16,6 +16,11 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   `skipped_inline_limit`, fail-closed is_inline-Typvalidierung. 5 Tests
   (Env-9438-Fall, drei Zustände je Teilklasse), Suite 1056/1056 grün;
   Details im Archiv (`docs/features/_archive.md`, FR-20-Sektion).
+- `TODO-Historik` - Disposition abgeschlossen (2026-09-24): Bulk-Copy überholt,
+  IMAP-Pool entwertet, Runner-Modularisierung realisiert (1.147 < 1.500 Zeilen);
+  konsumerspezifische Betriebsaufgaben entfernt (boku-user). Restwert als
+  FR-25 (low priority, Multi-Batch-Pipelining) im Katalog; Details im Archiv
+  (`docs/features/_archive.md`, Sektion Mail-Desk-Historik).
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der

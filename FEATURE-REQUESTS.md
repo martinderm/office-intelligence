@@ -34,6 +34,7 @@ trägt keinen Content.
 | `FR-09` | ⬜ geplant; Human Gate offen | FR-08 und `attachment_filing_candidate` Schema 1 abgeschlossen | Nach ausdrücklicher Freigabe: `MD-P1` | [`docs/features/FR-09.md`](docs/features/FR-09.md) |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` | [`docs/features/FR-10.md`](docs/features/FR-10.md) |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` | [`docs/features/FR-12.md`](docs/features/FR-12.md) |
+| `FR-25` | ⬜ geplant (low) | Aus TODO-Historik disponiert: Chunk-Modus für historische Großaufarbeitung (total_count/chunk_size, Index-Sicherung je Chunk) | `MD-P1`/`MD-P2` | [`docs/features/FR-25.md`](docs/features/FR-25.md) |
 
 Vollständig abgeschlossene FRs (FR-01–08, 11, 13–20, 21–24) stehen im
 Archiv [`docs/features/_archive.md`](docs/features/_archive.md); ihre Paketkarten sind

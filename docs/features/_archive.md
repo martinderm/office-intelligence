@@ -1846,101 +1846,51 @@ echten `.docx`; die drei relevanten Anhänge erhielten
 
 ## Mail-Desk-Historik: früheres TODO.md (Backlog, Meilensteine und Changelog vor dem FR-System)
 
-Das frühere \skills/mail-desk/TODO.md\ wurde 2026-09-24 hierher überführt und
-löschbar gestellt, nachdem das FR-System (\docs/features/\, ICM Record library)
-die zentrale Heimat fuer Backlog und Nachweise geworden ist. Der Inhalt ist
-unveraendert historisiert: die operativen Aufgaben und Meilensteine stammen aus
-der konsumerspezifischen Betriebsphase (boku-user, Januar-September 2026) und
-sind **kein Bundle-Backlog**. Die technischen Kandidaten (Bulk-Copy/Pipelining/
-IMAP-Pool, Runner-Modularisierung) bleiben als dokumentierte Vorschläge erhalten;
-neue Pakete laufen jetzt ueber FR-Records (\docs/features/\) und den Katalog
-[\../../FEATURE-REQUESTS.md\](../../FEATURE-REQUESTS.md).
+Das frühere `skills/mail-desk/TODO.md` wurde 2026-09-24 hierher überführt und
+am selben Tag disponiert: konsumerspezifische Betriebsaufgaben wurden entfernt
+(Workspace-Sache von boku-user), die technischen Kandidaten mit Disposition
+versehen. Abgeschlossene Meilensteine bleiben als Nachweis-Historie erhalten.
+Neue Pakete laufen über FR-Records (`docs/features/`) und den Katalog
+[`../../FEATURE-REQUESTS.md`](../../FEATURE-REQUESTS.md).
 
 ---
 
-# Mail-Desk — Aufgaben, Backlog & Changelog
+# Mail-Desk — Aufgaben, Backlog & Changelog (historisiert 2026-09-24)
 
-Zentrales Backlog für alle offenen Aufgaben, technischen Optimierungen und Meilensteine im Bereich `mail-desk`.
+## 1. Disposition der technischen Kandidaten (2026-09-24)
 
----
+- **[P0] Bulk-Copy & Multi-ID Move — überholt/abgelöst.** Die abgeschlossene
+  GroupWise-Transaktionsresilienz-Arbeit (siehe Meilenstein unten) hat das
+  Gegenteil des Vorschlags bewiesen: der GroupWise POA sperrt bei Multi-ID-Bulk-
+  Befehlen den Socket (WinError 10054); sequentielle, verifizierte
+  Einzeltransaktionen mit Mini-Pausen laufen stabil (6,3 s/Mail, 22× schneller
+  als die Basis). Der Execute-Flow ist bewusst sequentiell
+  (`core/modes/execute.py`: `message copy`/`message delete` pro Mail mit
+  Zielverifikation); die Ziel-Metrik „30–45 s per 25er-Charge" wäre über
+  Bulk-Befehle auf GroupWise nicht stabil erreichbar. Kein Umsetzungspfad.
 
-## 1. Offene operative Aufgaben (Mail-Verarbeitung)
+- **[P2] Multi-Batch Pipelining (`batch-pipeline.json`) — teilweise überholt,
+  Rest als FR-Kandidat (low) formuliert.** Auto-Discovery für
+  `batch-pipeline.json` und der autonome `--pipeline N`-Modus existieren; ein
+  echter Chunk-Modus (`total_count`/`chunk_size` mit Index-Sicherung je Chunk)
+  fehlt. Für den laufenden 10er-Batch-Betrieb entbehrlich; relevant nur für
+  historische Großaufarbeitung → siehe FR-25 (low priority).
 
-- [ ] **Nächste historische Charge verarbeiten (März 2026)**
-  - *Umfang:* E-Mails aus März 2026 (`date: "2026-03-01"` bzw. `query: "since 2026-03-01 before 2026-04-01"`).
-  - *Ablauf:* Standardisierter Ablauf via JSON-Manifest (`batch-draft.json` $\rightarrow$ Audit $\rightarrow$ `batch-manifest.json` Execute).
-  - *Ziel:* Fortlaufende Abarbeitung Monat für Monat bis zum aktuellen Tagesbestand.
+- **[P2] Persistenter IMAP-Session-Pool — entwertet.** Kein `imaplib` im
+  Bundle; der Himalaya-Subprozess bleibt die Backend-Architektur
+  (Backend-Abstraktion, FR-18-Klasse). Der Handshake-Nachteil wurde durch die
+  Transaktionspause und den dynamischen Timer gemildert; ein nativer
+  IMAP-Worker wäre ein Architekturbruch, solange Himalaya die Backend-Strategie
+  ist.
 
----
+- **Runner-Modularisierung — Ziel-Architektur realisiert, Trigger nicht
+  erfüllt.** Die Modi liegen längst unter `scripts/core/modes/` (13
+  Workflow-Treiber, System-Map L2 §1); der Runner-Root ist ein schlanker
+  Dispatcher. Aktuell **1.147 Zeilen** (Trigger-Kriterium > 1.500 nicht
+  erfüllt). Künftig neue komplexe Betriebsmodi gehen als FR-Pakete durch den
+  Katalog; die alten Trigger-Checkboxen entfallen.
 
-## 2. Offene technische Optimierungen (Engine & Runner)
-
-- [ ] **[P0] Bulk-Copy & Multi-ID Move (Gruppierung nach Zielordner)**
-  - *Beschreibung:* E-Mails einer Charge beim Ausführen nach Zielordner bündeln und mit Multi-ID-Befehlen kopieren (`himalaya message copy <id1> <id2> ... -f <folder>`).
-  - *Sammel-Löschung:* Alle erfolgreich verschobenen Mails in einem einzigen Befehl aus der `INBOX` löschen (`himalaya message delete <id1> <id2> ...`).
-  - *Bulk-Verifikation:* 1 `envelope list` pro Zielordner verifiziert alle neu transferierten Mails gleichzeitig.
-  - *Ziel-Metrik:* Reduktion von ~150 IMAP-Verbindungen auf ~10 Verbindungen pro 25er-Charge; Verkürzung der Ausführungsdauer von ~12–15 Min. auf **ca. 30–45 Sekunden**.
-  - *Dateien:* [`scripts/core/himalaya.py`](scripts/core/himalaya.py), [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
-
-- [ ] **[P2] Multi-Batch Pipelining (`batch-pipeline.json`)**
-  - *Beschreibung:* Unterstützung für Pipeline-Läufe mit z. B. `total_count: 100` und `chunk_size: 25`, die mehrere Chunks nacheinander abarbeiten, nach jedem Chunk den Index sichern und Fortschritt melden.
-  - *Wirkung:* Aufarbeitung größerer historischer Zeitfenster ohne wiederholte manuelle Anstöße.
-  - *Dateien:* [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
-
-- [ ] **[P2] Persistenter IMAP-Session-Pool (`imaplib` / Keep-Alive)**
-  - *Beschreibung:* Optionaler nativer Python-IMAP-Worker, der eine offene TLS-Verbindung über den gesamten Lauf hinweg hält, statt für jede Operation den `himalaya`-Prozess neu zu spawnen.
-  - *Wirkung:* IMAP-Befehle antworten in < 50 ms statt 3–5 s pro TLS-Handshake.
-  - *Dateien:* [`scripts/core/himalaya.py`](scripts/core/himalaya.py)
-
----
-
-## 3. Architektur & Modularisierungs-Backlog (Batch Runner Refactoring)
-
-### Ist-Zustand & Bewertung
-- **Code-Umfang:** `mail_desk_batch_runner.py` umfasst derzeit ca. **1.225 Zeilen**.
-- **Bereits ausgelagert:** Sämtliche datenzugriffs- und protokollrelevanten Module liegen sauber isoliert in `scripts/core/`:
-  - `core/himalaya.py` (IMAP-Kapselung & Verifikation)
-  - `core/index.py` (Master-Index, Signaturen, Atomares I/O)
-  - `core/classifier.py` (Kataloge, Thread-Vererbung, Heuristiken)
-  - `core/evidence.py` (Projekt-Evidenzen & Batch-Flush)
-  - `core/sent_indexer.py` (Sent-Items Synchronisation & Auto-Reply Resolution)
-  - `core/action_log.py` (Action Logging & Case Resolution)
-- **Architektonisches Urteil:** Aktuell vollkommen handhabbar und stabil. Der Runner fungiert als linearer, gut gegliederter Modus-Dispatcher ohne Spaghetti-Abhängigkeiten. Ein Refactoring hat derzeit **keine Dringlichkeit**, da das System performant und fehlerfrei läuft.
-
-### Ziel-Architektur für zukünftige Modularisierung
-Sollten weitere umfangreiche Workflows (z. B. LLM-basierte Antwortgenerierung, Moodle-Integration oder Multi-Account-Routing) hinzukommen, wird die Modi-Logik modularisiert:
-
-```text
-scripts/
-├── mail_desk_batch_runner.py       <-- Schlanker CLI-Dispatcher (~150 Zeilen)
-└── core/
-    ├── __init__.py
-    ├── common.py
-    ├── himalaya.py
-    ├── index.py
-    ├── classifier.py
-    ├── evidence.py
-    ├── sent_indexer.py
-    ├── action_log.py
-    └── modes/                      <-- Ausgelagerte Modus-Handler
-        ├── __init__.py
-        ├── inspect.py              (run_inspect_mode)
-        ├── draft.py                (run_draft_mode)
-        ├── execute.py              (run_execute_mode)
-        ├── verify.py               (run_verify_mode)
-        ├── pipeline.py             (run_pipeline_mode)
-        ├── search.py               (run_search_mode)
-        └── resolve.py              (run_resolve_mode)
-```
-
-### Trigger-Kriterien für die Umsetzung
-- [ ] Überschreitung von 1.500 Zeilen im Root-Runner.
-- [ ] Hinzufügen neuer komplexer Betriebsmodi (z. B. AI-Drafting / Tutor-Bridge).
-- [ ] Geplante Wartungs-Session ohne parallele operative Mail-Verarbeitung.
-
----
-
-## 4. Abgeschlossene Aufgaben & Meilensteine (Changelog)
+## 2. Abgeschlossene Aufgaben & Meilensteine (Changelog-Historie)
 
 - [x] **Januar und Februar 2026 vollständig abgeschlossen** *(2026-09-01)*
   - Alle E-Mails bis 2026-03-01 transferiert, verifiziert, aus `INBOX` entfernt.
@@ -1949,34 +1899,37 @@ scripts/
 
 - [x] **$O(1)$ In-Memory-Signatur-Filter ($0\text{ ms}$ Bekannt-Prüfung)** *(2026-09-01)*
   - Nutzung der im Envelope-Listing nativ vorhandenen Header (`subject`, `from`, `date`) zum sofortigen In-Memory-Abgleich gegen `final-location-index.json` und `action-log.jsonl`.
-  - Scan-Dauer für 50–80 bekannte Mails von 150 s auf **unter 0,001 s** reduziert. Vollkommen unabhängig von wandernden Envelope-IDs.
-  - Dateien: [`scripts/core/index.py`](scripts/core/index.py), [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
+  - Scan-Dauer für 50-80 bekannte Mails von 150 s auf **unter 0,001 s** reduziert. Vollkommen unabhängig von wandernden Envelope-IDs.
+  - Dateien: [`scripts/core/index.py`](../../skills/mail-desk/scripts/core/index.py), [`scripts/mail_desk_batch_runner.py`](../../skills/mail-desk/scripts/mail_desk_batch_runner.py)
 
 - [x] **Natives IMAP-Datums-Windowing (`date:` / `query:` statt Server-Side `SORT`)** *(2026-09-01)*
   - Vermeidung von `SORT (DATE) UTF-8 ALL` auf 9.500 Mails; stattdessen native IMAP `SEARCH`-B-Tree-Filter (`date 2026-02-12`, `before 2026-03-01`).
-  - Serverantwort in < 0,3 Sekunden statt 60–90 Sekunden Datenbank-Sortierüberlastung auf dem GroupWise POA.
-  - Dateien: [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
+  - Serverantwort in < 0,3 Sekunden statt 60-90 Sekunden Datenbank-Sortierüberlastung auf dem GroupWise POA.
+  - Dateien: [`scripts/mail_desk_batch_runner.py`](../../skills/mail-desk/scripts/mail_desk_batch_runner.py)
 
 - [x] **GroupWise-Transaktionsresilienz & Schnellverifikation** *(Commits `75921c8`, `98f7a19`)*
   - Schnellverifikation im Zielordner über fokussierte Header-Prüfung (< 2 s). Socket-Schonung durch 0.15 s Transaktionspause zwischen IMAP-Befehlen. Dynamischer Konsolen-Timer korrigiert (bis 360 s).
   - Erkenntnis: GroupWise POA sperrt bei Multi-ID-Bulk-Befehlen leicht den Socket (WinError 10054); sequentielle, verifizierte Einzeltransaktionen mit Mini-Pausen laufen mit 6,3 s / Mail stabil und 22x schneller.
-  - Dateien: [`scripts/core/himalaya.py`](scripts/core/himalaya.py), [`scripts/core/progress.py`](scripts/core/progress.py), [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
+  - Dateien: [`scripts/core/himalaya.py`](../../skills/mail-desk/scripts/core/himalaya.py), [`scripts/core/progress.py`](../../skills/mail-desk/scripts/core/progress.py), [`scripts/mail_desk_batch_runner.py`](../../skills/mail-desk/scripts/mail_desk_batch_runner.py)
 
 - [x] **Thread-Vererbung via `In-Reply-To` & `References` ($O(1)$-Klassifikation)** *(Commit `4de208c`)*
-  - Im Klassifikator prüfen, ob die `in_reply_to`- oder `references`-Header einer Mail auf eine bereits im [`final-location-index.json`](../../../../boku-user/data/mail-desk/final-location-index.json) registrierte Eltern-`message_id` verweisen.
+  - Im Klassifikator prüfen, ob die `in_reply_to`- oder `references`-Header einer Mail auf eine bereits im `final-location-index.json` registrierte Eltern-`message_id` verweisen.
   - Sofortige und deterministische Übernahme des Zielordners und Projekts/Topics in < 0,001 ms ohne Volltextsuche. 100 % Thread-Konsistenz.
-  - Dateien: [`scripts/core/classifier.py`](scripts/core/classifier.py)
+  - Dateien: [`scripts/core/classifier.py`](../../skills/mail-desk/scripts/core/classifier.py)
 
 - [x] **Lokaler Index-Vorab-Check ($O(1)$ Hash-Lookup)** *(Commit `9b4f31c`)*
   - Vor dem Kopieren prüfen, ob die `message_id` bereits im lokalen Master-Index vorliegt.
   - Vermeidet unnötige IMAP-Netzwerkabfragen auf Zielordner vor dem Kopieren; überspringt bei Runner-Neustarts bereits transferierte Mails sofort.
-  - Dateien: [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py)
+  - Dateien: [`scripts/mail_desk_batch_runner.py`](../../skills/mail-desk/scripts/mail_desk_batch_runner.py)
 
 - [x] **Batch Evidence Flush (Atomares Projekt-Schreiben)** *(Commit `f0333b9`)*
-  - Neue Evidenzeinträge einer Charge nach Projekt gruppieren und gesammelt in einem einzigen Schreibvorgang in [`evidence/YYYY-MM.md`](../../../../boku-user/memory/references/projects/) anhängen.
+  - Neue Evidenzeinträge einer Charge nach Projekt gruppieren und gesammelt in einem einzigen Schreibvorgang in `evidence/YYYY-MM.md` anhängen.
   - Schont I/O, verhindert Dateisperren und minimiert Git-Diff-Fragmentierung. Deduplizierung in $O(1)$ über Message-ID.
-  - Dateien: [`scripts/mail_desk_batch_runner.py`](scripts/mail_desk_batch_runner.py), [`scripts/core/evidence.py`](scripts/core/evidence.py)
+  - Dateien: [`scripts/mail_desk_batch_runner.py`](../../skills/mail-desk/scripts/mail_desk_batch_runner.py), [`scripts/core/evidence.py`](../../skills/mail-desk/scripts/core/evidence.py)
 
+*Hinweis (2026-09-24): die operativ-konsumerspezifische Sektion „Nächste historische
+Charge verarbeiten (März 2026)" wurde bei der Historisierung entfernt — Betriebs-
+Charges liegen beim konsumierenden Workspace (boku-user), nicht im Bundle.*
 
 ---
 
