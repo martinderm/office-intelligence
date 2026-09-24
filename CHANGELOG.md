@@ -81,6 +81,16 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   (Workspace-Sache von boku-user). Verbleibender Restwert als **FR-25
   (low priority)** formuliert: Multi-Batch-Pipelining/Chunk-Modus für
   historische Großaufarbeitung.
+- **Verteilte Notiz-Files aufgeräumt:** `skills/project-catalog-entry/TODO.md`
+  (reines FR-01a/b1/b2-Nachweisdokument, kein offenes Backlog) in das Archiv
+  überführt (Sektion „Project-Catalog-Entry-Historik") und gelöscht; der
+  `project-catalog-entry`-SKILL-Verweis zeigt auf die Archiv-Sektion. Das
+  run-scoped Bundle-Root-`TODO.md` (Batch-CLI-Adoptions-Abrechnung) ist mit
+  dem Run-Manifest abgerechnet und entfernt. Stale refactor-map-Zelle
+  („Backlog & Anstehende Optimierungen") als erledigt markiert.
+- **FR-Records mit `sub_skills:`-Pflichtfeld:** alle aktiven FR-Records führen
+  jetzt das Frontmatter-Feld `sub_skills:` (betroffene Sub-Skills je Paket);
+  die Record-Regel ist in `docs/features/CONTEXT.md` verankert.
 
 ### 2026-09-23
 

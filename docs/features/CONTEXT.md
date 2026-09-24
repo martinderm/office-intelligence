@@ -29,3 +29,5 @@ Record library (ICM Form 3) für die Feature Requests des Bundles.
 - Neue FR = neues Record-File nach dem Frontmatter-Muster der Bestehenden (copy,
   not blank page); Archivierung = Abschnitt in `_archive.md` + Statuszeile aus dem
   Katalog entfernen.
+- Jedes Record führt das Pflicht-Feld `sub_skills:` (betroffene Sub-Skills des
+  Bundles, z. B. `[mail-desk, cloud-atlas]` mit Kurzbegründung je Paket).

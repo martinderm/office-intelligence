@@ -84,7 +84,7 @@ Folgezielraum. Ein Abschnitt ohne Split bleibt vollständig in seinem genannten 
 | `## Abschluss-Checkliste (operativ, verpflichtend)` | Punkte 1, 7–9: fachliche Verifikation, Quellen-/Evidence-Prüfung und kontextsparende Prüfung | `KERN` | Als verkürzte Abschlussprüfung mit den nicht verhandelbaren Prüfungen erhalten. |
 | `## Abschluss-Checkliste (operativ, verpflichtend)` | Punkte 2–6 und 10: Log-/Index-/Script-Operationen, Index-Gegencheck und Compliance-Block | `CLI` | OI-14c macht `CLI` zur einzigen detaillierten Tool-Checkliste; `SCHEMA` liefert die Feldformen. |
 | `## Ausgabe an den User` | Gesamter Abschnitt | `KERN` | Nutzerbericht ist der Abschluss des Kernflows, keine CLI-Ausgabeform. |
-| `## Backlog & Anstehende Optimierungen` | Gesamter Abschnitt | `KERN` | Einzeiliger Link auf `TODO.md`; keine Backlog-Inhalte in neue Referenzen kopieren. |
+| `## Backlog & Anstehende Optimierungen` | Gesamter Abschnitt | `KERN` | **2026-09-24 erledigt:** `TODO.md` wurde zurückgezogen (Historik im FR-Archiv, siehe `_archive.md`); der `SKILL.md`-Abschnitt trägt jetzt den FR-Katalog-/Archiv-Verweis — kein eigener Backlog-Abschnitt mehr zu refactoren. |
 
 ## Normative Invarianten, die beim Cut erhalten bleiben müssen
 
