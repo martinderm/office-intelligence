@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-19/MD-RC1): 158 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 70 Testmodule; 1051 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-20/MD-A3): 159 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 71 Testmodule; 1056 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -657,3 +657,29 @@ verifiziertem Ziel `ATAEL`/`82`) blieb unkorrigiert und
 **Pflichttests (alle erfüllt):** `tests/test_reconcile_stale_repair.py` (6,
 Env-9428-Fall, Idempotenz, Gates, Tracker). **Suite 1051/1051 grün.**
 Fix-Runde (dokumentiert): Tracker-Edge `repaired` per-Item-Trigger.
+
+## 23. MD-A3 — Anhang-Quota Inline vs. Datei (FR-20, abgeschlossen)
+
+**Problem:** Das Anhang-Zählquota (5) traf in Inventar-Reihenfolge ALLE MIME-Teile
+inkl. Inline-Signaturbilder; bei Env 9438 verdrängten 6 Inline-Bilder 3 echte
+`.docx` (`skipped_count_limit`, nie policy-geprüft).
+
+**Umsetzung (Option A):**
+- Getrennte Quoten: `max_inline_per_message: 3` (neu, DEFAULT-Policy) für
+  Inline-Teile, `max_attachments_per_message: 5` weiterhin für Datei-Anhänge;
+  `check_attachment_policy` erhält `is_inline`/`inline_index` (kwargs) und
+  signalisiert Over-Limit-Inline transparent als `skipped_inline_limit`
+  (nie `skipped_count_limit`).
+- `inspect_mime_tree`/`canonicalize_and_bind_attachments` führen getrennte
+  file/inline-Zähler; Policy-Status über beide Pfade identisch; Inventar-
+  Reihenfolge und kumulative Bytes-Semantik unverändert.
+- Fail-closed: `validate_attachment_candidate_metadata` weist nicht-boolsche
+  caller-supplied `is_inline`-Werte ab (Quota-Klasse ist policy-relevant).
+- MD-A1-Strict-Invariante unverändert: Inline-Disposition ohne referenzierten
+  CID zählt weiterhin im Datei-Zähler.
+- Doku: batch-runner.md Policy-Abschnitt (5 Datei / 3 Inline + neuer Reason).
+
+**Pflichttests (alle erfüllt):** `tests/test_attachment_inline_quota.py` (5,
+Env-9438-Fall: 3 inline allowed / 3 inline skipped_inline_limit / beide .docx
+allowed — drei Zustände je Teilklasse). **Suite 1056/1056 grün.**
+Fix-Runde (dokumentiert): is_inline-Typvalidierung fail-closed.

@@ -31,6 +31,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
 | `FR-23` | ✅ 2026-09-24 | Workspace-Lock-Delegation an Runner-Subprozesse: `--workspace-lease-id`/`--workspace-conversation-id` reichen die Agent-Lease an die Anhang-Bewertung weiter; fremde/abgelaufene Leases bleiben fail-closed | MD-L1 im Kernel-Loop (8 Tests, fail-closed-Regression gepinnt); 1045 Tests grün |
 | `FR-19` | ✅ 2026-09-24 | Reconcile-Repair-Härtung: `apply_local_repairs` korrigiert stale Index-/Log-Records nach frischer Verifikation (append-only `reconciled`-Eintrag, idempotent); `runner-progress.json` wird im Repair-Pfad deterministisch nachgeführt | MD-RC1 im Kernel-Loop (6 Tests, Env-9428-Fall gepinnt), 1 Fix-Runde (Tracker-Edge); 1051 Tests grün |
+| `FR-20` | ✅ 2026-09-24 | Anhang-Quota Inline vs. Datei: getrennte Quoten (5 Datei / 3 Inline), neuer transparenter Reason `skipped_inline_limit`; echte Anhänge werden nie mehr durch Inline-Bilder verdrängt | MD-A3 im Kernel-Loop (5 Tests, Env-9438-Fall: drei Zustände je Teilklasse), 1 Fix-Runde (is_inline-Typvalidierung); 1056 Tests grün |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -1806,6 +1807,42 @@ blieb unkorrigiert; `runner-progress.json` blieb auf `status: "failed"` stehen.
   Orchestrator-Map-Sync-Runde nachgezogen, inkl. Referenzkorrektur
   processes.md §5 auf `quarantine_index.py`) + 1 Minor (Tracker-Edge) —
   behoben als dokumentierte Fix-Runde MD-RC1-001 Runde 2.
+
+## FR-20: Anhang-Quota — Inline-Bilder dürfen echte Anhänge nicht verdrängen
+
+**Status:** ✅ Abgeschlossen (2026-09-24; MD-A3 im Kernel-Loop mit Subagenten,
+1 unabhängiges Review + 1 Fix-Runde). Befund Batch 2026-W39/3 (Env 9438,
+`Wtrlt: FW: Reaching out to our partners.`): das Zählquota (5) traf in
+Inventar-Reihenfolge alle MIME-Teile inkl. 6 Inline-Signaturbildern vor den
+echten `.docx`; die drei relevanten Anhänge erhielten
+`policy_status: skipped_count_limit` und wurden nie policy-geprüft.
+
+### Kernergebnis (Option A)
+
+- Getrennte Quoten: `max_inline_per_message: 3` (neu in der Default-Policy)
+  für Inline-Teile; `max_attachments_per_message: 5` weiterhin für
+  Datei-Anhänge.
+- `check_attachment_policy(..., is_inline=..., inline_index=...)`: Inline-Teile
+  nutzen `inline_index` gegen das Inline-Limit; Überschreitung trägt den
+  neuen, transparenten Reason `skipped_inline_limit` (nie
+  `skipped_count_limit`). Sicherheitsprüfung bleibt oberste Präzedenz.
+- `inspect_mime_tree`/`canonicalize_and_bind_attachments` führen getrennte
+  file/inline-Zähler; Policy-Status über beide Pfade identisch;
+  Inventar-Reihenfolge und kumulative Bytes-Semantik unverändert.
+- Fail-closed: nicht-boolsche caller-supplied `is_inline`-Werte werden
+  abgewiesen (die Quota-Klasse ist policy-relevant) — Fix-Runde.
+- MD-A1-Strict-Invariante unverändert: Inline-Disposition ohne
+  referenzierten CID zählt im Datei-Zähler.
+- Doku: `references/batch-runner.md` (5 Datei / 3 Inline + neuer Reason).
+
+### Umsetzungsnachweis
+
+- Hermetischer Test `skills/mail-desk/tests/test_attachment_inline_quota.py`
+  (5 Tests: Env-9438-Fall — 3 inline `allowed` / 3 inline
+  `skipped_inline_limit` / beide `.docx` `allowed`; drei Zustände je
+  Teilklasse); Suite 1056/1056 grün.
+- Unabhängiges Review: 1 Minor (is_inline-Typvalidierung) — behoben als
+  dokumentierte Fix-Runde; keine bestehenden Tests angepasst.
 
 ## Archivierungsregel
 

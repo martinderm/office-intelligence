@@ -14,6 +14,7 @@ DEFAULT_ATTACHMENT_POLICY: dict[str, Any] = {
     "version": "1.0.0",
     "transport": {
         "max_attachments_per_message": 5,
+        "max_inline_per_message": 3,
         "max_single_file_bytes": 15 * 1024 * 1024,       # 15 MB
         "max_total_bytes_per_message": 25 * 1024 * 1024,  # 25 MB
         "download_timeout_seconds": 25,
@@ -85,11 +86,24 @@ def check_attachment_policy(
     current_index: int = 0,
     cumulative_bytes: int = 0,
     policy: dict[str, Any] | None = None,
+    *,
+    is_inline: bool = False,
+    inline_index: int = 0,
 ) -> tuple[str, str | None]:
     """Validate an attachment candidate against transport, cumulative size, and security rules.
 
     Unbekannte oder ungültige Größe sowie unbekannte oder nicht erlaubte MIME-Typen
     dürfen niemals "allowed" ergeben (fail-closed).
+
+    Zählquoten sind getrennt (FR-20/MD-A3): nicht-inline Teile zählen gegen
+    ``max_attachments_per_message``; Inline-Teile (``is_inline=True``) zählen
+    ausschließlich gegen das eigene, kleinere ``max_inline_per_message``, damit
+    Inline-Signaturbilder echte Datei-Anhänge nicht verdrängen.
+
+    Args:
+        current_index: Position der Klasse innerhalb der Nachricht (Datei- bzw.
+            bei ``is_inline=True`` der Inline-Zähler).
+        inline_index: Position des Inline-Teils; nur bei ``is_inline=True`` relevant.
 
     Returns:
         (policy_status, reason)
@@ -101,6 +115,7 @@ def check_attachment_policy(
             "skipped_oversized",
             "skipped_total_oversized",
             "skipped_count_limit",
+            "skipped_inline_limit",
         }
     """
     pol = policy or DEFAULT_ATTACHMENT_POLICY
@@ -112,10 +127,17 @@ def check_attachment_policy(
     if ext in _DANGEROUS_EXTENSIONS:
         return "rejected_security", f"Extension '{ext}' disallowed due to active content or executable risk"
 
-    # 2. Zähllimit pro Nachricht
-    max_count = transport.get("max_attachments_per_message", 5)
-    if current_index >= max_count:
-        return "skipped_count_limit", f"Attachment index {current_index} exceeds count limit ({max_count})"
+    # 2. Zähllimit pro Nachricht, getrennt nach Klasse (Datei vs. Inline)
+    if is_inline:
+        max_inline = transport.get("max_inline_per_message", 3)
+        if inline_index >= max_inline:
+            return "skipped_inline_limit", (
+                f"Inline index {inline_index} exceeds inline limit ({max_inline})"
+            )
+    else:
+        max_count = transport.get("max_attachments_per_message", 5)
+        if current_index >= max_count:
+            return "skipped_count_limit", f"Attachment index {current_index} exceeds count limit ({max_count})"
 
     # 3. Unbekannte oder nicht positive Größe (Fail-Closed: niemals "allowed")
     if size_bytes is None or not isinstance(size_bytes, int) or size_bytes <= 0:

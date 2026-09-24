@@ -46,6 +46,7 @@ def validate_attachment_candidate_metadata(item: dict[str, Any]) -> tuple[bool, 
     - Missing or invalid SHA-256 (must be 64-char hex string)
     - Missing or invalid MIME type (must match MIME_TYPE_REGEX)
     - Forged fetch_status (only 'available' is legitimate for inspected parts)
+    - Non-boolean is_inline (caller-supplied policy-relevant metadata must not be coerced)
     """
     if not isinstance(item, dict):
         return False, "Attachment item must be a dictionary"
@@ -79,6 +80,12 @@ def validate_attachment_candidate_metadata(item: dict[str, Any]) -> tuple[bool, 
     fetch_st = item.get("fetch_status")
     if fetch_st is not None and fetch_st != "available":
         return False, f"Forged or invalid fetch_status: {fetch_st!r} (must be 'available')"
+
+    # 7. Inline flag check: caller-supplied is_inline drives which quota class applies,
+    # so a non-boolean value must fail closed instead of being coerced (FR-20/MD-A3).
+    is_inline = item.get("is_inline", False)
+    if not isinstance(is_inline, bool):
+        return False, f"is_inline must be a boolean, got {is_inline!r}"
 
     return True, None
 
@@ -182,6 +189,10 @@ def inspect_mime_tree(
 
     attachments: list[dict[str, Any]] = []
     cumulative_bytes = 0
+    # Separate count classes (FR-20/MD-A3): real file attachments vs. inline parts.
+    # Inventory order stays the MIME traversal order; only the quota class differs.
+    file_index = 0
+    inline_index = 0
 
     for locator, part in leaf_parts:
         content_type = part.get_content_type().lower()
@@ -224,15 +235,23 @@ def inspect_mime_tree(
             sha256 = None
 
         clean_filename = sanitize_attachment_filename(raw_filename or f"part_{locator.replace('.', '_')}")
-        current_idx = len(attachments)
+
+        if is_inline:
+            class_index = inline_index
+            inline_index += 1
+        else:
+            class_index = file_index
+            file_index += 1
 
         policy_status, policy_reason = check_attachment_policy(
             filename=clean_filename,
             mime_type=content_type,
             size_bytes=size_bytes,
-            current_index=current_idx,
+            current_index=class_index,
             cumulative_bytes=cumulative_bytes,
             policy=pol,
+            is_inline=is_inline,
+            inline_index=class_index if is_inline else 0,
         )
 
         if policy_status == "allowed" and size_bytes:
@@ -296,11 +315,18 @@ def bind_attachment_candidate(
     size_bytes = int(attachment["size_bytes"])
     mime_type = str(attachment["mime_type"]).strip().lower()
 
+    # Single-candidate binding has no inventory position; inline candidates use the
+    # first inline slot and are therefore only rejected by the inline quota if the
+    # effective policy sets max_inline_per_message to 0 (FR-20/MD-A3).
+    is_inline = bool(attachment.get("is_inline", False))
+
     policy_status, policy_reason = check_attachment_policy(
         filename=clean_filename,
         mime_type=mime_type,
         size_bytes=size_bytes,
         policy=pol,
+        is_inline=is_inline,
+        inline_index=0,
     )
 
     bound = dict(attachment)
@@ -337,7 +363,8 @@ def canonicalize_and_bind_attachments(
     NEVER trusts caller-supplied policy_status, invented part-locators, or unverified MIME metadata.
     Accepts strictly validated inventories from RFC-822 inspection with authentic provenance,
     valid part locator, positive integer size, 64-char SHA-256, and normalized MIME type.
-    Recomputes policy_status via check_attachment_policy with cumulative size tracking.
+    Recomputes policy_status via check_attachment_policy with cumulative size tracking
+    and the separate file/inline count quotas (FR-20/MD-A3).
     Fails closed if account or message_id is missing, or if candidates fail validation.
     """
     if not account or not str(account).strip():
@@ -354,6 +381,9 @@ def canonicalize_and_bind_attachments(
 
     bound_list: list[dict[str, Any]] = []
     cumulative_bytes = 0
+    # Separate count classes (FR-20/MD-A3): real file attachments vs. inline parts.
+    file_index = 0
+    inline_index = 0
 
     for idx, item in enumerate(raw_attachments):
         valid, reason = validate_attachment_candidate_metadata(item)
@@ -368,13 +398,23 @@ def canonicalize_and_bind_attachments(
         sha256 = str(item["sha256"]).strip().lower()
         part_locator = str(item["part_locator"]).strip()
 
+        is_inline = bool(item.get("is_inline", False))
+        if is_inline:
+            class_index = inline_index
+            inline_index += 1
+        else:
+            class_index = file_index
+            file_index += 1
+
         policy_status, policy_reason = check_attachment_policy(
             filename=clean_filename,
             mime_type=mime_type,
             size_bytes=size_bytes,
-            current_index=idx,
+            current_index=class_index,
             cumulative_bytes=cumulative_bytes,
             policy=pol,
+            is_inline=is_inline,
+            inline_index=class_index if is_inline else 0,
         )
 
         if policy_status == "allowed":

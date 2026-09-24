@@ -11,6 +11,11 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   unverändert); `runner-progress.json` wird im Repair-Pfad deterministisch
   nachgeführt (completed/repaired). 6 Tests, Suite 1051/1051 grün; Details im
   Archiv (`docs/features/_archive.md`, FR-19-Sektion).
+- `FR-20`/`MD-A3` - Anhang-Quota Inline vs. Datei abgeschlossen und archiviert
+  (2026-09-24): getrennte Quoten (5 Datei / 3 Inline), neuer Reason
+  `skipped_inline_limit`, fail-closed is_inline-Typvalidierung. 5 Tests
+  (Env-9438-Fall, drei Zustände je Teilklasse), Suite 1056/1056 grün;
+  Details im Archiv (`docs/features/_archive.md`, FR-20-Sektion).
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der

@@ -1431,6 +1431,17 @@ Fehler-/Reason-Matrix fail-closed.
    serialisiert oder im Envelope exponiert. `inventory_sha256` ist der revalidierte SHA-256 des
    MIME-Kandidaten (identisch zur bestehenden MD-A2-Fetch-Semantik).
 
+   **Zählquoten getrennt nach Klasse (FR-20/MD-A3, Option A):** Seit MD-A3 trennt
+   `check_attachment_policy` die Anhang-Zählquote in zwei Klassen. Nicht-inline
+   Datei-Anhänge zählen gegen `max_attachments_per_message` (Default 5); Inline-Teile
+   (`is_inline: true`, z. B. referenzierte Signaturbilder) zählen ausschließlich gegen
+   das eigene, kleinere `max_inline_per_message` (Default 3). Ein Inline-Teil über
+   seinem Limit erhält den transparenten `policy_status: skipped_inline_limit` mit dem
+   Reason `Inline index N exceeds inline limit (M)` — nie mehr `skipped_count_limit`;
+   echte Datei-Anhänge werden dadurch nicht mehr verdrängt. Die deterministische
+   Inventar-Reihenfolge (MIME-Traversal) bleibt unverändert, und nur `allowed`-Teile
+   zählen weiter auf das kumulative Byte-Budget.
+
 4. **T05 lineare Komposition:** Vor der Fetch-Schleife läuft explizit der kanonische
    `attachment_fetch.verify_workspace_lock` mit den vertrauenswürdigen Control-Plane-Bindungen;
    kein I/O geschieht vor diesem Guard. Danach läuft pro zulässigem Part das unveränderte
