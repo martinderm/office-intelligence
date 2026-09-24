@@ -124,7 +124,8 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
 - **SSOT je Ebene:** Die L2-Subsystem-Map (`skills/<desk>/docs/system-map/README.md`,
   Kopfzeile) ist die kanonische Stelle für die Sub-Skill-Metrik. Die L1-Komplexitätsmatrix
   (§2) referenziert die L2-Karte oder nennt keine Zerlegung; historische Snapshots in den
-  FR-Ledgern (`FEATURE-REQUESTS.md`, `FEATURE-REQUEST-PROGRESS.md`) sind **bewusst
+  FR-Ledgern (Record-Files unter `docs/features/`, Katalog `FEATURE-REQUESTS.md`,
+  `FEATURE-REQUEST-PROGRESS.md`) sind **bewusst
   eingefrorene Abnahmewerte** und werden nicht fortgeschrieben (sie tragen den
   Zeitstempel ihrer Paketabnahme).
 - **Frische-Erhebungsregel:** Vor jedem Dokumentations-Commit, der eine Metrik nennt,

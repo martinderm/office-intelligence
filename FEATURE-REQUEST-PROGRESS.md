@@ -2,7 +2,7 @@
 
 Diese ephemere Arbeitsdatei enthält nur den aktuellen Übergabestand zwischen
 Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
-[`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md); ihre Details bleiben
+[`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und

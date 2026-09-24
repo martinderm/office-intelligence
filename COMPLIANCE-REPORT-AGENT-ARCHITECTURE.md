@@ -487,7 +487,7 @@ Dieser Bericht bleibt die Compliance- und Audit-Evidenz. Er führt keine
 Paketkarten, Implementierungsreihenfolgen oder Feature-Abnahmen doppelt.
 
 - Laufende und geplante Arbeit: [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md)
-- Vollständig abgeschlossene FRs: [`FEATURE-REQUEST-ARCHIVE.md`](FEATURE-REQUEST-ARCHIVE.md)
+- Vollständig abgeschlossene FRs: [`docs/features/_archive.md`](docs/features/_archive.md)
 
 Die nach dem Abschlussaudit umgesetzten Mail-Desk-Härtungen und Attachment-
 Erweiterungen ändern das Abschlussurteil nur, wenn sie eine hier bewertete

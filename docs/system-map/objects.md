@@ -116,6 +116,16 @@ Reply-Heuristik- und Identitäts-Konfiguration des konsumierenden Workspaces.
 * **Optionale Felder (Schema 1+2):** `no_reply_sender_tokens`, `owner_address` (string|null), `sent_sender_domain_whitelist`, `sent_subject_stopwords`, `internal_domains`, `spam_sender_allowlist` (je Liste nicht-leerer Strings mit dokumentierten Defaults; FR-22/MD-ID1-ID4).
 * **Fallback-Vertrag:** Fehlende Datei = **leere** Trigger-Liste (keine Anrede-Trigger ohne Katalog); Schema-Drift = fail-loud `ValueError`.
 
+### 3.4 Feature-Request-System (`docs/features/`)
+Record library (ICM Form 3) für Feature Requests; Katalog-File am Root.
+
+* **Katalog:** `FEATURE-REQUESTS.md` (Root) — Status-Tabelle + Reihenfolge, kein Spec-Inhalt.
+* **Records (aktive FRs):** `docs/features/FR-<n>.md` — YAML-Frontmatter (`id`, `type: feature-request`, `status`, `packages`, `next_package`, `blocker`) plus verbindliche Paketkarte (SSOT je FR).
+* **Archiv:** `docs/features/_archive.md` — abgeschlossene FRs (Archivstatus-Tabelle + FR-Sektionen); Root-Stub `FEATURE-REQUEST-ARCHIVE.md` ist reiner Link-Stub.
+* **Progress (ephemeres L4-Produkt):** `FEATURE-REQUEST-PROGRESS.md` (Root) — Arbeitsdokument, wird nach Abnahme bereinigt.
+* **Folder-Vertrag:** [`docs/features/CONTEXT.md`](../features/CONTEXT.md) (Record-Format, Routing, Archivierungsregeln).
+* **Surfaces:** Daedalus-Kernel-Loop (Run-Manifeste verweisen via `spec_reference` auf den Katalog), Coding-Agents (Paketlektüre), Human Review.
+
 ---
 
 ## 4. Sub-Skill-spezifische Objektwelten (Verweise)
