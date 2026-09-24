@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-23/MD-L1): 157 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 69 Testmodule; 1045 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand FR-19/MD-RC1): 158 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 70 Testmodule; 1051 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -29,7 +29,7 @@
 │  └─ Modes: scripts/core/modes/ (13 Workflow-Treiber)                   │
 │      ├─ pipeline.py / execute.py / verify.py                           │
 │      ├─ dossier.py / dossier_apply.py / dossier_synthesis.py           │
-│      └─ reconcile.py (Read-Only Drift-Erkennung)                       │
+│      └─ reconcile.py (Read-First Batch-Recovery)                       │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Atomare Disk-Writes (Lock-geschützt)
                                     ▼
@@ -123,7 +123,7 @@ geschlossen.**
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
-| **Integrität & Reconcile** | [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py)<br>[`scripts/core/readiness.py`](../scripts/core/readiness.py) | Read-only Drift-Erkennung zwischen Disk, Inventar und Quarantäne-Index. |
+| **Integrität & Reconcile** | [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py)<br>[`scripts/core/readiness.py`](../scripts/core/readiness.py) | Read-first Batch-Recovery-Assessment über das Recovery-Journal: read-only Report; der optionale Repair-Pfad (`apply_local_repairs`) korrigiert fehlende **und** stale Index-/Log-Records nach frischer Ziel-Verifikation (append-only `reconciled`-Log-Eintrag, idempotent; Gates: Approval-Receipt + `check_folders`; null Mailbox-Mutationen) und führt `runner-progress.json` deterministisch nach (FR-19/MD-RC1). Quarantäne-Drift-Erkennung liegt bei `quarantine/quarantine_index.py`. |
 
 ---
 
@@ -632,3 +632,28 @@ korrekt fail-closed; es fehlte nur der legitime Übergabepfad.
 **Pflichttests (alle erfüllt):** `tests/test_runner_lease_delegation.py` (8,
 Flag-Threading, Byte-identität ohne Flags, Reject außerhalb draft/inspect,
 fail-closed-Regression-Pins). **Suite 1045/1045 grün.**
+
+## 22. MD-RC1 — Reconcile-Repair-Härtung: stale Records + Tracker-Nachführung (FR-19, abgeschlossen)
+
+**Problem:** `apply_local_repairs` reparierte nur fehlende Records; ein
+vorhandener, aber stale Record (Befund Env 9428: `INBOX`/`9428` statt
+verifiziertem Ziel `ATAEL`/`82`) blieb unkorrigiert und
+`runner-progress.json` blieb auf `failed` stehen.
+
+**Umsetzung:**
+- Stale-Index-Korrektur (final_folder/envelope_id/updated_at, atomar),
+  Stale-Log-Korrektur als append-only `reconciled: true`-Eintrag;
+  Ziel-Auflösung über action→decision→Journal→Quelle (approved target),
+  fail-closed bei unverifizierbarem Decision-Ziel; Idempotenz; Gates
+  (Approval + check_folders) unverändert; null Mailbox-Mutationen.
+- Micro-FR: `_follow_up_runner_progress` setzt eine vorhandene
+  `runner-progress.json` im Repair-Pfad deterministisch auf `completed`/
+  `repaired` (per-Item-Repair-Trigger, nicht repaired_count), löscht
+  `error`, erfindet die Datei nie; read-only Reconcile neutral.
+- Referenzkorrektur: processes.md §5 referenziert jetzt
+  `quarantine_index.py` (Quarantäne-Reconciliation); die L2-Zelle
+  „Integrität & Reconcile" beschreibt den Batch-Recovery-Vertrag korrekt.
+
+**Pflichttests (alle erfüllt):** `tests/test_reconcile_stale_repair.py` (6,
+Env-9428-Fall, Idempotenz, Gates, Tracker). **Suite 1051/1051 grün.**
+Fix-Runde (dokumentiert): Tracker-Edge `repaired` per-Item-Trigger.

@@ -1176,6 +1176,48 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
 
 ---
 
+## Modus: `reconcile` (Recovery-Bericht & lokale Reparatur)
+
+`reconcile` liest das `batch-recovery-journal.json` des neuesten unterbrochenen
+Laufs und ist standardmäßig strikt **read-only**. `apply_local_repairs` schreibt
+ausschließlich lokale Index-/Log-/Evidence-Records nach und mutiert niemals die
+Mailbox. Eine lokale Reparatur setzt zwei unveränderte Gates voraus: einen
+Approval-Receipt (`approval.state: approved`) und eine frische
+Ziel-Verifikation (`check_folders: true`). Fehlt eines davon, endet der Lauf mit
+`approval_required` bzw. `verification_required` und ohne jeden Write.
+
+Nach frischer Ziel-Verifikation repariert `apply_local_repairs` fehlende Records
+und — seit FR-19/MD-RC1 — auch **stale** vorhandene Records:
+
+- **Index:** Weicht der gespeicherte `final_folder`/`envelope_id` vom verifizierten
+  Ziel ab, wird der Eintrag in-place auf Zielordner, verifizierte `envelope_id` und
+  ein frisches `updated_at` korrigiert (bestehender atomarer Index-Save-Pfad).
+- **Action-Log:** Weicht der neueste Eintrag im `target_folder`/`new_envelope_id`
+  vom verifizierten Ziel ab, wird **genau ein** kanonischer `reconciled: true`-Eintrag
+  mit dem verifizierten Ziel angehängt. Das Log bleibt append-only: Original-Einträge
+  werden nie verändert.
+- **Idempotenz:** Ein zweiter Repair-Lauf ohne Drift schreibt nichts und meldet
+  `repaired_count: 0`. Der `repaired`-Report weist `index`/`action_log` sowohl im
+  Missing- als auch im Stale-Fall aus.
+
+Als verifiziertes Zielordner gilt der freigegebene Manifest-/Decision-Zielordner;
+der im Journal gespeicherte `final_folder` dient nur als Fallback-Locator, damit
+ein selbst stale Journal-Record die Korrektur nicht blockiert.
+
+**Tracker-Nachführung (Micro-FR):** Nur im `apply_local`-Pfad wird nach der
+Item-Schleife eine **bereits vorhandene** `runner-progress.json` deterministisch
+auf ihr konsistentes End-Statum gesetzt: `status: completed` bei vollständig
+abgeschlossenem Lauf, sonst `status: repaired`, wenn Index-/Log-Records repariert
+wurden (auch wenn die Evidence-Pflege offenbleibt und ein Review nötig bleibt);
+sonst bleibt sie unverändert. Ein vorhandener `error`-Eintrag wird beim Follow-up
+gelöscht (`error: null`). Die Idempotenz-Regel („kein Write bei Drift-los“)
+bezieht sich auf die Index-/Log-Records; die Tracker-Identitätsfelder
+`schema_version`, `run_id` und `mode` bleiben wert-identisch erhalten, `updated_at`
+wird erneuert, der Schreibvorgang ist atomar (Tempdatei + `os.replace`). Die Datei
+wird nie erfunden; ein read-only `reconcile` berührt sie nicht.
+
+---
+
 ## Desk-Signals-Katalog (`mail-desk.json`) im Batch-Lauf
 
 - Beim Batch-Lauf lädt der Runner den Desk-Signals-Katalog
@@ -1205,6 +1247,7 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl` oder `pendi
      - Wenn `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen.
      - Wiederholen bis zum Abschluss.
   3. Reduziert unnötiges Polling drastisch und schont Context Window und Systemressourcen bei maximaler Termintreue.
+- **Repair-Nachführung:** Ein `reconcile`-Lauf mit `apply_local_repairs` führt eine vorhandene `runner-progress.json` nach der Item-Schleife deterministisch auf ihr konsistentes End-Statum (`completed` bzw. `repaired`) nach; ein read-only Reconcile und eine fehlende Datei bleiben unberührt (siehe Abschnitt `reconcile`).
 
 ---
 

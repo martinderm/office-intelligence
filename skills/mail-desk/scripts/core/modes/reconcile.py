@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..action_log import append_action_log_entry
-from ..common import normalize_message_id, resolve_data_dir, resolve_final_index_path, utc_now_iso
+from ..common import atomic_write_json, normalize_message_id, resolve_data_dir, resolve_final_index_path, utc_now_iso
 from ..evidence import flush_batch_evidence
 from ..himalaya import verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
@@ -34,6 +34,72 @@ def _logged(data_dir: Path, message_id: str) -> bool:
     except OSError:
         return False
     return False
+
+
+def _latest_action_log_entry(data_dir: Path, message_id: str) -> dict[str, Any] | None:
+    """Return the newest action-log entry for a normalized Message-ID."""
+    path = data_dir / "action-log.jsonl"
+    if not path.exists():
+        return None
+    latest: dict[str, Any] | None = None
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict) and normalize_message_id(str(entry.get("message_id", ""))) == message_id:
+                latest = entry
+    except OSError:
+        return None
+    return latest
+
+
+def _logged_target_differs(data_dir: Path, message_id: str, target_folder: str, target_env: str) -> bool:
+    """Report whether the newest log entry disagrees with the verified target."""
+    entry = _latest_action_log_entry(data_dir, message_id)
+    if entry is None:
+        return False
+    action = entry.get("action") if isinstance(entry.get("action"), dict) else {}
+    return (
+        str(action.get("target_folder", "")) != target_folder
+        or str(action.get("new_envelope_id", "")) != target_env
+    )
+
+
+def _follow_up_runner_progress(
+    data_dir: Path,
+    *,
+    completed: bool,
+    repaired: bool,
+    now: Callable[[], str],
+) -> None:
+    """Move an existing tracker to its consistent end state after a repair run.
+
+    Only the ``apply_local`` repair path calls this. A missing file is never
+    invented and a read-only reconcile never reaches here.
+    """
+    path = data_dir / "runner-progress.json"
+    if not path.exists():
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(state, dict):
+        return
+    if completed:
+        new_status = "completed"
+    elif repaired:
+        new_status = "repaired"
+    else:
+        return
+    state["status"] = new_status
+    state["updated_at"] = now()
+    state["error"] = None
+    atomic_write_json(path, state)
 
 
 def run_reconcile_mode(
@@ -94,7 +160,11 @@ def run_reconcile_mode(
         action = record.get("action") if isinstance(record.get("action"), dict) else {}
         action_type = str(action.get("type", "copy_as_move"))
         source = str(record.get("source_folder", "INBOX"))
-        final_folder = str(record.get("final_folder") or ("Trash" if action_type == "delete" else action.get("target_folder") or source))
+        decision = record.get("decision") if isinstance(record.get("decision"), dict) else {}
+        approved_target = str(action.get("target_folder") or decision.get("target_folder") or "")
+        # The journal-local final_folder may itself be stale; the approved
+        # manifest/decision target wins, the journal locator is the fallback.
+        final_folder = str("Trash" if action_type == "delete" else (approved_target or record.get("final_folder") or source))
         folder_verified: bool | None = None
         final_env: str | None = None
         if check_folders and action_type != "delete" and message_id:
@@ -121,6 +191,7 @@ def run_reconcile_mode(
         repaired: list[str] = []
 
         if apply_local and verifiable:
+            verified_env = final_env or str(record.get("final_envelope_id") or record.get("envelope_id", ""))
             if not in_index:
                 index_items[message_id] = {"message_id": message_id, "backend": "himalaya", "final_folder": final_folder, "envelope_id": final_env or str(record.get("final_envelope_id") or record.get("envelope_id", "")), "in_reply_to": "", "references": [], "subject": str(record.get("subject", "")), "from": str(record.get("from", "")), "date": str(record.get("date", "")) or now(), "updated_at": now()}
                 index_data["updated_at"] = now()
@@ -128,11 +199,32 @@ def run_reconcile_mode(
                 in_index = True
                 repaired.append("index")
                 journal.transition(mutable_record, "indexed", final_envelope_id=final_env or record.get("final_envelope_id"), final_folder=final_folder)
+            else:
+                existing_index = index_items.get(message_id)
+                if isinstance(existing_index, dict) and (
+                    str(existing_index.get("final_folder", "")) != final_folder
+                    or str(existing_index.get("envelope_id", "")) != verified_env
+                ):
+                    # A verified target that differs from the stored record is
+                    # stale, not proof of consistency: correct it in place.
+                    existing_index["final_folder"] = final_folder
+                    existing_index["envelope_id"] = verified_env
+                    existing_index["updated_at"] = now()
+                    index_data["updated_at"] = now()
+                    save_index(idx_p, index_data)
+                    repaired.append("index")
+                    journal.transition(mutable_record, "indexed", final_envelope_id=verified_env, final_folder=final_folder)
             if not in_log:
                 append_action(dd, {"timestamp": now(), "envelope_id": str(record.get("envelope_id", "")), "message_id": message_id, "subject": str(record.get("subject", "")), "from": str(record.get("from", "")), "action": {"type": action_type, "source_folder": source, "target_folder": final_folder, "new_envelope_id": final_env or str(record.get("final_envelope_id") or "")}, "decision": record.get("decision", {}), "notes": str(record.get("notes", "")), "reconciled": True})
                 in_log = True
                 repaired.append("action_log")
                 journal.transition(mutable_record, "logged", final_envelope_id=final_env or record.get("final_envelope_id"), final_folder=final_folder)
+            elif _logged_target_differs(dd, message_id, final_folder, verified_env):
+                # Append-only: the stale entry stays, one canonical reconciled
+                # entry records the freshly verified target.
+                append_action(dd, {"timestamp": now(), "envelope_id": str(record.get("envelope_id", "")), "message_id": message_id, "subject": str(record.get("subject", "")), "from": str(record.get("from", "")), "action": {"type": action_type, "source_folder": source, "target_folder": final_folder, "new_envelope_id": verified_env}, "decision": record.get("decision", {}), "notes": str(record.get("notes", "")), "reconciled": True})
+                repaired.append("action_log")
+                journal.transition(mutable_record, "logged", final_envelope_id=verified_env, final_folder=final_folder)
             if isinstance(evidence, dict) and evidence_ok is False:
                 status = flush_evidence([{"message_id": message_id, "evidence": evidence}], workspace_root=workspace_root)
                 evidence_ok = bool(status) and all(status.values())
@@ -148,6 +240,9 @@ def run_reconcile_mode(
         if recovery_state != "complete":
             needs_review = True
         results.append({"message_id": message_id, "journal_phase": record.get("phase"), "final_folder": final_folder, "folder_verified": folder_verified, "current_envelope_id": final_env, "in_index": in_index, "in_action_log": in_log, "in_evidence": evidence_ok, "recovery_state": recovery_state, "repaired": repaired})
+
+    if apply_local:
+        _follow_up_runner_progress(dd, completed=not needs_review, repaired=any(row.get("repaired") for row in results), now=now)
 
     if journal and not needs_review:
         journal.set_run_status("completed")

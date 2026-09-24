@@ -275,13 +275,18 @@ Implementiert in [`scripts/core/attachment_disposition_log.py`](../scripts/core/
 
 ## 5. Der Read-Only Reconcile Flow
 
-Implementiert in [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py):
+Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py):
 
 * **Ziel:** Vollständige Konsistenzprüfung zwischen Dateisystem, Inventaren und Index ohne jede Schreiboperation.
 * **Ergebnisse:**
   * `consistent`: Alle Dateien auf Disk stimmen exakt mit Inventaren und Index überein.
   * `missing_review`: Quarantäne-Dateien existieren, wurden aber noch nicht indiziert oder freigegeben.
   * `drift`: Ein Feld (Hash, Größe, Pfad) weicht ab → Sofortiger Alarmstop (`AttachmentIndexDriftError`).
+
+Hinweis (Referenzkorrektur 2026-09-24, FR-19/MD-RC1): dieser Abschnitt beschreibt die
+Quarantäne-Reconciliation; der **Batch-Reconcile-Flow** (Recovery-Journal-Assessment,
+read-only Report + optionaler Repair-Pfad über `scripts/core/modes/reconcile.py`) ist
+separat — siehe die Modul-Zelle „Integrität & Reconcile" in der L2-Karte.
 
 ---
 

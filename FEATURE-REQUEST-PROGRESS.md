@@ -5,6 +5,12 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- `FR-19`/`MD-RC1` - Reconcile-Repair-Härtung abgeschlossen und archiviert
+  (2026-09-24): `apply_local_repairs` korrigiert stale Index-/Log-Records nach
+  frischer Verifikation (append-only `reconciled: true`, idempotent, Gates
+  unverändert); `runner-progress.json` wird im Repair-Pfad deterministisch
+  nachgeführt (completed/repaired). 6 Tests, Suite 1051/1051 grün; Details im
+  Archiv (`docs/features/_archive.md`, FR-19-Sektion).
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der

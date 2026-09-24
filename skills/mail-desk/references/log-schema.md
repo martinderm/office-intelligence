@@ -275,7 +275,7 @@ Live-Fortschritts- und ETA-Statusdatei unter `data/mail-desk/runner-progress.jso
   "schema_version": 1,
   "run_id": "execute_20260831_125605",
   "mode": "draft|execute|pipeline|inspect",
-  "status": "running|completed|failed",
+  "status": "running|completed|failed|aborted|repaired",
   "started_at": "2026-08-31T12:56:05",
   "updated_at": "2026-08-31T10:56:35Z",
   "progress": {

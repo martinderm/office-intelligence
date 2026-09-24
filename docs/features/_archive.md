@@ -30,6 +30,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-22` | ✅ | Identity-freier Desk-Signals-Fallback: neutraler leerer Fallback + owner-generierte Trigger (Schema 2 mit Schema-1-Legacy), sent_indexer/internal-domain/Spam-Gegenindikatoren → Katalog bzw. entfernt, `spam_sender_allowlist`-Gate | MD-ID1–ID4 im Kernel-Loop (12 Dispatches mit Red-Gates), 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün |
 | `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
 | `FR-23` | ✅ 2026-09-24 | Workspace-Lock-Delegation an Runner-Subprozesse: `--workspace-lease-id`/`--workspace-conversation-id` reichen die Agent-Lease an die Anhang-Bewertung weiter; fremde/abgelaufene Leases bleiben fail-closed | MD-L1 im Kernel-Loop (8 Tests, fail-closed-Regression gepinnt); 1045 Tests grün |
+| `FR-19` | ✅ 2026-09-24 | Reconcile-Repair-Härtung: `apply_local_repairs` korrigiert stale Index-/Log-Records nach frischer Verifikation (append-only `reconciled`-Eintrag, idempotent); `runner-progress.json` wird im Repair-Pfad deterministisch nachgeführt | MD-RC1 im Kernel-Loop (6 Tests, Env-9428-Fall gepinnt), 1 Fix-Runde (Tracker-Edge); 1051 Tests grün |
 
 ## FR-01 — Projektkatalog Schema v3
 
@@ -1758,6 +1759,53 @@ und konnte die Agent-Session-Lease weder erkennen noch benutzen.
   entfernt, `tempfile_namespace`-Helfer nach oben gezogen; Help-Text-Divergenz
   des `--workspace-conversation-id`-Flags als bewusste Präzisierung
   adjudiziert (dokumentiert im Run-Manifest).
+
+## FR-19: Reconcile-Repair-Härtung — stale Records nachverifizieren
+
+**Status:** ✅ Abgeschlossen (2026-09-24; MD-RC1 im Kernel-Loop mit Subagenten,
+1 unabhängiges Review + 1 Fix-Runde). Befund Batch 2026-W39/3 (Env 9428,
+GroupWise): `reconcile --apply_local_repairs` reparierte nur **fehlende**
+Index-/Log-/Evidence-Records; ein vorhandener, aber **stale** Record
+(`INBOX`/`9428` statt verifiziertem Ziel `Projekte/In Ausarbeitung/ATAEL`/`82`)
+blieb unkorrigiert; `runner-progress.json` blieb auf `status: "failed"` stehen.
+
+### Kernergebnis
+
+- **Stale-Index-Korrektur:** vorhandener Index-Record wird mit dem
+  verifizierten Zustand verglichen; bei Abweichung werden `final_folder`,
+  `envelope_id` (verifizierte Ziel-Env) und `updated_at` aktualisiert
+  (atomar über den bestehenden Save-Pfad); `repaired` weist `index` aus.
+- **Stale-Log-Korrektur:** weicht der geloggte `target_folder`/
+  `new_envelope_id` ab, wird GENAU EIN kanonischer Action-Log-Eintrag mit
+  `reconciled: true` angehängt (append-only; Original-Einträge bleiben
+  unangetastet); `repaired` weist `action_log` aus.
+- **Ziel-Auflösung:** der verifizierte Ziel-Ordner wird aus
+  `action.target_folder` → `decision.target_folder` → Journal-→ Quelle
+  aufgelöst (approved target, nicht der stale Journal-Locator); fail-closed,
+  wenn das Decision-Ziel nicht verifizierbar ist.
+- **Gates unverändert:** keine Reparatur ohne frische Ziel-Verifikation
+  (`check_folders: true`) und ohne Approval-Receipt; null
+  Mailbox-Mutationen; Idempotenz (zweiter Lauf ohne Drift schreibt nichts).
+- **Micro-FR (Tracker):** `runner-progress.json` wird im Repair-Pfad
+  deterministisch nachgeführt (`completed` bei vollständiger Reparatur,
+  `repaired` bei Reparaturen mit offenem Review; `error` wird gelöscht,
+  Identity-Felder bleiben); Datei wird nie erfunden; read-only Reconcile
+  berührt sie nie. Der `repaired`-Trigger ist der per-Item-Repair-Status
+  (nicht `repaired_count`), sodass Stale-Korrekturen mit gescheitertem
+  Evidence-Flush trotzdem als `repaired` enden.
+
+### Umsetzungsnachweis
+
+- `skills/mail-desk/scripts/core/modes/reconcile.py` (Stale-Korrektur +
+  `_follow_up_runner_progress`); Doku `references/batch-runner.md` +
+  `references/log-schema.md` (Status-Enum um `repaired`/`aborted` erweitert).
+- Hermetischer Test `skills/mail-desk/tests/test_reconcile_stale_repair.py`
+  (6 Tests: Env-9428-Stale-Fall, Idempotenz, Gates, Tracker-Nachführung,
+  kein Progress-File-Invent, read-only-Neutralität); Suite 1051/1051 grün.
+- Unabhängiges Review: 1 Major (Map-/log-schema-Sync fehlte — durch
+  Orchestrator-Map-Sync-Runde nachgezogen, inkl. Referenzkorrektur
+  processes.md §5 auf `quarantine_index.py`) + 1 Minor (Tracker-Edge) —
+  behoben als dokumentierte Fix-Runde MD-RC1-001 Runde 2.
 
 ## Archivierungsregel
 
