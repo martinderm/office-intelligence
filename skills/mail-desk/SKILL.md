@@ -501,4 +501,6 @@ Der User-Output bleibt kurz: bearbeitete Mail, Ziel/Entscheidung, Move/Copy-Stat
 Reply/Todo, aktualisierte Referenz-/Evidence-Dateien (oder warum keine), und offenes
 Review; keine langen Mailinhalte ohne Anfrage.
 
-Offene Verbesserungen: [`TODO.md`](TODO.md).
+Offene Verbesserungen: FR-Katalog [`../../FEATURE-REQUESTS.md`](../../FEATURE-REQUESTS.md);
+historisches Backlog und Meilensteine im Archiv
+[`../../docs/features/_archive.md`](../../docs/features/_archive.md).

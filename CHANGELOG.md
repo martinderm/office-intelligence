@@ -65,6 +65,14 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 - FR-13/15/16/17/18/21/22 (Katalog-Ausdünnung) sowie FR-19/20/23/24 nach
   Abschluss — Records im Langzeit-Archiv, aktiver Backlog: FR-09, FR-10, FR-12.
+- **`skills/mail-desk/TODO.md` entfernt und historisiert:** das frühere gemischte
+  Backlog/Changelog-File (operative boku-user-Aufgaben, technische Kandidaten
+  Bulk-Copy/Multi-ID-Move, Multi-Batch-Pipelining, persistenter IMAP-Session-Pool,
+  Runner-Modularisierungs-Trigger und die Meilensteine Januar–September 2026)
+  wurde unverändert in
+  [`docs/features/_archive.md`](docs/features/_archive.md) überführt (Sektion
+  „Mail-Desk-Historik"); Backlog-Pflege läuft jetzt ausschließlich über das
+  FR-System (Record library + Katalog).
 
 ### 2026-09-23
 
