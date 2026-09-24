@@ -11,17 +11,21 @@ Agent-Lifecycle-Verwaltung mit.
 | Sub-Skill | Einsatzbereich | Nicht zuständig für |
 | --- | --- | --- |
 | [cloud-atlas](skills/cloud-atlas/SKILL.md) | Projekt- und Topic-Cloudspeicher, Konvertierung, Filemaps und lokale Markdown-Mirrors | Projekt-/Topic-Katalogeinträge |
-| [mail-desk](skills/mail-desk/SKILL.md) | Fachliche Bearbeitung einzelner Mails, Routing, Reply-/Todo-Entscheidungen und leichte Mail-Logs | Mailbox-Transport und vollständige Aufgaben-Triage |
+| [mail-desk](skills/mail-desk/SKILL.md) | Fachliche Bearbeitung einzelner Mails sowie Batch-/Stapelverarbeitung (draft→execute→verify): Routing, Reply-/Todo-Entscheidungen, Anhang-Bewertung und leichte Mail-Logs | Mailbox-Transport und vollständige Aufgaben-Triage |
 | [meeting-desk](skills/meeting-desk/SKILL.md) | Intake, Klassifikation, Evidenz und Nachbereitung einzelner Meetings, Konferenzschaltungen und Vorträge | Dokumentation eines gesamten größeren Events |
 | [event-documentation](skills/event-documentation/SKILL.md) | Konferenzen, Tagungen und Seminare mit Programm, Aufzeichnungen und Action-Item-Triage | allgemeiner Meeting-Intake außerhalb eines Events |
 | [task-desk](skills/task-desk/SKILL.md) | Action-Item-Extraktion, Priorisierung, Deduplizierung und Vorbereitung der Aufgaben-Synchronisation | Mailbox-Routing oder Pflege von Katalogstrukturen |
 | [project-catalog-entry](skills/project-catalog-entry/SKILL.md) | `projects.json` und zugehörige Projektarbeits- und Wissensstruktur | Topic-/Subtopic-Katalogpflege |
 | [topic-catalog-entry](skills/topic-catalog-entry/SKILL.md) | `topics.json` und zugehörige Topic-/Subtopic-Arbeits- und Wissensstruktur | Projektkatalogpflege |
 
-`mail-desk` ist grundsätzlich ein kontrollierter Fall-für-Fall-Workflow. Kleine,
-ausdrücklich beauftragte Datums- oder Ordner-Batches sind möglich, wenn jede Mail
-denselben vollständigen Compliance-Flow durchläuft; die Desk-Regeln bestimmen die
-Grenzen.
+`mail-desk` ist grundsätzlich ein kontrollierter Fall-für-Fall-Workflow; Batch- und
+Stapelverarbeitung (draft→execute→verify) läuft fachlich durch den mail-desk-Skill —
+der Batch-Runner und seine Werkzeuge setzen dessen Verträge (Review-Hash-Bindung,
+Final-Index-Hardrules, JSON-Manifest-Client, Katalogpflege-Router) durch. Jede Mail
+durchläuft denselben vollständigen Compliance-Flow; die Desk-Regeln bestimmen die
+Grenzen. Consumer-Pipelines (z. B. eine Batch-SOP im konsumierenden Workspace) laden
+vor allen Phasen die Pflicht-Referenzen des Skills und ersetzen sie nicht
+(„Pipeline und Fachvertrag").
 
 ## Installation und Nutzung
 
@@ -57,5 +61,7 @@ zuständigen Sub-Skills beschrieben.
 Für Entwickler, Refactorings und Coding-Agenten (wie Daedalus) existiert eine vollständige,
 föderierte System Map nach ICM Form 6:
 - [Paket System Map (L1)](docs/system-map/README.md): Router, Zusammenspiel der 7 Desks, Data Zones, Bundle-Invarianten.
-- [Mail-Desk System Map (L2)](skills/mail-desk/docs/system-map/README.md): Quarantäne-Engine, Himalaya-Adapter, Dossier-Modi.
+- [Mail-Desk System Map (L2)](skills/mail-desk/docs/system-map/README.md): Quarantäne-Engine, Himalaya-Adapter, Batch-Runner/-Verträge, Dossier-Modi.
+
+Ein kompaktes Änderungsprotokoll liegt im [`CHANGELOG.md`](CHANGELOG.md).
 - [Cloud-Atlas System Map (L2)](skills/cloud-atlas/docs/system-map/README.md): Filemap-Generierung, Dokumentkonvertierung, OCR-Verzweigung.
