@@ -88,6 +88,12 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   run-scoped Bundle-Root-`TODO.md` (Batch-CLI-Adoptions-Abrechnung) ist mit
   dem Run-Manifest abgerechnet und entfernt. Stale refactor-map-Zelle
   („Backlog & Anstehende Optimierungen") als erledigt markiert.
+- **Batch-Runner-Referenz Slimming (DOC-S1):** `references/batch-runner.md`
+  von 8.754 auf 7.088 Wörter (−19%, 1.643 → 1.401 Zeilen) — Prosa-Dedup und
+  repräsentative JSON-Beispiele; **alle 5 JSON-Schemata byte-identisch**, 21
+  Sektionen, Quoten/Limits, Lock-/Lease-Verträge und fail-closed-Regeln
+  vollständig erhalten; Size-Gate-Test (`test_batch_runner_slim.py`) pinnt das
+  Fenster 5.300–7.100 Wörter dauerhaft.
 - **FR-Records mit `sub_skills:`-Pflichtfeld:** alle aktiven FR-Records führen
   jetzt das Frontmatter-Feld `sub_skills:` (betroffene Sub-Skills je Paket);
   die Record-Regel ist in `docs/features/CONTEXT.md` verankert.

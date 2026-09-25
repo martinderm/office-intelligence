@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-24/Deduco): 158 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 72 Testmodule; 1059 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-24/Runner-Slim): 159 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 73 Testmodule; 1064 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -709,3 +709,23 @@ Git.
 **Pflichttests (alle erfüllt):** `tests/test_docs_no_ticket_labels.py` (3),
 `tests/test_catalog_docs_contract.py` (13), `tests/test_skill_routing_contract.py`
 (5). **Suite 1059/1059 grün.**
+## 25. DOC-S1 — Batch-Runner-Referenz Slimming (abgeschlossen)
+
+**Problem:** `references/batch-runner.md` trug 8.754 Wörter (1.643 Zeilen, 40%
+JSON-Beispiele) — Token-Ballast bei jedem Skill-Load.
+
+**Umsetzung (Doku-only, kein Code-Change):**
+- Prosa-Dedup: Abschnitte, die SKILL.md-Regeln oder Schemata wortreich wiederholen,
+  gestrafft (Zweck, CLI, execute-Synthese, Materialitäts-Gate, Ablagevorschlag,
+  Evaluierungs-Orchestrator, Draft-Integration).
+- JSON-Output-Beispiele repräsentativ gekürzt (Feld- und Item-Reduktion mit
+  Ellipsen-Keys); **alle 5 JSON-Schemata byte-identisch zu HEAD**; alle 21
+  Sektionen, CLI-Tabellen, Quoten/Limits, Lock-/Lease-Verträge, fail-closed-Regeln
+  und die Provenance-Zeile erhalten. Review-Major: versehentlich gelöschte
+  Sortierregel „nicht parsebare Daten folgen am Ende" durch den Orchestrator
+  wiederhergestellt; Matrix-Verweis in der Draft-Integration ergänzt.
+- Guard: `tests/test_batch_runner_slim.py` (5 Tests: Size-Gate 5.300–7.100 Wörter,
+  21 Sektionen, Contract-Vokabular-Floor, Schema-Floor, Provenance) pinnt den
+  schlanken, vertragsvollständigen Zustand.
+
+**Ergebnis:** 7.088 Wörter / 1.401 Zeilen (−19%). **Suite 1064/1064 grün.**
