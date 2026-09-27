@@ -8,6 +8,13 @@ Red-Gate history: at the DOC-S1-001 dispatch the file carried 8754 words
 (1643 lines, 40% JSON examples) and failed the size gate below; the no-loss
 floors (sections, contract vocabulary, schema fields) passed then and pin the
 slimmed, contract-complete state since.
+
+Orchestrator test-correction (documented, 2026-09-27, run
+2026-09-27T204500Z-fr09-mdp1): MAX_WORDS 7100 → 7400. The MD-P1 module contract
+added a new normative section (``## Promotion-Preflight``) to the reference;
+the gate is a hygiene guard (no unbounded regrowth), not a fixed-content
+freeze, so the ceiling moves once, with the real new module contract as the
+reason. All floors (sections, vocabulary, schema) unchanged.
 """
 
 from __future__ import annotations
@@ -20,9 +27,10 @@ import unittest
 BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 
-#: Size gate: 20-40% reduction from the 8754-word baseline.
+#: Size gate: 20-40% reduction from the 8754-word baseline; raised once for
+#: the MD-P1 promotion-preflight module contract (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 7100
+MAX_WORDS = 7400
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (
@@ -43,6 +51,7 @@ REQUIRED_SECTIONS = (
     "## Live-Fortschritts-Monitoring",
     "## Final-Index- und Batch-Importregeln",
     "## Fehlerbehandlung & Sicherheit",
+    "## Promotion-Preflight",
     "## Materialitäts-Gate und LLM-Handoff",
     "## Katalog- und Filemap-gestützter Ablagevorschlag",
     "## Policygebundener Anhang-Evaluierungs-Orchestrator",

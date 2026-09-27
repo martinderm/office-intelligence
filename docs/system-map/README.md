@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (162 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
+│ (165 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -83,28 +83,35 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
   Facade (FR-13/MD-M1-T01–T04).
 - **Quarantäne-Paketierung** unter `core/quarantine/` mit identitätserhaltenden
   Legacy-Shims (FR-13/MD-M2, FR-13 geschlossen).
-- **Katalogtreues Routing** mit `routing_priority`, Exaktcode-vor-Kontakt und
-  `do_not_route_if` für Projekte und Topics inkl. Newsletter-Mapping (FR-17/MD-R1).
-- **DNR-gegatete Sibling-Kohärenz** (FR-17/MD-R2).
-- **Begrenzte Client-Deadlines** für mehrordrige Himalaya-Operationen (FR-17/MD-R6).
-- **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
-  Evidence-Fallback (FR-17/MD-R7).
-- **Deterministische MIME-Inventarkette** mit Feldkonsistenz-Gate (FR-17/MD-R3).
-- **Inline-Bild-Policy** für die automatische Auswertung (FR-17/MD-R4).
-- **Vertragsdokumentation und Laufzeit-Hygiene** (FR-17/MD-R5).
-- **Reply-Heuristik:** Abschluss-/Dankesmails ohne konkrete Anforderung werden
-  auf `needs_reply: false` herabgestuft, in beiden Klassifikationspässen; zitierte
-  Thread-Historie zählt dabei nicht als Anforderung; kanonischer Owner
-  `core/matching/reply_heuristics.py` (FR-17/MD-R8).
-- **Workspace-Agnostizismus:** Reply-Trigger und Desk-Policies kommen aus dem
-  Desk-Signals-Katalog des konsumierenden Workspace (`memory/references/mail-desk/
-  mail-desk.json`, Schema 1, fail-loud bei Drift); Sent-Index-Einträge tragen den
-  verifizierten Batch-Account; das Zoom-Recording-Routing gehört dem Topic-Katalog
-  (FR-18/MD-S1–S3).
-- **Desk-Signals-Doku + Katalog-Validator:** Pflegevertrag/Semantik dokumentiert
-  (SKILL.md, batch-runner.md, topic-catalog-entry, FR-21/MD-S4); read-only
-  Workspace-Katalog-Validator `skills/mail-desk/scripts/catalog_validator.py`
-  (topics/projects/mail-desk, kanonischer Envelope, Exit 0/1/2, FR-21/MD-S5).
+ - **Katalogtreues Routing** mit `routing_priority`, Exaktcode-vor-Kontakt und
+   `do_not_route_if` für Projekte und Topics inkl. Newsletter-Mapping (FR-17/MD-R1).
+ - **DNR-gegatete Sibling-Kohärenz** (FR-17/MD-R2).
+ - **Begrenzte Client-Deadlines** für mehrordrige Himalaya-Operationen (FR-17/MD-R6).
+ - **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
+   Evidence-Fallback (FR-17/MD-R7).
+ - **Deterministische MIME-Inventarkette** mit Feldkonsistenz-Gate (FR-17/MD-R3).
+ - **Inline-Bild-Policy** für die automatische Auswertung (FR-17/MD-R4).
+ - **Vertragsdokumentation und Laufzeit-Hygiene** (FR-17/MD-R5).
+ - **Reply-Heuristik:** Abschluss-/Dankesmails ohne konkrete Anforderung werden
+   auf `needs_reply: false` herabgestuft, in beiden Klassifikationspässen; zitierte
+   Thread-Historie zählt dabei nicht als Anforderung; kanonischer Owner
+   `core/matching/reply_heuristics.py` (FR-17/MD-R8).
+ - **Workspace-Agnostizismus:** Reply-Trigger und Desk-Policies kommen aus dem
+   Desk-Signals-Katalog des konsumierenden Workspace (`memory/references/mail-desk/
+   mail-desk.json`, Schema 1, fail-loud bei Drift); Sent-Index-Einträge tragen den
+   verifizierten Batch-Account; das Zoom-Recording-Routing gehört dem Topic-Katalog
+   (FR-18/MD-S1–S3).
+ - **Desk-Signals-Doku + Katalog-Validator:** Pflegevertrag/Semantik dokumentiert
+   (SKILL.md, batch-runner.md, topic-catalog-entry, FR-21/MD-S4); read-only
+   Workspace-Katalog-Validator `skills/mail-desk/scripts/catalog_validator.py`
+   (topics/projects/mail-desk, kanonischer Envelope, Exit 0/1/2, FR-21/MD-S5).
+ - **Hashgebundene Approval-Receipts + read-only Promotion-Preflight:**
+   `core/attachment_promotion.py` (MD-P1) bindet Human-Receipts kanonisch an
+   exakt einen `attachment_filing_candidate` (Review-Payload: Candidate-Hash,
+   Quarantäne-Identität, Storage/`scan_dir`/Ziel, Filemap-Snapshot-Hash) und
+   prüft read-only fail-closed mit 13 Stopcodes; null Mutationen auf jedem Pfad.
+   Promotion-Writer und Cloud-Atlas-Handoff bleiben MD-P2/MD-P3 (Human Gate für
+   den mutierenden Pfad separat).
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---

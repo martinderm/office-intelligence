@@ -1114,7 +1114,32 @@ berührt sie nicht.
 1. **Kein Datenverlust:** Schlägt ein Einzelschritt (z. B. Routing oder Index-Write) fehl, gibt das Skript `success: false` (kanonischer Fehler-Envelope) zurück und das Eingabemanifest **bleibt zur Fehleranalyse erhalten**.
 2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine temporäre Zwischendatei (`.tmp`) geschrieben und anschließend atomar ersetzt, um Korruption bei Prozessabbrüchen zu verhindern.
 3. **Plattformunabhängiges UTF-8:** Standard-Streams (`stdout`/`stderr`) und Datei-I/O sind strikt UTF-8 (verhindert Windows-`charmap`-Fehler bei Umlauten/Sonderzeichen).
-4. **Fehlertolerante Subprozess-Ausführung:** `subprocess.run(..., errors="replace")` und Timeouts auf Einzelebene verhindern, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze den ganzen Batch blockieren.
+4. **Fehlertolerante Subprozess-Ausführung:** `errors="replace"` und Einzeit-Timeouts verhindern, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze den Batch blockieren.
+
+---
+
+## Promotion-Preflight (`core/attachment_promotion.py`)
+
+Das Modul `scripts/core/attachment_promotion.py` bindet Human-Approval-Receipts
+kanonisch an exakt einen `attachment_filing_candidate` und prüft die Promotion-
+Preconditions ausschließlich lesend, fail-closed, **null Mutationen** auf jedem
+Pfad (kein `mkdir`/Write/`unlink`/`replace`, keine Filemap-, Katalog- oder
+Mailbox-Änderung). `compute_promotion_review_hash()` bildet den kanonischen
+Review-Payload (Candidate-Hash, Quarantäne-Identität, Storage/`scan_dir`/Zielpfad,
+Filemap-Snapshot-Hash); `verify_promotion_approval_receipt()` validiert das
+Schema-1-Receipt (`attachment_promotion_approval`, `approved`, `review_hash`,
+timezone-aware `approved_at`/`expires_at`) fail-closed mit injizierbarer Uhr.
+`preflight_attachment_promotion()` validiert in fester Reihenfolge Kandidat
+(Hash-Neuberechnung, nur `proposed`/`pending_human_review`) → Quarantäne-Evidenz
+(realer Disk-Hash) → Receipt → Lock → Storage-Neuauflösung (inaktiv/archiviert/
+read-only per Property-Markern → `storage_not_writable`; fehl/mehrfach →
+`catalog_drift`) → Pfadprüfung (Containment, Reparse-Prüfung innerhalb der
+`scan_dir`-Subtree — Mount-Junction am `scan_dir` legitim; Geräte-/Absolut-/`..`
+-Pfade stoppen; Ziel-Parent existiert) → Filemap-Snapshot + realer Zielzustand
+(`already_present`/`collision_detected`/`ready`). Output:
+`attachment_promotion_preflight` Schema 1 ohne absolute Pfade. Kein Writer, keine
+Cloud-Atlas-Ausführung: Promotion, Journal und Refresh sind separate, noch nicht
+freigegebene Pakete.
 
 ---
 

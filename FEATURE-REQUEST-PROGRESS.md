@@ -57,8 +57,54 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   sind sauber.
 - `FR-08` ist mit `MD-A1` bis `MD-A5` vollständig umgesetzt, unabhängig reviewt,
   getestet und committed. Der Abschluss ist archiviert.
-- `FR-09` ist noch nicht gestartet. Vor `MD-P1` bleibt die ausdrückliche Human-
-  Freigabe für den mutierenden Cloud-Promotion-Pfad erforderlich.
+- `FR-09`/`MD-P1` — **Approval-Bindung und read-only Promotion-Preflight implementiert
+  und unabhängig reviewt (2026-09-27, TDD red→green, 2 dokumentierte Fix-Runden,
+  Review APPROVE).** Neu:
+  `skills/mail-desk/scripts/core/attachment_promotion.py` (exakt drei öffentliche
+  Funktionen `compute_promotion_review_hash()`, `verify_promotion_approval_receipt()`,
+  `preflight_attachment_promotion()`) und das bindende Testmodul
+  `skills/mail-desk/tests/test_maildesk_attachment_promotion_mdp1.py` (78 Tests,
+  genuine Red gegen das fehlende Modul: `ImportError`, Exit 1). Öffentliche Verträge:
+  kanonischer Review-Payload bindet Candidate-Schema/`candidate_hash`, Quarantäne-
+  Identität, Storage/`scan_dir`/Ziel und den kanonischen Filemap-Snapshot-Hash;
+  Schema-1-Receipt (`receipt_type: attachment_promotion_approval`,
+  `decision: approved`, `review_hash`, timezone-aware `approved_at`/`expires_at`,
+  optionaler Kommentar) mit injizierbarer Uhr und fail-closed bei fehl/
+  maschinell/abgelaufen/zukünftig/unplausibel-lang; deterministisches
+  `attachment_promotion_preflight` Schema 1 (`ready`/`already_present`/Stopcode) ohne
+  absolute Pfade. Trust-Boundaries: nur Schema-1-`attachment_filing_candidate` mit
+  `status: proposed`/`promotion_status: pending_human_review` erreicht überhaupt den
+  Preflight; `candidate_hash` wird kanonisch neu berechnet; Lock-Ownership kommt
+  ausschließlich aus der Control Plane (eingebettete `lease_id`/`conversation_id`/
+  `workspace_root`/`allow_legacy` werden ignoriert); Storage/`scan_dir`/Ziel werden aus
+  aktuellem Katalog + Kandidat neu aufgelöst und gegen den Receipt geprüft; Zielpfad
+  ausschließlich `workspace_root / scan_dir / target_relative_path`; absolute Pfade,
+  `..`, Windows-Gerätenamen und Symlink/Junction/Reparse-Escapes stoppen; Ziel-Parent
+  muss existieren; Storage-Gate per Property-Markern (`archived`/`archive: true`,
+  `read_only: true`, `active: false`, `enabled: false`, `disabled: true`,
+  `status` in `{inactive, disabled, archived}`) → `storage_not_writable`, fehl/
+  mehrfach/abwesend → `catalog_drift`. Wiederverwendet (keine Reimplementation):
+  `compute_candidate_hash`/`validate_cloud_atlas_filemap`/`resolve_catalog_storage`,
+  `verify_quarantine_attachment_artifact`/`verify_workspace_lock`,
+  `verify_no_tracked_quarantine`, `canonical_json_sha256`. Nachweis: fokussierte Suite
+  78/78 grün, vollständige entdeckte Mail-Desk-Suite 1151/1151 grün, `compileall` und
+  `git diff --check` sauber; Schreibfallen (open-write/`mkdir`/`unlink`/`replace`/
+  Himalaya/atomic writer) beweisen null Mutationen auf Erfolgs- und Fehlerpfaden.
+  Fix-Runden (dokumentiert): Runde 1 — real-Junction-Regression (Junction am
+  unresolved Ziel-Parent → `unsafe_path`, Windows-only ungemockt) und
+  Multi-Storage-Gate-Reihenfolge (kandidatgebundener Storage vor Unique-Check;
+  non-Mapping → `storage_not_writable`); Runde 2 — Walk auf die `scan_dir`-Innensubtree
+  begrenzt (Mount-Junction am `scan_dir` selbst bleibt legitim `ready`, Outside-Fälle
+  über resolved containment) und ID-Präfix-Heuristik entfernt (Property-Marker
+  entscheiden). Review: 2× REQUEST_CHANGES (1 Major + 2 Minor; 2 Minor prozessual
+  orchestratorseitig) → APPROVE (0 actionable). Bewusste Grenzen:
+  `references/batch-runner.md` und die System Map wurden orchestratorseitig im
+  selben Arbeitsschritt synchronisiert; der shared Macht-Guard ist auf typenlose
+  Human-Receipts ausgelegt, daher prüft der Promotion-Pfad die FR-09-Schema-1-Receipts
+  über einen reinen Klassen-/Issuer-Probe gegen Maschinen-Receipts (fail-closed).
+  Vor `MD-P2`/`MD-P3` bleibt die ausdrückliche Human-Freigabe für den mutierenden
+  Cloud-Promotion-Pfad erforderlich. Commit-Kandidat:
+  `feat(mail-desk): add hash-bound approval and read-only promotion preflight (MD-P1)`.
 - `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) und MD-E2 (`MD-E2-T01`–`T04`) sind vollständig
   implementiert, reviewt, verifiziert und paketabgenommen; `FR-15` ist geschlossen.** Der staged
   `attachment_evaluation`-Vertrag

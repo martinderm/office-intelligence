@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-26): 162 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 76 Testmodule; 1073 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-09-MD-P1): 165 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 77 Testmodule; 1151 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -764,3 +764,41 @@ JSON-Beispiele) — Token-Ballast bei jedem Skill-Load.
   schlanken, vertragsvollständigen Zustand.
 
 **Ergebnis:** 7.088 Wörter / 1.401 Zeilen (−19%). **Suite 1064/1064 grün.**
+
+---
+
+## 27. FR-09/MD-P1 — Hashgebundene Approval-Receipts und read-only Promotion-Preflight (abgeschlossen)
+
+**Human Gate (User 2026-09-27):** FR-09/MD-P1 ausdrücklich freigegeben (Scope
+nur MD-P1, Tier high, Fingerprint-Freigabe je Kandidat; keine reale Promotion).
+
+**Umsetzung:** Neues `core/attachment_promotion.py` mit exakt drei öffentlichen
+Funktionen — `compute_promotion_review_hash()` (kanonischer Review-Payload:
+Candidate-Schema/`candidate_hash` + Quarantäne-Identität + Storage/`scan_dir`/
+Ziel + Filemap-Snapshot-Hash), `verify_promotion_approval_receipt()` (Schema-1-
+Receipt `attachment_promotion_approval`, timezone-aware RFC 3339, injizierbare
+Uhr, fail-closed gegen fehl/maschinell/abgelaufen/zukünftig/unplausibel-lang)
+und `preflight_attachment_promotion()` (read-only, feste Reihenfolge: Kandidat
++ Hash → Quarantäne inkl. realem Disk-Hash → Receipt → Lock → Storage-Neu-
+auflösung (Property-Marker-Gate) → Pfadprüfung (containment, reparse-frei
+innerhalb der `scan_dir`-Subtree, Gerätenamen, Parent existiert) → Filemap +
+realer Zielzustand (`ready`/`already_present`/`collision_detected`)).
+
+**Trust-Boundaries:** Nur Schema-1-Kandidaten mit
+`promotion_status: "pending_human_review"` erreichen den Preflight; Lock-IDs
+nur aus der Control Plane; Zielpfad nur `workspace_root / scan_dir /
+target_relative_path`; Stopcodes `approval_missing/invalid/expired`,
+`candidate_drift`, `source_drift`, `lock_unavailable`, `catalog_drift`,
+`storage_not_writable`, `filemap_drift`, `unsafe_path`, `parent_missing`,
+`collision_detected`, `preflight_error`. Null Mutationen auf jedem Pfad
+(Schreibfallen-getestet). Kein Writer, keine Filemap-/Cloud-Atlas-Mutation —
+Promotion/Journal/Refresh bleiben MD-P2/MD-P3.
+
+**Review:** unabhängig, 2 dokumentierte Fix-Runden (Runde 1: real-Junction am
+unresolved Ziel-Parent → `unsafe_path` + Multi-Storage-Gate-Reihenfolge;
+Runde 2: Walk auf `scan_dir`-Innensubtree begrenzt — Mount-Junction am
+`scan_dir` selbst legitim `ready` — + ID-Präfix-Heuristik entfernt, Property-
+Marker entscheiden) → APPROVE.
+
+**Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp1.py` (78, inkl.
+realer Windows-Junction-Regressionen ungemockt). **Suite 1151/1151 grün.**
