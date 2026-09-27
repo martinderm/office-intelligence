@@ -21,6 +21,7 @@
 │                 office-intelligence (Skill Bundle Root)                │
 │  ├─ SKILL.md (Router für Fach-Desks)                                   │
 │  ├─ docs/system-map/ (Paket System Map)                                │
+│  ├─ docs/analysis/ (Konzeptanalysen, z. B. Jev-Integration)            │
 │  └─ skills/ (7 modulare Sub-Skills)                                    │
 └──────┬──────────────────────┬──────────────────────┬───────────────────┘
        │                      │                      │
