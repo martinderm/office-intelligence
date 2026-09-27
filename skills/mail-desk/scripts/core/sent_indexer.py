@@ -19,6 +19,13 @@ from .matching.reply_heuristics import (
     load_reply_heuristics,
 )
 
+#: Maximum number of days synchronized in one watermark-derived Sent-Items run.
+MAX_SYNC_WINDOW_DAYS = 60
+
+#: Himalaya page size used for the per-date Sent-Items envelope query.
+SENT_SYNC_PAGE_SIZE = 100
+
+
 # Re-exported canonical MD-ID1 identity defaults.  These are the same objects the
 # reply-heuristics owner defines -- imported, never duplicated -- so the sent-index
 # identity stays sourced from the workspace desk-signals catalog owner.
@@ -145,13 +152,18 @@ def append_sent_index_entries(
     return added_count
 
 
-def sync_sent_items_by_date(
+def _sync_sent_items_for_date(
     date_str: str,
     folder: str = "Sent Items",
     account: str | None = None,
     data_dir: Path | None = None,
-) -> int:
-    """Fetch envelopes for a specific date (YYYY-MM-DD) from Sent Items and stream into sent-index.jsonl.
+) -> dict[str, Any]:
+    """Fetch one Sent-Items date and return its indexing statistics.
+
+    Returns ``{"added", "envelopes_examined", "truncated"}``.  A Himalaya or
+    envelope-parse failure is fail-closed: it re-raises with the date in the
+    message instead of masquerading as ``0 new mails``.  A legitimately empty
+    day (``[]``) is not an error and returns ``added: 0``.
 
     Fails loud with a ``ValueError`` before any file write if ``account`` is
     missing: every indexed entry must be bound to the verified workspace account
@@ -168,25 +180,36 @@ def sync_sent_items_by_date(
     existing_eids = {str(e.get("sent_envelope_id", "")) for e in existing_index["all_entries"] if e.get("sent_envelope_id")}
     existing_mids = set(existing_index["by_message_id"].keys())
 
-    # Date query via Himalaya (fast single-day filter)
+    # Date query via Himalaya (fast single-day filter); transport/parse errors
+    # are fail-closed and never collapse into a silent "0 new mails".
     try:
         out = run_himalaya(
-            ["-o", "json", "envelope", "list", "-f", folder, "-s", "100", f"date {date_str}"],
+            ["-o", "json", "envelope", "list", "-f", folder, "-s", str(SENT_SYNC_PAGE_SIZE), f"date {date_str}"],
             account=account,
             timeout=30,
         )
         if "[" in out:
             out = out[out.find("["):]
         envs = json.loads(out)
-    except Exception:
-        return 0
+    except Exception as error:
+        raise RuntimeError(
+            f"Sent sync failed for {date_str}: {type(error).__name__}: {error}"
+        ) from error
 
-    if not isinstance(envs, list) or not envs:
-        return 0
+    if not isinstance(envs, list):
+        raise RuntimeError(
+            f"Sent sync failed for {date_str}: Himalaya returned a non-list envelope payload."
+        )
+
+    envelopes_examined = len(envs)
+    # A full page may hide further envelopes; flag instead of silently truncating.
+    truncated = envelopes_examined >= SENT_SYNC_PAGE_SIZE
+    if not envs:
+        return {"added": 0, "envelopes_examined": 0, "truncated": False}
 
     unhandled_envs = [e for e in envs if str(e.get("id")) not in existing_eids]
     if not unhandled_envs:
-        return 0
+        return {"added": 0, "envelopes_examined": envelopes_examined, "truncated": truncated}
 
     sent_path = dd / "sent-index.jsonl"
     sent_path.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +259,48 @@ def sync_sent_items_by_date(
             existing_eids.add(eid)
             added_count += 1
 
-    return added_count
+    return {"added": added_count, "envelopes_examined": envelopes_examined, "truncated": truncated}
+
+
+def sync_sent_items_by_date(
+    date_str: str,
+    folder: str = "Sent Items",
+    account: str | None = None,
+    data_dir: Path | None = None,
+) -> int:
+    """Fetch envelopes for a specific date (YYYY-MM-DD) from Sent Items and stream into sent-index.jsonl.
+
+    Returns the number of newly indexed entries.  Fails closed with a
+    ``RuntimeError`` naming the date on any Himalaya/parse failure (never a
+    silent ``0``), and fails loud with a ``ValueError`` before any file write if
+    ``account`` is missing: every indexed entry must be bound to the verified
+    workspace account rather than a hardcoded mailbox.
+    """
+    return int(_sync_sent_items_for_date(date_str, folder=folder, account=account, data_dir=data_dir)["added"])
+
+
+def _dedupe_iso_dates(dates: list[str]) -> list[str]:
+    """Normalize a date list to sorted unique ISO ``YYYY-MM-DD`` strings."""
+    unique_dates: set[str] = set()
+    for d in dates:
+        d_clean = str(d).strip()[:10]
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", d_clean):
+            unique_dates.add(d_clean)
+    return sorted(unique_dates)
+
+
+def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[str]:
+    """Expand ISO dates to the queried set, optionally including the following day."""
+    expanded: set[str] = set()
+    for d_str in _dedupe_iso_dates(dates):
+        expanded.add(d_str)
+        if include_next_day:
+            try:
+                next_dt = datetime.strptime(d_str, "%Y-%m-%d") + timedelta(days=1)
+                expanded.add(next_dt.strftime("%Y-%m-%d"))
+            except Exception:
+                continue
+    return sorted(expanded)
 
 
 def sync_sent_items_by_dates(
@@ -247,46 +311,138 @@ def sync_sent_items_by_dates(
     include_next_day: bool = True,
 ) -> int:
     """Sync Sent Items for a list of ISO dates (e.g. ['2026-01-19', '2026-01-20'])."""
-    unique_dates: set[str] = set()
-    for d in dates:
-        d_clean = d.strip()[:10]
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", d_clean):
-            unique_dates.add(d_clean)
-            if include_next_day:
-                try:
-                    dt = datetime.strptime(d_clean, "%Y-%m-%d")
-                    next_dt = dt + timedelta(days=1)
-                    unique_dates.add(next_dt.strftime("%Y-%m-%d"))
-                except Exception:
-                    pass
-
     total_added = 0
-    for d_str in sorted(unique_dates):
-        added = sync_sent_items_by_date(d_str, folder=folder, account=account, data_dir=data_dir)
-        total_added += added
-
+    for d_str in _expand_sync_dates(dates, include_next_day=include_next_day):
+        total_added += sync_sent_items_by_date(d_str, folder=folder, account=account, data_dir=data_dir)
     return total_added
 
 
+def _sent_index_watermark(data_dir: Path) -> datetime | None:
+    """Return the newest indexed Sent-Items date, or ``None`` for an empty index."""
+    index = load_sent_index(data_dir)
+    latest: datetime | None = None
+    for entry in index.get("all_entries", []):
+        parsed = parse_date_to_datetime(str(entry.get("at", "")))
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
+
+
+def _derive_sent_sync_window(count: int | None, data_dir: Path) -> tuple[list[str], str | None]:
+    """Derive the no-dates sync window from the sent-index watermark.
+
+    The window spans from the newest indexed sent date (watermark) through today
+    inclusive; an empty index yields today only.  It is capped at
+    ``MAX_SYNC_WINDOW_DAYS`` per run and bounded to the most recent ``count``
+    days when the gap exceeds ``count`` (today is always included).  When either
+    bound trims earlier gap days, the returned follow-up hint describes the
+    *final* end state: it names every bound that applied and counts the days
+    still unsynced from the final ``start``, so telemetry never overstates the
+    synced span (FR-26/MD-SE2).  ``start`` is resolved after both bounds before
+    the hint is built.
+    """
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    watermark = _sent_index_watermark(data_dir)
+    if watermark is None:
+        start = today
+    else:
+        start = datetime(watermark.year, watermark.month, watermark.day)
+    if start > today:
+        start = today
+
+    original_start = start
+    gap_days = (today - start).days + 1
+
+    cap_applied = gap_days > MAX_SYNC_WINDOW_DAYS
+    if cap_applied:
+        start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
+
+    count_applied = False
+    if count is not None and count > 0 and (today - start).days + 1 > count:
+        start = today - timedelta(days=count - 1)
+        count_applied = True
+
+    window_days = (today - start).days + 1
+    # Days between the watermark and the final start are the ones either bound
+    # left unsynced; compute them from the FINAL start, never the pre-bound one.
+    unsynced_days = (start - original_start).days
+
+    follow_up_hint: str | None = None
+    if unsynced_days > 0:
+        applied_bounds: list[str] = []
+        if cap_applied:
+            applied_bounds.append(f"MAX_SYNC_WINDOW_DAYS={MAX_SYNC_WINDOW_DAYS} cap")
+        if count_applied:
+            applied_bounds.append(f"count={count} bound")
+        follow_up_hint = (
+            f"Sent-index watermark gap of {gap_days} days; synced the most recent "
+            f"{window_days} day(s) ({' and '.join(applied_bounds)}). "
+            f"{unsynced_days} earlier day(s) remain unsynced (watermark gap)."
+        )
+
+    window = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(window_days)]
+    return window, follow_up_hint
+
+
 def sync_sent_items(
-    count: int = 100,
+    count: int | None = 100,
     folder: str = "Sent Items",
     dates: list[str] | None = None,
     account: str | None = None,
     data_dir: Path | None = None,
     workspace_root: Path | None = None,
-) -> tuple[int, int]:
-    """Sync sent items either by explicit dates (fast) or by recent days."""
-    dd = data_dir or resolve_data_dir()
-    if dates:
-        added = sync_sent_items_by_dates(dates, folder=folder, account=account, data_dir=dd)
-        return len(dates), added
+) -> dict[str, Any]:
+    """Sync Sent Items by explicit dates or by an index-watermark-derived window.
 
-    # If no dates provided, sync today and past 7 days
-    today = datetime.now()
-    recent_dates = [(today - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
-    added = sync_sent_items_by_dates(recent_dates, folder=folder, account=account, data_dir=dd)
-    return len(recent_dates), added
+    The no-dates path queries every day from the sent-index watermark through
+    today (capped at ``MAX_SYNC_WINDOW_DAYS``, optionally bounded to the most
+    recent ``count`` days) instead of a hardwired 7-day window.  Per-date
+    Himalaya/parse failures are collected and re-raised fail-closed with the
+    failing dates named, so the caller never sees a silent ``ok``.
+
+    Returns ``{"date_windows_synced", "envelopes_examined",
+    "new_entries_indexed", "truncated_days", "follow_up_hint"}``.
+    """
+    dd = data_dir or resolve_data_dir()
+    follow_up_hint: str | None = None
+    if dates:
+        window_dates = _dedupe_iso_dates(dates)
+    else:
+        window_dates, follow_up_hint = _derive_sent_sync_window(count, dd)
+
+    query_dates = _expand_sync_dates(window_dates, include_next_day=True)
+    added_total = 0
+    envelopes_total = 0
+    truncated_days: list[str] = []
+    failures: list[tuple[str, Exception]] = []
+    for date_str in query_dates:
+        try:
+            date_result = _sync_sent_items_for_date(date_str, folder=folder, account=account, data_dir=dd)
+        except Exception as error:
+            failures.append((date_str, error))
+            continue
+        added_total += int(date_result.get("added", 0))
+        envelopes_total += int(date_result.get("envelopes_examined", 0))
+        if date_result.get("truncated"):
+            truncated_days.append(date_str)
+
+    if failures:
+        failed_dates = ", ".join(date_str for date_str, _ in failures)
+        first_error = failures[0][1]
+        raise RuntimeError(
+            f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
+            f"First error: {type(first_error).__name__}: {first_error}"
+        ) from first_error
+
+    return {
+        "date_windows_synced": len(query_dates),
+        "envelopes_examined": envelopes_total,
+        "new_entries_indexed": added_total,
+        "truncated_days": truncated_days,
+        "follow_up_hint": follow_up_hint,
+    }
 
 
 def parse_date_to_datetime(s: str) -> datetime | None:

@@ -25,6 +25,11 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   Befund Batch W40/1): keep-Items blockieren Verify-Completion (MD-V1),
   Sent-Sync Watermark/count/fail-closed + Telemetrie (MD-SE1/SE2),
   review_reason read_escalation_failed (MD-A5). Sequenziell A5 → SE1/SE2 → V1.
+- `FR-26` - Verify/Sent-Sync/Read-Eskalations-Haertung abgeschlossen und
+  archiviert (2026-09-27): keep-Items aus Evidenzpflicht (Completion regulaeber
+  verify), Sent-Sync Watermark/count/fail-closed + Telemetrie-Trennung,
+  review_reason read_escalation_failed. 9 Tests, Suite 1073/1073 gruen;
+  Details im Archiv (`docs/features/_archive.md`, FR-26-Sektion).
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der

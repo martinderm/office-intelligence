@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-24/Runner-Slim): 159 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 73 Testmodule; 1064 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-26): 162 getrackte Dateien; 69 getrackte Dateien unter `scripts/`, davon 56 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 76 Testmodule; 1073 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -657,6 +657,41 @@ verifiziertem Ziel `ATAEL`/`82`) blieb unkorrigiert und
 **Pflichttests (alle erfüllt):** `tests/test_reconcile_stale_repair.py` (6,
 Env-9428-Fall, Idempotenz, Gates, Tracker). **Suite 1051/1051 grün.**
 Fix-Runde (dokumentiert): Tracker-Edge `repaired` per-Item-Trigger.
+
+## 26. FR-26 — Verify-Evidenz-Scope, Sent-Sync-Watermark, Read-Eskalations-Reason (abgeschlossen)
+
+**Problem (Batch 2026-W40/1, boku-user 2026-09-27):** (1) `verify` prüfte
+Evidenz für JEDES Item — keep-Items (kein Evidenz-Zuhause) endeten
+`in_evidence=False` → `recovery_required` → leerer Synthese-Handoff, während
+read-only `reconcile` (Evidenz optional) `completed` + Handoff lieferte —
+widersprüchliche Completion-Pfade. (2) `--sync-sent N` ignorierte `count`
+(fest `range(7)`, Telemetrie meldete 7 „Envelopes" = Datums-Buckets), füllte
+die Watermark-Lücke still nicht auf, schluckte Per-Datum-Fehler als
+„0 neue Mails" (ok:true) und kappte Tage >100 Envelopes ohne Vermerk.
+(3) `_full_read_failure` trug keinen `review_reason`.
+
+**Umsetzung:**
+- **MD-V1:** keep/unknown-Items aus der Evidenzpflicht ausgenommen
+  (`in_evidence=null`, Evidence-Scan geskippt); moved-Items (non-INBOX
+  effective_folder) behalten den byte-gleichen Check; Completion-Gate
+  (`completion.py`) unverändert — keep-Batches schließen regelmäßig über
+  `verify`, `reconcile` bleibt Recovery-Pfad.
+- **MD-SE1:** Sent-Sync-Fenster aus dem Index-Watermark (max `at` → heute,
+  Cap `MAX_SYNC_WINDOW_DAYS=60` mit `follow_up_hint`, `count` begrenzt auf die
+  N neuesten Tage; Count-Trim setzt ebenfalls einen Hint); Per-Datum-Himalaya-
+  Fehler propagieren fail-closed (RuntimeError mit Datum-Kontext, nie still
+  `ok`); page-full-Daten als `truncated_days` geflaggt statt still gekappt.
+- **MD-SE2:** Telemetrie getrennt (`date_windows_synced` vs.
+  `envelopes_examined`), `total_envelopes_examined` korrekt befüllt.
+- **MD-A5:** `_full_read_failure` trägt
+  `review_reason: "read_escalation_failed"`.
+
+**Pflichttests (alle erfüllt):** `tests/test_review_reason_read_failure.py`
+(2), `tests/test_sent_sync_watermark.py` (4: Watermark-Gap-Deckung, Count-
+Bound, fail-closed, Telemetrie-Trennung), `tests/test_verify_keep_evidence_scope.py`
+(3, keep-only-Completion + moved-Floor + Handoff-Release).
+**Suite 1073/1073 grün.** 2 dokumentierte Fix-Runden (Sent-Sync-Hint-Truthfulness
++ hermetischer Zeit-Test; 1 Orchestrator-Testkorrektur je).
 
 ## 23. MD-A3 — Anhang-Quota Inline vs. Datei (FR-20, abgeschlossen)
 

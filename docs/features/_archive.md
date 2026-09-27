@@ -29,6 +29,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-21` | ✅ | Desk-Signals-Doku (SKILL.md/batch-runner.md) + Pattern-Semantik (topic-catalog-entry) + Workspace-Katalog-Validator `catalog_validator.py` | MD-S4/MD-S5 im Kernel-Loop (Docs-Contract-Test + 35 Validator-Tests), 1 Fix-Runde Root-vs-Nested Min-3 |
 | `FR-22` | ✅ | Identity-freier Desk-Signals-Fallback: neutraler leerer Fallback + owner-generierte Trigger (Schema 2 mit Schema-1-Legacy), sent_indexer/internal-domain/Spam-Gegenindikatoren → Katalog bzw. entfernt, `spam_sender_allowlist`-Gate | MD-ID1–ID4 im Kernel-Loop (12 Dispatches mit Red-Gates), 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün |
 | `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
+| `FR-26` | ✅ 2026-09-27 | Verify-Evidenz-Scope (keep-Items ausgenommen, Completion konsistent), Sent-Sync Watermark/count/fail-closed/Telemetrie-Trennung, review_reason read_escalation_failed | MD-V1/SE1/SE2/A5 im Kernel-Loop (9 Tests), 2 Fix-Runden; 1073 Tests grün |
 | `FR-23` | ✅ 2026-09-24 | Workspace-Lock-Delegation an Runner-Subprozesse: `--workspace-lease-id`/`--workspace-conversation-id` reichen die Agent-Lease an die Anhang-Bewertung weiter; fremde/abgelaufene Leases bleiben fail-closed | MD-L1 im Kernel-Loop (8 Tests, fail-closed-Regression gepinnt); 1045 Tests grün |
 | `FR-19` | ✅ 2026-09-24 | Reconcile-Repair-Härtung: `apply_local_repairs` korrigiert stale Index-/Log-Records nach frischer Verifikation (append-only `reconciled`-Eintrag, idempotent); `runner-progress.json` wird im Repair-Pfad deterministisch nachgeführt | MD-RC1 im Kernel-Loop (6 Tests, Env-9428-Fall gepinnt), 1 Fix-Runde (Tracker-Edge); 1051 Tests grün |
 | `FR-20` | ✅ 2026-09-24 | Anhang-Quota Inline vs. Datei: getrennte Quoten (5 Datei / 3 Inline), neuer transparenter Reason `skipped_inline_limit`; echte Anhänge werden nie mehr durch Inline-Bilder verdrängt | MD-A3 im Kernel-Loop (5 Tests, Env-9438-Fall: drei Zustände je Teilklasse), 1 Fix-Runde (is_inline-Typvalidierung); 1056 Tests grün |
@@ -1999,6 +2000,54 @@ MS-ID. Kein `--force` oder generisches Ignorieren wurde verwendet.
 1. **Abwärtskompatibilität für Routing:** Root-Felder (`domains`, `contacts`, `aliases`, `typical_subject_patterns`, `cloud_sync` usw.) und WP-Aliase wurden beibehalten, damit Mail-Desk-Klassifizierungen kompatibel bleiben.
 2. **Activity Clusters (WEEK):** Die vorhandenen kanonischen IDs bleiben maßgeblich; mangels stabiler normativer Nummern wurde kein `number`-Feld erfunden.
 3. **Human Gate:** Künftige produktive Quellen, Scope-Erweiterungen und weitere Backfills benötigen weiterhin Lock-Ownership und explizite Freigabe.
+
+---
+
+## FR-26: Verify-Completion-Gate, Sent-Sync-Coverage und Read-Eskalations-Reason
+
+**Status:** ✅ Abgeschlossen (2026-09-27; MD-A5 + MD-SE1/SE2 + MD-V1 im
+Kernel-Loop mit Subagenten, 1 unabhängiges Review + 2 dokumentierte Fix-Runden).
+Befund Batch 2026-W40/1 (boku-user, 2026-09-27): (1) keep-Items blockierten das
+Verify-Completion-Gate (Evidenzprüfung für JEDES Item, keep hat kein
+Evidenz-Zuhause) — PartialFailure/leerer Handoff, während read-only
+`reconcile` (Evidenz optional) `completed` + Handoff lieferte; (2) `--sync-sent
+N` ignorierte `count` (fest `range(7)`, Telemetrie meldete 7 „Envelopes“ =
+Datums-Buckets), füllte die Watermark-Lücke still nicht auf, schluckte
+Per-Datum-Fehler als „0 neue Mails“ (ok:true); (3) `_full_read_failure`
+trug keinen `review_reason`.
+
+### Kernergebnis
+
+- **MD-V1:** keep/unknown-Items aus der Evidenzpflicht ausgenommen
+  (`in_evidence=null`, Scan geskippt); moved-Items (non-INBOX effective_folder,
+  auch ohne action-Feld im batch_file-Fall) behalten den byte-gleichen Check;
+  Completion-Gate unverändert — keep-Batches schließen regelmäßig
+  über `verify`; `reconcile` bleibt Recovery-Pfad. Option (b) „kanonisches
+  Evidenz-Zuhause“ bewusst an FR-09 (Cloud-Handoff) delegiert.
+- **MD-SE1:** Sent-Sync-Fenster aus dem Index-Watermark (max `at` → heute;
+  Cap `MAX_SYNC_WINDOW_DAYS=60` mit truthful `follow_up_hint`, der BOTH den
+  60-Cap- und den Count-Bound-Effekt nennt); `count` begrenzt auf die N
+  neuesten Tage (Count-Trim setzt ebenfalls einen Hint — kein Dauerstillstand
+  bei leerem Count-Fenster); Per-Datum-Himalaya-Fehler propagieren fail-closed
+  (RuntimeError mit Datum-Kontext, nie still `ok`); page-full-Daten als
+  `truncated_days` geflaggt statt still gekappt.
+- **MD-SE2:** Telemetrie getrennt (`date_windows_synced` vs.
+  `envelopes_examined`), `total_envelopes_examined` korrekt befuellt.
+- **MD-A5:** `_full_read_failure` trägt
+  `review_reason: "read_escalation_failed"`.
+
+### Umsetzungsnachweis
+
+- `core/modes/verify.py` (Evidenz-Scope), `core/sent_indexer.py` (Watermark-
+  Fenster + fail-closed), `core/modes/sync_sent.py` (Telemetrie),
+  `core/classifier.py` (review_reason); Doku batch-runner.md/SKILL.md
+  (Orchestrator-Sync).
+- Hermetische Tests: `test_verify_keep_evidence_scope.py` (3), `test_sent_sync_
+  watermark.py` (4), `test_review_reason_read_failure.py` (2); Suite 1073/1073
+  grün.
+- Unabhängiges Review: 2 Major (nicht-hermetischer Zeit-Test; Hint-Lüge vor
+  Count-Bound) + 1 Minor (Manifest-Filename) — alle als dokumentierte Fix-
+  Runde 2 behoben.
 
 ---
 

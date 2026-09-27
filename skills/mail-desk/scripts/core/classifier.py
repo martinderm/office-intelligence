@@ -144,6 +144,7 @@ def _full_read_failure(
     decision = dict(preview_item.get("decision", {}))
     decision["confidence"] = "low"
     decision["review_required"] = True
+    decision["review_reason"] = "read_escalation_failed"
     decision["read_escalation"] = {
         "level": "full_body",
         "triggers": triggers,

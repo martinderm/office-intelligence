@@ -8,6 +8,30 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-09-27
+
+#### Added
+
+- **FR-26/MD-V1 — Verify-Evidenz-Scope:** keep_in_folder/unknown-Items sind von
+  der Evidenzpflicht ausgenommen (`in_evidence=null`, Scan geskippt) — Batches
+  mit keep-Items schließen regelmäßig über `verify` (Handoff released), statt
+  fail-closed zu enden; moved-Items behalten den Evidenz-Check. `reconcile`
+  bleibt Recovery-Pfad.
+- **FR-26/MD-SE1+MD-SE2 — Sent-Sync-Coverage & fail-closed:** das No-Dates-
+  Fenster leitet sich aus dem Index-Watermark ab (max `at` → heute, Cap 60
+  Tage mit `follow_up_hint`); `--sync-sent N` wird respektiert (N neueste
+  Tage); Per-Datum-Himalaya-Fehler propagieren fail-closed (nie still
+  `ok: true`); Telemetrie getrennt (`date_windows_synced` vs.
+  `envelopes_examined`); page-full-Tage als `truncated_days` sichtbar.
+- Guard-Tests: `test_verify_keep_evidence_scope.py` (3),
+  `test_sent_sync_watermark.py` (4), `test_review_reason_read_failure.py` (2).
+  **Suite 1073/1073 grün.**
+
+#### Fixed
+
+- **FR-26/MD-A5:** `_full_read_failure` trägt
+  `review_reason: "read_escalation_failed"` (maschinenlesbare Triage).
+
 ### 2026-09-24
 
 #### Added

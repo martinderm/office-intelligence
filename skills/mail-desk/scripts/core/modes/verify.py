@@ -165,28 +165,51 @@ def run_verify_mode(
         in_action_log = log_entry is not None
         logged_folder = log_entry.get("action", {}).get("target_folder") if log_entry else None
 
+        # FR-26/MD-V1 evidence scope: keep_in_folder/unknown items never move,
+        # so they have no evidence home.  For them evidence is *not checked*
+        # (``None``, not a failure) and the evidence search is skipped entirely;
+        # only index/action-log/folder checks apply.  Moved items keep the
+        # fail-closed evidence requirement byte-for-byte.
+        action = item.get("action") if isinstance(item.get("action"), dict) else {}
+        action_type = action.get("type") if isinstance(action.get("type"), str) else None
+        if action_type is None:
+            # Execute result rows and message-id-only items carry no action:
+            # infer the move from the effective target folder (item, then
+            # index, then action log).  No known non-INBOX target means the
+            # item never left its folder.
+            effective_folder = (
+                item.get("final_folder")
+                or item.get("target_folder")
+                or indexed_folder
+                or logged_folder
+            )
+            moved = bool(effective_folder) and effective_folder != "INBOX"
+        else:
+            moved = action_type != "keep_in_folder"
+
         in_evidence: bool | None = None
-        evidence_file = item.get("evidence", {}).get("file") if isinstance(item.get("evidence"), dict) else item.get("evidence_file")
-        if evidence_file:
-            evidence_path = (workspace_root / evidence_file).resolve() if not Path(evidence_file).is_absolute() else Path(evidence_file)
-            if evidence_path.exists():
-                try:
-                    evidence_text = evidence_path.read_text(encoding="utf-8")
-                    in_evidence = message_id in evidence_text.lower()
-                except Exception:
+        if moved:
+            evidence_file = item.get("evidence", {}).get("file") if isinstance(item.get("evidence"), dict) else item.get("evidence_file")
+            if evidence_file:
+                evidence_path = (workspace_root / evidence_file).resolve() if not Path(evidence_file).is_absolute() else Path(evidence_file)
+                if evidence_path.exists():
+                    try:
+                        evidence_text = evidence_path.read_text(encoding="utf-8")
+                        in_evidence = message_id in evidence_text.lower()
+                    except Exception:
+                        in_evidence = False
+                else:
                     in_evidence = False
-            else:
-                in_evidence = False
-        elif evidence_root.exists():
-            found_evidence = False
-            for markdown_file in evidence_root.glob("**/*.md"):
-                try:
-                    if message_id in markdown_file.read_text(encoding="utf-8").lower():
-                        found_evidence = True
-                        break
-                except Exception:
-                    pass
-            in_evidence = found_evidence
+            elif evidence_root.exists():
+                found_evidence = False
+                for markdown_file in evidence_root.glob("**/*.md"):
+                    try:
+                        if message_id in markdown_file.read_text(encoding="utf-8").lower():
+                            found_evidence = True
+                            break
+                    except Exception:
+                        pass
+                in_evidence = found_evidence
 
         folder_verified: bool | None = None
         current_envelope_id: str | None = None
