@@ -21,6 +21,10 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   konsumerspezifische Betriebsaufgaben entfernt (boku-user). Restwert als
   FR-25 (low priority, Multi-Batch-Pipelining) im Katalog; Details im Archiv
   (`docs/features/_archive.md`, Sektion Mail-Desk-Historik).
+- `FR-26` - Verify/Sent-Sync/Read-Eskalations-Härtung geplant (2026-09-27,
+  Befund Batch W40/1): keep-Items blockieren Verify-Completion (MD-V1),
+  Sent-Sync Watermark/count/fail-closed + Telemetrie (MD-SE1/SE2),
+  review_reason read_escalation_failed (MD-A5). Sequenziell A5 → SE1/SE2 → V1.
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der
