@@ -1141,6 +1141,28 @@ read-only per Property-Markern → `storage_not_writable`; fehl/mehrfach →
 Cloud-Atlas-Ausführung: Promotion, Journal und Refresh sind separate, noch nicht
 freigegebene Pakete.
 
+**Promotion-Writer (`promote_attachment`, selbes Modul):** für genau einen
+Preflight-freigegebenen Kandidaten wird der vollständige Preflight unmittelbar vor
+dem ersten Write erneut ausgeführt (das übergebene Envelope ist Evidenz, nicht
+Autorität). Das Journal liegt unter
+`data/mail-desk/attachment-promotions/<promotion_id>/promotion-journal.json`
+(Schema 1, atomar, hash-chained Phasen `approved`/`preflight_verified`/
+`temp_written`/`target_promoted`/`target_verified`/`source_cleanup_pending`/
+`completed` plus `failed`/`recovery_required`; `promotion_id` deterministisch aus
+`review_hash` + `candidate_hash`). Promotion ausschließlich per atomarem
+`os.link`-No-Clobber (kein `os.replace()`-Fallback, `EEXIST` honoriert); Temp-
+Sibling `O_EXCL` + `fsync` + Größe/SHA-256-Re-Verify; finales Ziel neu geöffnet
+und verifiziert. **Re-Verify-before-Cleanup:** jeder Resume-/Completed-Pfad
+verifiziert das reale Ziel erneut, bevor die Quarantänequelle berührt wird und
+bevor `promotion_completed` gemeldet wird; raced-same-Pfade reconcilieren das
+Journal bis `completed`; Inventar-Update atomar unter dem bestehenden
+Inventory-Lock (Root identisch zum Preflight-Verifier); Cleanup-Fehler →
+`source_cleanup_pending` (Promotion erfolgreich); Retry erzeugt nie eine zweite
+Zieldatei. Endzustände: `promotion_completed`, `already_present_verified`,
+`source_cleanup_pending`, `collision_detected`, `recovery_required`. Der
+Cloud-Atlas-Refresh (`filemap.json`/Mirror) bleibt einem separaten, gebundenen
+Handoff-Vertrag vorbehalten.
+
 ---
 
 ## Materialitäts-Gate und LLM-Handoff (`core/attachment_handoff.py`)

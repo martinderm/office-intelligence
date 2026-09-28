@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-09-MD-P1): 165 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 77 Testmodule; 1151 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-09-MD-P2): 166 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 78 Testmodule; 1225 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -802,3 +802,45 @@ Marker entscheiden) → APPROVE.
 
 **Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp1.py` (78, inkl.
 realer Windows-Junction-Regressionen ungemockt). **Suite 1151/1151 grün.**
+
+### 27.1 MD-P2 — Atomarer Storage-Writer (abgeschlossen)
+
+**Human Gate (User 2026-09-27):** Fortsetzung mit dem nächsten Paket nach
+MD-P1-APPROVE = ausdrückliche Freigabe für den mutierenden Writer-Pfad
+(Scopo nur MD-P2; MD-P3/Cloud-Atlas-Handoff bleibt separat gegatet).
+
+**Umsetzung (Writer-Abschnitt in `core/attachment_promotion.py`, MD-P1-API
+unverändert):** `promote_attachment()` führt unmittelbar vor dem ersten Write
+den vollständigen MD-P1-Preflight erneut aus (das übergebene
+Preflight-Envelope ist Evidenz, nicht Autorität — Hash + 5 Feldbindungen
+revalidiert). Journal `data/mail-desk/attachment-promotions/<promotion_id>/
+promotion-journal.json` Schema 1, atomar (Sibling-Temp + `fsync` +
+`os.replace`), hash-chained Phasen `approved` → `preflight_verified` →
+`temp_written` → `target_promoted` → `target_verified` → (`
+source_cleanup_pending`) → `completed` plus terminal `failed`/
+`recovery_required`; `promotion_id` deterministisch aus `review_hash` +
+`candidate_hash`. Promotion ausschließlich per atomarem `os.link`-No-Clobber
+(kein `os.replace()`-Fallback); Temp-Sibling `O_EXCL` + `fsync` + Größe/SHA-256
+re-verify; finales Ziel neu geöffnet + verifiziert + Parent-Flush wo portabel.
+**Re-Verify-before-Cleanup-Invariante:** jeder Resume-/Completed-Pfad verifiziert
+das reale Ziel (Größe + SHA-256 gegen journalgebundene Werte) BEVOR die
+Quarantänequelle entfernt wird und BEVOR `promotion_completed` gemeldet wird;
+raced-same-Pfad reconciliert das Journal bis `completed`; stale eigene
+Journal-Temps werden entfernt; Inventar-Update atomar unter dem bestehenden
+Inventory-Lock, Inventar-Root identisch zum MD-P1-Verifier; Cleanup-Fehler →
+`source_cleanup_pending` (Promotion erfolgreich). Endzustände ausschließlich
+`promotion_completed`/`already_present_verified`/`source_cleanup_pending`/
+`collision_detected`/`recovery_required`. Keine Filemap-/Katalog-/Mailbox-/
+Cloud-Atlas-Mutation (Write-Trap-getestet).
+
+**Review:** unabhängig, 1 dokumentierte Fix-Runde (Re-Verify-before-Cleanup
+nach Falsifikation „Abort bei `target_verified` + externes Löschen des Ziels
+→ Retry löscht Quelle"; raced-same-Journal-Reconciliation; 6 zusätzliche
+Pflichttest-Familien inkl. Cross-Volume/Junction-Race/ENOSPC;
+Inventar-Root-Symmetrie; Journal-Temp-Hygiene; 2 dokumentierte
+Test-Defekt-Korrekturen) → Re-Review verifiziert alle Fixes am realen Code,
+0 Code-Findings (2 Doku-Minors orchestratorseitig geschlossen).
+
+**Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp2.py` (74).
+**Suite 1225/1225 grün.** MD-P3 (Cloud-Atlas-Handoff + Mirror) bleibt
+Human-gated.

@@ -104,7 +104,79 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   über einen reinen Klassen-/Issuer-Probe gegen Maschinen-Receipts (fail-closed).
   Vor `MD-P2`/`MD-P3` bleibt die ausdrückliche Human-Freigabe für den mutierenden
   Cloud-Promotion-Pfad erforderlich. Commit-Kandidat:
-  `feat(mail-desk): add hash-bound approval and read-only promotion preflight (MD-P1)`.
+     `feat(mail-desk): add hash-bound approval and read-only promotion preflight (MD-P1)`.
+- `FR-09`/`MD-P2` — **Atomarer, idempotenter, no-clobber Storage-Writer implementiert
+  und unabhängig reviewt (2026-09-27, TDD red→green, 1 dokumentierte Fix-Runde,
+  Review APPROVE mit 2 orchestratorseitig geschlossenen Doku-Minors).** Neu:
+  `skills/mail-desk/scripts/core/attachment_promotion.py` (klar getrennter
+  Writer-Abschnitt; MD-P1-API unverändert) und das bindende Testmodul
+  `skills/mail-desk/tests/test_maildesk_attachment_promotion_mdp2.py` (74 Tests,
+  genuine Red gegen die fehlende Writer-API: `ImportError: cannot import name
+  'PromotionJournalError'`, Exit 1). Öffentliche Writer-Verträge:
+  `derive_promotion_id(review_hash, candidate_hash) -> str` (deterministisch 64-Hex),
+  `load_promotion_journal(journal_path, *, expected_promotion_id/candidate_hash/
+  review_hash/source_sha256/target_relative_path) -> dict` (fail-closed bei
+  beschädigtem/vertauschtem Journal, gebrochener Hash-Kette, unbekannter/
+  übersprungener/widersprüchlicher Phasenfolge) und `promote_attachment(candidate,
+  catalogs, preflight, *, receipt, filemap, workspace_root=None, decision=None,
+  lease_id=None, conversation_id=None, data_dir=None, current_time=None,
+  max_filemap_age_seconds=86400, _fault_hook=None) -> dict`. Zusätzlich exportiert:
+  `JOURNAL_PHASES`, `PROMOTION_RESULT_STATUSES`, `PromotionJournalError`. Journal:
+  `data/mail-desk/attachment-promotions/<promotion_id>/promotion-journal.json` Schema 1,
+  atomar (Sibling-Temp + `fsync` + `os.replace`), Phasen
+  `approved`/`preflight_verified`/`temp_written`/`target_promoted`/`target_verified`/
+  `source_cleanup_pending`/`completed` plus terminal `failed`/`recovery_required`; jede
+  Phase bindet vorherigen Entry-Hash, Quell-/Zielhash, relative Pfade, Zeitstempel und
+  begrenzten Fehlercode. Ergebnis: `attachment_promotion_result` Schema 1; zulässige
+  Endzustände ausschließlich `promotion_completed`, `already_present_verified`,
+  `source_cleanup_pending`, `collision_detected`, `recovery_required`. Trust-Boundaries:
+  das MD-P1-Preflight-Envelope ist Evidenz, nicht Autorität — sein `preflight_hash` und
+  alle gebundenen Felder werden revalidiert und der vollständige MD-P1-Preflight unmittelbar
+  vor dem ersten Write erneut ausgeführt (Drift/Lock/Receipt/Katalog/Filemap/Quelle
+  stoppen fail-closed); Ziel wird direkt vor dem Write erneut geprüft (gleicher Hash →
+  idempotent `already_present_verified`, anderer Hash → `collision_detected`, kein Write);
+  Promotion ausschließlich per atomarem `os.link`-No-Clobber (`EEXIST` honoriert), never
+  `os.replace()`-Fallback — unsupported FS stoppt fail-closed und entfernt nur die eigene
+  Temp-Datei; Temp-Sibling exklusiv erzeugt (`O_EXCL`), `fsync`, Größe/SHA-256 neu
+  verifiziert; finales Ziel wird neu geöffnet, Größe/SHA-256 geprüft, Parent wo portabel
+  geflusht; **Re-Verify-before-Cleanup-Invariante:** jeder Resume-/Completed-Journal-Pfad
+  öffnet das reale Ziel erneut und verifiziert Größe+SHA-256 gegen die journalgebundenen
+  `source_size_bytes`/`source_sha256`, BEVOR die Quarantänequelle berührt wird und BEVOR
+  `promotion_completed` gemeldet wird (fehlend → `recovery_required`, anderer Hash →
+  `collision_detected`, Quelle bleibt); Quarantänequelle erst nach durablem Zielnachweis
+  entfernt, Inventar atomar unter dem bestehenden Inventory-Lock (`_QuarantineInventoryLock`)
+  aktualisiert (Inventar-Root identisch zum MD-P1-Verifier, auch unter `data_dir`), andere
+  Run-Anhänge unberührt; Cleanup-Fehler → erfolgreiche Promotion mit
+  `source_cleanup_pending`; raced-same-Pfad (Crash zwischen `os.link` und Journal-Append)
+  reconciliert das Journal bis `completed` statt dauerhaft `in_progress`; stale eigene
+  Journal-Temp-Dateien werden bei Start/Resume entfernt; Retry aus jeder Phase ohne zweite
+  Zieldatei; keine Filemap-/Katalog-/Mailbox-/Cloud-Atlas-Mutation. Wiederverwendet (keine
+  Reimplementation): `compute_candidate_hash`, `compute_promotion_review_hash`/
+  `verify_promotion_approval_receipt`/`preflight_attachment_promotion`,
+  `_QuarantineInventoryLock`/`_load_quarantine_inventory`, `canonical_json_sha256`.
+  Nachweis: fokussierte Suite 74/74 grün, MD-P1-Modul 78/78 unverändert grün,
+  vollständige entdeckte Mail-Desk-Suite 1225/1225 grün (1151 Baseline + 74),
+  `compileall` und `git diff --check` sauber; Fault-Injection nach jeder Journalphase
+  (`_fault_hook`) beweist eindeutig reconcilierbare Zustände und Retry aus jeder Phase;
+  Pflichttests umfassen Cross-Volume-Quelle (EXDEV simuliert), realer Junction-/Reparse-
+  Race am Parent/Ziel (Windows, skip-if-unavailable), Abort nach
+  `source_cleanup_pending`, Retry aus `failed`-Phase, `fsync`/Close-Fehler-Injection
+  und literalses `errno.ENOSPC`.
+  **Fix-Runde (dokumentiert):** Review REQUEST_CHANGES (1 Major + 4 Minor) → Runde 1:
+  Re-Verify-before-Cleanup-Invariante (gelöschtes/beschädigtes Ziel nach Abort bei
+  `target_verified`/`source_cleanup_pending`/`completed` → keine Quell-Löschung, kein
+  `promotion_completed`), raced-same-Journal-Reconciliation, 6 zusätzliche
+  Pflichttest-Familien, Inventar-Root-Symmetrie, Journal-Temp-Hygiene. 2 dokumentierte
+  Test-Defekt-Korrekturen innerhalb der TDD-Runde (8.3-Short-Path-Mismatch im
+  Temp-Detektor; fd-Wiederverwendung im fsync-Injector — mechanisch, keine
+  Produktionsannahme abgeschwächt). Re-Review: alle 5 Fixes am realen Code verifiziert
+  (Falsifikation inkl. Lock-Forging- und Journal-Tampering-Versuche), 0 Code-Findings;
+  2 Doku-Sync-Minors (dieser Entry + System Maps) wurden orchestratorseitig im selben
+  Arbeitsschritt geschlossen. Residuen (nicht blockierend): TOCTOU-Fenster zwischen
+  Re-Verify und Quell-Unlock (external racer, spec-konform begrenzt); Journal bleibt bei
+  externem Same-Hash-Target vor Write deterministisch `in_progress` mit sicherem
+  `already_present_verified`-Retry. Commit-Kandidat:
+  `feat(mail-desk): add atomic no-clobber storage writer (MD-P2)`.
 - `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) und MD-E2 (`MD-E2-T01`–`T04`) sind vollständig
   implementiert, reviewt, verifiziert und paketabgenommen; `FR-15` ist geschlossen.** Der staged
   `attachment_evaluation`-Vertrag

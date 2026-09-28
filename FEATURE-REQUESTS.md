@@ -31,7 +31,7 @@ trägt keinen Content.
 
 | ID | Status | Erledigter Teil | Nächstes Paket | Record |
 | --- | --- | --- | --- | --- |
-| `FR-09` | 🔄 MD-P1 abgeschlossen; MD-P2 Human Gate offen | Read-only Promotion-Preflight + hashgebundene Approval-Receipts implementiert (78 Tests, Suite 1151/1151) | Nach ausdrücklicher Freigabe: `MD-P2` | [`docs/features/FR-09.md`](docs/features/FR-09.md) |
+| `FR-09` | 🔄 MD-P1+MD-P2 abgeschlossen; MD-P3 Human Gate offen | Read-only Promotion-Preflight + Approval-Receipts + atomarer Storage-Writer implementiert (152 Fokustests, Suite 1225/1225) | Nach ausdrücklicher Freigabe: `MD-P3` | [`docs/features/FR-09.md`](docs/features/FR-09.md) |
 | `FR-10` | ⬜ geplant | Temporäre manifestgebundene Host-Ausführung dokumentiert | `MD-G1` | [`docs/features/FR-10.md`](docs/features/FR-10.md) |
 | `FR-12` | ⬜ geplant | Identifikation des 2.200-Zeilen-Monolithen `convert_cloud_docs.py` in System Map | `CA-M1` | [`docs/features/FR-12.md`](docs/features/FR-12.md) |
 | `FR-25` | ⬜ geplant (low) | Aus TODO-Historik disponiert: Chunk-Modus für historische Großaufarbeitung (total_count/chunk_size, Index-Sicherung je Chunk) | `MD-P1`/`MD-P2` | [`docs/features/FR-25.md`](docs/features/FR-25.md) |

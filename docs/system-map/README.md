@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (165 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
+│ (166 Dateien)│       │ (28 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -110,8 +110,11 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    exakt einen `attachment_filing_candidate` (Review-Payload: Candidate-Hash,
    Quarantäne-Identität, Storage/`scan_dir`/Ziel, Filemap-Snapshot-Hash) und
    prüft read-only fail-closed mit 13 Stopcodes; null Mutationen auf jedem Pfad.
-   Promotion-Writer und Cloud-Atlas-Handoff bleiben MD-P2/MD-P3 (Human Gate für
-   den mutierenden Pfad separat).
+   **Atomarer Storage-Writer (MD-P2):** `promote_attachment()` im selben Modul —
+   frischer MD-P1-Preflight vor dem ersten Write, hash-chain-Journal unter
+   `data/mail-desk/attachment-promotions/`, atomarer `os.link`-No-Clobber,
+   Re-Verify-before-Cleanup-Invariante, Inventory-Cleanup unter bestehendem
+   Lock; Cloud-Atlas-Handoff bleibt MD-P3 (Human Gate separat).
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---
