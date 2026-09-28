@@ -425,14 +425,24 @@ class PromotionIdempotencyTests(PromotionTestCase):
             second_stat = target.stat()
         self.assertEqual(first_stat.st_ino, second_stat.st_ino)
 
-    def test_already_present_writes_no_journal(self) -> None:
+    def test_already_present_writes_journal_trust_anchor(self) -> None:
+        # MD-P3 fix round 1: an already-present verification is journaled with the
+        # same hash-chained discipline so the Cloud-Atlas handoff has a trust anchor.
         with tempfile.TemporaryDirectory() as tmp:
             env = build_promotion_env(tmp, target_state="already_present")
             result = self.promote(env)
             journals = list((env.ws / PROMOTION_DIR).glob(f"*/{JOURNAL_FILENAME}"))
+            journal = json.loads(journals[0].read_text(encoding="utf-8"))
+            phases = [entry["phase"] for entry in journal["phases"]]
         self.assertEqual("already_present_verified", result["status"])
-        self.assertEqual([], journals)
-        self.assertIsNone(result["journal_relative_path"])
+        self.assertEqual(1, len(journals))
+        self.assertEqual(
+            f"data/mail-desk/attachment-promotions/{result['promotion_id']}/{JOURNAL_FILENAME}",
+            result["journal_relative_path"],
+        )
+        self.assertEqual(result["journal_hash"], journal["journal_hash"])
+        self.assertIs(True, journal["already_present"])
+        self.assertEqual(["approved", "preflight_verified", "completed"], phases)
 
 
 class PromotionCollisionTests(PromotionTestCase):

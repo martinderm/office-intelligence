@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-27/FR-09-MD-P2): 166 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 78 Testmodule; 1225 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-28/FR-09-MD-P3): 166 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 79 Testmodule; 1261 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -842,5 +842,44 @@ Test-Defekt-Korrekturen) → Re-Review verifiziert alle Fixes am realen Code,
 0 Code-Findings (2 Doku-Minors orchestratorseitig geschlossen).
 
 **Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp2.py` (74).
-**Suite 1225/1225 grün.** MD-P3 (Cloud-Atlas-Handoff + Mirror) bleibt
-Human-gated.
+**Suite 1225/1225 grün.**
+
+### 27.2 MD-P3 — Cloud-Atlas-Handoff und gebundener Storage-Refresh (abgeschlossen)
+
+**Human Gate (User 2026-09-28):** Fortsetzung mit dem nächsten Paket nach
+MD-P2-APPROVE = Freigabe für den Cloud-Atlas-Handoff-Pfad. FR-09 ist damit
+vollständig umgesetzt; die reale Promotion bleibt an die Review-Receipts
+gebunden.
+
+**Umsetzung:** `build_cloud_atlas_refresh_handoff()` erzeugt das
+`cloud_atlas_refresh_handoff` Schema 1 ausschließlich aus einem revalidierten
+MD-P2-Ergebnis (`promotion_completed`/`already_present_verified`) mit
+revalidiertem Journal als Trust-Anchor (`journal_hash`, `preflight_hash` und
+journalgebundene `subtopic_id`-Herleitung über `_bound_subtopic_id`; der
+Writer persistiert die decision-gebundene Subtopic im Journal).
+`compose_promotion_outcome()` koppelt die Zustände
+(`promotion_completed_refresh_pending` bei fehlendem Adapter/Fehler/Timeout;
+`refresh_completed` nach Verify; Journal-/Zieldrift → `recovery_required`;
+Retry nur Refresh + Verify, nie MD-P2). Neuer schmal-Consumer
+`cloud-atlas/scripts/promotion_refresh.py` (`consume_promotion_refresh_handoff`):
+eigener Lock (allow_legacy=False) → Handoff-Hash pop+recompute → Journal-
+Revalidierung inkl. `subtopic_id`-/Status-Cross-Check (`journal_drift` deny
+vor Engine) → reale Zieldatei gegen SHA-256/Groesse → nur der exakt
+kataloggebundene Storage (synthesized-Fallback-Storage → `storage_unbound`,
+katalogfremde Entity erreicht die Engine nie) → genau ein gebundener Storage-
+Scan über die kanonischen Writer (`gen_filemap`/`convert_cloud_docs`,
+`last_synced_at`-Katalogpflege unterdrückt) → Post-Refresh-Verify: neue
+Filemap muss exakt den Zielpfad mit erwartetem Hash enthalten.
+`promotion_completed_refresh_pending` ändert die verifizierte Promotion nie.
+
+**Review:** unabhängig, 3 dokumentierte Fix-Runden (Runde 1: journallose
+Handoffs abgeschafft — Journal-Anker beidseitig + `already_present` wird
+jetzt mitgejournaled + Catalog-Origin-Proof; Runde 2: failed@temp_written-
+Retry reconciliert statt `completed`-an-`failed` + `subtopic_id` aus Journal;
+Runde 3: Consumer-Cross-Check subtopic_id/status gegen Journal-Anchor) →
+APPROVE (0 actionable). 2 dokumentierte Test-Vertragsrotationen
+(mdp2 already_present-Journal-Vertrag; FD-Details in Progress).
+
+**Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp3.py` (36),
+`cloud-atlas tests/test_promotion_refresh.py` (29). **Suiten 1261/1261
+(mail-desk) + 167/167 (cloud-atlas) grün.**

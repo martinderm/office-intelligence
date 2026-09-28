@@ -1160,8 +1160,15 @@ Inventory-Lock (Root identisch zum Preflight-Verifier); Cleanup-Fehler →
 `source_cleanup_pending` (Promotion erfolgreich); Retry erzeugt nie eine zweite
 Zieldatei. Endzustände: `promotion_completed`, `already_present_verified`,
 `source_cleanup_pending`, `collision_detected`, `recovery_required`. Der
-Cloud-Atlas-Refresh (`filemap.json`/Mirror) bleibt einem separaten, gebundenen
-Handoff-Vertrag vorbehalten.
+Cloud-Atlas-Refresh (`filemap.json`/Mirror) läuft über den gebundenen
+`cloud_atlas_refresh_handoff` an den schmalen Cloud-Atlas-Consumer
+`promotion_refresh.py`: eigener Lock, Journal-Revalidierung als Trust-Anchor
+(inkl. `subtopic_id`-/Status-Cross-Check), reale Zieldatei gegen SHA-256/
+Größe, nur der exakt kataloggebundene Storage (synthesized Fallback-Storage →
+`storage_unbound`), genau ein gebundener Storage-Scan über die kanonischen
+Writer, Post-Refresh-Verify (Zielpfad mit erwartetem Hash in der neuen
+Filemap). Fehlender Adapter/Fehler → `promotion_completed_refresh_pending`
+(Promotion unverändert); Retry nur Refresh + Verify, nie Promotion.
 
 ---
 

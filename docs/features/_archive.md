@@ -30,6 +30,7 @@ Codeverträge nachvollziehbar; das Archiv ist kein zweiter aktiver Backlog.
 | `FR-22` | ✅ | Identity-freier Desk-Signals-Fallback: neutraler leerer Fallback + owner-generierte Trigger (Schema 2 mit Schema-1-Legacy), sent_indexer/internal-domain/Spam-Gegenindikatoren → Katalog bzw. entfernt, `spam_sender_allowlist`-Gate | MD-ID1–ID4 im Kernel-Loop (12 Dispatches mit Red-Gates), 1 Fix-Runde Validator-Owner-Gate; 1015 Tests grün |
 | `FR-24` | ✅ 2026-09-24 | Pflicht-Skill-Routing für Batch-Läufe: SKILL.md-Description routet Batch-Work nicht mehr weg; kanonischer Pflicht-Ladeblock + Consumer-Migrationsbaustein im Record | MD-R9 im Kernel-Loop (Doku-Contract-Test, 5 Tests); 1037 Tests grün |
 | `FR-26` | ✅ 2026-09-27 | Verify-Evidenz-Scope (keep-Items ausgenommen, Completion konsistent), Sent-Sync Watermark/count/fail-closed/Telemetrie-Trennung, review_reason read_escalation_failed | MD-V1/SE1/SE2/A5 im Kernel-Loop (9 Tests), 2 Fix-Runden; 1073 Tests grün |
+| `FR-09` | ✅ 2026-09-28 | Human-gated Cloud-Promotion: hashgebundene Approval-Receipts + read-only Preflight (MD-P1), atomarer no-clobber Storage-Writer mit Re-Verify-before-Cleanup (MD-P2), Cloud-Atlas-Handoff + kataloggebundener Refresh über schmalen Consumer (MD-P3) | MD-P1/P2/P3 im Kernel-Loop (78+74+36+29 Tests), 6 Fix-Runden + 1 Test-Vertragsrotation, Reviews APPROVE; Suiten 1261 + 167 grün |
 | `FR-23` | ✅ 2026-09-24 | Workspace-Lock-Delegation an Runner-Subprozesse: `--workspace-lease-id`/`--workspace-conversation-id` reichen die Agent-Lease an die Anhang-Bewertung weiter; fremde/abgelaufene Leases bleiben fail-closed | MD-L1 im Kernel-Loop (8 Tests, fail-closed-Regression gepinnt); 1045 Tests grün |
 | `FR-19` | ✅ 2026-09-24 | Reconcile-Repair-Härtung: `apply_local_repairs` korrigiert stale Index-/Log-Records nach frischer Verifikation (append-only `reconciled`-Eintrag, idempotent); `runner-progress.json` wird im Repair-Pfad deterministisch nachgeführt | MD-RC1 im Kernel-Loop (6 Tests, Env-9428-Fall gepinnt), 1 Fix-Runde (Tracker-Edge); 1051 Tests grün |
 | `FR-20` | ✅ 2026-09-24 | Anhang-Quota Inline vs. Datei: getrennte Quoten (5 Datei / 3 Inline), neuer transparenter Reason `skipped_inline_limit`; echte Anhänge werden nie mehr durch Inline-Bilder verdrängt | MD-A3 im Kernel-Loop (5 Tests, Env-9438-Fall: drei Zustände je Teilklasse), 1 Fix-Runde (is_inline-Typvalidierung); 1056 Tests grün |
@@ -2048,6 +2049,51 @@ trug keinen `review_reason`.
 - Unabhängiges Review: 2 Major (nicht-hermetischer Zeit-Test; Hint-Lüge vor
   Count-Bound) + 1 Minor (Manifest-Filename) — alle als dokumentierte Fix-
   Runde 2 behoben.
+
+---
+
+## FR-09 — Human-gated Cloud-Promotion
+
+**Status:** ✅ Abgeschlossen (2026-09-28; MD-P1/MD-P2/MD-P3 im Kernel-Loop mit
+Subagenten, unabhängige Reviews mit insgesamt 6 dokumentierten Fix-Runden und
+einer dokumentierten Test-Vertragsrotation, jeweils APPROVE). Der
+`attachment_filing_candidate` kann nach Human-Approval-Receipt voll automatisiert
+promotet werden: read-only Preflight (MD-P1), atomarer no-clobber Storage-Writer
+mit hash-chained Journal (MD-P2) und gebundener Cloud-Atlas-Refresh über den
+schmalen Consumer `promotion_refresh.py` (MD-P3). Jede Promotion braucht
+Workspace-Lock, frische Storage-/Filemap-Preconditions und eine hashgebundene
+Human-Receipt; reale Promotionen im produktiven Betrieb bleiben an die
+Receipt-Ausstellung durch den Menschen gebunden.
+
+### Kernergebnis
+
+- **MD-P1 — Approval-Receipts + read-only Preflight:** kanonischer Review-Payload
+  (Candidate-Hash + Quarantäne-Identität + Storage/`scan_dir`/Ziel +
+  Filemap-Snapshot-Hash), Schema-1-Receipts mit injizierbarer Uhr, 13 Stopcodes,
+  null Mutationen auf jedem Pfad (Write-Trap-getestet); reale Junction-Regressionen
+  (ungemockt) pinnen den Reparse-Schutz innerhalb der `scan_dir`-Subtree; Storage-
+  Gate per Property-Markern. 78 Fokustests.
+- **MD-P2 — Atomarer Storage-Writer:** frischer MD-P1-Preflight vor dem ersten
+  Write; hash-chain-Journal unter `data/mail-desk/attachment-promotions/`;
+  `os.link`-No-Clobber (kein `os.replace`-Fallback); Re-Verify-before-Cleanup-
+  Invariante (Resume/Completed-Pfade verifizieren das reale Ziel vor
+  Quell-Löschung); `already_present` wird mitgejournaled (Trust-Anchor); raced-
+  same-Reconciliation; Inventar-Cleanup unter bestehendem Lock. 74 Fokustests.
+- **MD-P3 — Cloud-Atlas-Handoff + gebundener Refresh:** Journal-Anker beidseitig
+  (journallose Handoffs fail-closed abgeschafft); Catalog-Origin-Proof
+  (synthesized Fallback-Storage → `storage_unbound`, katalogfremde Entity erreicht
+  die Engine nie); failed@temp_written-Retry reconciliert; `subtopic_id` aus dem
+  Journal hergeleitet; Consumer-Cross-Check subtopic_id/status; nur der exakt
+  kataloggebundene Storage, kanonische Writer, Post-Refresh-Verify;
+  `promotion_completed_refresh_pending` ändert die verifizierte Promotion nie.
+  36 + 29 Fokustests.
+- **Verifikation:** Suiten 1261/1261 (mail-desk) + 167/167 (cloud-atlas) grün;
+  hermetischer End-to-End Candidate → Approval → MD-P1 → MD-P2 → Handoff →
+  Cloud-Atlas-Verify; Refresh-Retry beweist null zweite Promotion.
+- **Residuen (nicht blockierend):** TOCTOU-Fenster zwischen Re-Verify und
+  Quell-Unlock bzw. Consumer-Re-Hash und Engine-Scan (external racer,
+  spec-konform begrenzt); vollständiges Journal-Forging außerhalb des
+  unsigned-Hash-Trust-Modells (dokumentiert).
 
 ---
 

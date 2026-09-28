@@ -922,7 +922,10 @@ def preflight_attachment_promotion(
 #   ``data/mail-desk/attachment-promotions/<promotion_id>/promotion-journal.json``
 #   with a hash chain binding the previous journal hash, the source/target hashes,
 #   the relative paths, a timestamp and a bounded failure code.  The journal and the
-#   real target are reconciled before any retry writes.
+#   real target are reconciled before any retry writes.  An
+#   ``already_present_verified`` outcome is journaled with the same discipline
+#   (``approved -> preflight_verified -> completed`` plus the ``already_present``
+#   annotation), so every success carries a trust anchor for the MD-P3 handoff.
 
 PROMOTION_RESULT_KIND = "attachment_promotion_result"
 PROMOTION_JOURNAL_KIND = "attachment_promotion_journal"
@@ -975,10 +978,13 @@ JOURNAL_PHASES: tuple[str, ...] = _PHASE_SEQUENCE + (PHASE_FAILED, PHASE_RECOVER
 
 #: Allowed success-chain transitions.  A phase may only advance to its documented
 #: successor (``target_verified`` may either record a cleanup failure or complete).
+#: ``preflight_verified`` may also complete directly for an ``already_present``
+#: verification, which journals no transfer phases but reaches ``completed`` with the
+#: ``already_present`` annotation.
 _ALLOWED_TRANSITIONS: dict[str | None, frozenset[str]] = {
     None: frozenset({PHASE_APPROVED}),
     PHASE_APPROVED: frozenset({PHASE_PREFLIGHT_VERIFIED}),
-    PHASE_PREFLIGHT_VERIFIED: frozenset({PHASE_TEMP_WRITTEN}),
+    PHASE_PREFLIGHT_VERIFIED: frozenset({PHASE_TEMP_WRITTEN, PHASE_COMPLETED}),
     PHASE_TEMP_WRITTEN: frozenset({PHASE_TARGET_PROMOTED}),
     PHASE_TARGET_PROMOTED: frozenset({PHASE_TARGET_VERIFIED}),
     PHASE_TARGET_VERIFIED: frozenset({PHASE_SOURCE_CLEANUP_PENDING, PHASE_COMPLETED}),
@@ -1265,6 +1271,36 @@ def _write_journal_atomic(journal_path: Path, journal: dict[str, Any]) -> None:
         raise
 
 
+def _bound_subtopic_id(decision: Mapping[str, Any] | None) -> str | None:
+    """Derive the catalog-bound subtopic id from a filing decision (additive MD-P3).
+
+    ``build_cloud_atlas_refresh_handoff`` needs the subtopic id to let the Cloud-Atlas
+    consumer resolve a *subtopic-owned* storage, but the canonical MD-A5 candidate never
+    carries it (its ``filemap_evidence`` records only scope/entity/storage/scan_dir).
+    The subtopic exists solely in the decision that MD-A5 resolved through
+    :func:`resolve_catalog_storage`, so the writer persists it into the journal -- the
+    candidate's bound decision context -- and the handoff reads it from there.  This
+    mirrors ``resolve_catalog_storage``'s subtopic resolution exactly:
+
+    * ``kind: "topic"`` reads the ``subtopic`` scalar;
+    * legacy ``kind: "subtopic"`` binds the entity id as the subtopic when a parent
+      ``topic`` scalar is present, otherwise the ``subtopic`` scalar;
+    * legacy ``kind: "event"`` reads the ``subtopic`` scalar.
+
+    Returns ``None`` for project scope or when no non-empty subtopic is bound.
+    """
+    if not isinstance(decision, Mapping):
+        return None
+    raw_kind = str(decision.get("kind") or "").strip().lower()
+    if raw_kind not in ("topic", "subtopic", "event"):
+        return None
+    subtopic = decision.get("subtopic")
+    if raw_kind == "subtopic" and str(decision.get("topic") or "").strip():
+        subtopic = decision.get("id")
+    text = str(subtopic or "").strip()
+    return text or None
+
+
 def _new_journal(
     *,
     candidate_hash: str,
@@ -1278,6 +1314,7 @@ def _new_journal(
     run_id: str,
     message_id: str,
     filename: str,
+    subtopic_id: str | None = None,
 ) -> dict[str, Any]:
     now = utc_now_iso()
     return {
@@ -1293,6 +1330,7 @@ def _new_journal(
         "source_relative_path": source_relative_path,
         "target_relative_path": target_relative_path,
         "storage_id": storage_id,
+        "subtopic_id": subtopic_id,
         "run_id": run_id,
         "source_message_id": normalize_message_id(message_id),
         "source_filename": filename,
@@ -1756,6 +1794,10 @@ def promote_attachment(
 
     # -- 2. Derive journal identity and reconcile any existing journal --
     promotion_id = derive_promotion_id(review_hash, candidate_hash)
+    # The candidate does not carry the subtopic; the decision bound to it does.  Persist
+    # it into the journal so the MD-P3 handoff can reach subtopic-owned storages even
+    # though build_cloud_atlas_refresh_handoff only receives the candidate.
+    bound_subtopic = _bound_subtopic_id(decision)
     journal_path = base_data / PROMOTION_DIR_NAME / promotion_id / JOURNAL_FILENAME
     # Crash hygiene: remove this promotion's own orphaned journal temp siblings from
     # an earlier interrupted _write_journal_atomic before starting or resuming.
@@ -1788,6 +1830,10 @@ def promote_attachment(
                     storage_id=storage_id, target_relative_path=target_rel,
                     source_sha256=source_sha, expected_size=expected_size,
                 )
+            if journal.get("already_present") is True:
+                return _result_from_journal(ws, journal_path, journal,
+                                            status=STATUS_ALREADY_PRESENT_VERIFIED,
+                                            reason="target_already_present")
             return _result_from_journal(ws, journal_path, journal,
                                         status=STATUS_PROMOTION_COMPLETED,
                                         reason="promotion_already_completed")
@@ -1842,14 +1888,42 @@ def promote_attachment(
                 return recovery(CODE_PREFLIGHT_DRIFT, promotion_id=promotion_id,
                                 candidate_hash=candidate_hash, review_hash=review_hash)
         if (fresh_status == STATUS_ALREADY_PRESENT
+                and (journal is None or journal.get("phase") != PHASE_FAILED)
                 and resume_rank <= _PHASE_RANK[PHASE_PREFLIGHT_VERIFIED]):
-            return _build_result(
+            # An already-present verification is journaled like any other success so
+            # the Cloud-Atlas handoff always has a hash-chained trust anchor.  The
+            # phases are approved -> preflight_verified -> completed with the
+            # already_present annotation; the completed retry path maps that
+            # annotation back to already_present_verified.  The quarantine source is
+            # never removed (the target already holds the verified bytes).  This path
+            # is only reachable when the loaded journal's last entry is NOT failed: a
+            # terminal failed journal must first retry the failed phase (appending
+            # completed directly would make the journal permanently contradictory).
+            preflight_hash = str(fresh.get("preflight_hash") or declared_hash)
+            if journal is None:
+                journal = _new_journal(
+                    candidate_hash=candidate_hash, review_hash=review_hash,
+                    preflight_hash=preflight_hash, source_sha256=source_sha,
+                    source_size_bytes=expected_size, source_relative_path=source_rel,
+                    target_relative_path=target_rel, storage_id=storage_id, run_id=run_id,
+                    message_id=message_id, filename=filename, subtopic_id=bound_subtopic,
+                )
+                try:
+                    journal["already_present"] = True
+                    journal = _append_phase(journal_path, journal, PHASE_APPROVED, _fault_hook)
+                except OSError:
+                    return recovery(CODE_TEMP_WRITE_FAILED, promotion_id=promotion_id,
+                                    candidate_hash=candidate_hash, review_hash=review_hash)
+            else:
+                journal["already_present"] = True
+            if resume_rank < _PHASE_RANK[PHASE_PREFLIGHT_VERIFIED]:
+                journal = _append_phase(
+                    journal_path, journal, PHASE_PREFLIGHT_VERIFIED, _fault_hook
+                )
+            journal = _append_phase(journal_path, journal, PHASE_COMPLETED, _fault_hook)
+            return _result_from_journal(
+                ws, journal_path, journal,
                 status=STATUS_ALREADY_PRESENT_VERIFIED, reason="target_already_present",
-                error_code=None, phase=None, promotion_id=promotion_id,
-                candidate_hash=candidate_hash, review_hash=review_hash,
-                preflight_hash=str(fresh.get("preflight_hash") or declared_hash),
-                storage_id=storage_id, target_relative_path=target_rel,
-                target_sha256=source_sha, target_size_bytes=expected_size,
             )
         if fresh_status == STATUS_READY and resume_rank == 0:
             preflight_hash = str(fresh.get("preflight_hash") or declared_hash)
@@ -1861,7 +1935,7 @@ def promote_attachment(
             preflight_hash=preflight_hash, source_sha256=source_sha,
             source_size_bytes=expected_size, source_relative_path=source_rel,
             target_relative_path=target_rel, storage_id=storage_id, run_id=run_id,
-            message_id=message_id, filename=filename,
+            message_id=message_id, filename=filename, subtopic_id=bound_subtopic,
         )
         try:
             journal = _append_phase(journal_path, journal, PHASE_APPROVED, _fault_hook)
@@ -2003,6 +2077,537 @@ def promote_attachment(
                                 reason="promotion_completed")
 
 
+# ==============================================================================
+# Handoff: Cloud-Atlas refresh handoff + outcome coupling (FR-09 / MD-P3)
+# ==============================================================================
+#
+# This final, clearly separated section is the only MD-P3 surface.  It neither
+# changes nor reuses any MD-P1/MD-P2 behaviour: it consumes an already verified
+# ``attachment_promotion_result`` and produces the declarative
+# ``cloud_atlas_refresh_handoff`` Schema 1 for Cloud-Atlas, plus the combined
+# outcome that couples the verified promotion to the receiving refresh.
+#
+# Trust boundaries (read this before relying on the handoff):
+#
+# * The handoff may only be derived from a canonically revalidated MD-P2 result
+#   whose status is ``promotion_completed`` or ``already_present_verified``.  Both
+#   statuses require an intact promotion journal (the trust anchor); a journal-less
+#   result is rejected fail-closed.  The result hash, the promotion journal
+#   (``load_promotion_journal``), the recorded ``preflight_hash``, the recomputed
+#   candidate hash, the recomputed review payload (which binds the previous filemap
+#   snapshot) and every storage/path/size binding must all agree; any drift raises
+#   ``PromotionHandoffError`` fail-closed.
+# * The handoff is pure bounded metadata: no absolute paths, no mail/attachment
+#   text, no descriptions and no receiving instructions are copied.  Cloud-Atlas
+#   receives an exact storage/path/hash binding, never an authorization.
+# * ``compose_promotion_outcome`` never mutates and never re-runs MD-P2.  A missing
+#   adapter, refresh error, timeout or verify error leaves the verified promotion
+#   untouched (``promotion_completed_refresh_pending``); only a verified refresh
+#   yields ``promotion_completed``/``refresh_completed``; journal/target drift stops
+#   as ``recovery_required``.
+
+CLOUD_ATLAS_REFRESH_HANDOFF_KIND = "cloud_atlas_refresh_handoff"
+CLOUD_ATLAS_REFRESH_HANDOFF_RECEIVER = "cloud-atlas"
+CLOUD_ATLAS_REFRESH_HANDOFF_OPERATION = "refresh_filemap"
+CLOUD_ATLAS_REFRESH_HANDOFF_SCHEMA_VERSION = 1
+
+#: The ordered steps the receiving Cloud-Atlas consumer must perform itself.
+REQUIRED_RECEIVING_STEPS: tuple[str, ...] = (
+    "verify_cloud_atlas_lock",
+    "revalidate_handoff_hash",
+    "revalidate_promotion_journal",
+    "reverify_real_target",
+    "refresh_bound_storage",
+    "verify_filemap_entry",
+)
+
+#: Steps the receiving consumer is explicitly forbidden to perform automatically.
+PROHIBITED_AUTOMATIC_STEPS: tuple[str, ...] = (
+    "re_run_promotion",
+    "mailbox_mutation",
+    "catalog_mutation",
+    "workspace_wide_scan",
+)
+
+#: The Cloud-Atlas refresh result kind and its closed status vocabulary.
+REFRESH_RESULT_KIND = "cloud_atlas_refresh_result"
+REFRESH_STATUS_COMPLETED = "refresh_completed"
+REFRESH_STATUS_PENDING = "refresh_pending"
+REFRESH_STATUS_DENIED = "refresh_denied"
+REFRESH_RESULT_STATUSES: frozenset[str] = frozenset(
+    {REFRESH_STATUS_COMPLETED, REFRESH_STATUS_PENDING, REFRESH_STATUS_DENIED}
+)
+
+#: Combined promotion outcome when the local promotion succeeded but the receiving
+#: Cloud-Atlas refresh has not (yet) been verified.
+STATUS_PROMOTION_COMPLETED_REFRESH_PENDING = "promotion_completed_refresh_pending"
+
+#: Refresh denials that indicate real drift and therefore stop as recovery_required.
+_HANDOFF_DRIFT_REASONS: frozenset[str] = frozenset(
+    {"journal_drift", "target_drift", "handoff_drift"}
+)
+
+_HANDOFF_KEY_ORDER: tuple[str, ...] = (
+    "schema_version",
+    "kind",
+    "receiver",
+    "operation",
+    "promotion_id",
+    "journal_relative_path",
+    "journal_hash",
+    "candidate_hash",
+    "review_hash",
+    "preflight_hash",
+    "scope",
+    "entity_id",
+    "subtopic_id",
+    "storage_id",
+    "scan_dir",
+    "target_relative_path",
+    "target_sha256",
+    "target_size_bytes",
+    "filemap_snapshot_hash",
+    "required_receiving_steps",
+    "prohibited_automatic_steps",
+    "handoff_hash",
+)
+
+
+class PromotionHandoffError(ValueError):
+    """Raised when an MD-P2 result cannot yield a canonical Cloud-Atlas handoff."""
+
+
+def _require_handoff_text(value: Any, field: str) -> str:
+    if not _is_nonempty_text(value):
+        raise PromotionHandoffError(f"Cloud-Atlas refresh handoff requires a non-empty '{field}'.")
+    return str(value).strip()
+
+
+def _require_handoff_sha256(value: Any, field: str) -> str:
+    text = str(value or "").strip().lower()
+    if not _is_sha256_hex(text):
+        raise PromotionHandoffError(f"Cloud-Atlas refresh handoff '{field}' is not 64-hex.")
+    return text
+
+
+def _verified_promotion_result(promotion_result: Any) -> dict[str, Any]:
+    """Validate an ``attachment_promotion_result`` and return a shallow copy."""
+    if not isinstance(promotion_result, Mapping):
+        raise PromotionHandoffError("Cloud-Atlas refresh handoff requires a promotion result object.")
+    if promotion_result.get("schema_version") != SCHEMA_VERSION:
+        raise PromotionHandoffError("Unsupported promotion result schema_version.")
+    if promotion_result.get("kind") != PROMOTION_RESULT_KIND:
+        raise PromotionHandoffError("Wrong promotion result kind.")
+    declared = str(promotion_result.get("result_hash") or "").strip().lower()
+    body = {key: value for key, value in promotion_result.items() if key != "result_hash"}
+    if not _is_sha256_hex(declared) or declared != canonical_json_sha256(body):
+        raise PromotionHandoffError("Promotion result_hash does not recompute.")
+    return dict(promotion_result)
+
+
+def _build_outcome_result(
+    promotion_result: Mapping[str, Any],
+    *,
+    status: str,
+    reason: str,
+    error_code: str | None,
+    refresh_status: str | None = None,
+    refresh_result_hash: str | None = None,
+    handoff_hash: str | None = None,
+) -> dict[str, Any]:
+    """Return the deterministic combined ``attachment_promotion_result`` Schema 1."""
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": PROMOTION_RESULT_KIND,
+        "status": status,
+        "reason": reason,
+        "error_code": error_code,
+        "phase": promotion_result.get("phase"),
+        "promotion_id": promotion_result.get("promotion_id"),
+        "candidate_hash": promotion_result.get("candidate_hash"),
+        "review_hash": promotion_result.get("review_hash"),
+        "preflight_hash": promotion_result.get("preflight_hash"),
+        "storage_id": promotion_result.get("storage_id"),
+        "target_relative_path": promotion_result.get("target_relative_path"),
+        "target_sha256": promotion_result.get("target_sha256"),
+        "target_size_bytes": promotion_result.get("target_size_bytes"),
+        "journal_relative_path": promotion_result.get("journal_relative_path"),
+        "journal_hash": promotion_result.get("journal_hash"),
+        "handoff_hash": handoff_hash,
+        "refresh_status": refresh_status,
+        "refresh_result_hash": refresh_result_hash,
+    }
+    payload["result_hash"] = canonical_json_sha256(payload)
+    return payload
+
+
+def build_cloud_atlas_refresh_handoff(
+    promotion_result: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    filemap: Mapping[str, Any],
+    *,
+    workspace_root: Path | str | None = None,
+    data_dir: Path | None = None,
+    journal_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Derive the ``cloud_atlas_refresh_handoff`` Schema 1 from a verified MD-P2 result.
+
+    Only ``promotion_completed`` and ``already_present_verified`` are accepted, and
+    *both* require an intact promotion journal: the journal is the trust anchor, so a
+    journal-less result is rejected fail-closed.  The journal is revalidated through
+    :func:`load_promotion_journal`, the candidate hash and review payload are
+    recomputed and every result/journal/candidate/storage/path/size binding -- including
+    the recorded ``preflight_hash`` and the ``already_present`` annotation -- is
+    cross-checked.  Any drift raises :class:`PromotionHandoffError`.  No filesystem
+    artifact is written.
+    """
+    result = _verified_promotion_result(promotion_result)
+    status = str(result.get("status") or "")
+    if status not in (STATUS_PROMOTION_COMPLETED, STATUS_ALREADY_PRESENT_VERIFIED):
+        raise PromotionHandoffError(
+            f"Cloud-Atlas refresh handoff requires a verified promotion, got {status!r}."
+        )
+    if not isinstance(candidate, Mapping) or not isinstance(filemap, Mapping):
+        raise PromotionHandoffError("Cloud-Atlas refresh handoff requires a candidate and a filemap.")
+
+    candidate_hash = compute_candidate_hash(candidate)
+    if candidate_hash != _require_handoff_sha256(result.get("candidate_hash"), "candidate_hash"):
+        raise PromotionHandoffError("Candidate hash does not match the promotion result.")
+    review_hash = compute_promotion_review_hash(candidate, filemap)
+    if review_hash != _require_handoff_sha256(result.get("review_hash"), "review_hash"):
+        raise PromotionHandoffError("Review payload hash does not match the promotion result.")
+    promotion_id = _require_handoff_sha256(result.get("promotion_id"), "promotion_id")
+    if promotion_id != derive_promotion_id(review_hash, candidate_hash):
+        raise PromotionHandoffError("Promotion id does not derive from review + candidate hash.")
+    preflight_hash = _require_handoff_sha256(result.get("preflight_hash"), "preflight_hash")
+    target_sha256 = _require_handoff_sha256(result.get("target_sha256"), "target_sha256")
+    target_size = result.get("target_size_bytes")
+    if not isinstance(target_size, int) or isinstance(target_size, bool) or target_size <= 0:
+        raise PromotionHandoffError("Promotion result target_size_bytes must be a positive integer.")
+    storage_id = _require_handoff_text(result.get("storage_id"), "storage_id")
+    target_relative_path = _normalize_slashes(result.get("target_relative_path")).strip("/")
+    if not _is_safe_relative_path(target_relative_path):
+        raise PromotionHandoffError("Promotion result target_relative_path is not a safe path.")
+
+    destination = candidate.get("destination")
+    filemap_evidence = candidate.get("filemap_evidence")
+    if not isinstance(destination, Mapping) or not isinstance(filemap_evidence, Mapping):
+        raise PromotionHandoffError("Candidate is missing its destination/filemap evidence.")
+    if str(destination.get("storage_id") or "").strip() != storage_id:
+        raise PromotionHandoffError("Candidate storage_id does not match the promotion result.")
+    if _normalize_slashes(destination.get("target_relative_path")).strip("/") != target_relative_path:
+        raise PromotionHandoffError("Candidate target path does not match the promotion result.")
+
+    scope = str(filemap_evidence.get("scope") or "").strip().lower()
+    if scope not in ("project", "topic"):
+        raise PromotionHandoffError("Candidate filemap scope must be 'project' or 'topic'.")
+    entity_id = _require_handoff_text(filemap_evidence.get("project"), "entity_id")
+    raw_subtopic = filemap_evidence.get("subtopic_id") or filemap_evidence.get("subtopic")
+    candidate_subtopic = str(raw_subtopic).strip() if _is_nonempty_text(raw_subtopic) else None
+    scan_dir = _normalize_slashes(filemap_evidence.get("scan_dir")).strip("/")
+    if not _is_safe_relative_dir(scan_dir):
+        raise PromotionHandoffError("Candidate scan_dir is not a safe workspace-relative path.")
+
+    ws_root = resolve_workspace_root(workspace_root, data_dir=data_dir)
+    resolved_journal_path: Path | None = None
+    journal_relative_path: str | None = None
+    raw_journal_relative = result.get("journal_relative_path")
+    if _is_nonempty_text(raw_journal_relative):
+        rel = _normalize_slashes(raw_journal_relative).strip("/")
+        if not _is_safe_relative_path(rel):
+            raise PromotionHandoffError("Promotion journal path is not a safe relative path.")
+        journal_relative_path = rel
+        resolved_journal_path = ws_root / PurePosixPath(rel)
+    elif journal_path is not None:
+        resolved_journal_path = Path(journal_path)
+        rel = _relative_posix(ws_root, resolved_journal_path)
+        if not _is_safe_relative_path(rel):
+            raise PromotionHandoffError("Promotion journal path is not a safe relative path.")
+        journal_relative_path = rel
+
+    # Both verified statuses require an intact, revalidatable journal: the journal --
+    # not the result -- is the trust anchor.  A journal-less result (or one whose
+    # journal is missing) is rejected fail-closed; format-only result checks are not
+    # sufficient, and the recorded preflight_hash is cross-checked below.
+    if resolved_journal_path is None or journal_relative_path is None:
+        raise PromotionHandoffError(
+            "Cloud-Atlas refresh handoff requires a promotion journal for both result statuses."
+        )
+    if not resolved_journal_path.is_file():
+        raise PromotionHandoffError("Cloud-Atlas refresh handoff journal does not exist.")
+
+    try:
+        journal = load_promotion_journal(
+            resolved_journal_path,
+            expected_promotion_id=promotion_id,
+            expected_candidate_hash=candidate_hash,
+            expected_review_hash=review_hash,
+            expected_source_sha256=target_sha256,
+            expected_target_relative_path=target_relative_path,
+        )
+    except PromotionJournalError as exc:
+        raise PromotionHandoffError(f"Promotion journal revalidation failed: {exc}") from exc
+    for field, expected in (
+        ("preflight_hash", preflight_hash),
+        ("storage_id", storage_id),
+        ("target_relative_path", target_relative_path),
+        ("target_sha256", target_sha256),
+        ("source_sha256", target_sha256),
+    ):
+        if str(journal.get(field) or "").strip().lower() != str(expected).strip().lower():
+            raise PromotionHandoffError(f"Promotion journal drift on '{field}'.")
+    if journal.get("source_size_bytes") != target_size:
+        raise PromotionHandoffError("Promotion journal size does not match the result.")
+    if str(journal.get("status") or "") != "completed":
+        raise PromotionHandoffError("Promotion journal is not completed.")
+    expected_already_present = status == STATUS_ALREADY_PRESENT_VERIFIED
+    if bool(journal.get("already_present")) != expected_already_present:
+        raise PromotionHandoffError(
+            "Promotion journal already_present annotation does not match the result status."
+        )
+    journal_hash = _require_handoff_sha256(journal.get("journal_hash"), "journal_hash")
+
+    # The canonical candidate never records the subtopic (its filemap_evidence holds
+    # only scope/entity/storage/scan_dir).  The writer persists the decision-bound
+    # subtopic into the journal (see promote_attachment / _bound_subtopic_id), so the
+    # journal is the authoritative source; a legacy candidate-carried value is only a
+    # fallback.  A project-scope handoff must never carry a subtopic.
+    journal_subtopic = journal.get("subtopic_id")
+    subtopic_id = (
+        str(journal_subtopic).strip()
+        if _is_nonempty_text(journal_subtopic)
+        else candidate_subtopic
+    )
+    if subtopic_id is not None and scope != "topic":
+        raise PromotionHandoffError("A project-scope handoff must not carry a subtopic_id.")
+
+    handoff: dict[str, Any] = {
+        "schema_version": CLOUD_ATLAS_REFRESH_HANDOFF_SCHEMA_VERSION,
+        "kind": CLOUD_ATLAS_REFRESH_HANDOFF_KIND,
+        "receiver": CLOUD_ATLAS_REFRESH_HANDOFF_RECEIVER,
+        "operation": CLOUD_ATLAS_REFRESH_HANDOFF_OPERATION,
+        "promotion_id": promotion_id,
+        "journal_relative_path": journal_relative_path,
+        "journal_hash": journal_hash,
+        "candidate_hash": candidate_hash,
+        "review_hash": review_hash,
+        "preflight_hash": preflight_hash,
+        "scope": scope,
+        "entity_id": entity_id,
+        "subtopic_id": subtopic_id,
+        "storage_id": storage_id,
+        "scan_dir": scan_dir,
+        "target_relative_path": target_relative_path,
+        "target_sha256": target_sha256,
+        "target_size_bytes": target_size,
+        "filemap_snapshot_hash": _filemap_snapshot_hash(filemap),
+        "required_receiving_steps": list(REQUIRED_RECEIVING_STEPS),
+        "prohibited_automatic_steps": list(PROHIBITED_AUTOMATIC_STEPS),
+    }
+    handoff["handoff_hash"] = canonical_json_sha256(handoff)
+    return handoff
+
+
+def _revalidate_outcome_journal(
+    result: Mapping[str, Any],
+    status: str,
+    *,
+    workspace_root: Path | str | None,
+    journal_path: Path | str | None,
+) -> str | None:
+    """Revalidate the promotion journal anchor for :func:`compose_promotion_outcome`.
+
+    Returns a bounded drift reason when the anchor is missing or does not revalidate,
+    else ``None``.  The journal -- not the result -- is the trust anchor, so composition
+    enforces the same requirement as :func:`build_cloud_atlas_refresh_handoff`.  Without a
+    supplied ``workspace_root``/``journal_path`` only the binding presence can be checked
+    (no workspace root is fabricated); a resolvable location is fully re-loaded through
+    :func:`load_promotion_journal` and cross-checked against the result.
+    """
+    if status not in (STATUS_PROMOTION_COMPLETED, STATUS_ALREADY_PRESENT_VERIFIED):
+        return None
+    relative = result.get("journal_relative_path")
+    anchor = str(result.get("journal_hash") or "").strip().lower()
+    if not _is_nonempty_text(relative) or not _is_sha256_hex(anchor):
+        return CODE_JOURNAL_CORRUPTED
+    if workspace_root is None and journal_path is None:
+        return None
+    ws_root = resolve_workspace_root(workspace_root, data_dir=None)
+    if journal_path is not None:
+        resolved = Path(journal_path)
+    else:
+        normalized = _normalize_slashes(relative).strip("/")
+        if not _is_safe_relative_path(normalized):
+            return CODE_JOURNAL_CORRUPTED
+        resolved = ws_root / PurePosixPath(normalized)
+    try:
+        journal = load_promotion_journal(
+            resolved,
+            expected_promotion_id=result.get("promotion_id"),
+            expected_candidate_hash=result.get("candidate_hash"),
+            expected_review_hash=result.get("review_hash"),
+            expected_source_sha256=result.get("target_sha256"),
+            expected_target_relative_path=result.get("target_relative_path"),
+        )
+    except (PromotionJournalError, OSError):
+        return "journal_drift"
+    if str(journal.get("journal_hash") or "").strip().lower() != anchor:
+        return "journal_drift"
+    if str(journal.get("status") or "") != "completed":
+        return "journal_drift"
+    if bool(journal.get("already_present")) != (status == STATUS_ALREADY_PRESENT_VERIFIED):
+        return "journal_drift"
+    for field in ("preflight_hash", "storage_id", "target_relative_path"):
+        if str(journal.get(field) or "").strip().lower() != str(
+            result.get(field) or ""
+        ).strip().lower():
+            return "journal_drift"
+    return None
+
+
+def compose_promotion_outcome(
+    promotion_result: Mapping[str, Any],
+    refresh_outcome: Mapping[str, Any] | None = None,
+    *,
+    workspace_root: Path | str | None = None,
+    journal_path: Path | str | None = None,
+) -> dict[str, Any]:
+    """Couple a verified promotion with a Cloud-Atlas refresh result, without mutation.
+
+    A missing/invalid adapter, a refresh error/timeout/verify error or an untrusted
+    refresh result yields ``promotion_completed_refresh_pending`` with the unchanged
+    ``promotion_id``.  A verified refresh for the same target yields
+    ``promotion_completed``/``refresh_completed``.  Journal/target/cross-binding drift
+    yields ``recovery_required``.  MD-P2 is never re-run.
+
+    The promotion journal is revalidated for every verified status (the same trust
+    anchor :func:`build_cloud_atlas_refresh_handoff` enforces): with no
+    ``workspace_root``/``journal_path`` the result must at least carry a valid journal
+    binding, and a supplied location is re-loaded through
+    :func:`load_promotion_journal`.
+    """
+    result = _verified_promotion_result(promotion_result)
+    promotion_status = str(result.get("status") or "")
+    if promotion_status in (STATUS_RECOVERY_REQUIRED, STATUS_COLLISION_DETECTED):
+        return _build_outcome_result(
+            result, status=STATUS_RECOVERY_REQUIRED,
+            reason=str(result.get("reason") or promotion_status),
+            error_code=str(result.get("error_code") or promotion_status),
+        )
+    if promotion_status not in (
+        STATUS_PROMOTION_COMPLETED, STATUS_ALREADY_PRESENT_VERIFIED, STATUS_SOURCE_CLEANUP_PENDING
+    ):
+        return _build_outcome_result(
+            result, status=STATUS_RECOVERY_REQUIRED,
+            reason=CODE_JOURNAL_CORRUPTED, error_code=CODE_JOURNAL_CORRUPTED,
+        )
+
+    journal_reason = _revalidate_outcome_journal(
+        result, promotion_status,
+        workspace_root=workspace_root, journal_path=journal_path,
+    )
+    if journal_reason is not None:
+        return _build_outcome_result(
+            result, status=STATUS_RECOVERY_REQUIRED,
+            reason=journal_reason, error_code=journal_reason,
+        )
+
+    refresh_status: str | None = None
+    refresh_result_hash: str | None = None
+    handoff_hash: str | None = None
+    if isinstance(refresh_outcome, Mapping) and refresh_outcome.get("kind") == REFRESH_RESULT_KIND:
+        declared = str(refresh_outcome.get("result_hash") or "").strip().lower()
+        body = {key: value for key, value in refresh_outcome.items() if key != "result_hash"}
+        if _is_sha256_hex(declared) and declared == canonical_json_sha256(body):
+            if str(refresh_outcome.get("promotion_id") or "").strip().lower() != str(
+                result.get("promotion_id") or ""
+            ).strip().lower():
+                return _build_outcome_result(
+                    result, status=STATUS_RECOVERY_REQUIRED,
+                    reason="refresh_promotion_drift", error_code="refresh_promotion_drift",
+                )
+            refresh_result_hash = declared
+            handoff_hash = str(refresh_outcome.get("handoff_hash") or "").strip() or None
+            token = str(refresh_outcome.get("status") or "")
+            if token == REFRESH_STATUS_COMPLETED:
+                same_target = (
+                    str(refresh_outcome.get("target_relative_path") or "")
+                    == str(result.get("target_relative_path") or "")
+                    and str(refresh_outcome.get("target_sha256") or "").strip().lower()
+                    == str(result.get("target_sha256") or "").strip().lower()
+                )
+                if not same_target:
+                    return _build_outcome_result(
+                        result, status=STATUS_RECOVERY_REQUIRED,
+                        reason="refresh_target_drift", error_code="refresh_target_drift",
+                    )
+                refresh_status = REFRESH_STATUS_COMPLETED
+            elif token == REFRESH_STATUS_DENIED and str(
+                refresh_outcome.get("reason") or ""
+            ) in _HANDOFF_DRIFT_REASONS:
+                return _build_outcome_result(
+                    result, status=STATUS_RECOVERY_REQUIRED,
+                    reason=str(refresh_outcome.get("reason") or REFRESH_STATUS_DENIED),
+                    error_code=str(refresh_outcome.get("reason") or REFRESH_STATUS_DENIED),
+                )
+            else:
+                refresh_status = REFRESH_STATUS_PENDING
+
+    if refresh_status == REFRESH_STATUS_COMPLETED:
+        return _build_outcome_result(
+            result, status=STATUS_PROMOTION_COMPLETED, reason="promotion_completed",
+            error_code=None, refresh_status=REFRESH_STATUS_COMPLETED,
+            refresh_result_hash=refresh_result_hash, handoff_hash=handoff_hash,
+        )
+    return _build_outcome_result(
+        result, status=STATUS_PROMOTION_COMPLETED_REFRESH_PENDING,
+        reason=REFRESH_STATUS_PENDING, error_code=None,
+        refresh_status=REFRESH_STATUS_PENDING, refresh_result_hash=refresh_result_hash,
+        handoff_hash=handoff_hash,
+    )
+
+
+def write_cloud_atlas_refresh_handoff(handoff: Mapping[str, Any], output_path: Path | str) -> Path:
+    """Atomically persist a revalidated handoff to ``output_path`` and return it.
+
+    The handoff hash is recomputed before writing; a tampered mapping raises
+    :class:`PromotionHandoffError`.  The write uses a flushed sibling temp file plus
+    ``os.replace`` (the dossier-handoff pattern) and never touches any other path.
+    """
+    if not isinstance(handoff, Mapping):
+        raise PromotionHandoffError("write_cloud_atlas_refresh_handoff requires a handoff mapping.")
+    declared = str(handoff.get("handoff_hash") or "").strip().lower()
+    body = {key: value for key, value in handoff.items() if key != "handoff_hash"}
+    if not _is_sha256_hex(declared) or declared != canonical_json_sha256(body):
+        raise PromotionHandoffError("Refusing to write a handoff whose handoff_hash does not recompute.")
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = _canonical_json_bytes(dict(handoff))
+    tmp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    descriptor = os.open(
+        tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+    )
+    try:
+        handle = os.fdopen(descriptor, "wb")
+    except OSError:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        _unlink_quiet(tmp_path)
+        raise
+    try:
+        with handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except OSError:
+        _unlink_quiet(tmp_path)
+        raise
+    return path
+
+
 __all__ = [
     "compute_promotion_review_hash",
     "verify_promotion_approval_receipt",
@@ -2010,7 +2615,22 @@ __all__ = [
     "derive_promotion_id",
     "load_promotion_journal",
     "promote_attachment",
+    "build_cloud_atlas_refresh_handoff",
+    "compose_promotion_outcome",
+    "write_cloud_atlas_refresh_handoff",
     "PromotionJournalError",
+    "PromotionHandoffError",
     "JOURNAL_PHASES",
     "PROMOTION_RESULT_STATUSES",
+    "CLOUD_ATLAS_REFRESH_HANDOFF_KIND",
+    "CLOUD_ATLAS_REFRESH_HANDOFF_RECEIVER",
+    "CLOUD_ATLAS_REFRESH_HANDOFF_OPERATION",
+    "REQUIRED_RECEIVING_STEPS",
+    "PROHIBITED_AUTOMATIC_STEPS",
+    "REFRESH_RESULT_KIND",
+    "REFRESH_RESULT_STATUSES",
+    "REFRESH_STATUS_COMPLETED",
+    "REFRESH_STATUS_PENDING",
+    "REFRESH_STATUS_DENIED",
+    "STATUS_PROMOTION_COMPLETED_REFRESH_PENDING",
 ]

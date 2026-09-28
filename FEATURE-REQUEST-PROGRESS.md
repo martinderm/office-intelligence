@@ -30,6 +30,14 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   verify), Sent-Sync Watermark/count/fail-closed + Telemetrie-Trennung,
   review_reason read_escalation_failed. 9 Tests, Suite 1073/1073 gruen;
   Details im Archiv (`docs/features/_archive.md`, FR-26-Sektion).
+- `FR-09` - Human-gated Cloud-Promotion abgeschlossen und archiviert
+  (2026-09-28): MD-P1 hashgebundene Approval-Receipts + read-only Preflight
+  (78 Tests), MD-P2 atomarer no-clobber Storage-Writer mit Re-Verify-before-
+  Cleanup-Invariante (74 Tests), MD-P3 Cloud-Atlas-Handoff + kataloggebundener
+  Refresh ueber schmalen Consumer promotion_refresh.py (36+29 Tests). 6
+  dokumentierte Fix-Runden + 1 Test-Vertragsrotation, Reviews APPROVE; Suiten
+  1261 + 167 gruen. Details im Archiv (`docs/features/_archive.md`,
+  FR-09-Sektion).
 - `MD-H6` — Himalaya Invocation & Fail-Fast Bootstrap ist unabhängig reviewt und
   freigegeben: `HIMALAYA_CONFIG` wird als absoluter Config-Pfad via `-c` gebunden,
   fehlende Config oder Executable stoppen vor jedem Prozessstart und der
@@ -177,6 +185,88 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   externem Same-Hash-Target vor Write deterministisch `in_progress` mit sicherem
   `already_present_verified`-Retry. Commit-Kandidat:
   `feat(mail-desk): add atomic no-clobber storage writer (MD-P2)`.
+- `FR-09`/`MD-P3` — **Cloud-Atlas-Refresh-Handoff und schmaler Consumer implementiert
+  und unabhängig reviewt (2026-09-28, TDD red→green, 3 dokumentierte Fix-Runden,
+  Review APPROVE; FR-09 damit vollständig abgeschlossen).** Neu/geändert:
+  `skills/mail-desk/scripts/core/attachment_promotion.py` (neuer klar getrennter
+  MD-P3-Abschnitt; MD-P1/MD-P2-API unverändert),
+  `skills/cloud-atlas/scripts/promotion_refresh.py` (neuer schmaler Adapter) sowie die
+  bindenden Testmodule `skills/mail-desk/tests/test_maildesk_attachment_promotion_mdp3.py`
+  (36 Tests) und `skills/cloud-atlas/tests/test_promotion_refresh.py` (29 Tests). Genuine
+  Red gegen die fehlenden Symbole: `ImportError: cannot import name
+  'CLOUD_ATLAS_REFRESH_HANDOFF_KIND'` (Exit 1) bzw.
+  `FileNotFoundError .../promotion_refresh.py` (Exit 1). Öffentliche Verträge:
+  `build_cloud_atlas_refresh_handoff(promotion_result, candidate, filemap, *,
+  workspace_root=None, data_dir=None, journal_path=None) -> dict` erzeugt
+  `cloud_atlas_refresh_handoff` Schema 1 ausschließlich aus einem revalidierten MD-P2-Ergebnis
+  (`promotion_completed`/`already_present_verified`): `result_hash` wird nachgerechnet, das
+  Promotion-Journal via `load_promotion_journal` revalidiert und ist der Trust-Anchor —
+  journallose `already_present_verified`-Ergebnisse werden fail-closed abgewiesen,
+  `preflight_hash` wird gegen das Journal kreuzgeprüft, die Subtopic-Herleitung
+  (`_bound_subtopic_id`, Spiegelbild von `resolve_catalog_storage`) wird im Journal
+  persistiert und vom Builder bevorzugt; gebunden sind
+  Scope (`project|topic`), katalogisierte Entity-ID, optionale Subtopic-ID, Storage-ID,
+  `scan_dir`, Zielrelativpfad, Ziel-SHA-256, Größe, vorheriger Filemap-Snapshot-Hash,
+  `required_receiving_steps`, `prohibited_automatic_steps` und `handoff_hash`
+  (`canonical_json_sha256`); absolute Pfade, Beschreibungen und Mail-/Anhangstexte werden
+  nicht übernommen (Test beweist Textfreiheit). `write_cloud_atlas_refresh_handoff(handoff,
+  output_path) -> Path` persistiert optional atomar (Hash-Recheck, Sibling-Temp+`fsync`+
+  `os.replace`). `compose_promotion_outcome(promotion_result, refresh_outcome=None, *,
+  workspace_root=None, journal_path=None) -> dict`
+  koppelt ohne Mutation und revalidiert das Journal als Anker: fehlender Adapter/Refresh-
+  Fehler/Timeout/Verify-Fehler/unvollständiges
+  Refresh-Ergebnis → `promotion_completed_refresh_pending` mit unveränderter `promotion_id`;
+  verifizierter Refresh für dasselbe Ziel → `promotion_completed`/`refresh_completed`;
+  Journal-/Ziel-/Promotion-Binding-Drift → `recovery_required`; ein Retry führt nie MD-P2 aus
+  (Test patcht `promote_attachment` auf `AssertionError`, 0 Calls). Consumer:
+  `consume_promotion_refresh_handoff(handoff, workspace_root=None, *, lease_id=None,
+  conversation_id=None, current_time=None, data_dir=None) -> dict` (Ergebnis
+  `cloud_atlas_refresh_result` Schema 1) prüft (1) eigenen Workspace-Lock
+  (`workspace_lock_guard.require_workspace_lock`, `allow_legacy=False`; der Mail-Desk-Handoff
+  liefert keine Cloud-Atlas-Autorisierung), (2) Handoff-Hash (pop+recompute), Promotion-Journal
+  (dynamisch geladenes Mail-Desk-`load_promotion_journal`) inkl. `subtopic_id`- und
+  Status-Cross-Check gegen den Journal-Anchor (`journal_drift` deny vor Engine) und reale
+  Zieldatei gegen SHA-256/Größe, (3) genau den kataloggebundenen Storage (synthesized
+  Fallback-Storage → `storage_unbound`; katalogfremde Entity erreicht die Engine nie) über
+  die kanonischen Cloud-Atlas-Funktionen
+  (`resolve_all_sync_configs` mit `storage_id`; Konvertierung nur für konvertierbare Typen via
+  `convert_cloud_docs.run_conversion`, danach `gen_filemap.run_generation`; `list(configs) ==
+  [storage_id]` erzwungen, nie Workspace-weit), (4) nach dem Refresh die neue Filemap über den
+  MD-A5-Wrapper `validate_cloud_atlas_filemap` plus exakten Ziel-Entry-Check
+  (`scan_dir/target_relative_path` mit erwartetem SHA-256) → erst dann `refresh_completed`.
+  Trust-Boundaries: Handoff ist Evidenz, nicht Autorisierung; unbekannte Schlüssel, absolute/
+  traversierende Pfade, `journal_relative_path`/`-hash`-Asymmetrie, Prompt-Injection-Metadaten
+  und jeder Drift stoppen fail-closed ohne Filemap-/Mirror-Mutation; Binär-/Office-Inhalte
+  bleiben `untrusted_external`; keine In-Place-OCR-Sonderbehandlung; die Cloud-Atlas-Kataloge
+  werden vom Consumer bewusst nicht mutiert (das kanonische `last_synced_at`-Bookkeeping wird
+  für den gebundenen Scan unterdrückt, da die MD-P3-Autorität nur Filemap/Mirror umfasst).
+  **Fix-Runden (dokumentiert):** Runde 1 — journallose `already_present_verified`-Handoffs
+  abgeschafft (Journal-Anker beidseitig; MD-P2 journaled jetzt auch den
+  already-present-Pfad — dokumentierte Test-Vertragsrotation
+  `test_already_present_writes_no_journal` → `test_already_present_writes_journal_trust_anchor`),
+  Catalog-Origin-Proof (synthesized Fallback-Storage → `storage_unbound`, katalogfremde
+  Entity erreicht die Engine nie, Baum-Snapshot null Mutation), offset-invarianter
+  Frische-Check, 4 neue Pinning-Familien, Cleanups. Runde 2 —
+  failed@temp_written-Retry reconciliert das Journal (nie `completed` an `failed`;
+  un-retryable → `recovery_required`) statt des widersprüchlichen Shortcuts;
+  `subtopic_id` aus dem Journal hergeleitet (Subtopic-Storage erreichbar);
+  `compose_promotion_outcome` revalidiert das Journal (additive keyword-only Parameter).
+  Runde 3 — Consumer-Cross-Check: Journal-`subtopic_id` (None-aware) und Status
+  `completed` müssen zum Handoff passen, sonst `journal_drift` deny vor Engine
+  (Falsifikation „tampered sub-2 vs. Journal sub-1" geschlossen). Review-Verlauf:
+  REQUEST_CHANGES (1 Major + 2 Minor) → Fix 1 → REQUEST_CHANGES (1 Major + 1 Minor)
+  → Fix 2 → REQUEST_CHANGES (1 falsifizierter Minor) → Fix 3 → **APPROVE (0 actionable)**.
+  Nachweis: fokussierte Suiten 36/36 und 29/29 grün (inkl. hermetischem End-to-End
+  Candidate → Approval → MD-P1 → MD-P2 → Handoff → Cloud-Atlas-Verify, das beweist, dass ein
+  Refresh-Retry keine zweite Promotion ausführt); vollständige Mail-Desk-Suite 1261/1261 grün
+  (1225 Baseline + 36), Cloud-Atlas-Suite 167/167 (138 Baseline + 29), `compileall` Exit 0,
+  `git diff --check` sauber. Bewusste Grenzen/Residuen: TOCTOU-Fenster zwischen Consumer-
+  Re-Hash und Engine-Scan ist inhärent und dokumentiert (fail-closed-Richtung); vollständiges
+  Journal-Forging bleibt außerhalb des Trust-Modells des Consumers (unsigned Hash-Bindung,
+  dokumentiert); der bekannte MDA3-Timing-Flake trat in Baseline-Läufen unter Last auf,
+  Post-Change-Läufe grün. System Map und `references/batch-runner.md` wurden
+  orchestratorseitig im selben Arbeitsschritt synchronisiert. Commit-Kandidat:
+  `feat(cloud-atlas): consume mail-desk promotion refresh handoff (MD-P3)`.
 - `FR-15` — **MD-E1 (`MD-E1-T01`–`T07`) und MD-E2 (`MD-E2-T01`–`T04`) sind vollständig
   implementiert, reviewt, verifiziert und paketabgenommen; `FR-15` ist geschlossen.** Der staged
   `attachment_evaluation`-Vertrag
