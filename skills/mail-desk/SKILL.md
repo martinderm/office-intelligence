@@ -1,6 +1,6 @@
 ---
 name: mail-desk
-description: Agentische Einzelmail-Verarbeitung innerhalb von office-intelligence. Verwende diesen Skill, wenn Mails über einen unterstützten Mailbox-Backend einzeln beurteilt, Projekt- oder Topic-Kontext zugeordnet, Antwortbedarf und Todos getrennt entschieden sowie leichte Arbeitslogs unter data/mail-desk/ gepflegt werden sollen. Unterstützt Gmail sowie Himalaya-/IMAP-Backends. Auch Batch- und Stapelverarbeitung (batch pipelines, draft→execute→verify) läuft fachlich durch diesen Skill, dessen Körper die Batch-Verträge trägt — Draft bindet expected_count/allow_fewer/Review-Hash, Final-Index-Hardrules, JSON-Manifest-Client und Katalogpflege-Router.
+description: Agentische Einzelmail-Verarbeitung innerhalb von office-intelligence. Verwende diesen Skill, wenn Mails über einen unterstützten Mailbox-Backend einzeln beurteilt, Projekt- oder Topic-Kontext zugeordnet, Antwortbedarf und Todos getrennt entschieden sowie leichte Arbeitslogs unter data/mail-desk/ gepflegt werden sollen. Unterstützt Gmail sowie Himalaya-/IMAP-Backends. Auch Batch- und Stapelverarbeitung (batch pipelines, draft→execute→verify) sowie die Dossier-Kette (dossier, dossier_apply, dossier_synthesis) läuft fachlich durch diesen Skill, dessen Körper die Batch-Verträge trägt — Draft bindet expected_count/allow_fewer/Review-Hash, Final-Index-Hardrules, JSON-Manifest-Client und Katalogpflege-Router.
 ---
 
 # mail-desk
@@ -55,6 +55,15 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   Struktur. Fehlende Inventarisierung, Account-/Message-ID-Drift oder ungültige
   Part-Metadaten halten das einzelne Item fail-closed in `INBOX` zur Review.
   Ein Abruf, eine Extraktion oder Cloud-Ablage ist dadurch noch nicht autorisiert.
+
+### Betriebsarten-Matrix (Runner)
+
+| Gruppe | Modi | Zweck & Verhalten |
+|---|---|---|
+| **Batch** | `draft` → `execute` → `verify` | Reguläre Abarbeitung aus `INBOX` mit Review-Hash |
+| **Recherche** | `inspect`, `search`, `sync_sent` | Lesende Mailbox-Sichtung & Suche |
+| **Dossier** | `dossier` → `dossier_apply` → `dossier_synthesis` (→ `dossier_handoff`) | Katalog-gebundene Projekt-/Event-Dossiers mit EVID-Ankern |
+| **Recovery** | `reconcile`, `resolve` | Lesender Wiederanlauf & Archivierung offener Fälle |
 
 ## Mutationen, Identität und Backend
 
