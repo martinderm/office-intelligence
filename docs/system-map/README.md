@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (171 Dateien)│       │ (L2-Metrik)  │       │ - project-catalog-entry  │
+│ (172 Dateien)│       │ (L2-Metrik)  │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -115,6 +115,13 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    `data/mail-desk/attachment-promotions/`, atomarer `os.link`-No-Clobber,
    Re-Verify-before-Cleanup-Invariante, Inventory-Cleanup unter bestehendem
    Lock; Cloud-Atlas-Handoff bleibt MD-P3 (Human Gate separat).
+ - **Basename-Contract-Reconcile (Issue #9):** `validate_attachment_filename`
+   lehnt Win32-Speicheralias (Trailing-Dot/Space) und Control-Characters
+   fail-closed ab, erlaubt aber kollisionsfreie Embedded-Dot-Basenames
+   (`agenda..pdf`); Raw-MIME-Namen bleiben als `original_filename` im Inventar
+   erhalten (keine Sanitization-Launderung) und werden im Fetch vor I/O
+   erneut fail-closed validiert (`FilenameDriftError` bei Drift). Leserichtung
+   je Pin-Gruppe dokumentiert in L2-Map §30.
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---

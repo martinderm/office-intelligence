@@ -5,6 +5,28 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- GitHub [Issue #9](https://github.com/martinderm/office-intelligence/issues/9):
+  Attachment-Basename Contract-Reconcile in isoliertem Worktree; Commit/Push am
+  2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.
+  Vorabprüfung: 6 Pins aus Spec-Commit `0896334` unverändert wiederhergestellt;
+  genuine Rot exakt 5 Failures + 6 Errors. Leserichtung je Pin-Gruppe mit
+  Begründung (L2-Map §30): Provenienz und Windows-Aliase = Tests Spec
+  (Produktionshärtung: `original_filename` wird nie gewaschen, im Fetch vor
+  I/O fail-closed validiert, `FilenameDriftError`; Ablehnung von Trailing-
+  Dot/Space-Win32-Aliasen und Control-Characters), Embedded Dots = Tests Spec
+  mit dokumentierter Präzisions-Verschärfung (ohne Separator kein Traversal;
+  Separatoren bleiben bedingungslos abgelehnt), Identity-/Payload-Drift war
+  bereits Produktion-Spec. Kein stilles Lockern oder Rotationsabbau von
+  Sicherheits-Pins; `sanitize_attachment_filename` (Storage-Derivation) und
+  der MD-A2-`relative_path`/Repeat-Vertrag bleiben unverändert.
+  Abnahme: Fokus-Frames 591 Attachment-Tests (nur bekannte MD-A3-Timing-Rotation
+  #10) plus Vollsuite; erster #9-Frame enthielt einen einzelnen
+  umgebungsbedingten `flaky_lock_marker_mda3`-Race-Flake (Rerun mit Änderungen
+  deterministisch grün, Baseline-Frame 1309/1309 OK, Nachweis zu #10);
+  finaler Rerun-Voll-Frame **1315 Tests / 1315 grün**;
+  `test_attachment_basename` 6/6 deterministisch.
+  Kein neuer FR-Record; dauerhafter Status bleibt im GitHub-Issue.
+
 - GitHub [Issue #2](https://github.com/martinderm/office-intelligence/issues/2):
   Cloud-Atlas-Verzeichnisausschlüsse in isoliertem Worktree; Commit/Push am
   2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.
