@@ -21,6 +21,14 @@ from ..synthesis_targets import validate_execute_synthesis_targets
 from ..telemetry import collect_telemetry
 
 
+#: Escalating backoff (seconds) before each copy-verify attempt. The length of
+#: the sequence is the bounded attempt budget: after a successful copy the
+#: target folder is re-listed freshly on every attempt, so a slow IMAP backend
+#: gets more than the two looks that proved insufficient (issue #7). Worst case
+#: per attempt stays small (list <= 30s + <= 5 candidate reads <= 10s each).
+COPY_VERIFY_BACKOFFS: tuple[float, ...] = (0.3, 0.5, 1.0, 2.0)
+
+
 def _dependency(
     dependencies: Mapping[str, Callable[..., Any]] | None,
     name: str,
@@ -458,6 +466,11 @@ def _execute_with_journal(
         metadata_ok = _action_log_contains(dd, message_id) if message_id else False
         evidence_status = "not-applicable" if not record.get("evidence") else "pending"
         error: str | None = None
+        # Copy-verify diagnostics are collected per item and only surface on the
+        # exhausted attempt via the journal details and the item error suffix.
+        verify_listing_facts: dict[str, Any] = {}
+        verify_diagnostic_facts: dict[str, Any] = {}
+        verify_diagnostic_suffix = ""
 
         try:
             if not message_id:
@@ -481,12 +494,38 @@ def _execute_with_journal(
                     run_mail(["message", "copy", target, env_id, "-f", source], account=account, timeout=45, max_retries=2)
                     journal.transition(record, "copied")
                     _checkpoint(dependencies, "after_copy", item)
-                    sleep(0.3)
-                    verified = verify_folder(target, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account)
+                    # Bounded escalating retry: every attempt sleeps its backoff
+                    # and issues a fresh target-folder listing (himalaya spawns a
+                    # new subprocess per call), so a slow IMAP backend that has
+                    # not yet indexed the copy is given more than two looks.
+                    verified: str | None = None
+                    attempt_elapsed_ms: list[int] = []
+                    for backoff in COPY_VERIFY_BACKOFFS:
+                        attempt_started = time.monotonic()
+                        sleep(backoff)
+                        verified = verify_folder(target, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account, diagnostics=verify_listing_facts)
+                        attempt_elapsed_ms.append(int((time.monotonic() - attempt_started) * 1000))
+                        if verified:
+                            break
                     if not verified:
-                        sleep(0.5)
-                        verified = verify_folder(target, message_id, subject=str(item.get("subject", "")), from_addr=str(item.get("from", "")), date_str=str(item.get("date", "")), account=account)
-                    if not verified:
+                        verify_diagnostic_facts.update(
+                            {
+                                "verify_attempts": len(attempt_elapsed_ms),
+                                "verify_envelopes_seen": verify_listing_facts.get("envelopes_seen"),
+                                "verify_candidates": verify_listing_facts.get("candidate_count"),
+                                "verify_elapsed_ms": sum(attempt_elapsed_ms),
+                                "verify_attempt_elapsed_ms": attempt_elapsed_ms,
+                            }
+                        )
+                        verify_diagnostic_suffix = (
+                            " [verify attempts={attempts} envelopes_seen={envelopes} "
+                            "candidates={candidates} elapsed_ms={elapsed}]"
+                        ).format(
+                            attempts=verify_diagnostic_facts["verify_attempts"],
+                            envelopes=verify_diagnostic_facts.get("verify_envelopes_seen"),
+                            candidates=verify_diagnostic_facts.get("verify_candidates"),
+                            elapsed=verify_diagnostic_facts["verify_elapsed_ms"],
+                        )
                         raise RuntimeError("Target verification failed after copy.")
                     final_env = str(verified)
                     journal.transition(record, "verified", final_envelope_id=final_env, final_folder=target)
@@ -563,7 +602,7 @@ def _execute_with_journal(
                 evidence_status = "ok"
             journal.transition(record, "complete", final_envelope_id=str(final_env or env_id), final_folder=final_folder)
         except (KeyboardInterrupt, TimeoutError) as exc:
-            error = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            error = (f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__) + verify_diagnostic_suffix
             journal.transition(record, "aborted", error=error, final_envelope_id=str(final_env) if final_env else None, final_folder=final_folder)
             journal.set_run_status("aborted", error=error)
             if hasattr(tracker, "abort"):
@@ -573,8 +612,8 @@ def _execute_with_journal(
             aborted = True
             all_succeeded = False
         except Exception as exc:
-            error = f"{type(exc).__name__}: {exc}"
-            journal.transition(record, "partial", error=error, final_envelope_id=str(final_env) if final_env else None, final_folder=final_folder)
+            error = f"{type(exc).__name__}: {exc}{verify_diagnostic_suffix}"
+            journal.transition(record, "partial", error=error, **verify_diagnostic_facts, final_envelope_id=str(final_env) if final_env else None, final_folder=final_folder)
             all_succeeded = False
 
         success = routing_ok and index_ok and metadata_ok and evidence_status != "fail" and error is None

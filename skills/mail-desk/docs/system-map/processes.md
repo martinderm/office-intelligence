@@ -56,10 +56,12 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 2. Prüft die Gültigkeit des übergebenen Receipts gegen das Manifest.
 3. Führt IMAP-Operationen (Verschieben, Flaggen) atomar aus.
 4. Schreibt neue Einträge in `data/mail-desk/final-location-index.json` via atomarem Tempfile-Replace.
+5. Nach dem Copy verifiziert die Zielordner-Listung **bounded-eskalierend**: bis zu 4 Versuche mit Backoff 0.3/0.5/1.0/2.0s und einer frischen Himalaya-Listung je Versuch. Erschöpft sich das Budget, bleibt der kanonische Fehler „Target verification failed after copy." byte-identisch und trägt einen Diagnose-Suffix (Versuche, gesehene Envelopes, Kandidaten, `elapsed_ms`); dieselben Fakten gehen als freie Details in `journal.transition(...)`. Kein neuer Kanon-Zustand und kein neuer Result-Schema-Key.
 
 ### Phase 4: `verify` ([`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py))
 1. Fragt die Zielordner via Himalaya ab.
 2. Bestätigt das physische Vorhandensein der verschobenen Mails am Zielort.
+3. Bleibt der unabhängige Gesamt-Batch-Nachlauf; die execute-seitige Copy-Verifikation (Phase 3, Punkt 5) reduziert den zuvor flakigen Recovery-Fall, ersetzt Phase 4 aber nicht.
 
 ---
 
