@@ -137,6 +137,14 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    python3 scripts/catalog_inspect.py mail-desk
    ```
 
+   Auflösungsregel: Der Katalogpfad ist das aufgelöste `--workspace` (Default
+   `"."`, aufgelöst gegen das Prozess-CWD) plus
+   `memory/references/topics/topics.json`,
+   `memory/references/projects/projects.json` bzw.
+   `memory/references/mail-desk/mail-desk.json`. Aus dem Workspace-Root aufrufen
+   oder `--workspace <root>` setzen; bei falschem CWD endet der Aufruf read-only
+   mit `Catalog file not found.` (Exit 1).
+
 ## Harte Regel: kein manueller Final-Index-Write
 
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert

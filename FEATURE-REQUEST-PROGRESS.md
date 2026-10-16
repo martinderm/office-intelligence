@@ -5,6 +5,38 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- `FR-28`/`DOC-P1` — Batch-Doku-Schärfung + Signatur-Helfer in Finalisierung
+  (2026-10-16, GitHub issue #4, Human Gate User). Neu:
+  `skills/mail-desk/scripts/mail_desk_sign_manifest.py` (stdlib-only,
+  `candidate_count=len(items)`, Hash via `core.batch_contract
+  .canonical_execute_request_sha256`, Review → approved + Receipt exakt
+  3 Keys, Self-Check `validate_execute_contract` vor dem einzigen atomaren
+  Write, injizierbare Uhr, Write-Trap-Scan) und die bindende Testdatei
+  `skills/mail-desk/tests/test_maildesk_sign_manifest.py` (19 Tests, genuine
+  Rot: ModuleNotFoundError). Doku: `references/batch-runner.md` (A Re-
+  signaturpfad mit exakter Kanonisierungsregel + `review_hash_mismatch`;
+  B1 Verify-Schritt mit `execute_summary`-Beispiel + Read-only-Reconcile-
+  Fallback; B2 Recovery-Fall „Target verification failed after copy" und
+  `needs_local_repair` mit exaktem `batch-reconcile.json` + Gates; E
+  Ablage-Norm), `references/backends/himalaya.md` (C `preview_lines`),
+  `references/cli-operations.md` (D echte `CATALOG_PATHS` + CWD-Auflösung).
+  Size-Gate `MAX_WORDS` 7400→8000 (gemessen 7843) als dokumentierte
+  Testkorrektur im Modul-Docstring (Historie 7100→7400→8000). Review-Verlauf:
+  Runde 1 REQUEST_CHANGES (2 Major — Map-Drift neue Seam + fehlendes
+  FR-Frontmatter, beide Orchestrator-Sync; 1 Minor — `UnicodeDecodeError`
+  bei nicht-UTF-8-Manifesten bricht den kanonischen Fehlerpfad) → Fix in
+  Runde 2 (Fokus 19/19). Falsifikationsbeweise des
+  Reviewers: Post-Signatur-Drift → `review_hash_mismatch` (Signatur-Phase
+  re-verifiziert den Hash); Write-Trap-Scan (nur Manifest ändert sich);
+  Fail-Closed ohne Write bei Missing-Trigger-Keys/leeren `--reviewed-by`/
+  defektem JSON; kanonisches Modul importiert (`core.batch_contract`,
+  Pin-Test-Identität). Nachweis: Fokus 19/19, Guards 5/5 + 3/3,
+  CLI-Discover 1298 (23 präexistente diff-fremd-Altlasten in
+  `test_event_dossier`/`test_attachment_basename`, siehe Root-TODO;
+  1275 verifiziert grün), `compileall` 0, `git diff --check` sauber.
+  Commit-Kandidat: `docs(mail-desk): sharpen batch contracts + sign helper (DOC-P1)`.
+
+
 - `FR-19`/`MD-RC1` - Reconcile-Repair-Härtung abgeschlossen und archiviert
   (2026-09-24): `apply_local_repairs` korrigiert stale Index-/Log-Records nach
   frischer Verifikation (append-only `reconciled: true`, idempotent, Gates

@@ -75,6 +75,18 @@ Unter `data/mail-desk/` gelten folgende Standard-Dateinamen:
 | **Dossier-Handoff-Anforderung (Input)** | `data/mail-desk/batch-dossier-handoff-request.json` | `dossier_handoff` | Hash-gebundener abgeschlossener Synthese-Review; bleibt zur Review. |
 | **Dossier-Handoffs (Output)** | `data/mail-desk/batch-dossier-handoff.json` | `dossier_handoff` | Lokale, projektgebundene Übergaben an Cloud-Atlas und Task-Desk; keine externe Operation. |
 
+### Ablage-Norm für Seitenartefakte
+
+`data/mail-desk/batch-recovery-journal.json` und
+`data/mail-desk/batch-manifest.json` bleiben strikt unter `data/mail-desk/`.
+Eine **Kopie** des geschlossenen Recovery-Journals darf nach
+`data/mail-desk/archive/YYYY-Www/` wandern (ISO-Wochenordner wie im
+`resolve`-Modus), das Journal selbst bleibt unter `data/mail-desk/`.
+Synthese-Markdown entsteht **ausschließlich** an den Handoff-Zielen
+`memory/references/projects/<decision.id>/…` bzw.
+`memory/references/topics/<decision.id>/…`. Helferskripte und Reviewer
+synthetisieren niemals in das Workspace-Root oder an andere Orte.
+
 ---
 
 ## CLI-Aufrufe & Parameter
@@ -183,6 +195,36 @@ getrennten, autorisierten Dossier-/Pipeline-Pfaden akzeptiert; sie sind kein Sta
 Temporäre Manifest-Lese-/Löschoperationen behandeln Windows-Dateisperren mit maximal
 drei Versuchen und Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten und der
 Lauf meldet den Fehler.
+
+### Reviewte Korrekturen anwenden & neu signieren
+
+Korrekturen des Reviewers gehen ausschließlich in
+`data/mail-desk/batch-manifest.json` (pro Editor); `candidate_count` folgt immer
+`len(items)`. Die Kanonisierung ist exakt: `payload = dict(config)`,
+`payload.pop("review", None)`, dann
+`json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",",":"),
+allow_nan=False)` → SHA-256
+(`core/batch_contract.py:canonical_execute_request_sha256`). Alle übrigen Keys
+bleiben byte-identisch; genau der `review`-Block wird entfernt. Neu signiert wird
+mit `approval_receipt = {reviewed_at, reviewed_by, execute_request_sha256}`
+(exakt diese drei Keys, `review.state == "approved"`); bindet der Receipt-Hash
+nicht exakt dieses Manifest, scheitert `execute` mit `review_hash_mismatch`.
+
+Ohne Quellcodestudium signiert das stdlib-Helferskript neu:
+
+```bash
+python -B scripts/mail_desk_sign_manifest.py data/mail-desk/batch-manifest.json \
+    --reviewed-by <name> [--reviewed-at <ISO 8601>] [--workspace <root>]
+```
+
+Es lädt das Manifest, aktualisiert `candidate_count = len(items)`, verwirft einen
+alten `execute_request_sha256` aus `review`, berechnet den kanonischen Hash neu,
+setzt `review` auf `approved` samt Receipt, prüft sich selbst via
+`validate_execute_contract` (sonst Fehlerabbruch ohne Write) und schreibt atomar
+zurück. Die Uhr ist über `--reviewed-at` injizierbar; das Skript kontaktiert
+niemals die Mailbox und berührt keine andere Workspace-Datei. Es emittiert genau
+ein maschinenlesbares JSON-Envelope (`ok`, `execute_request_sha256`, `path`,
+`reviewed_at`/`reviewed_by`, `candidate_count`).
 
 ---
 
@@ -902,6 +944,41 @@ Prüft Message-IDs (oder ein ausgeführtes Manifest/Ergebnis) über alle Ebenen:
 }
 ```
 
+### Gekoppelter Verify-Schritt nach `execute`
+
+`verify` akzeptiert optional ein vollständiges Execute-Ergebnis als Provenienz
+(`execute_summary` oder ein `batch_file` mit `mode:"execute"`). Es schließt nur
+dann ab und gibt den Synthese-Handoff frei, wenn `mode:"execute"`, `ok:true`,
+`status:"completed"`, `recovery_required:false` vorliegen, die ergebnisdoppelte
+ID-Liste **exakt gleich** `verify_scope_ids` ist, alle Zeilen `success:true`
+tragen und ein `synthesis_candidate`-Mapping vorhanden ist.
+
+```json
+{
+  "mode": "verify",
+  "check_folders": true,
+  "items": [{"message_id": "msg-2026-001@partner.example.org"}],
+  "execute_summary": {
+    "mode": "execute",
+    "ok": true,
+    "status": "completed",
+    "recovery_required": false,
+    "results": [
+      {"message_id": "msg-2026-001@partner.example.org", "success": true}
+    ],
+    "synthesis_candidate": {
+      "status": "pending",
+      "items": [{"message_id": "msg-2026-001@partner.example.org"}]
+    }
+  }
+}
+```
+
+Weicht eine dieser Bedingungen ab, bleibt `synthesis_handoff` **leer** und es
+entsteht **kein** `completion_report`. Wiederherstellungspfad: Ein read-only
+`reconcile` über ein vollständiges Journal liefert `status:"completed"` und gibt
+den Handoff frei.
+
 ---
 
 ## Modus 4: `search` (Globales Finden & Lokalisieren)
@@ -1066,6 +1143,33 @@ Idempotenz-Regel bezieht sich auf die Index-/Log-Records; `schema_version`, `run
 und `mode` bleiben wert-identisch, `updated_at` wird erneuert, der Schreibvorgang ist
 atomar (Tempdatei + `os.replace`). Die Datei wird nie erfunden; read-only `reconcile`
 berührt sie nicht.
+
+### Recovery-Fall: „Target verification failed after copy"
+
+Meldet ein Lauf nach dem Copy „Target verification failed after copy", ist die
+Mailbox-Kopie dennoch bereits erfolgt. Die read-only Diagnose (`reconcile` ohne
+`apply_local_repairs`) zeigt dann `journal_phase: "partial"`, `folder_verified:
+true`, `current_envelope_id: "<neu>"`, `in_index: false` und
+`recovery_state: "needs_local_repair"`. Der korrekte Abschluss ist genau die
+**lokale** Reparatur; eine erneute Mailbox-Aktion ist falsch.
+
+Reparaturmanifest `data/mail-desk/batch-reconcile.json`:
+
+```json
+{
+  "mode": "reconcile",
+  "check_folders": true,
+  "apply_local_repairs": true,
+  "approval": {"state": "approved", "reviewed_at": "…", "reviewed_by": "…"}
+}
+```
+
+Fehlende Gates brechen ohne jeden Write ab: `approval.state != "approved"` →
+read-only `approval_required`, `check_folders: false` → `verification_required`.
+`apply_local_repairs` ist rein **lokal** (nur Index/Log/Evidence), idempotent
+(`repaired_count: 0` ohne Drift) und mutiert niemals die Mailbox; es führt eine
+vorhandene `runner-progress.json` deterministisch auf `completed` bzw.
+`repaired`.
 
 ---
 

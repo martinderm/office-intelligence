@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (166 Dateien)│       │ (30 Dateien) │       │ - project-catalog-entry  │
+│ (171 Dateien)│       │ (30 Dateien) │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │

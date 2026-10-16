@@ -55,6 +55,30 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
 
+### Message reads and body preview
+
+The client's `read` operation (subcommand `read`, manifest action `read`) fetches
+headers plus a bounded body preview. The preview length is the manifest field
+`preview_lines` and the CLI flag `--preview-lines`; **both default to `50`
+lines**. The result reports `read_level`:
+
+- `"preview"` — the body is truncated to `preview_lines` lines. A high value
+  (for example `400`) returns effectively the full message text while
+  `read_level` stays `"preview"`.
+- `"full_body"` — produced only by the internal full-body read path
+  (`full_body=True`, for example the classifier's escalation read), which
+  bypasses line truncation and is **not** reachable through the `read` CLI
+  subcommand or manifest action.
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json
+python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --preview-lines 400 --json
+```
+
+```json
+{"account": "…", "operations": [{"action": "read", "folder": "INBOX", "envelope_id": "7195", "preview_lines": 400}]}
+```
+
 ### Temporary host execution boundary
 
 If the sandbox cannot read the configured Himalaya config but the same bounded,

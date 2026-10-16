@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-09-28/FR-09-MD-P3): 166 getrackte Dateien; 70 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py` (Harness-Ausgabe-Boundaries); 79 Testmodule; 1261 Tests) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/FR-28-DOC-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1298 Tests — davon 1275 verifiziert grün und 23 Altlasten-Tests aus den zwei diff-fremden, präexistenten Altlasten-Modulen `test_event_dossier`/`test_attachment_basename` (Root-TODO)) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -20,7 +20,7 @@
 ┌────────────────────────────────────────────────────────────────────────┐
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py + catalog_validator.py         │
-│  │   + mail_desk_batch_cli.py + catalog_inspect.py                     │
+│  │   + batch_cli + catalog_inspect + sign_manifest                     │
 │  ├─ Core Domain: scripts/core/ (56 getrackte .py-Dateien)              │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
@@ -759,9 +759,10 @@ JSON-Beispiele) — Token-Ballast bei jedem Skill-Load.
   und die Provenance-Zeile erhalten. Review-Major: versehentlich gelöschte
   Sortierregel „nicht parsebare Daten folgen am Ende" durch den Orchestrator
   wiederhergestellt; Matrix-Verweis in der Draft-Integration ergänzt.
-- Guard: `tests/test_batch_runner_slim.py` (5 Tests: Size-Gate 5.300–7.100 Wörter,
-  21 Sektionen, Contract-Vokabular-Floor, Schema-Floor, Provenance) pinnt den
-  schlanken, vertragsvollständigen Zustand.
+- Guard: `tests/test_batch_runner_slim.py` (5 Tests: Size-Gate, seinerzeit
+  5.300–7.100 Wörter — historisch; aktuelles Gate 5.300–8.000 nach FR-28,
+  siehe §28, 21 Sektionen, Contract-Vokabular-Floor, Schema-Floor,
+  Provenance) pinnt den schlanken, vertragsvollständigen Zustand.
 
 **Ergebnis:** 7.088 Wörter / 1.401 Zeilen (−19%). **Suite 1064/1064 grün.**
 
@@ -883,3 +884,80 @@ APPROVE (0 actionable). 2 dokumentierte Test-Vertragsrotationen
 **Pflichttests:** `tests/test_maildesk_attachment_promotion_mdp3.py` (36),
 `cloud-atlas tests/test_promotion_refresh.py` (29). **Suiten 1261/1261
 (mail-desk) + 167/167 (cloud-atlas) grün.**
+
+## 28. FR-28/DOC-P1 — Batch-Dokumentationsschärfung und Signatur-Helfer (in Finalisierung)
+
+**Human Gate (User 2026-10-16):** GitHub issue #4 (A–E) nach Issue-Survey
+ausdrücklich freigegeben („issue 4 mit a-e jetzt angehen").
+
+**Umsetzung:**
+- **A — Review-Korrektur-/Signaturpfad:** `references/batch-runner.md`
+  („Reviewte Korrekturen anwenden & neu signieren"): Reviewer-Korrekturen
+  wandern per Editor in `data/mail-desk/batch-manifest.json`; exakte
+  Kanonisierung aus `core/batch_contract.py:canonical_execute_request_sha256`
+  (Kopie des Manifests, nur `review` wird entfernt, `json.dumps(...,
+  ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)`
+  → SHA-256); Receipt-Vertragsform (exakt 3 Keys `reviewed_at`/`reviewed_by`/
+  `execute_request_sha256`), Fehlerbild `review_hash_mismatch`.
+- **E — Ablage-Norm:** `batch-recovery-journal.json`/`batch-manifest.json`
+  bleiben unter `data/mail-desk/`; eine Archivkopie darf nach
+  `data/mail-desk/archive/YYYY-Www/` (ISO-Woche wie im Resolve-Modus);
+  Synthese-Markdown entsteht ausschließlich an den Handoff-Zielen
+  `memory/references/{projects,topics}/<decision.id>/…`.
+- **B1 — Verify-Schritt:** Beispiel-`batch-verify.json` mit eingebettetem
+  `execute_summary` (`mode:"execute"`, `ok:true`, `status:"completed"`,
+  `recovery_required:false`, zeilenweise `success:true`, ID-Liste exakt
+  deckungsgleich mit `verify_scope_ids`, `synthesis_candidate`) laut
+  `core/modes/verify.py:_verified_execute_candidate`; Mismatch → leerer
+  `synthesis_handoff` ohne `completion_report`; Read-only-`reconcile`-Fallback
+  bei vollständigem Journal → `status:"completed"` + freigegebener Handoff.
+- **B2 — Recovery-Fall (issue-Nachtrag, env 9498/9511):** „Target verification
+  failed after copy" → Read-only-Reconcile zeigt `journal_phase: partial`,
+  `folder_verified: true`, `recovery_state: "needs_local_repair"` — die
+  Mailbox-Kopie war erfolgreich; Abschluss nur über den lokalen Repair
+  (`batch-reconcile.json` mit `apply_local_repairs` + Approval-Gate, sonst
+  `approval_required`/`verification_required`; idempotent, `repaired_count:0`
+  ohne Drift, `runner-progress.json` → `completed`/`repaired`; nie
+  Mailbox-Mutation; FR-19-Verträge).
+- **C — Volltext-Read:** `backends/himalaya.md`: `read`-Aktion mit
+  `preview_lines` (Manifest-Feld und `--preview-lines`-Flag, Default 50
+  beidseitig); Volltext über hohen `preview_lines`-Wert;
+  `read_level:"full_body"` nur über interne Classifier-Eskalation erreichbar
+  (kein CLI-Flag) — dokumentierter Gerätepfad.
+- **D — `catalog_inspect.py`-CWD:** `cli-operations.md` nennt die echten
+  `CATALOG_PATHS` (`memory/references/{topics,projects,
+  mail-desk/mail-desk}.json`) und die CWD-Auflösung über `--workspace`
+  (Default `"."` → Prozess-CWD; Aufruf aus dem Workspace-Root, sonst
+  `Catalog file not found.`, Exit 1).
+
+**Neue Adapter-Seam:** `scripts/mail_desk_sign_manifest.py` —
+Harness-Ausgabe-Boundary wie `batch_cli`/`catalog_inspect`
+(`core.envelope`, `core.common.atomic_write_json`): lädt das Manifest, zwingt
+`candidate_count=len(items)`, berechnet den Hash über
+`canonical_execute_request_sha256` (kanonisches Modul, nicht die
+`dossier_apply`-Kopie), ersetzt `review` durch approved + Receipt (alter
+`execute_request_sha256`-Zwischenzustand wird entfernt, injizierbare Uhr),
+Self-Check via `validate_execute_contract` (nur bei `ok:true` wird atomar
+geschrieben, sonst fail-closed ohne Write), maschinenlesbarer
+JSON-Envelope auf stdout; nie Mailbox- oder weitere Workspace-Mutation
+(Write-Trap-Scan getestet).
+
+**Size-Gate:** `MAX_WORDS` 7400→8000 als dokumentierte Testkorrektur
+(Docstring-Historie 7100→7400→8000 mit FR-28-Rationale; gemessene Wortzahl
+7843).
+
+**Review:** unabhängig. Runde 1 → REQUEST_CHANGES (2 Major — Map-Drift der
+neuen Seam und fehlendes FR-Record-Frontmatter, beide im
+Orchestrator-Sync-Scope — und 1 Minor — `UnicodeDecodeError` bei
+Nicht-UTF-8-Manifesten bricht den kanonischen Fehlerpfad). Fix-Runde 2
+behebt den Minor; Map- und Frontmatter-Sync laufen im selben
+Orchestrator-Schritt (Metriken im Post-Commit-Frame, gemessen via
+`git ls-files`).
+
+**Altlasten (Root-TODO, diff-fremd/präexistent):** `test_event_dossier`
+(12 × `ModuleNotFoundError: mail_desk_event_dossier` — getracktes Testmodul
+ohne getracktes Skript) und `test_attachment_basename` (11 Vertragsbrüche:
+`KeyError: 'original_filename'`, Traversal-/Win32-Pfadsemantik). Die Suite
+trägt 1298 Tests, davon 1275 verifiziert grün inklusive der 19 neuen
+(Suite-Gesamtzahl nach Fix-Runde 2); bekannter MD-A3-Timing-Flake
+(OCR/Prozess-Timeout-Fenster) ist weiterhin in Root-TODO dokumentiert.
