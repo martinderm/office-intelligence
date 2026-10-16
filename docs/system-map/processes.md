@@ -60,13 +60,21 @@ Die Bearbeitung von E-Mails und die Erfassung von Aufgaben sind strikt getrennt:
 ## 4. Cloud-Atlas Workspace-Integration
 
 1. **Filemap-Generierung:**
-   - `cloud-atlas` erfasst Cloud-Verzeichnisse rekursiv und erzeugt `filemap.json`.
+    - `cloud-atlas` erfasst Cloud-Verzeichnisse rekursiv und erzeugt `filemap.json`.
+    - Projekt-, Topic- und Subtopic-Storages können mit `cloud_sync.<storage_id>.exclude_dirs`
+      literale scan-relative Verzeichnisse ausnehmen (Issue #2). Beide Scanner nutzen
+      `skills/cloud-atlas/scripts/core/scan_scope.py`: Validierung und Pruning vor
+      Hashing/Konvertierung, effektive Ausschlüsse in der Scan-Provenienz.
 2. **Kuratierung & Konvertierung:**
    - Binärformate (Word, Excel, PowerPoint) werden via Pandoc / LibreOffice nach Markdown übersetzt.
    - Bildbasierte PDFs durchlaufen OCR (Default: `local_derivative`).
 3. **Spiegelung in den Workspace:**
    - Ablage unter `memory/cloud/projects/<project-id>/` bzw. `memory/cloud/topics/<topic-id>/`.
-   - Das Projekt-Desk verlinkt diese lokalen Spiegel in den Projekt-Notizen (`memory/references/projects/<id>/`).
+    - Das Projekt-Desk verlinkt diese lokalen Spiegel in den Projekt-Notizen (`memory/references/projects/<id>/`).
+    - Bei geänderten Ausschlüssen bleiben Alt-Artefakte erhalten, verschwinden aber
+      aus dem Inventar. Cleanup mit Ausschlüssen verlangt vorherige Ownership durch
+      eine Quelle im verbleibenden Scope; unbekannte Artefakte bleiben unangetastet.
+      Überlappende Quellwurzeln nutzen getrennte Output-Wurzeln und Filemaps.
 
 ---
 

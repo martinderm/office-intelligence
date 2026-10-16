@@ -428,6 +428,12 @@ class FilemapSchemaTests(unittest.TestCase):
             Path(MODULE.__file__).resolve().parent / "core" / "mirror_paths.py",
             runtime_core / "mirror_paths.py",
         )
+        # Issue #2 adds a bundled runtime dependency; the standalone fixture
+        # must ship it too, without introducing a Shared-Memory dependency.
+        shutil.copy2(
+            Path(MODULE.__file__).resolve().parent / "core" / "scan_scope.py",
+            runtime_core / "scan_scope.py",
+        )
 
         with mock.patch.dict(
             os.environ,

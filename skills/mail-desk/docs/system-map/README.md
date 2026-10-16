@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/OUT-P1+VR-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1304 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Stand OUT-P1+VR-P1, 2026-10-16; inkl. +2 Copy-Verify-Retry-Tests, issue #7, und +4 Output-Contract-Tests, issues #5/#6) — abzüglich konstant 23 diff-fremder, präexistenter Altlasten aus den zwei Modulen `test_event_dossier` (12 Errors, fehlendes Skript) und `test_attachment_basename` (11) und eines umgebungsabhängigen MD-A3-Timing-Flake-Satzes (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, Root-TODO) bleiben 1278–1279 grün (Referenzlauf: 1278 = 1304 − 23 − 3)) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/Post-Altlasten-Entfernung, Post-Commit-Frame inkl. der FR-28-Dateien und der Draft-API): 171 getrackte Dateien; 72 getrackte Dateien unter `scripts/`, davon 58 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 81 Testmodule; Suite 1309 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Vollsuite-Referenzlauf 2026-10-16 nach Entfernung der beiden diff-fremden Altlasten-Module — `test_event_dossier`/`test_attachment_basename`, Nachverfolgung in issues #8/#9, Spec in Git-History `0896334`; gemessen 1309 Tests / 1306 grün); verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, Root-TODO) → 1305–1307 grün je Lauf; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -21,7 +21,8 @@
 │                           mail-desk Engine                             │
 │  ├─ CLI Facades: scripts/mail_desk_*.py + catalog_validator.py         │
 │  │   + batch_cli + catalog_inspect + sign_manifest                     │
-│  ├─ Core Domain: scripts/core/ (56 getrackte .py-Dateien)              │
+│  ├─ Core Domain: scripts/core/ (58 getrackte .py-Dateien)              │
+│  │   ├─ drafts.py (Draft-API: save/delete/replace)                     │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
 │  │   ├─ quarantine/ (6 kanonische Quarantäne-Owner + Legacy-Shims)      │
@@ -120,6 +121,7 @@ Verzeichnislevel. Vollständige Suite 804/804 grün. **MD-M2 ist abgenommen; FR-
 geschlossen.**
 | **MD-E2 Draft-Integration (FR-15/MD-E2-T01/T02)** | [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py) | Standardmäßig aktive `draft`-Auswertung: nur unklare Items rufen `attachment_evaluate`, der validierte `ready`-Handoff wird genau einmal als getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein additives finales `attachment_evaluation`; `classifier_revision` bindet den Classifier-Regel-AST, Kataloge und konsumierte Hashes. Fail-closed-Härtung: bounded Outcome-Matrix in Review/`INBOX`, kanonische Handoff-Revalidierung, fail-loud `AttachmentReclassificationContractError`, deterministische `already_fetched`-Idempotenz. Keine zweite Fetch-/MIME-/Hash-Validierung. |
 | **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
+| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND (`message save`), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
@@ -131,8 +133,8 @@ geschlossen.**
 
 | Dimension | Dokument | Inhalt |
 | :--- | :--- | :--- |
-| **Nomen** (Struktur & Zustand) | [`objects.md`](objects.md) | `attachment-quarantine-index.json` (Schema 1 mit optionalen Coverage-Feldern), `attachment-disposition-log.jsonl`, `attachment-discard-journal.json`, `.quarantine-inventory.json`, `final-location-index.json`, Dossiers, DTOs. |
-| **Verben** (Ablauf & Transformation) | [`processes.md`](processes.md) | Batch-Lifecycles (`draft` → `execute` → `verify`), Quarantäne-, Coverage- & Dispositions-Ablauf, Recovery-Workflow, Reconcile, Himalaya-Intake. |
+| **Nomen** (Struktur & Zustand) | [`objects.md`](objects.md) | `attachment-quarantine-index.json` (Schema 1 mit optionalen Coverage-Feldern), `attachment-disposition-log.jsonl`, `attachment-discard-journal.json`, `.quarantine-inventory.json`, `final-location-index.json`, `draft-journal.json` (Schema 1, ungesendete Draft-API; getrennt vom Batch-Recovery-Journal), Dossiers, DTOs. |
+| **Verben** (Ablauf & Transformation) | [`processes.md`](processes.md) | Batch-Lifecycles (`draft` → `execute` → `verify`), Quarantäne-, Coverage- & Dispositions-Ablauf, Recovery-Workflow, Reconcile, Himalaya-Intake sowie der ungesendete Draft-Lifecycle (Drafts-Ordner-Auflösung → APPEND → `\Deleted` + EXPUNGE). |
 | **Seiteneffekte** (Umwelt & Grenzen) | [`effects.md`](effects.md) | Windows UNC-Drive Normalisierung, 0x400 Reparse-Point Bann, Tempfile-Replace, Secret-Filter, Recovery-Scope-Drift, Coverage-Fail-Closed-Integrität. |
 
 ---
@@ -1001,3 +1003,98 @@ ohne getracktes Skript) und `test_attachment_basename` (11 Vertragsbrüche:
 trägt 1298 Tests, davon 1275 verifiziert grün inklusive der 19 neuen
 (Suite-Gesamtzahl nach Fix-Runde 2); bekannter MD-A3-Timing-Flake
 (OCR/Prozess-Timeout-Fenster) ist weiterhin in Root-TODO dokumentiert.
+
+---
+
+## 29. DRAFT-P1 (GitHub issue #3) — Standalone-Draft-API: `save_draft` / `delete_draft` / `replace` (abgeschlossen)
+
+**Problem:** Entwürfe konnten nur über den vollen Batch-Lifecycle entstehen; ein
+einzelner, ungesendeter Entwurf („Antwort vorbereiten, noch nicht senden") hatte
+keine erste Klasse im Client.
+
+**Bestätigte Produktentscheidungen (Human Gate User 2026-10-16):**
+- **Kein Approval-Gate.** `save_draft`/`delete_draft`/`replace_draft` arbeiten auf
+  ungesendeten Entwürfen; Senden/SMTP bleiben ausdrücklich out of scope, ein
+  `message send` wird nie erzeugt.
+- **Standalone.** Der Batch-Runner bleibt unangetastet (keine Draft-Modi, keine
+  Alias-Erweiterung), und das Batch-Journal wird weder gelesen noch geschrieben.
+- **Replace = neu-erst-dann-löschen** (`replace_envelope_id`).
+
+**Umsetzung:**
+- **Modul:** `scripts/core/drafts.py` mit `save_draft`, `delete_draft`,
+  `replace_draft`, `resolve_drafts_folder`, `build_draft_message`, `DraftJournal`;
+  die Symboloberfläche wird aus `core/__init__.py` per Objektidentität re-exportiert
+  (bewusst ohne `__all__`-Erweiterung: die `core.__all__`-Baseline ist eingefroren,
+  siehe `tests/test_quarantine_compatibility_contract.py`). **Adjudikation
+  2026-10-16 (Orchestrator):** namespace-only Re-Exports werden akzeptiert, die
+  frozen `core.__all__`-Baseline bleibt unverändert; ein Follow-up (expliziter
+  `__all__`-Eintrag) ist optional und nicht erforderlich.
+- **Client:** `scripts/mail_desk_himalaya_client.py` erhält die Subcommands
+  `save-draft`/`delete-draft`/`replace-draft`, den Op-Layer
+  (`op_save_draft`/`op_delete_draft`/`op_replace_draft`) und die Manifest-Aktionen
+  `save_draft`/`delete_draft`/`replace_draft`. Ohne explizites Vorgabe-Journal legt
+  der Op-Layer ein wochengebundenes Draft-Journal unter dem aufgelösten
+  Datenverzeichnis an.
+- **Dynamische Drafts-Ordner-Auflösung (deterministisch, fail-loud):**
+  `folder list -o json` → Toleranz gegenüber einer führenden Log-Zeile; Kette
+  RFC-6154-`\Drafts`-Attribut (Auswertung von `attributes`/`flags`/`special_use`/
+  `description`/`desc`) → konventioneller Name `Drafts` → GroupWise-Konvention
+  `Work In Progress`. Es gibt **keinen** hartkodierten Fallback: bleibt alles
+  leer, endet die Operation mit einem begrenzten `drafts_folder_unresolved`
+  (`DraftsFolderUnresolvedError`), auch wenn schon das Ordner-Listing scheitert.
+  Die Attribut-Stufe ist belegt forward-kompatibel: `himalaya folder list --help`
+  der installierten Fassung 1.2.0 kennt nur `-a`/`-w`/`-o`, das JSON-Payload trägt
+  reine Ordnernamen (dieselbe Faktenlage wie die heutige `mailbox_preflight`
+  Annahme).
+- **UTF-8-APPEND:** `build_draft_message` baut die Nachricht mit der
+  `SMTPUTF8`-Policy (rohe UTF-8-Header, keine RFC-2047-Kodierung) und übergibt sie
+  als ein Argument an `message save -f <folder> <raw>` (IMAP APPEND). Das Ergebnis
+  ist das Envelope `{envelope_id, folder, subject, to, date}` analog zu
+  `get_single_email_details`; ein nicht auffindbarer Entwurf endet als begrenzter
+  `draft_verification_failed`-Fehler statt als scheinbarer Erfolg.
+- **Löschen ohne UID MOVE (belegt):** `delete_draft` setzt `\Deleted` in place
+  (`flag add deleted <id> -f <folder>`) und entfernt die markierte Nachricht
+  anschließend mit `folder expunge <folder>`. `message delete` ist bewusst
+  verworfen: die eigene Hilfe der installierten Himalaya-Fassung dokumentiert
+  „if the given folder points to the trash folder, it adds the 'deleted' flag to
+  its envelope, otherwise it moves it to the trash folder" — auf einem
+  Nicht-Trash-Ordner wäre das genau der verbotene UID MOVE.
+- **Replace-Crash-Fenster:** `replace_draft` hängt den neuen Entwurf zuerst an und
+  löscht erst danach den alten (`REPLACE_CRASH_WINDOW` ist als Konstante
+  dokumentiert), damit ein Crash nie beide Entwürfe verliert. Mit Journal wird der
+  Eintrag mit beiden Envelope-IDs (`envelope_id`, `old_envelope_id`,
+  `crash_window`) **vor** dem Löschschritt geschrieben, sodass ein Crash ab dem
+  Löschschritt (`\Deleted`/EXPUNGE) reconcile-sichtbar bleibt; das einzige
+  Restfenster ist ein Crash nach dem APPEND, aber vor diesem Journal-Schreibvorgang
+  (der angehängte Entwurf bleibt dann ohne Journal-Eintrag). Reconcile selbst
+  bleibt out of scope.
+- **Draft-Journal:** eigene Datei `data/mail-desk/draft-journal.json`, Schema 1,
+  atomar geschrieben, pro Lauf (`runs.<run_id>.items.<envelope_id>`) mit
+  `envelope_id`/`folder`/`subject`/`to`/`date`/`action`/`recorded_at` und
+  optional `old_envelope_id`/`crash_window`. Ein unlesbares oder strukturell
+  falsches Journal endet fail-loud (`draft_journal_corrupted`) und wird nicht
+  stillschweigend überschrieben. Das Batch-Recovery-Journal ist eine andere
+  Datei mit unverändertem Vertrag; der `DraftManifest`-Review-Vertrag
+  (`batch_contract.py`) bleibt unberührt.
+
+**Doku-Sync (gleicher Schritt):** `SKILL.md` trennt die beiden
+„Draft"-Begriffe (`DraftManifest` = Batch-Review-Artefakt, `save_draft` =
+einzelne Client-Operation) und korrigiert den veralteten Hinweis, die
+Quarantäne-Paketierung sei noch offen (sie ist abgeschlossen, §7);
+`references/cli-operations.md` dokumentiert Manifest-Aktionen, Subcommands,
+Ordner-Auflösung, UTF-8, Lösch- und Replace-Semantik sowie das Journal;
+`references/backends/himalaya.md` dokumentiert dieselben Kommandos
+(`message save`, `flag add deleted`, `folder expunge`).
+
+**Pflichttests:** `tests/test_drafts_api.py` (22 Tests, hermetisch über den
+gefakten `run_himalaya`-Seam: Ordner-Auflösung inkl. GroupWise-Fallback und
+fail-loud, UTF-8-Round-Trip plus Envelope-Contract, Löschen ohne UID MOVE,
+Replace-Reihenfolge plus Journal mit beiden UIDs und Crash-Fenster,
+`core`-Re-Exports, Manifest-Aktionen, Doku-/Map-Contract). Red-Gate: der
+modulare Lauf war mit 30 Assertion-Failures rot (fehlender `core`-Re-Export,
+fehlende Doku-/Map-Syncs sowie die auf `flag add deleted` rotierte
+Lösch-Pin), danach 22/22 grün. Rotationen: genau eine Pin-Rotation
+(`message delete` → `flag add deleted`, Begründung in der Test-Docstring über
+die Himalaya-Hilfe) plus die zugehörige Reihenfolge-Pin im Replace-Test.
+Suite-Metrik: fokussierter Discovery-Lauf; Vollsuite erst in der finalen
+Orchestrator-Abnahme (siehe Metrik-Frame in der Kopfzeile).

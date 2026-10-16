@@ -55,6 +55,27 @@ from .sent_indexer import (
 )
 from .progress import BatchProgressTracker
 from .envelope import build_error, build_success, emit_json
+
+# Draft API (standalone, unsent).  Namespace re-exports only: ``__all__`` stays
+# the frozen ``test_quarantine_compatibility_contract`` baseline, so the draft
+# symbols are deliberately not appended there.
+from .drafts import (
+    DRAFT_JOURNAL_FILENAME,
+    DRAFT_JOURNAL_SCHEMA_VERSION,
+    DRAFTS_FOLDER_NAME_CANDIDATES,
+    DRAFTS_FOLDER_UNRESOLVED_REASON,
+    DRAFTS_SPECIAL_USE_ATTRIBUTE,
+    REPLACE_CRASH_WINDOW,
+    DraftError,
+    DraftJournal,
+    DraftJournalCorruptedError,
+    DraftsFolderUnresolvedError,
+    build_draft_message,
+    delete_draft,
+    replace_draft,
+    resolve_drafts_folder,
+    save_draft,
+)
 from .attachment_quarantine_index import (
     INDEX_FILENAME,
     SCHEMA_VERSION,

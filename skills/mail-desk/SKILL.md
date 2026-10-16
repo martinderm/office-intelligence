@@ -122,6 +122,42 @@ benötigen ausdrücklich `apply_local_repairs: true` sowie eine freigegebene
 Recovery-Receipt; er kopiert oder löscht niemals Mailboxdaten. Details stehen in
 [`references/batch-runner.md`](references/batch-runner.md).
 
+### Ungesendete Draft-API (`save-draft`, `delete-draft`, `replace-draft`)
+
+Die drei eigenständigen Entwurfsoperationen ([`scripts/core/drafts.py`](scripts/core/drafts.py))
+arbeiten auf **ungesendeten** Entwürfen. Sie sind **kein** Batch-Modus und haben
+**kein** Approval-Gate: ein Entwurf liegt ungesendet in der Mailbox, Senden/SMTP
+bleiben out of scope. Der Batch-Runner kennt keine Draft-Modi und bleibt
+unangetastet; die Operationen laufen ausschließlich über den JSON-Manifest-Client.
+
+**Nicht zu verwechseln sind zwei „Draft"-Begriffe:** `DraftManifest` ist das
+reviewbare Artefakt eines Batch-`draft`-Laufs (`expected_count`/`allow_fewer`/
+Review-Hash, siehe [`references/batch-runner.md`](references/batch-runner.md));
+`save_draft` ist die einzelne Client-Operation, die genau einen ungesendeten
+Entwurf in den Drafts-Ordner legt.
+
+- **Drafts-Ordner:** deterministisch aus der Live-Ordnerliste aufgelöst (zuerst
+  das RFC-6154-Attribut, dann der konventionelle Name `Drafts`, dann die
+  GroupWise-Konvention `Work In Progress`); ist nichts davon vorhanden, endet die
+  Operation fail-loud, ohne hartkodierten Fallback. Ein explizites `--folder`
+  überspringt die Auflösung.
+- **UTF-8:** Betreff, Empfänger und Body gehen als roher RFC-822-Literal
+  (SMTPUTF8) in das APPEND, ohne 7-bit-Downgrade; das Ergebnis trägt
+  `{envelope_id, folder, subject, to, date}`.
+- **Löschen ohne UID MOVE:** `\Deleted` wird direkt am Envelope gesetzt und die
+  markierte Nachricht danach per `folder expunge` entfernt; ein `message delete`
+  (das eine Nicht-Trash-Nachricht in den Trash-Ordner verschiebt) wird bewusst
+  nicht verwendet.
+- **Ersetzen:** neu zuerst, alt danach (`replace_envelope_id`); das dokumentierte
+  Crash-Fenster (beide Entwürfe beobachtbar) und beide Envelope-IDs landen im
+  Draft-Journal.
+- **Draft-Journal:** eigene Datei `data/mail-desk/draft-journal.json` (Schema 1,
+  Eintrag je Envelope-ID mit `envelope_id`/`folder`/`subject`/`to`/`date`); das
+  `batch-recovery-journal.json` des Batch-Pfads bleibt unberührt.
+
+Details: [`references/cli-operations.md`](references/cli-operations.md),
+[`references/backends/himalaya.md`](references/backends/himalaya.md).
+
 Wähle **genau einen** Adapter und lies nur diesen vollständig:
 
 - Gmail: [`references/backends/gmail.md`](references/backends/gmail.md)
@@ -497,8 +533,11 @@ Topic-Vertikale besitzen und per Objektidentität an die Facade gebunden sind. D
 `matching/ambiguity.py`, `matching/date_parser.py`, `matching/project_matching.py` und
 `matching/topic_matching.py`; da sich diese Quellen einmalig geändert haben,
 rotieren vorhandene `classifier_revision`-Werte genau einmal (genehmigt). Die
-Quarantäne-Paketierung unter `core/quarantine/` bleibt offen.
-Detail: [`docs/system-map/README.md`](docs/system-map/README.md) §6.
+Quarantäne-Paketierung unter `core/quarantine/` ist abgeschlossen: die sechs
+kanonischen Owner liegen in `core/quarantine/`, die alten `core/attachment_*.py`-Pfade
+sind dünne, objektidentische Shims, und der `classifier_revision`-Fingerprint blieb
+dabei unrotiert.
+Detail: [`docs/system-map/README.md`](docs/system-map/README.md) §7.
 
 Verifiziere nur mit dem kleinstmöglichen belastbaren Nachweis; keine breiten
 Mailbox-, Ordner- oder Rohmail-Listen in den Kontext ziehen, wenn ein fokussierter

@@ -17,6 +17,11 @@ Usage:
     python3 scripts/mail_desk_himalaya_client.py delete -f INBOX 7195 --json
     python3 scripts/mail_desk_himalaya_client.py search -q "USAGE-NG" --json
 
+    # Ungesendete Entwürfe (standalone, kein Approval-Gate, kein SMTP):
+    python3 scripts/mail_desk_himalaya_client.py save-draft -t a@example.org -s "Betreff" -b "Text" --json
+    python3 scripts/mail_desk_himalaya_client.py delete-draft 41 -f "Drafts" --json
+    python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -s "Betreff" -b "Text" --json
+
 Note:
     MIME attachment inspection is strictly audited and executed exclusively via JSON
     manifest (--input), ensuring verified account binding, drift checks, and policy
@@ -35,7 +40,8 @@ import sys
 from typing import Any
 
 from core.envelope import build_error, build_success, emit_json
-from core.common import normalize_message_id
+from core.common import get_iso_week_folder, normalize_message_id, resolve_data_dir
+from core import drafts
 from core.attachments import (
     AccountDriftError,
     AttachmentDriftError,
@@ -160,6 +166,58 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p_search.add_argument("-q", "--query", type=str, default="", help="Text search query.")
     p_search.add_argument("-m", "--message-id", type=str, default=None, help="Specific Message-ID.")
     p_search.add_argument("-f", "--folders", nargs="*", default=None, help="Folders to search in.")
+
+    # save-draft (IMAP draft creation, unsent; no approval gate, no SMTP)
+    p_save_draft = subparsers.add_parser(
+        "save-draft",
+        parents=[common_parent],
+        help="Append a new unsent draft into the Drafts folder.",
+    )
+    p_save_draft.add_argument("-t", "--to", type=str, required=True, help="Recipient address(es).")
+    p_save_draft.add_argument("-s", "--subject", type=str, required=True, help="Draft subject.")
+    p_save_draft.add_argument("-b", "--body", type=str, default="", help="Draft body text.")
+    p_save_draft.add_argument("--cc", type=str, default=None, help="Optional Cc recipients.")
+    p_save_draft.add_argument(
+        "-f",
+        "--folder",
+        type=str,
+        default=None,
+        help="Drafts folder (default: resolved dynamically from the mailbox).",
+    )
+
+    # delete-draft (\Deleted + EXPUNGE, never a UID MOVE)
+    p_delete_draft = subparsers.add_parser(
+        "delete-draft",
+        parents=[common_parent],
+        help="Delete a draft via \\Deleted + EXPUNGE (no UID MOVE).",
+    )
+    p_delete_draft.add_argument("envelope_id", type=str, help="Envelope ID of the draft.")
+    p_delete_draft.add_argument(
+        "-f",
+        "--folder",
+        type=str,
+        default=None,
+        help="Drafts folder (default: resolved dynamically from the mailbox).",
+    )
+
+    # replace-draft (append the new draft first, then delete the old one)
+    p_replace_draft = subparsers.add_parser(
+        "replace-draft",
+        parents=[common_parent],
+        help="Replace a draft: append the new draft, then delete the old one.",
+    )
+    p_replace_draft.add_argument("envelope_id", type=str, help="Envelope ID of the draft to replace.")
+    p_replace_draft.add_argument("-t", "--to", type=str, required=True, help="Recipient address(es).")
+    p_replace_draft.add_argument("-s", "--subject", type=str, required=True, help="Draft subject.")
+    p_replace_draft.add_argument("-b", "--body", type=str, default="", help="Draft body text.")
+    p_replace_draft.add_argument("--cc", type=str, default=None, help="Optional Cc recipients.")
+    p_replace_draft.add_argument(
+        "-f",
+        "--folder",
+        type=str,
+        default=None,
+        help="Drafts folder (default: resolved dynamically from the mailbox).",
+    )
 
     return parser.parse_args(argv)
 
@@ -312,6 +370,101 @@ def op_search(
     )
 
 
+# ==============================================================================
+# Draft Operations (standalone: save / delete / replace; unsent, no SMTP)
+# ==============================================================================
+
+def _active_draft_journal(
+    journal: "drafts.DraftJournal | None",
+    data_dir: Path | None,
+) -> "drafts.DraftJournal":
+    """Return the supplied journal or create a workspace-scoped default one."""
+    if journal is not None:
+        return journal
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    return drafts.DraftJournal(base, "drafts-" + get_iso_week_folder())
+
+
+def op_save_draft(
+    to: str,
+    subject: str,
+    body: str = "",
+    *,
+    folder: str | None = None,
+    account: str | None = None,
+    cc: str | None = None,
+    from_addr: str | None = None,
+    journal: "drafts.DraftJournal | None" = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Append a new unsent draft into the resolved Drafts folder.
+
+    No approval gate: drafts are stored unsent and sending is out of scope. The
+    envelope contract is ``{envelope_id, folder, subject, to, date, message_id}``.
+    """
+    active_journal = _active_draft_journal(journal, data_dir)
+    return drafts.save_draft(
+        subject,
+        to,
+        body,
+        folder=folder,
+        account=account,
+        cc=cc,
+        from_addr=from_addr,
+        journal=active_journal,
+    )
+
+
+def op_delete_draft(
+    envelope_id: str,
+    *,
+    folder: str | None = None,
+    account: str | None = None,
+    journal: "drafts.DraftJournal | None" = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Delete a draft via ``\\Deleted`` + EXPUNGE (never a UID MOVE)."""
+    active_journal = _active_draft_journal(journal, data_dir)
+    return drafts.delete_draft(
+        envelope_id,
+        folder=folder,
+        account=account,
+        journal=active_journal,
+    )
+
+
+def op_replace_draft(
+    old_envelope_id: str,
+    subject: str,
+    to: str,
+    body: str = "",
+    *,
+    folder: str | None = None,
+    account: str | None = None,
+    cc: str | None = None,
+    from_addr: str | None = None,
+    journal: "drafts.DraftJournal | None" = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Replace a draft: append the new draft first, then delete the old one.
+
+    The new-then-delete order and its documented crash window are owned by
+    ``core.drafts.replace_draft``; the journal records both envelope ids.
+    """
+    active_journal = _active_draft_journal(journal, data_dir)
+    return drafts.replace_draft(
+        old_envelope_id,
+        subject,
+        to,
+        body,
+        folder=folder,
+        account=account,
+        cc=cc,
+        from_addr=from_addr,
+        journal=active_journal,
+    )
+
+
 def op_inspect_attachments(
     envelope_id: str | int,
     folder: str = "INBOX",
@@ -459,6 +612,35 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     overall_deadline_seconds=op.get(
                         "overall_deadline_seconds", DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS
                     ),
+                )
+            elif action in ["save_draft", "savedraft"]:
+                if not str(op.get("to", "")).strip():
+                    raise ValueError("save_draft requires a 'to' recipient.")
+                res = op_save_draft(
+                    to=op.get("to"),
+                    subject=str(op.get("subject", "")),
+                    body=str(op.get("body", "")),
+                    folder=op.get("folder"),
+                    cc=op.get("cc"),
+                    account=acc,
+                )
+            elif action in ["delete_draft", "deletedraft"]:
+                res = op_delete_draft(
+                    envelope_id=str(op.get("envelope_id", op.get("id"))),
+                    folder=op.get("folder"),
+                    account=acc,
+                )
+            elif action in ["replace_draft", "replacedraft"]:
+                if not str(op.get("to", "")).strip():
+                    raise ValueError("replace_draft requires a 'to' recipient.")
+                res = op_replace_draft(
+                    old_envelope_id=str(op.get("envelope_id", op.get("id"))),
+                    subject=str(op.get("subject", "")),
+                    to=op.get("to"),
+                    body=str(op.get("body", "")),
+                    folder=op.get("folder"),
+                    cc=op.get("cc"),
+                    account=acc,
                 )
             elif action in ["inspect_attachments", "attachments"]:
                 op_account = op.get("account")
@@ -650,6 +832,31 @@ def main() -> int:
                 message_id=args.message_id,
                 folders=args.folders,
                 account=args.account,
+            )
+        elif sub == "save_draft":
+            result = op_save_draft(
+                to=args.to,
+                subject=args.subject,
+                body=args.body,
+                folder=args.folder,
+                account=args.account,
+                cc=args.cc,
+            )
+        elif sub == "delete_draft":
+            result = op_delete_draft(
+                envelope_id=args.envelope_id,
+                folder=args.folder,
+                account=args.account,
+            )
+        elif sub == "replace_draft":
+            result = op_replace_draft(
+                old_envelope_id=args.envelope_id,
+                subject=args.subject,
+                to=args.to,
+                body=args.body,
+                folder=args.folder,
+                account=args.account,
+                cc=args.cc,
             )
 
         if machine_mode:

@@ -34,10 +34,13 @@
 Implementiert in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py):
 
 ### Phase 1: Identifikation & Inkrementalitätsprüfung
-1. Scannt den Quellordner nach unterstützten Formaten (`.pdf`, `.docx`, `.xlsx`, `.pptx`, `.doc`).
+1. Validiert `exclude_dirs` pro Storage; `core/scan_scope.walk_scoped()` beschneidet ausgeschlossene Teilbäume vor der Traversierung und scannt danach nach unterstützten Formaten (`.pdf`, `.docx`, `.xlsx`, `.pptx`, `.doc`).
 2. Liest bestehende Mirror-Dateien unter `memory/cloud/<id>/mirrors/`.
 3. Vergleicht den aktuellen SHA-256 der Quelldatei mit dem im Frontmatter gespeicherten `source_sha256`.
 4. Ist der Hash identisch und nicht `--force` gesetzt, wird die Datei übersprungen (Idempotenz).
+5. Bei aktiven Ausschlüssen reserviert `retained_artifact_paths()` vorhandene
+   Artefakte ohne In-Scope-Ownership. Mirror-/Derivat-Kollisionen stoppen vor dem
+   ersten Write; auch der Generator darf reservierte Pfade nicht neu zuordnen.
 
 ### Phase 2: Formatspezifische Transformation
 * **DOCX / DOC:** Konvertierung via Pandoc nach GitHub Flavored Markdown (GFM). Bei alten Binär-DOCs Fallback über LibreOffice.
@@ -74,7 +77,7 @@ Implementiert in [`scripts/gen_filemap.py`](../scripts/gen_filemap.py):
 
 1. **Overlay-Laden:** Liest `filemap-curation.json` (falls vorhanden).
 2. **Dateisystem-Traversierung:**
-   - Scannt alle Verzeichnisse unterhalb des Speicherpfads.
+    - Nutzt denselben `core/scan_scope.walk_scoped()` wie der Konverter; ausgeschlossene Verzeichnisse werden nicht betreten, ähnlich benannte Siblings bleiben enthalten.
    - Filtert Dateien gegen interne Ignore-Regeln (`.git`, `~$*`, temporäre Dateien) und Kuratierungs-Muster.
 3. **Knoten-Erstellung:**
    - Berechnet Dateigröße, Modifikationsdatum und SHA-256 Hash.
@@ -82,7 +85,9 @@ Implementiert in [`scripts/gen_filemap.py`](../scripts/gen_filemap.py):
    - Ermittelt den zugehörigen relativen `mirror_path`.
 4. **Validierung & Speicherung:**
    - Validiert die Gesamtstruktur im Speicher gegen `filemap.schema.json`.
-   - Speichert atomar unter `memory/cloud/<id>/filemap.json`.
+    - Speichert atomar unter `memory/cloud/<id>/filemap.json`.
+    - Schreibt effektive `exclude_dirs` in JSON, lesbare Filemap und Storage-Ergebnis;
+      ausgeschlossene Quellen nehmen nicht am Hash-Rename-Matching teil.
 
 ---
 

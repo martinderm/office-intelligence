@@ -306,3 +306,40 @@ Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
    - Fügt Account-Parameter `-a <account>` an vordefinierter Position ein.
 3. **Ausführung mit Timeout:**
    - Führt den Subprozess aus; bei Überschreiten des Timeouts erfolgt sofortiger harter Abbruch ohne Retries (`himalaya_timeout`).
+
+### 6.1 Ungesendete Draft-Operationen (Client, ohne Approval-Gate)
+
+Implementiert in [`scripts/core/drafts.py`](../scripts/core/drafts.py) und verdrahtet im
+JSON-Manifest-Client ([`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py),
+Aktionen `save_draft`/`delete_draft`/`replace_draft`). Der Ablauf ist standalone: kein
+Batch-Modus, kein Approval-Gate, kein SMTP-/`send`-Schritt; das Batch-Recovery-Journal
+bleibt unberührt.
+
+1. **Zielordner auflösen (`resolve_drafts_folder`):**
+   - `folder list -o json` lesen (führende Log-Zeile wird toleriert); Fehler beim
+     Listing enden fail-loud als `drafts_folder_unresolved`.
+   - Kette: RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise
+     `Work In Progress`. Ist nichts davon vorhanden, bricht die Operation begrenzt ab;
+     es gibt keinen hartkodierten Ordnernamen als stillen Fallback. Ein explizites
+     `-f/--folder` überspringt die Auflösung vollständig.
+2. **Entwurf anlegen (`save_draft`):** `build_draft_message` erzeugt den rohen
+   RFC-822-Literal (SMTPUTF8, keine RFC-2047-Kodierung, Body als UTF-8), der als ein
+   Argument an `message save -f <folder> <raw>` geht (IMAP APPEND). Danach wird der
+   neue Entwurf über den kanonischen `verify_in_target_folder`-Seam wiedergefunden;
+   scheitert das, endet der Lauf als `draft_verification_failed` statt als
+   scheinbarer Erfolg. Ergebnis: `{envelope_id, folder, subject, to, date}`.
+3. **Entwurf löschen (`delete_draft`, ohne UID MOVE):** `flag add deleted <id> -f <folder>`
+   setzt `\Deleted` direkt am Envelope, `folder expunge <folder>` entfernt die markierte
+   Nachricht. `message delete` wird bewusst nicht verwendet, weil es eine Nachricht
+   außerhalb des Trash-Ordners in den Trash verschiebt (UID MOVE).
+4. **Entwurf ersetzen (`replace_draft`):** neu zuerst (`message save`), alt danach
+   (`flag add deleted` + `folder expunge`). Mit Journal wird der Eintrag mit beiden
+   Envelope-IDs **vor** dem Löschschritt geschrieben, sodass das Crash-Fenster
+   dazwischen reconcile-sichtbar ist: beide Entwürfe sind sichtbar, weil der neue
+   bereits durabel angehängt ist. Einziges Restfenster bleibt ein Crash nach dem
+   APPEND, aber vor dem Journal-Schreibvorgang (angehängter Entwurf ohne Eintrag).
+5. **Journal:** Jede Operation schreibt atomar einen Eintrag in
+   `data/mail-desk/draft-journal.json` (Schema 1, siehe [`objects.md`](objects.md) §5.4):
+   `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, beim Ersetzen zusätzlich
+   `old_envelope_id` und `crash_window`. Ein unlesbares Journal endet fail-loud
+   (`draft_journal_corrupted`).
