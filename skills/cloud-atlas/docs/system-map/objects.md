@@ -9,7 +9,8 @@
 
 ## 1. Das Filemap-Objekt (`filemap.json`)
 
-Die Filemap ist das vollständige, maschinenlesbare Inventar eines angebundenen Cloud-Speichers.
+Die Filemap ist das maschinenlesbare Inventar des konfigurierten Scan-Scopes eines
+angebundenen Cloud-Speichers. `exclude_dirs` dokumentiert absichtliche Auslassungen.
 
 * **Dateipfad:** `memory/cloud/projects/<project-id>/filemap.json`
 * **Implementierungsdatei:** [`scripts/gen_filemap.py`](../scripts/gen_filemap.py)
@@ -20,25 +21,25 @@ Die Filemap ist das vollständige, maschinenlesbare Inventar eines angebundenen 
 ```json
 {
   "schema_version": 1,
-  "generated_at": "2026-09-16T12:00:00Z",
+  "$schema": "https://raw.githubusercontent.com/martinderm/office-intelligence/main/skills/cloud-atlas/references/filemap.schema.json",
+  "kind": "cloud-filemap",
+  "scope": "project",
   "storage_id": "default",
-  "source_root": "rel/path/to/cloud",
-  "files_count": 42,
-  "total_bytes": 10485760,
-  "files": [
-    {
-      "relative_path": "docs/bericht.docx",
-      "size_bytes": 24576,
-      "mtime": "2026-09-15T10:30:00Z",
-      "sha256": "4a5b6c...",
-      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "category": "document",
-      "mirror_path": "mirrors/docs/bericht.md",
-      "conversion_status": "converted"
-    }
-  ]
+  "project": "example",
+  "project_title": "Example",
+  "scan_dir": "data/cloud/shared",
+  "output_dir": "memory/cloud/projects/example",
+  "exclude_dirs": ["Specialized Area"],
+  "updated_at": "2026-10-16 12:00:00",
+  "files": {}
 }
 ```
+
+`exclude_dirs` ist ein additives Schema-1-Feld (Legacy: fehlend = `[]`). Es
+enthält die effektiven, normalisierten, relativ zu `scan_dir` geltenden
+Verzeichnispfade. `scripts/core/scan_scope.py` validiert sowohl Projekt-/Topic-
+als auch Subtopic-Konfigurationen; `gen_filemap.validate_filemap()` prüft die
+kanonische Provenienz und das Fehlen ausgeschlossener Dateieinträge.
 
 ---
 

@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)  
 > **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine (65 Dateien, 41 Tests) zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen.  
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand Issue #2, 2026-10-16: 32 getrackte Dateien im freigegebenen Commit-Frame (`git ls-files skills/cloud-atlas/`), Vollsuite 182/182 grün (`unittest discover` mit absoluten Testpfaden); davon 15 neue Ausschluss-Regressionstests.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 ---
@@ -26,7 +26,8 @@
 │  └─ core/ (Hilfsmodule)                                                │
 │      ├─ metadata.py (Frontmatter- & Metadaten-Schemas)                 │
 │      ├─ curation.py (Curation-Overlays & manuelle Overrides)           │
-│      └─ mirror_paths.py (Pfadberechnung & Kollisionsvermeidung)        │
+│      ├─ mirror_paths.py (Pfadberechnung & Kollisionsvermeidung)        │
+│      └─ scan_scope.py (Storage-lokale Verzeichnisausschlüsse)          │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Atomare Disk-Writes (Lock-geschützt)
                                     ▼
@@ -50,6 +51,7 @@
 | **Metadaten & Frontmatter** | [`scripts/core/metadata.py`](../scripts/core/metadata.py) | Validierung der 12 Pflichtschlüssel und kanonischen Frontmatter-Eigenschaften. |
 | **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
 | **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen. |
+| **Scan-Scope (Issue #2)** | `scripts/core/scan_scope.py` | Gemeinsame Normalisierung, case-insensitiver Komponentenvergleich und Pre-Traversal-Pruning von `exclude_dirs`; Inventar und Rename-Matching bleiben im selben Scope. |
 
 ---
 

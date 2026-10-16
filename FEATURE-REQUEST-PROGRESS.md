@@ -5,6 +5,24 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- GitHub [Issue #2](https://github.com/martinderm/office-intelligence/issues/2):
+  Cloud-Atlas-Verzeichnisausschlüsse in isoliertem Worktree; Commit/Push am
+  2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.
+  Vorabprüfung bestätigt fehlende Implementierung. Beide Scanner teilen
+  `core/scan_scope.py`; Tests zuerst, einschließlich Ausschlusswechsel,
+  Custom-Derivaten, Hash-Rename-Isolation und separaten überlappenden Storages.
+  Kein neuer FR-Record; dauerhafter Status bleibt im GitHub-Issue.
+  Unabhängiges Review fand eine Zielkollision mit behaltenen Custom-Mirrors;
+  echte Red-Reproduktion ergänzt, Reservierung auch nach Inventarentfernung
+  implementiert (15 neue Tests grün). Dokumentierte Testkorrektur: Standalone-
+  Fixture in `test_gen_filemap.py` kopiert zusätzlich den neuen gebündelten
+  Scope-Owner; der erste Voll-Lauf zeigte dafür `ModuleNotFoundError`.
+  Abnahme 2026-10-16: Cloud-Atlas-Vollsuite **182/182**, Projektkatalog **28/28**,
+  unabhängiges Re-Review **APPROVE** (15/15 Fokus erneut unabhängig geprüft).
+  Freigegebener Branch: `fix/issue-2-cloud-exclusions`; Integration nach `main`
+  und damit Remote-Abschluss des Issues stehen separat aus. Logs liegen lokal im
+  Harness-Scratch (`issue2-cloud-acceptance.log`, `issue2-project-final.log`).
+
 - `FR-28`/`DOC-P1` — Batch-Doku-Schärfung + Signatur-Helfer in Finalisierung
   (2026-10-16, GitHub issue #4, Human Gate User). Neu:
   `skills/mail-desk/scripts/mail_desk_sign_manifest.py` (stdlib-only,

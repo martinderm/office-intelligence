@@ -19,3 +19,16 @@ Schreiben deterministisch geprüft. Dateischlüssel und Pfade müssen
 workspace-relativ sein; SHA-256-Werte werden als 64-stellige Hexwerte und
 Zeit-/Größenfelder in den bestehenden Filemap-Formaten geprüft. Unbekannte
 Dateieintragsfelder bleiben für manuell kuratierte Metadaten zulässig.
+
+## Scan-Provenienz: `exclude_dirs` (Issue #2)
+
+Neue Filemaps enthalten zusätzlich `exclude_dirs`: die normalisierten,
+scan-relativen, literalen Verzeichnisausschlüsse des Storages (Standard `[]`).
+Das additive Feld bleibt in Schema 1 optional, damit bestehende Maps gültig
+bleiben. Der Runtime-Validator prüft kanonische Ausschlüsse und weist weiterhin
+inventarisierte Dateien aus ausgeschlossenen Verzeichnissen zurück. Das JSON-Schema
+prüft Array und sichere relative Einträge; Normalisierung, Komponentenvergleich
+und Inventar-Scope sind semantische Runtime-Prüfungen.
+Die Konverter-Ausgabe und die lesbare Filemap tragen dieselbe Provenienz.
+Konfiguration und konservatives Cleanup sind in [SKILL.md](../SKILL.md#verzeichnisausschlüsse-pro-storage-exclude_dirs-issue-2)
+beschrieben. Ausgeschlossene Alt-Artefakte bleiben auf Disk, fehlen aber im aktiven Inventar.

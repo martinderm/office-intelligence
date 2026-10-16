@@ -128,7 +128,24 @@
         "typical_subject_patterns": { "$ref": "#/$defs/stringArray" },
         "routing_priority": { "type": "number" },
         "do_not_route_if": { "$ref": "#/$defs/stringArray" },
-        "cloud_sync": { "type": "object", "additionalProperties": true },
+        "cloud_sync": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "exclude_dirs": {
+                "type": "array",
+                "description": "Literal scan-relative directory paths; Cloud Atlas validates and normalizes the effective scope before scanning.",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^(?![/\\\\])(?!.*[:\\u0000])(?!.*(?:^|[/\\\\])\\.\\.(?:[/\\\\]|$))(?!^(?:\\.[/\\\\]*)+$).+$"
+                }
+              }
+            },
+            "additionalProperties": true
+          }
+        },
         "updated_at": { "type": "string" },
         "schema_version": { "const": 3 }
       },

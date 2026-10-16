@@ -133,10 +133,48 @@ Jedes Projekt oder Thema kann beliebig viele Cloud-Speicher besitzen. Der Eintra
     "output_md": "Relative path to output filemap.md (e.g. memory/cloud/projects/meshe/filemap.md)",
     "output_dir": "Relative path to local markdown mirror directory (e.g. memory/cloud/projects/meshe/default oder memory/cloud/topics/<slug>/<storage_id>)",
     "curation_json": "Optional relative path to the tracked filemap curation overlay",
+    "exclude_dirs": ["Specialized Area", "Archive/Private"],
     "last_synced_at": "Automated timestamp of last successful sync (e.g. 2026-08-05 21:09:12)"
   }
 }
 ```
+
+### Verzeichnisausschlüsse pro Storage (`exclude_dirs`, Issue #2)
+
+Das optionale Array gilt identisch für Projekte, Topics und explizite
+Subtopic-Storages. Jeder Eintrag ist ein **literaler Verzeichnispfad relativ zu
+`scan_dir`**. Beispiel: Ein breiter Storage mit `scan_dir: "data/cloud/shared"`
+und `exclude_dirs: ["Specialized Area"]` lässt diesen Teilbaum aus. Ein zweiter
+Storage darf `data/cloud/shared/Specialized Area` mit **eigenem, getrenntem
+`output_dir` und eigenen Filemaps** registrieren. Keine automatische Neuzuordnung.
+
+- Fehlendes Feld oder `[]`: bisheriger vollständiger Scan.
+- `/` und `\` sind Separatoren; `.`-Segmente, doppelte Separatoren und abschließende
+  Separatoren werden normalisiert. Leerzeichen in Namen bleiben erhalten.
+- Komponentenvergleich ist auf allen Plattformen case-insensitive: `Area`
+  schließt `area/Nested` aus, aber nicht `Area Extra`. Ein File namens `Area`
+  bleibt erfasst. Glob-Zeichen werden nicht interpretiert.
+- Leere Einträge, ein Root-Ausschluss (`.`), absolute Pfade, Laufwerkspfade,
+  NUL und jedes `..`-Segment sind ungültig. Fehler stoppen vor dem ersten Write.
+- Doppelte und durch Eltern bereits abgedeckte Ausschlüsse werden reduziert;
+  beide Scanner beschneiden die Traversierung **vor** Hashing oder Konvertierung.
+- `filemap.json.exclude_dirs`, die lesbare Filemap und die Storage-Ergebnisse
+  enthalten die effektiven Ausschlüsse. Legacy-Filemaps ohne Feld bedeuten `[]`.
+
+**Änderungen & Cleanup:** Neu ausgeschlossene Quellen verschwinden aus dem
+Inventar, aber bestehende Mirrors und Derivate werden **nicht gelöscht** und
+nicht über Hash-Matches für andere Quellen wiederverwendet. Solange Ausschlüsse
+aktiv sind, bereinigt der Konverter nur zuvor inventarisierte Artefakte von
+weiterhin im Scope liegenden Quellen; unbekannte Artefakte und leere Verzeichnisse
+bleiben konservativ erhalten, auch bei wiederholten Läufen. Solche zurückbehaltenen
+Dateien sind kein aktives Inventar. Ihre Entfernung braucht eine separate,
+geprüfte Bereinigung. Ohne Ausschlüsse bleibt das bisherige Cleanup erhalten.
+Zurückbehaltene und nicht zuordenbare Artefaktpfade sind auch für die Zielplanung
+reserviert: Kollidiert ein neuer Mirror oder ein Derivat damit, stoppt der Lauf
+vor dem Write bzw. der Inventarübernahme mit `mirror-plan`, statt Alt-Artefakte
+zu überschreiben. Das gilt auch nach Entfernung ihres alten Filemap-Eintrags.
+Die Ausschlussfunktion verändert oder löscht keine Cloud-Originale; die bestehende,
+explizite OCR-Policy `enrich_source` bleibt auf **eingeschlossene** Quellen beschränkt.
 
 ### Manifest- und Metadaten-Verknüpfung in `filemap.json`
 

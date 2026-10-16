@@ -41,3 +41,18 @@ Die Modifikation von Originaldateien im Modus `enrich_source` unterliegt strengs
 
 * **Workspace-Lock Guard:** Jeder Lauf von `sync_project_cloud.py` oder `convert_cloud_docs.py` validiert vor dem ersten Schreibvorgang in `memory/cloud/` die aktive Lease des aufrufenden Harnesses via `workspace-lock`.
 * **Idempotente Atomarität:** Das Schreiben von `filemap.json` und aller `.md`-Mirrors erfolgt über `tempfile.NamedTemporaryFile` gefolgt von `os.replace`. Ein vorzeitiger Abbruch hinterlässt weder leere noch halb konvertierte Dateien.
+
+## 5. Ausschluss- und Cleanup-Grenze (Issue #2)
+
+`exclude_dirs` wirkt vor Hashing/Konvertierung und verändert keine Cloud-Quelle.
+Neu ausgeschlossene Quellen fehlen im Inventar, ihre bisherigen Mirrors und
+Derivate bleiben erhalten. Bei aktiven Ausschlüssen darf Cleanup nur zuvor
+inventarisierte Artefakte von Quellen im verbleibenden Scan-Scope entfernen;
+unbekannte Artefakte und leere Verzeichnisse bleiben bestehen. Das schützt auch
+Custom-Derivate über wiederholte Läufe, nachdem ihr Filemap-Eintrag entfernt ist.
+Die Zielplanung reserviert vorhandene Artefakte ohne positive In-Scope-Ownership
+bei jedem Lauf erneut; Kollisionen stoppen fail-closed vor Überschreiben oder
+Inventarübernahme (`mirror-plan`). Cleanup-Schutz allein wäre nicht ausreichend.
+Ohne Ausschlüsse gilt das bisherige Cleanup. Überlappende Quellwurzeln erfordern
+getrennte Output-Wurzeln und Filemaps je Storage. Keine automatische Übernahme
+von Ownership oder Entfernung zurückbehaltener Artefakte.

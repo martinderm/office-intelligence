@@ -13,6 +13,10 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 try:
+    from core.scan_scope import (
+        assert_unreserved_targets, normalize_exclude_dirs, retained_artifact_paths,
+        source_in_scope, walk_scoped,
+    )
     from core.metadata import (
         CANONICAL_CLOUD_METADATA_KEYS,
         validate_cloud_artifact_metadata,
@@ -26,6 +30,10 @@ except ModuleNotFoundError:
     # Keep direct imports from a test loader portable while preserving the
     # standalone script's bundled ``scripts/core`` import path.
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from core.scan_scope import (
+        assert_unreserved_targets, normalize_exclude_dirs, retained_artifact_paths,
+        source_in_scope, walk_scoped,
+    )
     from core.metadata import (
         CANONICAL_CLOUD_METADATA_KEYS,
         validate_cloud_artifact_metadata,
@@ -211,7 +219,7 @@ def validate_filemap(filemap, workspace_root=None):
     missing = sorted(required - set(filemap))
     if missing:
         raise ValueError(f"filemap is missing required keys: {missing}")
-    unknown = sorted(set(filemap) - required)
+    unknown = sorted(set(filemap) - required - {"exclude_dirs"})
     if unknown:
         raise ValueError(f"filemap has unknown container keys: {unknown}")
     if filemap["$schema"] != FILEMAP_SCHEMA_URI:
@@ -239,6 +247,9 @@ def validate_filemap(filemap, workspace_root=None):
     output_dir = normalize_workspace_relative_path(filemap["output_dir"])
     if not scan_dir or not output_dir:
         raise ValueError("filemap scan_dir and output_dir must be workspace-relative paths")
+    exclusions = normalize_exclude_dirs(filemap.get("exclude_dirs", []))
+    if "exclude_dirs" in filemap and exclusions != filemap["exclude_dirs"]:
+        raise ValueError("filemap.exclude_dirs must contain normalized effective exclusions")
     files = filemap["files"]
     if not isinstance(files, dict):
         raise ValueError("filemap.files must be an object")
@@ -251,6 +262,8 @@ def validate_filemap(filemap, workspace_root=None):
         normalized_source = normalize_workspace_relative_path(source_path)
         if not normalized_source or not path_is_within(normalized_source, scan_dir):
             raise ValueError(f"filemap.files contains a source outside scan_dir: {source_path!r}")
+        if not source_in_scope(normalized_source, scan_dir, exclusions):
+            raise ValueError(f"filemap.files contains an excluded source: {source_path!r}")
         if not isinstance(entry, dict):
             raise ValueError(f"filemap.files[{source_path!r}] must be an object")
         missing_entry = sorted(required_entry - set(entry))
@@ -633,7 +646,8 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             }
             if not all(isinstance(value, str) and value.strip() for value in values.values()):
                 raise ValueError(f"Subtopic storage '{sid}' must declare scan_dir, output_json, output_md and output_dir.")
-            configs[sid] = {"title": str(subtopic.get("title") or subtopic_id), **values, "curation_json": sconfig.get("curation_json"), "is_topic": True, "subtopic_id": subtopic_id}
+            configs[sid] = {"title": str(subtopic.get("title") or subtopic_id), **values, "curation_json": sconfig.get("curation_json"), "is_topic": True, "subtopic_id": subtopic_id,
+                            "exclude_dirs": normalize_exclude_dirs(sconfig.get("exclude_dirs", []))}
         if storage_id:
             if storage_id not in configs:
                 raise ValueError(f"Storage ID '{storage_id}' was not found for subtopic '{subtopic_id}'.")
@@ -657,6 +671,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
             "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
             "curation_json": None,
+            "exclude_dirs": [],
             "is_topic": is_topic
         }
         kuerzel = (meta.get("kuerzel") or project_id) if meta else project_id
@@ -690,6 +705,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
                 "curation_json": sconfig.get("curation_json"),
+                "exclude_dirs": normalize_exclude_dirs(sconfig.get("exclude_dirs", [])),
                 "is_topic": is_topic
             }
                 
@@ -819,6 +835,7 @@ def run_generation(args):
             output_json = args.output_json or resolved["output_json"]
             output_md = args.output_md or resolved["output_md"]
         output_dir = resolved["output_dir"]
+        exclude_dirs = resolved.get("exclude_dirs", [])
         
         # Convert relative paths to absolute paths
         scan_path_abs = os.path.normpath(os.path.join(workspace_root, scan_dir))
@@ -841,9 +858,13 @@ def run_generation(args):
             except Exception as e:
                 print(f"Warning: Could not read existing JSON: {e}")
 
+        reserved_artifacts = retained_artifact_paths(
+            workspace_root, output_dir, existing_files_data, scan_dir, exclude_dirs,
+        )
+
         # First pass: scan directory
         raw_scanned_files = []
-        for root, dirs, filenames in os.walk(scan_path_abs):
+        for root, dirs, filenames in walk_scoped(scan_path_abs, exclude_dirs):
             for f in filenames:
                 if f.startswith(".") or f.startswith("~$") or f.lower() == "desktop.ini":
                     continue
@@ -869,7 +890,8 @@ def run_generation(args):
         # Build index of unmapped existing entries by sha256 to track renames/moves
         unmapped_by_sha256 = {}
         for old_path, old_info in existing_files_data.items():
-            if old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256"):
+            if (old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256")
+                    and source_in_scope(old_path, scan_dir, exclude_dirs)):
                 unmapped_by_sha256.setdefault(old_info["sha256"], []).append((old_path, old_info))
 
         existing_mirrors = {
@@ -895,6 +917,7 @@ def run_generation(args):
                 output_dir,
                 existing_mirrors,
             )
+            assert_unreserved_targets(list(planned_mirrors.values()), reserved_artifacts)
         except ValueError as exc:
             raise GenerationError("mirror-plan", sid, exc, storage_results) from exc
 
@@ -948,6 +971,10 @@ def run_generation(args):
                 existing_info,
             )
             if derivative:
+                try:
+                    assert_unreserved_targets([derivative["path"]], reserved_artifacts)
+                except ValueError as exc:
+                    raise GenerationError("mirror-plan", sid, exc, storage_results) from exc
                 file_entry["derivative"] = derivative
 
             preserve_existing_ocr_metadata(
@@ -1001,6 +1028,7 @@ def run_generation(args):
             "project_title": project_title,
             "scan_dir": scan_dir,
             "output_dir": output_dir,
+            "exclude_dirs": exclude_dirs,
             "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "files": files_data
         }
@@ -1034,6 +1062,8 @@ Dieses Dokument stellt die automatisierte Filemap des kanonischen **{project_tit
 Der Cloud-Speicher dient als primäre und offizielle Dateiablage des Projekts/Themas. Hier dürfen ausschließlich finale bzw. zur Veröffentlichung in der offiziellen Projektdokumentation freigegebene Dokumente abgelegt werden.
 
 Pfad relativ zum Workspace-Root: `{scan_dir}/`
+
+Absichtlich ausgeschlossene Verzeichnisse (relativ zum Scan-Pfad): {json.dumps(exclude_dirs, ensure_ascii=False)}
 
 > [!NOTE]
 > Die Dateiliste und Versionen werden automatisch aus den im Verzeichnis vorhandenen Dateien generiert. Versionen werden anhand gängiger Namenskonventionen (z. B. `_v3`, `-FINAL`, `-def`) extrahiert. Alle Pfade sind relativ zum Workspace-Root angegeben.
@@ -1093,6 +1123,7 @@ Pfad relativ zum Workspace-Root: `{scan_dir}/`
             "output_json": output_json.replace("\\", "/"),
             "output_md": output_md.replace("\\", "/"),
             "file_count": len(files_data),
+            "exclude_dirs": exclude_dirs,
         }
         try:
             atomic_write_text(output_md_abs, md_content)

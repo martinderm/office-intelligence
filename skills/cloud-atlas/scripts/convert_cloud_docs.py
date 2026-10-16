@@ -16,6 +16,10 @@ from pathlib import Path, PurePosixPath
 from core.metadata import build_cloud_artifact_metadata
 from core.curation import load_curation_overlay, merge_curated_metadata
 from core.mirror_paths import explicit_custom_mirror_path, plan_markdown_mirrors
+from core.scan_scope import (
+    assert_unreserved_targets, normalize_exclude_dirs, retained_artifact_paths,
+    source_in_scope, walk_scoped,
+)
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -1291,6 +1295,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             configs[sid] = {
                 "title": str(subtopic.get("title") or subtopic_id), **values,
                 "curation_json": sconfig.get("curation_json"),
+                "exclude_dirs": normalize_exclude_dirs(sconfig.get("exclude_dirs", [])),
                 "is_topic": True, "subtopic_id": subtopic_id,
                 **resolve_cloud_metadata_policy(subtopic, sconfig, subtopic_id, True),
             }
@@ -1316,6 +1321,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
             "output_md": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap.md",
             "output_dir": f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}",
             "curation_json": None,
+            "exclude_dirs": [],
             "is_topic": is_topic,
             **resolve_cloud_metadata_policy(meta, {}, project_id, is_topic),
         }
@@ -1350,6 +1356,7 @@ def resolve_all_sync_configs(workspace_root, project_id, force_topic=False, stor
                 "output_md": output_md or f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}/filemap{suffix}.md",
                 "output_dir": output_dir or (f"memory/cloud/{'topics' if is_topic else 'projects'}/{project_id}" + (f"/{sid}" if sid != "default" else "")),
                 "curation_json": sconfig.get("curation_json"),
+                "exclude_dirs": normalize_exclude_dirs(sconfig.get("exclude_dirs", [])),
                 "is_topic": is_topic,
                 **resolve_cloud_metadata_policy(meta, sconfig, project_id, is_topic),
             }
@@ -1555,11 +1562,13 @@ def run_conversion(args, run_state):
         cloud_path_abs = os.path.normpath(os.path.join(workspace_root, cloud_dir))
         output_path_abs = os.path.normpath(os.path.join(workspace_root, output_dir))
         filemap_json_abs = os.path.normpath(os.path.join(workspace_root, filemap_json))
+        exclude_dirs = resolved.get("exclude_dirs", [])
         storage_summary = {
             "storage_id": bounded_text(sid),
             "scan_dir": bounded_text(cloud_dir.replace("\\", "/")),
             "output_dir": bounded_text(output_dir.replace("\\", "/")),
             "output_json": bounded_text(filemap_json.replace("\\", "/")),
+            "exclude_dirs": exclude_dirs,
         }
         run_state["partial_storage"] = storage_summary
 
@@ -1606,6 +1615,19 @@ def run_conversion(args, run_state):
                 "files": {}
             }
         files_in_json = filemap_data.setdefault("files", {})
+        reserved_artifacts = retained_artifact_paths(
+            workspace_root, output_dir, files_in_json, cloud_dir, exclude_dirs,
+        )
+        # With exclusions active, cleanup requires positive prior ownership by an
+        # in-scope source. Unknown or excluded artifacts are retained, including
+        # custom paths after their old inventory entry has disappeared.
+        cleanup_owned = set()
+        for old_source, old_info in files_in_json.items():
+            if isinstance(old_info, dict) and source_in_scope(old_source, cloud_dir, exclude_dirs):
+                cleanup_owned.add(old_info.get("markdown_mirror"))
+                derivative = old_info.get("derivative")
+                if isinstance(derivative, dict):
+                    cleanup_owned.add(derivative.get("path"))
 
         processed_mirrors = set()
         processed_derivatives = set()
@@ -1614,7 +1636,7 @@ def run_conversion(args, run_state):
 
         # Collect raw scanned cloud files
         raw_scanned_files = []
-        for root, dirs, filenames in os.walk(cloud_path_abs):
+        for root, dirs, filenames in walk_scoped(cloud_path_abs, exclude_dirs):
             for f in filenames:
                 ext = os.path.splitext(f)[1].lower()
                 if ext not in extensions:
@@ -1651,7 +1673,8 @@ def run_conversion(args, run_state):
         # Build index of unmapped existing entries by sha256 to track renames/moves
         unmapped_by_sha256 = {}
         for old_path, old_info in files_in_json.items():
-            if old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256"):
+            if (old_path not in current_scanned_paths and isinstance(old_info, dict) and old_info.get("sha256")
+                    and source_in_scope(old_path, cloud_dir, exclude_dirs)):
                 unmapped_by_sha256.setdefault(old_info["sha256"], []).append((old_path, old_info))
 
         existing_mirrors = {
@@ -1678,6 +1701,7 @@ def run_conversion(args, run_state):
                 existing_mirrors,
                 supported_extensions=extensions,
             )
+            assert_unreserved_targets(list(planned_mirrors.values()), reserved_artifacts)
         except ValueError as exc:
             raise ConversionRunError("mirror-plan", str(exc), sid) from exc
 
@@ -1724,6 +1748,12 @@ def run_conversion(args, run_state):
             elif is_pdf and ocr_policy == "local_derivative":
                 derivative_rel_workspace = os.path.join(output_dir, "_derivatives", os.path.splitext(rel_to_cloud)[0] + ".pdf").replace("\\", "/")
                 derivative_abs = os.path.normpath(os.path.join(workspace_root, derivative_rel_workspace))
+
+            if derivative_rel_workspace:
+                try:
+                    assert_unreserved_targets([derivative_rel_workspace], reserved_artifacts)
+                except ValueError as exc:
+                    raise ConversionRunError("mirror-plan", str(exc), sid) from exc
 
             # Check converter availability for .doc files
             if is_doc and not doc_converter:
@@ -2024,6 +2054,8 @@ def run_conversion(args, run_state):
                         continue
 
                     if mirror_rel_workspace not in processed_mirrors:
+                        if exclude_dirs and mirror_rel_workspace not in cleanup_owned:
+                            continue
                         print(f"Removing orphaned mirror: {mirror_rel_workspace}")
                         try:
                             os.remove(get_safe_path(mirror_abs))
@@ -2042,6 +2074,8 @@ def run_conversion(args, run_state):
                     deriv_abs = os.path.join(root, f)
                     deriv_rel_workspace = os.path.relpath(deriv_abs, workspace_root).replace("\\", "/")
                     if deriv_rel_workspace not in processed_derivatives:
+                        if exclude_dirs and deriv_rel_workspace not in cleanup_owned:
+                            continue
                         print(f"Removing orphaned derivative: {deriv_rel_workspace}")
                         try:
                             os.remove(get_safe_path(deriv_abs))
@@ -2052,7 +2086,7 @@ def run_conversion(args, run_state):
                                 del info["derivative"]
 
             # Clean up empty subdirectories in _derivatives
-            for root, dirs, files in os.walk(derivatives_dir_abs, topdown=False):
+            for root, dirs, files in ([] if exclude_dirs else os.walk(derivatives_dir_abs, topdown=False)):
                 for d in dirs:
                     dir_path = os.path.join(root, d)
                     try:
@@ -2063,7 +2097,7 @@ def run_conversion(args, run_state):
                         print(f"Warning removing empty subdirectory {dir_path}: {e}")
 
         # Clean up empty subdirectories in output_path_abs
-        if os.path.exists(output_path_abs):
+        if not exclude_dirs and os.path.exists(output_path_abs):
             for root, dirs, files in os.walk(output_path_abs, topdown=False):
                 for d in dirs:
                     dir_path = os.path.join(root, d)
@@ -2076,6 +2110,7 @@ def run_conversion(args, run_state):
 
         # Save filemap.json back with current active files
         filemap_data["files"] = new_files_in_json
+        filemap_data["exclude_dirs"] = exclude_dirs
         filemap_data["updated_at"] = now_str
         write_json_file(filemap_json_abs, filemap_data)
         print(f"Saved filemap JSON to {filemap_json_abs}")
