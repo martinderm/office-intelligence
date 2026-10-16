@@ -9,6 +9,17 @@
 
 ## 1. Plattform-Spezifika & Windows-Barrieren
 
+**Read-only Event-Fassade (Issue #8):** `core/event_dossier.py` und die
+gleichnamige CLI komponieren nur; keine Mailbox-/Event-/Quarantäne-/Cloud-/Task-
+Writes, keine selbst erzeugten Freigaben. `apply` meldet ausdrücklich
+`applied: false`, `dispatch_required: true`. Report liest nur exakt receiptierten
+Projekt-/Event-Output unter den beiden Dual-Evidence-Zonen: Hash-/Source-Drift,
+Partial-Mengen, Traversal/ADS, Symlinks/Reparse-Points und Hardlinks scheitern.
+Diese lokale Integritätsprüfung ist keine Race-freie Writer-Attestation.
+CLI-Eingaben maximal 2 MiB, striktes JSON, Parser-/Schema-/I/O-Fehler bounded
+ohne Rohdaten-/Pfad-Echo. Account bleibt live zu revalidieren, Content bleibt
+menschlich zu prüfen. Externer Writer und dessen Writes separat in #14.
+
 ### 1.1 Reparse-Point- & Symlink-Erkennung (NTFS 0x400)
 Zur Abwehr von Junction-Escapes und Symlink-Angriffen in Quarantäneverzeichnissen implementieren [`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py) und [`quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py) eine strikte Attributprüfung:
 

@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (171 Dateien)│       │ (L2-Metrik)  │       │ - project-catalog-entry  │
+│ (L2-Metrik)  │       │ (L2-Metrik)  │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -58,6 +58,13 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 
 
 #### 2.1 Mail-Desk – Verantwortlichkeits-Detail (Status je FR-Paket)
+
+**Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert
+nur den vorhandenen `dossier_apply`-Request, Handoff verlangt vollständige
+quellengebundene Apply-/Verify-Ergebnisse. Report verifiziert Source-/Output-
+Receipts ohne Inhaltsfreigabe. Externer Event-Writer separat offen (#14).
+Details und aktuelle Messwerte: L2-Kopfzeile sowie
+[`references/event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
 
 Kanonische Langfassung der mail-desk-Zelle der Komplexitätsmatrix (§2). Die Zelle
 in §2 nennt nur Kurzstatus + Anker; Änderungen an Verantwortlichkeiten erfolgen

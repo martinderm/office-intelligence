@@ -44,6 +44,21 @@ Die Bearbeitung von E-Mails und die Erfassung von Aufgaben sind strikt getrennt:
 
 ## 3. Meeting- & Event-Intake-Workflow
 
+**Mail → Event, Issue #8:**
+`skills/mail-desk/scripts/mail_desk_event_dossier.py` komponiert read-only
+`plan → review → apply → handoff → report` über `core/event_dossier.py`.
+Explizite Such-/Inspect-Bounds, Locator-/Account-/Hash-Prüfung und geordnete
+innere/äußere Approval-Bindungen gehen der operativen Übergabe voraus.
+`apply` liefert nur `batch_request`, `dispatch_required: true`, `applied: false`;
+Ausführung und Live-Katalog-/Lock-Prüfung bleiben beim bestehenden Batch-Owner.
+Nur vollständige, quellenidentische Execute-/Verify-Ergebnisse erlauben den
+`event-documentation`-Work-Order (`pending_content_review`). `report` prüft
+Source-/Work-Order-/Output-Hashes und alle receiptierten Dateien im exakten
+Projekt-/Event-Scope; nie Content-Approval oder Vollständigkeit behaupten.
+Der externe Event-Writer fehlt weiterhin (GitHub #14); keine E2E-Writer-
+Funktionalität wird hier behauptet. Vertrag:
+[`event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
+
 1. **Intake (`meeting-desk` bzw. `event-documentation`):**
    - Rohdaten (Transkripte von Fireflies, Zoom, Audio-Uploads) werden aufgenommen.
    - Trennung nach Granularität:

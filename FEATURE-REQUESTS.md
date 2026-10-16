@@ -9,6 +9,12 @@
 Issue-Nachweis (kein neuer FR-Record): [#2 — Cloud-Atlas-Verzeichnisausschlüsse](https://github.com/martinderm/office-intelligence/issues/2).
 Vertrag und Runtime-Grenzen: `skills/cloud-atlas/SKILL.md` und L2-System-Map.
 
+Issue-Nachweis: [#8 — Event-Dossier-Fassade](https://github.com/martinderm/office-intelligence/issues/8),
+Vertrag `skills/mail-desk/references/event-dossier.md`;
+separate, vorab bestätigte Writer-Lücke
+[#14](https://github.com/martinderm/office-intelligence/issues/14).
+Keine neuen FR-Record-Files.
+
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in
 seinem Record-File unter [`docs/features/`](docs/features/).
