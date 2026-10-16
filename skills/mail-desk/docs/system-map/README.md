@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/Post-Altlasten-Entfernung, Post-Commit-Frame inkl. der FR-28-Dateien und der Draft-API): 171 getrackte Dateien; 72 getrackte Dateien unter `scripts/`, davon 58 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 81 Testmodule; Suite 1309 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Vollsuite-Referenzlauf 2026-10-16 nach Entfernung der beiden diff-fremden Altlasten-Module — `test_event_dossier`/`test_attachment_basename`, Nachverfolgung in issues #8/#9, Spec in Git-History `0896334`; gemessen 1309 Tests / 1306 grün); verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, Root-TODO) → 1305–1307 grün je Lauf; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/Issue-#9-Frame inkl. der FR-28-Dateien und der Draft-API): 172 getrackte Dateien; 72 getrackte Dateien unter `scripts/`, davon 58 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Vollsuite-Referenzlauf 2026-10-16 nach Entfernung der beiden diff-fremden Altlasten-Module — `test_event_dossier`/`test_attachment_basename`, Nachverfolgung in issues #8/#9, Spec in Git-History `0896334`; gemessen 1309 Tests / 1306 grün; **Issue #9 stellt `test_attachment_basename` (6 Pins) wieder her → finaler Rerun-Voll-Lauf 2026-10-16 im #9-Frame: 1315 Tests / 1315 grün, Abnahmedetails in §30**); verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, Root-TODO) → Ergebnis je Lauf um diese Familie schwankend (Fokus-Frames zeigten die Rotation, der #9-Rerun-Voll-Frame war darüber hinaus grün); **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -1098,3 +1098,58 @@ Lösch-Pin), danach 22/22 grün. Rotationen: genau eine Pin-Rotation
 die Himalaya-Hilfe) plus die zugehörige Reihenfolge-Pin im Replace-Test.
 Suite-Metrik: fokussierter Discovery-Lauf; Vollsuite erst in der finalen
 Orchestrator-Abnahme (siehe Metrik-Frame in der Kopfzeile).
+
+## 30. Issue #9 — Attachment-Basename Contract-Reconcile (abgeschlossen)
+
+**Vorabprüfung und Leserichtung:** Die Produktionsdatei (`core/quarantine/
+attachment_fetch.py`, `core/attachments.py`) wurde seit Spec-Commit `0896334`
+weiterentwickelt; die Drift war gemischt. Entscheidung pro Pin-Gruppe mit
+Begründung — kein stiller Orchestrator-Fix, keine Sicherheitsrotation:
+
+- **Gruppe A (Provenienz, Pins 1/2/4): Tests = Spec.** `inspect_mime_tree`
+  wusch Raw-MIME-Namen still durch `sanitize_attachment_filename`
+  (`../agenda.pdf` → `agenda.pdf`) und verlor die Provenienz. Fix: Raw-Name
+  wird als `original_filename` in Inventar und Binding erhalten (niemals
+  umgeschrieben) und in `op_attachment_fetch` vor jedem I/O fail-closed
+  validiert; Drift zwischen Raw-Name und Storage-Name erzeugt
+  `FilenameDriftError`. Traversal wird nie gewaschen.
+- **Gruppe B (Windows-Aliase, Pin 3): Tests = Spec (Härtung).** Trailing
+  Dots/Spaces sind Win32-Speicheralias (`agenda.pdf.` ≡ `agenda.pdf`);
+  validate strippte zuvor still. Neu abgelehnt: Trailing-Dot/Space am Rohwert,
+  Control-Characters (inkl. Tab), exakte `.`/`..`-Komponenten.
+- **Gruppe C (Embedded Dots, Pins 1/7): Tests = Spec (dokumentierte
+  Verschärfung der Präzision).** Die bisherige `..`-Substring-Ablehnung war
+  überbreit: ohne Verzeichnisseparator kann ein reiner Basename nicht
+  traversieren. `agenda..pdf` ist auf allen Plattformen ein legitimer,
+  kollisionsfreier Literalname. Separatoren (`/`, `\`) bleiben bedingungslos
+  abgelehnt; `validate_attachment_filename` gibt das Literal unverändert
+  zurück, niemals einen gelaundernten Alias.
+- **Gruppe D (Identity-/Payload-Drift, Pins 4/5): Produktion = Spec.**
+  Account-, Message-ID-, Hash- und Raw-Payload-Drift waren bereits fail-closed
+  grün; keine Änderung.
+
+**Betroffene Verträge:** `validate_attachment_filename` (fetch),
+`sanitize_attachment_filename` (unverändert: Storage-Name-Derivation,
+mda1-Pins bestehen weiter), `inspect_mime_tree`/`bind_attachment_candidate`/
+`canonicalize_and_bind_attachments` (`original_filename`-Provenienz),
+`op_attachment_fetch` (Provenienz-Gate + `original_filename` in allen drei
+Ergebnis-Envelopes, Fetch→Repeat-Stabilität unverändert).
+Folgekonsumenten `quarantine_index` und `attachment_extract` prüfen reine
+Basenames ohne Separatoren — die Verschärfung der Präzision ändert ihr
+Verhalten nicht.
+
+**Testkorrektur:** Keine. Alle 6 historischen Pins aus `0896334` wurden
+unverändert wiederhergestellt; genuine Red war 5 Failures + 6 Errors wie im
+Issue beschrieben. Abnahme: Fokus-Frames `test_maildesk_attachment*.py` (591
+Tests; Rotationen ausschließlich der bekannten MD-A3-Timing-Familie #10,
+isoliert grün) plus erster Voll-Frame 1315 Tests mit einem einzigen
+`test_workspace_lock_loss_immediately_before_promotion_aborts`-Flake
+(`WorkspaceLockError not raised`; Ursache ist die geteilte globale
+Marker-Datei `flaky_lock_marker_mda3.txt` unter `tempfile.gettempdir()` im
+Test-Helfer `_flaky_lock_verifier` — umgebungs-/cross-run-sensitiv, kein Teil
+des reconcilten Codes, isoliert dreifach grün, Baseline-Frame 1309/1309 OK,
+Rerun mit Änderungen deterministisch grün, Nachweis zu issue #10 ergänzt).
+Finaler Rerun-Voll-Frame: **1315 Tests / 1315 grün** (Discovery-Frame
+`unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p
+"test_*.py"`, Log `issue9-mail-final.log` im Harness-Scratch).
+`test_attachment_basename` selbst: 6/6 grün, zweifach deterministisch.

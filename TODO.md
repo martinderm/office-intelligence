@@ -12,10 +12,12 @@
 
 ## 2026-10-16 — GELÖST → Issue #9: `test_attachment_basename` Vertragsbruch
 
-- **Auflösung:** Testmodul am 2026-10-16 aus der Suite entfernt (User-Auftrag).
-- **Nachverfolgung:** Contract-Reconcile (Security-Pins vs. gehärtete Produktion,
-  Quarantäne-Angriffsfläche) ist als **GitHub issue #9** erfasst — Klärung der
-  Leserichtung (Tests=Spec vs. Produktion=Spec) mit dokumentierter Begründung.
+- **Auflösung:** Testmodul am 2026-10-16 aus der Suite entfernt (User-Auftrag),
+  durch **GitHub issue #9** wiederhergestellt (6 Pins unverändert, genuine Rot
+  5 Failures + 6 Errors). Reconcile abgeschlossen: Leserichtung je Pin-Gruppe
+  mit dokumentierter Begründung in L2-Map §30; Produktionshärtung an
+  `validate_attachment_filename` und `original_filename`-Provenienz, keine
+  stillen Sicherheits-Rotationen.
 
 ## 2026-09-27 — Präexistenter, diff-fremder Timing-Flake in MD-A3-Tests
 
