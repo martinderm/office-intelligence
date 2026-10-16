@@ -1,5 +1,11 @@
 # Feature Requests — aktiver Backlog
 
+> **Neue Feature Requests ab sofort als GitHub Issues** im Repo
+> `martinderm/office-intelligence` anlegen (nicht mehr als FR-Record-File in
+> `docs/features/`). Diese Datei bleibt als Katalog der historischen
+> FR-Records (FR-01 …) bestehen; neue Fälle werden nur noch als Issue erfasst
+> und verfolgt.
+
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in
 seinem Record-File unter [`docs/features/`](docs/features/).
