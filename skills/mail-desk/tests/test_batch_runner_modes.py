@@ -331,6 +331,105 @@ class ExecuteModeTests(unittest.TestCase):
         self.assertEqual(1, reply.call_count)
         verify.assert_called_once()
 
+    def test_execute_copy_verify_escalates_bounded_retry_on_late_attempt(self) -> None:
+        """Issue #7/O1: a slow backend may need more than two verification looks.
+
+        The copy-verify path walks the bounded escalating backoff sequence
+        (0.3/0.5/1.0/2.0s), sleeping before each attempt and re-reading the
+        target folder with a fresh listing every time; a late success on the
+        fourth attempt still routes the item.
+        """
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            verify = Mock(side_effect=[None, None, None, "late-copy-42"])
+            sleep = Mock()
+            result = execute_mode.run_execute_mode(
+                {"items": [{
+                    "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
+                    "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
+                    "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
+                    "decision": {},
+                }]},
+                data_dir=data_dir,
+                dependencies={
+                    "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
+                    "auto_resolve_replies_from_sent": Mock(),
+                    "load_final_index": Mock(return_value={"items": {}}),
+                    "run_himalaya": Mock(return_value="ok"), "save_final_index_atomic": Mock(),
+                    "flush_batch_evidence": Mock(), "sleep": sleep,
+                    "utc_now_iso": Mock(return_value="now"),
+                    "verify_in_target_folder": verify,
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("late-copy-42", result["results"][0]["new_envelope_id"])
+        self.assertEqual(4, verify.call_count)
+        self.assertEqual([0.3, 0.5, 1.0, 2.0], [call.args[0] for call in sleep.call_args_list[:4]])
+
+    def test_execute_copy_verify_exhausts_retries_and_reports_diagnostics(self) -> None:
+        """Issue #7/O3: an exhausted copy-verify carries bounded diagnostics.
+
+        The canonical ``RuntimeError`` message stays byte-identical; the
+        collected facts (attempts, envelopes seen in the last listing, candidate
+        count, elapsed_ms) travel as free-form journal details and a compact
+        suffix on the result item's error string.
+        """
+        seen = {"envelopes_seen": 150, "candidate_count": 3}
+
+        def failing_verify(_folder, _message_id, **kwargs):
+            facts = kwargs.get("diagnostics")
+            if isinstance(facts, dict):
+                facts.update(seen)
+            return None
+
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            verify = Mock(side_effect=failing_verify)
+            sleep = Mock()
+            result = execute_mode.run_execute_mode(
+                {"items": [{
+                    "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
+                    "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
+                    "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
+                    "decision": {},
+                }]},
+                data_dir=data_dir,
+                dependencies={
+                    "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
+                    "auto_resolve_replies_from_sent": Mock(),
+                    "load_final_index": Mock(return_value={"items": {}}),
+                    "run_himalaya": Mock(return_value="ok"), "save_final_index_atomic": Mock(),
+                    "flush_batch_evidence": Mock(), "sleep": sleep,
+                    "utc_now_iso": Mock(return_value="now"),
+                    "verify_in_target_folder": verify,
+                },
+            )
+            journal = json.loads(
+                (data_dir / "batch-recovery-journal.json").read_text(encoding="utf-8")
+            )
+
+        self.assertFalse(result["ok"])
+        error = result["results"][0]["error"]
+        self.assertTrue(error.startswith("RuntimeError: Target verification failed after copy."), error)
+        self.assertIn("attempts=4", error)
+        self.assertIn("envelopes_seen=150", error)
+        self.assertIn("candidates=3", error)
+        self.assertIn("elapsed_ms=", error)
+        self.assertEqual(4, verify.call_count)
+        self.assertEqual([0.3, 0.5, 1.0, 2.0], [call.args[0] for call in sleep.call_args_list[:4]])
+        run = next(iter(journal["runs"].values()))
+        record = next(iter(run["items"].values()))
+        partial = [event for event in record["phases"] if event["phase"] == "partial"]
+        self.assertEqual(1, len(partial))
+        details = partial[0]["details"]
+        self.assertEqual(4, details["verify_attempts"])
+        self.assertEqual(150, details["verify_envelopes_seen"])
+        self.assertEqual(3, details["verify_candidates"])
+        self.assertIn("verify_elapsed_ms", details)
+
     def test_execute_reuses_matching_index_entry_without_mailbox_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data" / "mail-desk"

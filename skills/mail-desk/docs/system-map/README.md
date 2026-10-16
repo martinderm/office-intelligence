@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/OUT-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1302 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Stand OUT-P1, 2026-10-16) — abzüglich konstant 23 diff-fremder, präexistenter Altlasten aus den zwei Modulen `test_event_dossier` (12 Errors, fehlendes Skript) und `test_attachment_basename` (11; in drei aufeinanderfolgenden Volläufen identisch) und eines umgebungsabhängigen MD-A3-Timing-Flake-Satzes (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, Root-TODO) bleiben 1275–1277 grün (Referenzlauf: 1276 = 1302 − 23 − 3); nie auf die OUT-P1-Änderung bezogen) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/OUT-P1+VR-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1304 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Stand OUT-P1+VR-P1, 2026-10-16; inkl. +2 Copy-Verify-Retry-Tests, issue #7, und +4 Output-Contract-Tests, issues #5/#6) — abzüglich konstant 23 diff-fremder, präexistenter Altlasten aus den zwei Modulen `test_event_dossier` (12 Errors, fehlendes Skript) und `test_attachment_basename` (11) und eines umgebungsabhängigen MD-A3-Timing-Flake-Satzes (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, Root-TODO) bleiben 1278–1279 grün (Referenzlauf: 1278 = 1304 − 23 − 3)) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -952,7 +952,13 @@ ausdrücklich freigegeben („issue 4 mit a-e jetzt angehen").
   (`batch-reconcile.json` mit `apply_local_repairs` + Approval-Gate, sonst
   `approval_required`/`verification_required`; idempotent, `repaired_count:0`
   ohne Drift, `runner-progress.json` → `completed`/`repaired`; nie
-  Mailbox-Mutation; FR-19-Verträge).
+  Mailbox-Mutation; FR-19-Verträge). Nach dem Copy verifiziert die
+  Zielordner-Listung bounded-eskalierend (4 Versuche, Backoff
+  0.3/0.5/1.0/2.0s, frische Listung je Versuch, issue #7); erschöpft sich das
+  Budget, bleibt die kanonische Meldung „Target verification failed after copy."
+  byte-identisch und die Diagnosefakten (Versuche, gesehene Envelopes,
+  Kandidaten, `elapsed_ms`) reisen als Item-Error-Suffix sowie als freie
+  Journal-Details (`batch-recovery-journal.json`).
 - **C — Volltext-Read:** `backends/himalaya.md`: `read`-Aktion mit
   `preview_lines` (Manifest-Feld und `--preview-lines`-Flag, Default 50
   beidseitig); Volltext über hohen `preview_lines`-Wert;

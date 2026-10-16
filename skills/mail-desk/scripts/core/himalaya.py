@@ -456,9 +456,21 @@ def verify_in_target_folder(
     date_str: str = "",
     account: str | None = None,
     candidate_env_id: str | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> str | None:
-    """Verify presence of a message in target folder and return its new envelope_id."""
+    """Verify presence of a message in target folder and return its new envelope_id.
+
+    ``diagnostics`` is an optional caller-owned collector. When supplied, the
+    cheap listing facts (``envelopes_seen`` and ``candidate_count`` of the last
+    envelope listing) are written into it. It never changes the ``str | None``
+    return contract and is invisible to callers that omit it.
+    """
     norm_target = normalize_message_id(target_msg_id)
+
+    def _record_listing(envelopes_seen: int, candidate_count: int) -> None:
+        if diagnostics is not None:
+            diagnostics["envelopes_seen"] = envelopes_seen
+            diagnostics["candidate_count"] = candidate_count
 
     # Fast-path: if a specific candidate envelope is known (e.g. retained in-place), test it directly
     if candidate_env_id:
@@ -499,6 +511,8 @@ def verify_in_target_folder(
             env_date = env.get("date", "").strip()
             if ymd in env_date or date_str[:10] in env_date:
                 candidates.append(str(env["id"]))
+
+    _record_listing(len(envelopes), len(candidates))
 
     # 2. Check candidate headers (newest first, limit to top 5)
     for cid in list(reversed(candidates))[:5]:
