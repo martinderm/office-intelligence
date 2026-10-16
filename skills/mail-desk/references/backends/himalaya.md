@@ -79,6 +79,39 @@ python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --preview-lines 
 {"account": "…", "operations": [{"action": "read", "folder": "INBOX", "envelope_id": "7195", "preview_lines": 400}]}
 ```
 
+### Unsent draft operations (`save-draft` / `delete-draft` / `replace-draft`)
+
+The three draft operations create, replace and remove **unsent** drafts. They are
+standalone client operations with **no approval gate** and no SMTP path: sending is
+out of scope, the batch runner has no draft mode, and the operations touch no batch
+journal.
+
+- **Target folder (dynamic, fail-loud):** [`scripts/core/drafts.py`](../scripts/core/drafts.py)
+  (`resolve_drafts_folder`) resolves the folder from the live catalog — first the
+  RFC-6154 `\Drafts` special-use attribute (forward-compatible: Himalaya 1.2.0's
+  `folder list` exposes no attribute columns, only `-a`/`-w`/`-o`), then the
+  conventional name `Drafts`, then the GroupWise convention `Work In Progress`. If
+  none resolves, the operation fails loud with a bounded
+  `drafts_folder_unresolved` error instead of hard-coding a folder name. An explicit
+  `-f/--folder` skips the resolution.
+- **Append (UTF-8):** `save-draft` builds the raw RFC-822 message with the SMTPUTF8
+  policy and passes it as one argument to `message save -f <folder> <raw>`
+  (IMAP APPEND), so non-ASCII subject, recipients and body survive without a 7-bit
+  downgrade. The result carries `{envelope_id, folder, subject, to, date}`.
+- **Delete without UID MOVE:** `delete-draft` runs
+  `flag add deleted <envelope_id> -f <folder>` and then
+  `folder expunge <folder>`. `message delete` is deliberately not used: Himalaya
+  documents that it "moves it to the trash folder" for a non-trash folder, which is
+  exactly the forbidden UID MOVE.
+- **Replace (new-then-delete):** `replace-draft` appends the replacement draft first
+  and deletes the old one afterwards. A crash between the two steps leaves both
+  drafts observable (documented crash window); the draft journal records both
+  envelope ids.
+- **Journal:** every operation appends to `data/mail-desk/draft-journal.json`
+  (schema 1: `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, plus
+  `old_envelope_id`/`crash_window` on replace). The batch
+  `batch-recovery-journal.json` contract stays untouched.
+
 ### Temporary host execution boundary
 
 If the sandbox cannot read the configured Himalaya config but the same bounded,

@@ -210,6 +210,9 @@ Manifest-Shape:
     { "action": "copy", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
     { "action": "move", "source_folder": "INBOX", "target_folder": "Projekte/USAGE-NG", "envelope_id": "7195" },
     { "action": "delete", "folder": "INBOX", "envelope_id": "7195" },
+    { "action": "save_draft", "to": "a@example.org", "subject": "Betreff", "body": "Text" },
+    { "action": "delete_draft", "envelope_id": "41", "folder": "Drafts" },
+    { "action": "replace_draft", "envelope_id": "41", "to": "a@example.org", "subject": "Betreff", "body": "Text" },
     { "action": "search", "query": "USAGE-NG" }
   ],
   "delete_input_on_success": true
@@ -232,6 +235,47 @@ idempotente Retrys und atomare Sibling-Temp-Promotion. Nach der Lock-Prüfung un
 dem ersten Quarantäne-Write stoppt ein bounded read-only Git-Preflight fail-closed,
 falls unter `data/mail-desk/attachments/` bereits etwas getrackt ist (siehe
 Stop-Bedingung unten).
+
+## Ungesendete Entwürfe (`save-draft`, `delete-draft`, `replace-draft`)
+
+Die drei eigenständigen Entwurfsoperationen sind **kein Batch-Modus** und haben
+**kein Approval-Gate**: ein Entwurf liegt ungesendet in der Mailbox, Senden/SMTP
+bleiben out of scope. Sie laufen über dieselbe JSON-Manifest-Oberfläche wie die
+übrigen Aktionen (Manifest-Aktionen `save_draft`, `delete_draft`, `replace_draft`)
+oder direkt als Subcommand:
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py save-draft -t a@example.org -s "Betreff" -b "Text" --json
+python3 scripts/mail_desk_himalaya_client.py delete-draft 41 -f "Drafts" --json
+python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -s "Betreff" -b "Text" --json
+```
+
+- **Drafts-Ordner (deterministisch, fail-loud):** ohne `--folder` löst der Client
+  den Zielordner aus der Live-Ordnerliste auf: zuerst das RFC-6154-Attribut
+  `\Drafts` (forward-kompatibel; die installierte Himalaya-Fassung listet Ordner
+  ohne Attributspalten), dann der konventionelle Name `Drafts`, dann die
+  GroupWise-Konvention `Work In Progress`. Ist nichts davon vorhanden, bricht die
+  Operation fail-loud mit einem begrenzten `drafts_folder_unresolved`-Fehler ab;
+  ein hartkodierter Ordnername ist kein Fallback.
+- **UTF-8-sicher:** Die Nachricht wird als roher RFC-822-Literal in UTF-8
+  (SMTPUTF8) gebaut und als ein Argument an `message save` (IMAP APPEND) übergeben.
+  Betreff, Empfänger und Body bleiben byte-erhalten; es entsteht kein
+  RFC-2047-Downgrade. Das Ergebnis trägt das Envelope
+  `{envelope_id, folder, subject, to, date}`.
+- **Löschen ohne UID MOVE:** `delete-draft` setzt `\Deleted` direkt am Envelope
+  (`flag add deleted`) und entfernt die markierte Nachricht danach mit
+  `folder expunge`. `message delete` wird bewusst nicht verwendet: für einen
+  Nicht-Trash-Ordner verschiebt Himalaya die Nachricht in den Trash-Ordner.
+- **Ersetzen (neu-erst-dann-löschen):** `replace-draft` hängt zuerst den neuen
+  Entwurf an und löscht erst danach den alten (`replace_envelope_id`). Das
+  Crash-Fenster zwischen beiden Schritten ist dokumentiert: bricht der Lauf
+  dazwischen ab, sind beide Entwürfe sichtbar, weil der neue bereits durabel
+  angehängt ist. Das Draft-Journal hält beide Envelope-IDs fest.
+- **Draft-Journal:** Jede Operation schreibt einen Eintrag in
+  `data/mail-desk/draft-journal.json` (Schema 1) — je Envelope-ID `envelope_id`,
+  `folder`, `subject`, `to`, `date` und `action`; beim Ersetzen zusätzlich
+  `old_envelope_id` und `crash_window`. Das Journal ist bewusst eine eigene Datei
+  und **nicht** das `batch-recovery-journal.json` des Batch-Pfads.
 
 ## Policygebundene Anhang-Auswertung (Inspect → Fetch → Extract → Handoff)
 

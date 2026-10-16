@@ -214,6 +214,29 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **Dateipfad:** `.agents/mail-desk-backend.json` (im Ziel-Workspace)
 * **Zweck:** Credentials-freie Deklaration des Mailbox-Backends (`"himalaya"` / `"gmail"`), des Standard-Accounts und Quellordners.
 
+### 5.4 Draft-Journal (`draft-journal.json`)
+* **Dateipfad:** `data/mail-desk/draft-journal.json` (atomar geschrieben, JSON)
+* **Implementierungsdatei:** [`scripts/core/drafts.py`](../scripts/core/drafts.py) (`DraftJournal`)
+* **Schema-Version:** `1` — **eigene Datei** und eigenes Schema, getrennt vom
+  `batch-recovery-journal.json` (`core/recovery.py`) des Batch-Pfads: die
+  Draft-Operationen sind standalone und lesen oder schreiben den Batch-Vertrag nie.
+* **Zweck:** Buchführung über ungesendete Draft-Operationen (`save_draft`,
+  `delete_draft`, `replace_draft`), damit der Replace-Orphan später erkennbar wäre.
+* **Root-Struktur:** `{ "schema_version": 1, "runs": { "<run_id>": {
+  "run_id", "mode" (Default `"draft"`), "status" (`running`/`completed`/`failed`),
+  "created_at", "updated_at", "items": { "<envelope_id>": { … } } } } }`.
+  Ohne explizites Journal leitet der Client den Run-Bezeichner wochengebunden ab
+  (`drafts-<iso-week-folder>`).
+* **Eintragsfelder (`items.<envelope_id>`):** `envelope_id`, `folder`, `subject`,
+  `to`, `date`, `action` (`save_draft`/`delete_draft`/`replace_draft`),
+  `recorded_at`; beim Ersetzen zusätzlich `old_envelope_id` und `crash_window`
+  (der dokumentierte Text zum neuen-erst-dann-löschen-Fenster). `to` ist der
+  Empfänger der Entwurfsnachricht, wie er ins APPEND ging — nicht zu verwechseln
+  mit dem `to`/`cc` der klassifizierten Originalmail.
+* **Integrität (fail-closed):** Ein unlesbares Journal oder eine ungültige
+  Root-Form endet mit `DraftJournalCorruptedError` (`draft_journal_corrupted`);
+  die Datei wird nie stillschweigend überschrieben oder geleert.
+
 ---
 
 ## 6. DTOs, Verträge und In-Memory-Strukturen
@@ -221,6 +244,9 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **`DraftManifest` & Review Contract** ([`scripts/core/batch_contract.py`](../scripts/core/batch_contract.py)):
   * Bindende Parameter: `expected_count`, `allow_fewer`, `candidate_count`, `source_folder`, `account`, `skip_known`, `review`.
   * `canonical_execute_request_sha256()`: Berechnet Hash über das Request-Objekt unter bewusstem Ausschluss des Feldes `review`.
+* **Draft-Envelope & Draft-Journal (Client, ungesendet)** ([`scripts/core/drafts.py`](../scripts/core/drafts.py)):
+  * Das **Draft-Envelope** ist `{envelope_id, folder, subject, to, date, message_id}` und damit analog zu `get_single_email_details` aufgebaut. Es ist **kein** `DraftManifest`: der `DraftManifest`-Review-Vertrag oben gehört zum Batch-`draft`-Lauf, das Draft-Envelope zur einzelnen, ungesendeten Client-Operation ohne Approval-Gate.
+  * `DraftError`/`DraftsFolderUnresolvedError`/`DraftJournalCorruptedError` tragen begrenzte `reason_code`s (`drafts_folder_unresolved`, `draft_verification_failed`, `draft_journal_corrupted`); `REPLACE_CRASH_WINDOW` dokumentiert das Crash-Fenster der Replace-Reihenfolge, `DRAFT_JOURNAL_FILENAME` benennt das getrennte Journal (§5.4).
 * **Begrenzter Decision-Output & Runner-Envelope-Contracts (OUT-P1, 2026-10-16, Issues #5/#6):**
   * `decision.suppressed_candidates` ist eine **Ausgabebegrenzung**: höchstens `core.classifier.MAX_SUPPRESSED_CANDIDATES_OUT` (3) Katalogdaten-Zeilen (`kind`, `id`, `suppression_reason`) plus `decision.suppressed_count` (Gesamtzahl). Die interne DNR-/Newsletter-Auswertung konsumiert weiterhin die vollständige Liste; kein Downstream-Leser benötigt sie. Feldspiegel: [`references/folder-rules.md`](../references/folder-rules.md).
   * **PartialFailure-Envelope** ([`scripts/mail_desk_batch_runner.py`](../scripts/mail_desk_batch_runner.py), `_result_envelope`): `data.results` trägt nur die fehlgeschlagenen Items; die erfolgreichen erscheinen als `data.succeeded_count` + `data.succeeded_envelope_ids` (IDs genügen). Das Recovery-Journal bleibt die vollständige Quelle. `data.execute_summary` und der Success-Envelope bleiben unverändert.
