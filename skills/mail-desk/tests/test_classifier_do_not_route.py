@@ -27,6 +27,15 @@ B-2 reproduction: topic ``netzwerke`` declares
 ``do_not_route_if: ['newsletter', 'no-reply']`` and the subject carries
 ``Newsletter``; today the mail routes to ``Themen/Netzwerke`` with a preselected
 subtopic.  The target suppresses it.
+
+OUT-P1 output-cap rotation (2026-10-16, issue #5): the emitted
+``decision.suppressed_candidates`` list is intentionally bounded to the first
+``classifier.MAX_SUPPRESSED_CANDIDATES_OUT`` rows plus the new
+``decision.suppressed_count`` total; the full catalog-only list stays internal to
+the do-not-route/newsletter mapping that runs before output.  The MD-R1/MD-R2 pins
+below each carry at most three suppressed rows, so their exact row assertions stay
+valid and pin the bounded output unchanged; the new
+``SuppressedCandidateOutputCapTests`` pins the cap itself.
 """
 
 from __future__ import annotations
@@ -337,6 +346,44 @@ class ThreadInheritanceCharacterizationTests(unittest.TestCase):
         self.assertEqual("project", item["decision"]["kind"])
         self.assertEqual("atael", item["decision"]["id"])
         self.assertEqual("Projekte/In Ausarbeitung/ATAEL", item["action"]["target_folder"])
+
+
+class SuppressedCandidateOutputCapTests(unittest.TestCase):
+    """Target (Red now): the decision output caps suppressed rows and reports the total.
+
+    OUT-P1 (2026-10-16, issue #5): ``decision.suppressed_candidates`` carries at
+    most ``classifier.MAX_SUPPRESSED_CANDIDATES_OUT`` (3) rows — the first ones in
+    catalog order — plus ``decision.suppressed_count`` with the total.  The
+    internal, pre-output do-not-route/newsletter mapping keeps consuming the
+    complete list, so the routing outcome here stays the deterministic
+    ``Newsletter`` mapping.
+    """
+
+    def test_decision_output_caps_suppressed_rows_and_reports_the_total(self) -> None:
+        projects = [
+            routing_fixtures.project_contact(
+                f"alpha-{index}", do_not_route_if=["newsletter"]
+            )
+            for index in range(5)
+        ]
+
+        item = _classify(
+            {"subject": routing_fixtures.NEWSLETTER_SUBJECT}, projects=projects
+        )
+
+        rows = item["decision"]["suppressed_candidates"]
+        self.assertEqual(3, len(rows))
+        self.assertEqual(5, item["decision"]["suppressed_count"])
+        self.assertEqual(
+            ["alpha-0", "alpha-1", "alpha-2"], [row["id"] for row in rows]
+        )
+        for row in rows:
+            self.assertEqual({"kind", "id", "suppression_reason"}, set(row.keys()))
+        # The complete internal list still drove the newsletter mapping.
+        self.assertEqual(
+            routing_fixtures.NEWSLETTER_FOLDER, item["action"]["target_folder"]
+        )
+        self.assertIs(False, item["decision"].get("review_required"))
 
 
 if __name__ == "__main__":

@@ -220,7 +220,48 @@ def get_unprocessed_emails(
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably."""
+    """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably.
+
+    Known-envelope skipping is reported as exactly one aggregated progress step per
+    scan phase (``skipped N known envelopes``) instead of one step per known
+    envelope (OUT-P1, issue #5).  The returned ``known_count`` and every other
+    progress-file write are unchanged.
+    """
+    collected, known_count, skipped_known = _scan_unprocessed_emails(
+        folder,
+        target_count,
+        order=order,
+        date=date,
+        query=query,
+        account=account,
+        data_dir=data_dir,
+        skip_known=skip_known,
+        preview_lines=preview_lines,
+        tracker=tracker,
+    )
+    if tracker and skipped_known:
+        tracker.step(f"skipped {skipped_known} known envelopes")
+    return collected, known_count
+
+
+def _scan_unprocessed_emails(
+    folder: str,
+    target_count: int,
+    *,
+    order: str = "oldest",
+    date: str | None = None,
+    query: str | None = None,
+    account: str | None = None,
+    data_dir: Path | None = None,
+    skip_known: bool = True,
+    preview_lines: int = 30,
+    tracker: BatchProgressTracker | None = None,
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Collect unprocessed envelopes and return ``(collected, known_count, skipped_known)``.
+
+    The skipped-known counter is returned instead of logged so the public wrapper
+    can emit a single aggregated summary line per scan phase (OUT-P1, issue #5).
+    """
     dd = data_dir or resolve_data_dir()
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
@@ -228,6 +269,7 @@ def get_unprocessed_emails(
 
     collected: list[dict[str, Any]] = []
     known_count = 0
+    skipped_known = 0
     inspected_eids: set[str] = set()
 
     # Fast direct path if date or query filter is provided
@@ -275,8 +317,7 @@ def get_unprocessed_emails(
 
             if matched_entry and skip_known:
                 known_count += 1
-                if tracker:
-                    tracker.step("skipping_known_email", envelope_id=eid, subject=env.get("subject", ""))
+                skipped_known += 1
                 continue
 
             if tracker:
@@ -293,8 +334,7 @@ def get_unprocessed_emails(
                     or (matched_entry.get("final_folder") if matched_entry else None)
                 )
                 if skip_known:
-                    if tracker:
-                        tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
+                    skipped_known += 1
                     continue
             else:
                 email_res["is_known"] = False
@@ -306,9 +346,9 @@ def get_unprocessed_emails(
             time.sleep(0.02)
 
             if len(collected) >= target_count:
-                return collected, known_count
+                return collected, known_count, skipped_known
 
-        return collected, known_count
+        return collected, known_count, skipped_known
 
     fetch_sizes = _known_mail_fetch_sizes(target_count) if skip_known else [target_count]
 
@@ -317,7 +357,7 @@ def get_unprocessed_emails(
             tracker.step(f"listing_envelopes (fetch_count={f_size})")
         candidate_envs = get_oldest_envelopes(folder, f_size, account=account)
         if not candidate_envs:
-            return [], 0
+            return [], 0, 0
 
         if order != "oldest":
             candidate_envs.reverse()
@@ -337,8 +377,7 @@ def get_unprocessed_emails(
 
             if matched_entry and skip_known:
                 known_count += 1
-                if tracker:
-                    tracker.step("skipping_known_email", envelope_id=eid, subject=env.get("subject", ""))
+                skipped_known += 1
                 continue
 
             if tracker:
@@ -355,8 +394,7 @@ def get_unprocessed_emails(
                     or (matched_entry.get("final_folder") if matched_entry else None)
                 )
                 if skip_known:
-                    if tracker:
-                        tracker.step("skipping_known_email", envelope_id=eid, subject=email_res.get("subject", ""))
+                    skipped_known += 1
                     continue
             else:
                 email_res["is_known"] = False
@@ -368,12 +406,12 @@ def get_unprocessed_emails(
             time.sleep(0.02)
 
             if len(collected) >= target_count:
-                return collected, known_count
+                return collected, known_count, skipped_known
 
         if len(collected) >= target_count or len(candidate_envs) < f_size:
-            return collected, known_count
+            return collected, known_count, skipped_known
 
-    return collected, known_count
+    return collected, known_count, skipped_known
 
 
 # ==============================================================================
@@ -841,6 +879,50 @@ def _readiness_stop(mode: str, readiness: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _item_succeeded(entry: dict[str, Any]) -> bool:
+    """Report whether one result row carries at least one true outcome flag."""
+    return any(entry.get(key) is True for key in ("success", "resolved", "consistent"))
+
+
+def _item_identifier(entry: dict[str, Any]) -> str | None:
+    """Return the canonical envelope/message id of a result row, if it carries one."""
+    for key in ("envelope_id", "message_id", "id"):
+        value = entry.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _compact_partial_results(data: dict[str, Any]) -> dict[str, Any]:
+    """Keep only failed rows on a PartialFailure envelope and summarize the rest.
+
+    A partial failure is echoed back into the caller's context by shells and
+    harnesses, so the full result list must not travel with it (OUT-P1, issue #6).
+    The recovery journal keeps the complete record; the envelope needs only the
+    failed rows plus the count and ids of the succeeded ones.  Rows without a
+    recognized outcome flag are treated as failed and kept, never silently dropped.
+    """
+    results = data.get("results")
+    if not isinstance(results, list):
+        return data
+    successful = [
+        entry for entry in results if isinstance(entry, dict) and _item_succeeded(entry)
+    ]
+    compacted = dict(data)
+    compacted["results"] = [
+        entry
+        for entry in results
+        if not (isinstance(entry, dict) and _item_succeeded(entry))
+    ]
+    compacted["succeeded_count"] = len(successful)
+    compacted["succeeded_envelope_ids"] = [
+        identifier
+        for identifier in (_item_identifier(entry) for entry in successful)
+        if identifier is not None
+    ]
+    return compacted
+
+
 def _result_envelope(result: dict[str, Any], operation: str) -> dict[str, Any]:
     """Translate a legacy in-process result into the OI-10 CLI envelope."""
     data = _legacy_result_data(result, operation)
@@ -853,6 +935,8 @@ def _result_envelope(result: dict[str, Any], operation: str) -> dict[str, Any]:
 
     partial = _is_partial_failure(result)
     state = "PartialFailure" if partial else "Failed"
+    if partial:
+        data = _compact_partial_results(data)
     message = result.get("message") or (
         f"Batch runner {operation} completed with partial failures."
         if partial

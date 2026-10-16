@@ -265,6 +265,13 @@ class TargetSiblingDoNotRouteGateTests(unittest.TestCase):
         self.assertEqual("INBOX", item["action"]["target_folder"])
 
     def test_suppressed_sibling_chain_reports_a_catalog_data_only_candidate(self) -> None:
+        """OUT-P1 rotation review (2026-10-16, issue #5): the emitted
+        ``decision.suppressed_candidates`` is now bounded to
+        ``classifier.MAX_SUPPRESSED_CANDIDATES_OUT`` rows plus
+        ``decision.suppressed_count``.  This pin stays valid unchanged because the
+        sibling chain yields exactly one suppressed row; it pins the bounded,
+        catalog-data-only row shape.
+        """
         item = self._blocked_item()
         rows = item["decision"].get("suppressed_candidates", [])
 

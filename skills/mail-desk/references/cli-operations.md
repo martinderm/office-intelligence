@@ -102,13 +102,22 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Validiert die Erreichbarkeit und Authentifizierung des konfigurierten
    Mailkontos vor komplexen Operationen.
 
-7. **Batch-CLI-Wrapper (`mail_desk_batch_cli.py`):**
-   Harness-freundlicher Wrapper um den Batch-Runner: persistiert Runner-Envelope
-   (stdout) und Progress-Log (stderr) unter `<workspace>/tmp/mail-batch/` und
-   emittiert stattdessen einen kompakten kanonischen Summary-Envelope. Für
-   Harnesses mit Output-Fenster-Limits (z. B. `draft` mit großen Anhängen).
-   Modi und Parameter wie beim Batch-Runner (`draft`/`execute`/`reconcile`).
+7. **Batch-CLI-Wrapper (`mail_desk_batch_cli.py`) — empfohlener Standardweg:**
+   **Empfohlener Standard** für alle `draft`-, `execute`- und `reconcile`-Läufe.
+   Der Wrapper ruft den Batch-Runner auf, persistiert dessen Envelope (stdout) und
+   Progress-Log (stderr) unter `<workspace>/tmp/mail-batch/` und emittiert
+   stattdessen **nur** einen kompakten kanonischen Summary-Envelope. Damit bleibt
+   der Caller-Kontext auch bei `draft`-Läufen mit großen Anhängen und bei langen
+   Bekannt-Backlogs klein (OUT-P1, Issues #5/#6).
 
+   **Herkunft der Envelope-Duplikation:** Der Runner selbst emittiert **genau
+   einen** kanonischen Envelope auf stdout. Sieht ein Caller die Envelope doppelt,
+   stammt die zweite Kopie aus dem Harness/der Shell (Log-Mitschnitt **plus**
+   zusätzliche Envelope-Ausgabe), nicht aus dem Runner. Der Wrapper eliminiert
+   diese Duplikation, weil er Runner-stdout/-stderr in Dateien umleitet und dem
+   Caller ausschließlich den Summary-Envelope übergibt.
+
+   Modi und Parameter wie beim Batch-Runner (`draft`/`execute`/`reconcile`).
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen
    `execute`-Laufs und erwartet **kein** `--input`-Manifest. `--account` ist
    optional; ohne Angabe bindet der Runner den Account automatisch aus der

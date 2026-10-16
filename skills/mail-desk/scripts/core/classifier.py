@@ -78,6 +78,13 @@ FULL_BODY_ACTION_REQUEST = re.compile(
 #: suppression with no stronger candidate maps deterministically onto this existing folder.
 NEWSLETTER_TARGET_FOLDER = "Newsletter"
 
+#: Maximum ``decision.suppressed_candidates`` rows emitted on a classified item
+#: (OUT-P1, issue #5).  The full catalog-only list stays internal to the
+#: pre-output do-not-route/newsletter mapping; only its first rows plus the
+#: ``decision.suppressed_count`` total cross the output boundary, so a large
+#: suppressed catalog set can never bloat draft manifests or envelopes.
+MAX_SUPPRESSED_CANDIDATES_OUT = 3
+
 
 def load_catalogs(workspace_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Load projects and topics from catalogs in workspace memory."""
@@ -746,7 +753,12 @@ def classify_email(
         bound_attachments = []
 
     if suppressed_candidates:
-        decision["suppressed_candidates"] = suppressed_candidates
+        # Bounded output (OUT-P1, issue #5): the emitted rows are the first catalog
+        # rows plus the total.  The complete internal list already drove the
+        # do-not-route/newsletter decision above, so nothing downstream needs the
+        # full list and a draft/envelope stays small.
+        decision["suppressed_candidates"] = suppressed_candidates[:MAX_SUPPRESSED_CANDIDATES_OUT]
+        decision["suppressed_count"] = len(suppressed_candidates)
 
     action = {
         "type": "copy_as_move" if target_folder != "INBOX" else "keep_in_folder",

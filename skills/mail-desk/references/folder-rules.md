@@ -30,7 +30,10 @@ Catalog entries can declare `do_not_route_if` predicates (project and topic leve
 declared predicate that matches the mail's subject or header signals (subject, from, to,
 cc — never body text) suppresses that candidate; suppressed candidates are surfaced as
 `decision.suppressed_candidates[]` (catalog data: `kind`, `id`, `suppression_reason`) and
-never silently dropped. A `mailing list` declaration intentionally still suppresses on a
+never silently dropped. The emitted list is bounded: it carries at most the first 3 rows
+plus `decision.suppressed_count` with the total, so a large suppressed catalog set cannot
+bloat a draft manifest or envelope; the do-not-route decision itself always evaluates the
+complete list. A `mailing list` declaration intentionally still suppresses on a
 subject that literally contains the phrase "mailing list"; the bare `list.` token matches
 only from/to headers, never the subject. Newsletter-suppressed mails map deterministically
 to the `Newsletter` folder (`copy_as_move`, `review_required: false`) unless a strong

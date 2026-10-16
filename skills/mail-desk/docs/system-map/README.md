@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/FR-28-DOC-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1298 Tests — davon 1275 verifiziert grün und 23 Altlasten-Tests aus den zwei diff-fremden, präexistenten Altlasten-Modulen `test_event_dossier`/`test_attachment_basename` (Root-TODO)) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/OUT-P1, Post-Commit-Frame inkl. der FR-28-Dateien): 171 getrackte Dateien; 71 getrackte Dateien unter `scripts/`, davon 57 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 82 Testmodule; Suite 1302 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Stand OUT-P1, 2026-10-16) — abzüglich konstant 23 diff-fremder, präexistenter Altlasten aus den zwei Modulen `test_event_dossier` (12 Errors, fehlendes Skript) und `test_attachment_basename` (11; in drei aufeinanderfolgenden Volläufen identisch) und eines umgebungsabhängigen MD-A3-Timing-Flake-Satzes (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, Root-TODO) bleiben 1275–1277 grün (Referenzlauf: 1276 = 1302 − 23 − 3); nie auf die OUT-P1-Änderung bezogen) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -274,7 +274,11 @@ Newsletter-Prädikat ist strikt Betreff-/Header-scoped
 (subject, from, to, cc; niemals Body-/Preview-Text; der list.-Token bleibt from/to-only);
 
 no-reply bleibt from-only. Unterdrückte Kandidaten werden als decision.suppressed_candidates[]
-(Katalogdaten: kind, id, suppression_reason) sichtbar; Newsletter-unterdrückte Mails
+(Katalogdaten: kind, id, suppression_reason) sichtbar; **seit OUT-P1 ist diese
+Ausgabeliste begrenzt** — emittiert werden höchstens
+`classifier.MAX_SUPPRESSED_CANDIDATES_OUT` (3) Zeilen plus `decision.suppressed_count`
+mit der Gesamtzahl, während die interne DNR-/Newsletter-Entscheidung weiterhin die
+vollständige Liste auswertet. Newsletter-unterdrückte Mails
 werden deterministisch auf classifier.NEWSLETTER_TARGET_FOLDER (Newsletter,
 copy_as_move,
 review_required: false) abgebildet, außer ein starker nicht-unterdrückter
@@ -300,7 +304,7 @@ exakter, eindeutiger Katalogcode) wird über
 [`evaluate_thread_sibling_do_not_route`](../scripts/core/matching/project_matching.py)
 (DNR-Owner `project_matching.py`) geprüft. Ein unterdrückter Sibling bleibt
 unbekannt/`INBOX`/`keep_in_folder` mit `review_reason`
-(`do_not_route_suppressed`), genau einer katalogdaten-only `suppressed_candidates`-Zeile und ohne Thread-Vererbungsanspruch — kein Reroute.
+(`do_not_route_suppressed`), genau einer katalogdaten-only `suppressed_candidates`-Zeile und ohne Thread-Vererbungsanspruch — kein Reroute. Die OUT-P1-Ausgabebegrenzung (max. 3 Zeilen + `suppressed_count`) ändert diesen Ein-Zeilen-Fall nicht.
 Saubere Siblings erben unverändert; widersprüchliche Ketten, unbekannte/
 INBOX-/unowned Eltern und body-only-Tokens verhalten sich wie zuvor; aus
 Mailinhalt wird nie ein Ziel abgeleitet. Struktureller Nachweis:
@@ -532,6 +536,36 @@ schneidet ab und leitet in eine Datei um). Der Katalog-Feld-Inspekt per rohem
   enden kanonisch (`CatalogError`, Exit 2), nie bare `SystemExit`.
 - Beide Skripte nutzen `core.envelope` (kanonischer Vertrag) und wurden aus dem
   Consumer-Betrieb adoptiert und gehärtet (Fix-Runde MD-BC-fix-001).
+
+**OUT-P1 (2026-10-16, GitHub-Issues #5/#6) — Runner-Output-Contracts geschärft:**
+- **Klassifikations-Output begrenzt (Issue #5):** `core/classifier.py` schreibt nur noch
+  `MAX_SUPPRESSED_CANDIDATES_OUT` (3) `suppressed_candidates`-Zeilen plus
+  `suppressed_count` in `decision`; die interne DNR-/Newsletter-Auswertung nutzt
+  weiterhin die vollständige Liste und bleibt unverändert (`references/folder-rules.md`
+  spiegelt die begrenzte Ausgabeliste).
+- **Übersprungene bekannte Mails aggregiert (Issue #5):** `get_unprocessed_emails` ist
+  ein dünner Public Wrapper über den privaten `_scan_unprocessed_emails`; statt einer
+  `skipping_known_email`-Progress-Zeile je bekannter Envelope emittiert er genau eine
+  Zeile `skipped N known envelopes` je Scan-Phase. `known_count`,
+  Scan-/Paging-Schedule und `runner-progress.json`-Writes bleiben unverändert.
+- **PartialFailure-Envelope kompakt (Issue #6):** `_result_envelope` reduziert
+  `data.results` bei `PartialFailure` auf die fehlgeschlagenen Items und ergänzt
+  `succeeded_count` + `succeeded_envelope_ids` (IDs genügen; das Recovery-Journal
+  führt die vollständige Liste weiter). `execute_summary` und der Success-Envelope
+  bleiben unverändert.
+- **SOP-Doku (empfohlener Standardweg):** `references/cli-operations.md` (Item 7) und
+  `references/batch-runner.md` (Abschnitt Live-Fortschritts-Monitoring) empfehlen
+  `mail_desk_batch_cli.py` als Standard für `draft`/`execute`/`reconcile` (persistiert
+  Env + Progress unter `<workspace>/tmp/mail-batch/`, emittiert nur den Summary,
+  `--keep N` Default 10) und benennen die Herkunft der Envelope-Duplikation: der Runner
+  emittiert genau einen Envelope auf stdout; eine zweite Kopie stammt aus Harness/Shell
+  (Log-Mitschnitt plus Envelope-Ausgabe) und wird vom Wrapper eliminiert.
+- **Pflichttests OUT-P1:** `tests/test_classifier_do_not_route.py` (+1 Cap-Pin),
+  `tests/test_batch_runner_pilot_hardening.py` (+2 Skip-Aggregations-Pins),
+  `tests/test_batch_runner_envelope.py` (rotierter PartialFailure-Pin + neuer
+  Success-Envelope-Pin), `tests/test_classifier_thread_sibling_coherence.py`
+  (Rotations-Docstring; Pins unverändert grün). Suite-Metrik im oben genannten
+  Discovery-Frame.
 
 **Pflichttests (alle erfüllt):** `tests/test_batch_cli_wrapper.py` (11,
 Argument-Threading, Account-Neutralität, Prune-Hygiene, Envelope-Fehlerpfad),

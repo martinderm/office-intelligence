@@ -212,5 +212,71 @@ class BatchRunnerPilotHardeningTests(unittest.TestCase):
                     runner._load_configuration(args, self.data_dir)
 
 
+class KnownMailSkipSummaryTests(unittest.TestCase):
+    """OUT-P1 (2026-10-16, issue #5): known-mail skips aggregate into one summary line.
+
+    Contract rotation: ``get_unprocessed_emails`` used to emit one
+    ``skipping_known_email`` progress step per known envelope (redirected to stderr
+    by the runner boundary), so a large known backlog buried the real progress in
+    hundreds of lines.  The public wrapper now emits exactly one aggregated
+    ``skipped N known envelopes`` step per scan phase, while the returned
+    ``known_count``, the paging schedule and the per-step progress-file writes stay
+    unchanged.
+    """
+
+    class _RecordingTracker:
+        def __init__(self) -> None:
+            self.steps: list[str] = []
+
+        def step(self, step_name: str, **_kwargs: object) -> None:
+            self.steps.append(step_name)
+
+        def advance_item(self, **_kwargs: object) -> None:
+            self.steps.append("advance_item")
+
+    def _run_scan(self, *, known: int, target: int = 1):
+        tracker = self._RecordingTracker()
+        known_items = {f"{number}@example.test": {} for number in range(1, known + 1)}
+        envelopes = [
+            {"id": str(number), "subject": f"message {number}"}
+            for number in range(1, known + 2)
+        ]
+
+        def details(envelope_id, *_args, **_kwargs):
+            return {"envelope_id": str(envelope_id), "message_id": f"{envelope_id}@example.test"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            with patch.object(runner, "load_final_index", return_value={"items": known_items}), patch.object(
+                runner, "build_signature_index", return_value={},
+            ), patch.object(
+                runner, "get_oldest_envelopes",
+                side_effect=lambda _folder, _size, account=None: envelopes,
+            ), patch.object(runner, "get_single_email_details", side_effect=details), patch.object(
+                runner.time, "sleep",
+            ):
+                result = runner.get_unprocessed_emails(
+                    "INBOX", target, data_dir=data_dir, tracker=tracker,
+                )
+        return result, tracker
+
+    def test_known_backlog_emits_one_aggregated_line_and_no_per_mail_line(self) -> None:
+        (emails, known_count), tracker = self._run_scan(known=5)
+
+        self.assertEqual(5, known_count)
+        self.assertEqual(["6@example.test"], [email["message_id"] for email in emails])
+        skip_lines = [step for step in tracker.steps if "known envelopes" in step]
+        self.assertEqual(["skipped 5 known envelopes"], skip_lines)
+        self.assertNotIn("skipping_known_email", tracker.steps)
+
+    def test_clean_scan_emits_no_aggregated_skip_line(self) -> None:
+        (emails, known_count), tracker = self._run_scan(known=0)
+
+        self.assertEqual(0, known_count)
+        self.assertEqual(["1@example.test"], [email["message_id"] for email in emails])
+        self.assertEqual([], [step for step in tracker.steps if "known envelopes" in step])
+
+
 if __name__ == "__main__":
     unittest.main()

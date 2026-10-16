@@ -1,4 +1,11 @@
-"""Contract tests for the batch-runner's OI-10 CLI envelope boundary."""
+"""Contract tests for the batch-runner's OI-10 CLI envelope boundary.
+
+OUT-P1 (2026-10-16, issue #6) bounded the PartialFailure envelope: the error envelope
+carries only the failed ``data.results`` rows plus ``succeeded_count`` and
+``succeeded_envelope_ids`` instead of the full result list, which shells/harnesses
+otherwise echo back into the caller's context.  Success envelopes and
+``execute_summary`` are untouched.
+"""
 
 from __future__ import annotations
 
@@ -225,6 +232,12 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
         self.assertIn("unrecognized arguments", stderr)
 
     def test_partial_failure_preserves_input_and_nests_diagnostics(self) -> None:
+        """OUT-P1 contract rotation (2026-10-16, issue #6): a PartialFailure envelope
+        carries only the failed items under ``data.results`` plus the
+        ``succeeded_count``/``succeeded_envelope_ids`` summary, instead of echoing the
+        full result list back to the harness/shell.  Success envelopes are unchanged
+        (see ``test_partial_failure_compaction_leaves_success_envelope_full``).
+        """
         manifest = self.write_manifest("partial.json", "execute")
         result = {
             "ok": False,
@@ -238,8 +251,54 @@ class BatchRunnerEnvelopeTests(unittest.TestCase):
         self.assert_envelope(envelope, operation="execute")
         self.assertEqual("PartialFailure", envelope["state"])
         self.assertEqual("PartialFailure", envelope["error"]["type"])
-        self.assertEqual(result["results"], envelope["data"]["results"])
+        self.assertEqual([{"success": False, "id": "second"}], envelope["data"]["results"])
+        self.assertEqual(1, envelope["data"]["succeeded_count"])
+        self.assertEqual(["first"], envelope["data"]["succeeded_envelope_ids"])
         self.assertTrue(manifest.exists())
+
+    def test_partial_failure_compaction_leaves_success_envelope_full(self) -> None:
+        """OUT-P1: the compaction is PartialFailure-only; a success envelope keeps all rows."""
+        manifest = self.write_manifest("compact.json", "execute")
+        partial = {
+            "ok": False,
+            "mode": "execute",
+            "results": [
+                {"success": True, "envelope_id": "1"},
+                {"success": False, "envelope_id": "2"},
+                {"success": True, "envelope_id": "3"},
+                {"success": False, "envelope_id": "4"},
+            ],
+            "all_succeeded": False,
+        }
+        exit_code, envelope, _ = self.invoke(["--input", str(manifest)], handler_result=partial)
+
+        self.assertEqual(1, exit_code)
+        self.assertEqual("PartialFailure", envelope["state"])
+        self.assertEqual(
+            [{"success": False, "envelope_id": "2"}, {"success": False, "envelope_id": "4"}],
+            envelope["data"]["results"],
+        )
+        self.assertEqual(2, envelope["data"]["succeeded_count"])
+        self.assertEqual(["1", "3"], envelope["data"]["succeeded_envelope_ids"])
+
+        success_manifest = self.write_manifest("compact-ok.json", "execute")
+        exit_code, envelope, _ = self.invoke(
+            ["--input", str(success_manifest)],
+            handler_result={
+                "ok": True,
+                "mode": "execute",
+                "results": [{"success": True, "envelope_id": "1"}, {"success": True, "envelope_id": "2"}],
+            },
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertTrue(envelope["success"])
+        self.assertEqual(
+            [{"success": True, "envelope_id": "1"}, {"success": True, "envelope_id": "2"}],
+            envelope["data"]["results"],
+        )
+        self.assertNotIn("succeeded_count", envelope["data"])
+        self.assertNotIn("succeeded_envelope_ids", envelope["data"])
 
     def test_execute_telemetry_is_nested_under_envelope_data(self) -> None:
         manifest = self.write_manifest("telemetry.json", "execute")
