@@ -5,6 +5,30 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- GitHub [Issue #8](https://github.com/martinderm/office-intelligence/issues/8):
+  Vorabprüfung: Batch-Dossier-Modi und Event-Matching vorhanden; Fassade fehlt.
+  Full-Auto-Push für diese Session freigegeben. Historische 12 Pins aus `0896334`
+  wiederhergestellt (Rot: 12 Importfehler), Fassade und gemeinsamer Core ergänzt.
+  Ein historischer E2E-Pin setzte zusätzlich den nie implementierten Event-Writer
+  voraus: nach Git-/Dateiprüfung separat als #14 erfasst; kein Scope-Creep.
+  Dokumentierte Testkorrektur: echte Handoff-/Report-Assertions mit synthetischen
+  Writer-Bytes und explizitem Source-/Output-Receipt statt fehlendem Writer.
+  `apply` bleibt komponierend, keine Ausführung/automatische Freigabe. Zusätzliche
+  Approval-/Drift-/Pfad-/CLI-Pins: Fokus 32 Tests, 31 bestanden, ein echter
+  Symlink-Test mangels Plattformberechtigung übersprungen (synthetischer
+  Reparse-Test und echter Hardlink-Test bestanden). Systematische JSON-
+  Typmutationen fanden zwei vor Abnahme geschlossene Shape-Guard-Lücken.
+  Dokumentierte zweite Testkorrektur: Reparse-Injektion auf den aufgelösten
+  Langpfad statt Windows-8.3-Alias, mit expliziter Hit-Assertion. Im ersten
+  Gesamtframe 1339 Tests: 1336 bestanden, zwei bekannte MD-A3-Timing-Failures
+  (#10; beide isoliert grün), ein Skip. Im folgenden Frame 1341 Tests war nur
+  die inzwischen korrigierte Reparse-Fixture rot. Finale Abnahme: **1341 Tests,
+  1340 bestanden, ein Plattform-Skip, keine Fehler**; Event-Storage-Verträge
+  zusätzlich **6/6**. Eigenprüfung und `git diff --check` abgeschlossen;
+  unabhängiges PR-Review/Integration stehen aus (kein APPROVE behauptet).
+  Lokale Rohlogs: Harness-Scratch `issue8-mail-final.log` (finaler Code-Frame),
+  `issue8-mail-suite.log` und `issue8-mail-acceptance.log` (Vorläufe).
+
 - GitHub [Issue #2](https://github.com/martinderm/office-intelligence/issues/2):
   Cloud-Atlas-Verzeichnisausschlüsse in isoliertem Worktree; Commit/Push am
   2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.
@@ -19,8 +43,7 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   Scope-Owner; der erste Voll-Lauf zeigte dafür `ModuleNotFoundError`.
   Abnahme 2026-10-16: Cloud-Atlas-Vollsuite **182/182**, Projektkatalog **28/28**,
   unabhängiges Re-Review **APPROVE** (15/15 Fokus erneut unabhängig geprüft).
-  Freigegebener Branch: `fix/issue-2-cloud-exclusions`; Integration nach `main`
-  und damit Remote-Abschluss des Issues stehen separat aus. Logs liegen lokal im
+  Integriert über PR #13 (`a4b8e80`), Issue geschlossen. Logs liegen lokal im
   Harness-Scratch (`issue2-cloud-acceptance.log`, `issue2-project-final.log`).
 
 - `FR-28`/`DOC-P1` — Batch-Doku-Schärfung + Signatur-Helfer in Finalisierung

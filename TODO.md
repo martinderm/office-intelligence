@@ -6,9 +6,12 @@
   (`test_event_dossier.py` — Spec-first committet in `0896334`, Produktionsmodul
   `mail_desk_event_dossier.py` nie implementiert — und `test_attachment_basename.py`)
   wurden am 2026-10-16 aus der Suite entfernt (User-Auftrag „Altlasten entfernen").
-- **Nachverfolgung:** Der_feature-Vollzug der Event-Dossier-Orchestrierungs-Facade
-  ist als **GitHub issue #8** erfasst (inkl. Pflichthinweis auf Vorab-Prüfung);
-  die 12 Pins bleiben als Spec in der Git-History (`0896334`) abrufbar.
+- **Nachverfolgung:** **GitHub issue #8** implementiert die read-only Fassade;
+  die 12 historischen Pins sind wiederhergestellt und um Negativtests ergänzt.
+  Dokumentierte Testkorrektur: Der E2E-Pin prüft die externe Writer-Grenze mit
+  synthetischen Artefakten und Source-/Output-Receipt. Der vorab nachweislich
+  fehlende Event-Writer ist separat **GitHub issue #14**; keine Implementierung
+  oder End-to-End-Writer-Abnahme wird mit der Fassade behauptet.
 
 ## 2026-10-16 — GELÖST → Issue #9: `test_attachment_basename` Vertragsbruch
 

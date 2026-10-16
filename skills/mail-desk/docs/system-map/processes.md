@@ -9,6 +9,27 @@
 
 ## 1. Übersicht der Lifecycles im Mail-Desk
 
+### Event-Dossier-Fassade (Issue #8, separater Read-only-Lifecycle)
+
+`mail_desk_event_dossier.process_request` delegiert an `core/event_dossier.py`:
+1. `plan`: explizite Ordner/Begriffe, bounded erste Envelope-Seite, foldergebundene
+   Inspect-IDs; keine Vollständigkeit, keine Live-Account-Behauptung.
+2. `review`: Search/Read/MIME-Locatoren exakt binden, Messages mit konsistentem
+   Hash und Anhänge nach Hash deduplizieren, alle Provenienzen behalten.
+   Content-Drift scheitert; Kalenderkonflikte/fehlende Parents verlangen Review.
+3. `apply`: beide externen Receipts validieren (innerer Batch-Hash ohne Review,
+   äußerer Dossier-Hash einschließlich finalem innerem Receipt). Nur Request-
+   Übergabe, **keine Ausführung** (`applied: false`). Der Batch-Owner revalidiert
+   Katalog, Account, Zielordner und Lock vor der eigentlichen Mutation.
+4. `handoff`: `_require_completed_apply` plus exakte Request-/Receipt-/Quellen-
+   und Syntheseziel-Paarung; nie Partial-Apply übernehmen. Work-Order an
+   `event-documentation`, weiterhin `pending_content_review`.
+5. `report`: Work-Order-/Source-Snapshot-Bindung und vollständige Output-Hashliste
+   gegen echte lokale Dateien prüfen. Keine Content-Freigabe.
+
+Der externe Event-Writer fehlt (GitHub #14); die Writer-Grenze ist synthetisch
+getestet. Vollständige DTOs und Bounds: `references/event-dossier.md`.
+
 ```
 [Mailbox / Himalaya]
          │

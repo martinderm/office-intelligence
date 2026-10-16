@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files` (Kanonik-Ebene, Stand 2026-10-16/Post-Altlasten-Entfernung, Post-Commit-Frame inkl. der FR-28-Dateien und der Draft-API): 171 getrackte Dateien; 72 getrackte Dateien unter `scripts/`, davon 58 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 81 Testmodule; Suite 1309 Tests im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"` (Vollsuite-Referenzlauf 2026-10-16 nach Entfernung der beiden diff-fremden Altlasten-Module — `test_event_dossier`/`test_attachment_basename`, Nachverfolgung in issues #8/#9, Spec in Git-History `0896334`; gemessen 1309 Tests / 1306 grün); verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, Root-TODO) → 1305–1307 grün je Lauf; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine zur Vermeidung von Context-Bloat und Attention Drift. Stand Issue #8, 2026-10-16: 175 Dateien im Commit-Frame (`git ls-files --cached --others --exclude-standard skills/mail-desk/`), 74 unter `scripts/`, davon 59 unter `scripts/core/`; 82 Testmodule. Aktuelle Suite-Abnahme siehe Issue-#8-Abschnitt unten. Historischer Post-Altlasten-Frame: 171 Dateien, 1309 Tests (1306 grün, drei MD-A3-Timing-Failures); DRAFT-P1 (#3, 23 Tests) enthalten. MD-A3-/READY-Flakes bleiben separat in #10, Attachment-Basename-Reconcile in #9.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -996,13 +996,10 @@ behebt den Minor; Map- und Frontmatter-Sync laufen im selben
 Orchestrator-Schritt (Metriken im Post-Commit-Frame, gemessen via
 `git ls-files`).
 
-**Altlasten (Root-TODO, diff-fremd/präexistent):** `test_event_dossier`
-(12 × `ModuleNotFoundError: mail_desk_event_dossier` — getracktes Testmodul
-ohne getracktes Skript) und `test_attachment_basename` (11 Vertragsbrüche:
-`KeyError: 'original_filename'`, Traversal-/Win32-Pfadsemantik). Die Suite
-trägt 1298 Tests, davon 1275 verifiziert grün inklusive der 19 neuen
-(Suite-Gesamtzahl nach Fix-Runde 2); bekannter MD-A3-Timing-Flake
-(OCR/Prozess-Timeout-Fenster) ist weiterhin in Root-TODO dokumentiert.
+**Historischer Altlasten-Frame (Root-TODO):** Damals fehlten Event-Fassade und
+Basename-Vertragsabgleich. Die Module wurden separat entfernt; Issue #8 stellt
+nun die Event-Pins samt produktiver Fassade wieder her. Der externe Event-Writer
+bleibt separat #14, Basename-Reconcile #9 und Timing-/READY-Flakes #10.
 
 ---
 
@@ -1098,3 +1095,43 @@ Lösch-Pin), danach 22/22 grün. Rotationen: genau eine Pin-Rotation
 die Himalaya-Hilfe) plus die zugehörige Reihenfolge-Pin im Replace-Test.
 Suite-Metrik: fokussierter Discovery-Lauf; Vollsuite erst in der finalen
 Orchestrator-Abnahme (siehe Metrik-Frame in der Kopfzeile).
+
+## 30. Issue #8 — Read-only Event-Dossier-Fassade
+
+**Vorabprüfung:** `core/modes/dossier*.py` und Event-Matching existieren bereits;
+nur `scripts/mail_desk_event_dossier.py` fehlte. Neue Fassade über
+`scripts/core/event_dossier.py`, vollständiger Vertrag in
+[`references/event-dossier.md`](../../references/event-dossier.md).
+
+**Stufen:** bounded `plan`; locator-/hashgebundenes `review` mit Dedupe und
+Semantic-Review-Flags; komponierendes `apply` mit unverändertem `batch_request`,
+`dispatch_required: true`, `applied: false`; Handoff nur nach vollständiger,
+identischer Execute-/Verify-Kette; source- und output-hashgebundenes `report`.
+Innere und äußere Hash-Owner werden wiederverwendet, kein Approval wird erzeugt.
+Keine Mailbox-/Event-/Cloud-/Task-Writes und keine Content-Freigabe; Katalog-
+und Lock-Revalidierung verbleiben bei den operativen Ownern.
+
+**Testkorrektur:** 12 historische Pins aus `0896334` wiederhergestellt (genuine
+Rot: 12 Importfehler). Der historische Writer-E2E-Pin benötigt einen ebenfalls
+nie implementierten Event-Writer; Vorabprüfung/Follow-up GitHub #14. Die
+Fassade prüft dieselbe Übergabe plus ein explizites Source-/Output-Receipt mit
+synthetischen Writer-Bytes, ohne einen echten Writer-Abschluss zu behaupten.
+Zusatzpins: getrennte Approval-Gates/Reihenfolge, Attachment-Part-Drift,
+Quellsubstitution/Partial-Apply, Syntheseziel-Drift, Kalendererhalt, genaue
+Output-Mengen, Pfad-/Hardlink-/Reparse-Barrieren, CLI-Bounds sowie systematische
+verschachtelte JSON-Typmutationen. Letztere reproduzierten zwei Shape-Guard-
+Lücken (operative Message-ID und Work-Order-Event), vor Abnahme geschlossen.
+Die Reparse-Fixture verwendet den kanonisch aufgelösten Langpfad statt eines
+Windows-8.3-Alias und prüft die tatsächliche Injektion mit einer Hit-Assertion
+(dokumentierte Testkorrektur, keine Abschwächung des Produktionsguards).
+
+**Abnahme 2026-10-16:** Vollsuite **1341 Tests: 1340 bestanden, ein Plattform-
+Skip, keine Fehler** (absolute Discovery-Pfade, `-B -m unittest discover`,
+`test_*.py`; `issue8-mail-final.log` im lokalen Harness-Scratch).
+Fassade: 32 Tests (31 bestanden, ein echter Symlink-Test mangels Berechtigung
+übersprungen; echter Hardlink- und synthetischer Reparse-Test bestanden).
+Event-Storage-Verträge separat 6/6. Vorlauf mit zwei bekannten MD-A3-Timing-
+Failures (#10; isoliert beide grün); finaler Voll-Lauf ohne diese Fehler.
+175 Dateien, 74 Scripts, davon 59 Core-Dateien, 82 Testmodule; Messung über
+`git ls-files --cached --others --exclude-standard`. Eigenprüfung abgeschlossen;
+unabhängiges PR-Review und Integration bleiben separat, kein APPROVE behauptet.
