@@ -118,6 +118,10 @@ class HashDriftError(AttachmentDriftError):
     """Raised when attachment payload SHA-256 hash drifts."""
 
 
+class FilenameDriftError(AttachmentDriftError):
+    """Raised when the original MIME filename drifts from the bound storage name."""
+
+
 # ==============================================================================
 # MIME Inspection
 # ==============================================================================
@@ -270,6 +274,11 @@ def inspect_mime_tree(
             "is_inline": is_inline,
             "provenance": PROVENANCE_RFC822,
         }
+        # Preserve the raw RFC-822 MIME filename as provenance (issue #9):
+        # inventory sanitization derives the storage name but never launders
+        # the original away; downstream consumers validate it fail-closed.
+        if raw_filename:
+            entry["original_filename"] = raw_filename
         if policy_reason:
             entry["policy_reason"] = policy_reason
 
@@ -342,6 +351,10 @@ def bind_attachment_candidate(
     bound["envelope_id"] = str(envelope_id).strip()
     bound["message_id"] = norm_mid
     bound["policy_status"] = policy_status
+    # Raw MIME-name provenance passes through unchanged (issue #9); validation
+    # against it stays fail-closed at fetch time, never laundered here.
+    if "original_filename" in attachment:
+        bound["original_filename"] = attachment["original_filename"]
     if policy_reason:
         bound["policy_reason"] = policy_reason
     else:
@@ -437,6 +450,9 @@ def canonicalize_and_bind_attachments(
             "envelope_id": str(envelope_id).strip(),
             "message_id": norm_mid,
         }
+        # Raw MIME-name provenance passes through unchanged (issue #9).
+        if "original_filename" in item:
+            bound["original_filename"] = item["original_filename"]
         if policy_reason:
             bound["policy_reason"] = policy_reason
 

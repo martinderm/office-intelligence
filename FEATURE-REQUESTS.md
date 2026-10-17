@@ -15,6 +15,10 @@ separate, vorab bestätigte Writer-Lücke
 [#14](https://github.com/martinderm/office-intelligence/issues/14).
 Keine neuen FR-Record-Files.
 
+Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reconcile](https://github.com/martinderm/office-intelligence/issues/9).
+Vertrag und Runtime-Grenzen: Mail-Desk L2-System-Map §30 (Leserichtung je
+Pin-Gruppe) und `skills/mail-desk/docs/system-map/effects.md` §4.
+
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in
 seinem Record-File unter [`docs/features/`](docs/features/).

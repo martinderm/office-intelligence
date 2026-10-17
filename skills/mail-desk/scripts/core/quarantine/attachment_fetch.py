@@ -45,6 +45,7 @@ from core.attachment_policy import (
 from core.attachments import (
     AccountDriftError,
     AttachmentDriftError,
+    FilenameDriftError,
     HashDriftError,
     LocationDriftError,
     MessageIdDriftError,
@@ -268,23 +269,32 @@ def validate_attachment_filename(raw_filename: Any) -> str:
     Rejects before any I/O:
     - Non-string or empty filename
     - Free paths with directory separators (/ or \\)
-    - Traversal sequences (..)
+    - Exact current/parent directory components ("." / "..")
     - Windows reserved device names with or without extension (CON, CON.txt, AUX.pdf, etc.)
-    - Forbidden filesystem characters (<>:"|?* or null bytes)
+    - Forbidden filesystem characters (<>:"|?*, null bytes, other control characters)
+    - Trailing dots or spaces (Win32 strips them, making such names storage aliases)
+
+    Embedded dot sequences without a separator (e.g. ``agenda..pdf``) are
+    legitimate literal basenames on every supported platform: traversal
+    requires a directory separator, which remains rejected unconditionally.
+    The literal name is returned unchanged; callers never receive a silently
+    laundered alias (issue #9, documented reconcile decision).
     """
     if not isinstance(raw_filename, str) or not raw_filename.strip():
         raise ValueError("Attachment filename is missing or empty.")
 
     cleaned = raw_filename.strip()
 
-    # 1. Reject free candidate paths and path traversal sequences
-    if "/" in cleaned or "\\" in cleaned or ".." in cleaned:
+    # 1. Reject free candidate paths and exact traversal components. Embedded
+    #    dots without a separator cannot traverse and stay valid (#9).
+    if "/" in cleaned or "\\" in cleaned or cleaned in {".", ".."}:
         raise ValueError(
             f"Free candidate path or directory traversal rejected before I/O: {raw_filename!r}"
         )
 
-    # 2. Reject null bytes and illegal characters
-    if "\x00" in cleaned or re.search(r'[<>:"|?*]', cleaned):
+    # 2. Reject null bytes, illegal characters and other control characters
+    #    (including tabs, which are not filename characters on any target).
+    if "\x00" in cleaned or re.search(r'[<>:"|?*]', cleaned) or any(ord(c) < 32 for c in cleaned):
         raise ValueError(
             f"Illegal characters in attachment filename rejected before I/O: {raw_filename!r}"
         )
@@ -294,6 +304,15 @@ def validate_attachment_filename(raw_filename: Any) -> str:
     if stem in WIN32_RESERVED_NAMES or cleaned.upper() in WIN32_RESERVED_NAMES:
         raise ValueError(
             f"Windows reserved device name rejected before I/O: {raw_filename!r}"
+        )
+
+    # 4. Reject Win32 storage aliases: trailing dots/spaces are stripped by the
+    #    filesystem, so storing them would alias a different literal name. The
+    #    check uses the raw value because surrounding whitespace was already
+    #    stripped above and must not hide a trailing alias.
+    if raw_filename != raw_filename.rstrip() or cleaned.endswith("."):
+        raise ValueError(
+            f"Trailing dot or space storage alias rejected before I/O: {raw_filename!r}"
         )
 
     return cleaned
@@ -1034,6 +1053,22 @@ def op_attachment_fetch(
             f"Part locator drift: candidate has '{candidate.get('part_locator')}', requested '{part_locator}'"
         )
 
+    # 1b. Original MIME filename provenance gate (issue #9): when the candidate
+    # carries the raw RFC-822 filename, it must itself pass fail-closed
+    # validation before any I/O (raw traversal is never laundered by inventory
+    # sanitization) and must remain consistent with the bound storage name.
+    original_filename: str | None
+    raw_original = candidate.get("original_filename")
+    if raw_original is None:
+        original_filename = None
+    else:
+        original_filename = validate_attachment_filename(raw_original)
+        if sanitize_attachment_filename(original_filename) != str(candidate.get("filename", "")).strip():
+            raise FilenameDriftError(
+                f"Filename drift detected: original MIME name {raw_original!r} "
+                f"does not sanitize to inventory storage name {candidate.get('filename')!r}"
+            )
+
     # 2. Receipt Verification & Review Hash Consistency
     computed_rev_hash = compute_review_hash(
         account=account,
@@ -1157,6 +1192,7 @@ def op_attachment_fetch(
                     "effective_mime_type": eff_mime,
                     "size_bytes": len(existing_bytes),
                     "filename": clean_filename,
+                    "original_filename": original_filename if original_filename is not None else clean_filename,
                     "error": None,
                 }
 
@@ -1234,6 +1270,7 @@ def op_attachment_fetch(
                 "effective_mime_type": eff_mime,
                 "size_bytes": len(existing_bytes),
                 "filename": clean_filename,
+                "original_filename": original_filename if original_filename is not None else clean_filename,
                 "error": None,
             }
 
@@ -1274,6 +1311,7 @@ def op_attachment_fetch(
         "effective_mime_type": eff_mime,
         "size_bytes": len(payload),
         "filename": clean_filename,
+        "original_filename": original_filename if original_filename is not None else clean_filename,
         "error": None,
     }
 

@@ -2,7 +2,7 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine zur Vermeidung von Context-Bloat und Attention Drift. Stand Issue #8, 2026-10-16: 175 Dateien im Commit-Frame (`git ls-files --cached --others --exclude-standard skills/mail-desk/`), 74 unter `scripts/`, davon 59 unter `scripts/core/`; 82 Testmodule. Aktuelle Suite-Abnahme siehe Issue-#8-Abschnitt unten. Historischer Post-Altlasten-Frame: 171 Dateien, 1309 Tests (1306 grün, drei MD-A3-Timing-Failures); DRAFT-P1 (#3, 23 Tests) enthalten. MD-A3-/READY-Flakes bleiben separat in #10, Attachment-Basename-Reconcile in #9.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`, Kanonik-Ebene; **Merge-Frame 2026-10-17, Issue #8 × #9**: 178 getrackte Dateien; 74 getrackte Dateien unter `scripts/`, davon 59 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 83 Testmodule; Suite im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"`. Historische Frames: Post-Altlasten 171 Dateien, 1309 Tests (1306 grün; beide Altlasten-Module `test_event_dossier`/`test_attachment_basename` entfernt, Spec in Git-History `0896334`, Nachverfolgung issues #8/#9); **#9-Frame: `test_attachment_basename` (6 Pins) wiederhergestellt → 1315 Tests / 1315 grün, Leserichtung je Pin-Gruppe in §30**); **#8 stellt die Event-Dossier-Fassade samt Pins wieder her (§31), Suite-Endmessung im Findings-Fix-Frame**; verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, inkl. `flaky_lock_marker_mda3.txt`-Marker-Race-Fund) → Ergebnis je Lauf um diese Familie schwankend; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -1096,7 +1096,62 @@ die Himalaya-Hilfe) plus die zugehörige Reihenfolge-Pin im Replace-Test.
 Suite-Metrik: fokussierter Discovery-Lauf; Vollsuite erst in der finalen
 Orchestrator-Abnahme (siehe Metrik-Frame in der Kopfzeile).
 
-## 30. Issue #8 — Read-only Event-Dossier-Fassade
+## 30. Issue #9 — Attachment-Basename Contract-Reconcile (abgeschlossen)
+
+**Vorabprüfung und Leserichtung:** Die Produktionsdatei (`core/quarantine/
+attachment_fetch.py`, `core/attachments.py`) wurde seit Spec-Commit `0896334`
+weiterentwickelt; die Drift war gemischt. Entscheidung pro Pin-Gruppe mit
+Begründung — kein stiller Orchestrator-Fix, keine Sicherheitsrotation:
+
+- **Gruppe A (Provenienz, Pins 1/2/4): Tests = Spec.** `inspect_mime_tree`
+  wusch Raw-MIME-Namen still durch `sanitize_attachment_filename`
+  (`../agenda.pdf` → `agenda.pdf`) und verlor die Provenienz. Fix: Raw-Name
+  wird als `original_filename` in Inventar und Binding erhalten (niemals
+  umgeschrieben) und in `op_attachment_fetch` vor jedem I/O fail-closed
+  validiert; Drift zwischen Raw-Name und Storage-Name erzeugt
+  `FilenameDriftError`. Traversal wird nie gewaschen.
+- **Gruppe B (Windows-Aliase, Pin 3): Tests = Spec (Härtung).** Trailing
+  Dots/Spaces sind Win32-Speicheralias (`agenda.pdf.` ≡ `agenda.pdf`);
+  validate strippte zuvor still. Neu abgelehnt: Trailing-Dot/Space am Rohwert,
+  Control-Characters (inkl. Tab), exakte `.`/`..`-Komponenten.
+- **Gruppe C (Embedded Dots, Pins 1/7): Tests = Spec (dokumentierte
+  Verschärfung der Präzision).** Die bisherige `..`-Substring-Ablehnung war
+  überbreit: ohne Verzeichnisseparator kann ein reiner Basename nicht
+  traversieren. `agenda..pdf` ist auf allen Plattformen ein legitimer,
+  kollisionsfreier Literalname. Separatoren (`/`, `\`) bleiben bedingungslos
+  abgelehnt; `validate_attachment_filename` gibt das Literal unverändert
+  zurück, niemals einen gelaundernten Alias.
+- **Gruppe D (Identity-/Payload-Drift, Pins 4/5): Produktion = Spec.**
+  Account-, Message-ID-, Hash- und Raw-Payload-Drift waren bereits fail-closed
+  grün; keine Änderung.
+
+**Betroffene Verträge:** `validate_attachment_filename` (fetch),
+`sanitize_attachment_filename` (unverändert: Storage-Name-Derivation,
+mda1-Pins bestehen weiter), `inspect_mime_tree`/`bind_attachment_candidate`/
+`canonicalize_and_bind_attachments` (`original_filename`-Provenienz),
+`op_attachment_fetch` (Provenienz-Gate + `original_filename` in allen drei
+Ergebnis-Envelopes, Fetch→Repeat-Stabilität unverändert).
+Folgekonsumenten `quarantine_index` und `attachment_extract` prüfen reine
+Basenames ohne Separatoren — die Verschärfung der Präzision ändert ihr
+Verhalten nicht.
+
+**Testkorrektur:** Keine. Alle 6 historischen Pins aus `0896334` wurden
+unverändert wiederhergestellt; genuine Red war 5 Failures + 6 Errors wie im
+Issue beschrieben. Abnahme: Fokus-Frames `test_maildesk_attachment*.py` (591
+Tests; Rotationen ausschließlich der bekannten MD-A3-Timing-Familie #10,
+isoliert grün) plus erster Voll-Frame 1315 Tests mit einem einzigen
+`test_workspace_lock_loss_immediately_before_promotion_aborts`-Flake
+(`WorkspaceLockError not raised`; Ursache ist die geteilte globale
+Marker-Datei `flaky_lock_marker_mda3.txt` unter `tempfile.gettempdir()` im
+Test-Helfer `_flaky_lock_verifier` — umgebungs-/cross-run-sensitiv, kein Teil
+des reconcilten Codes, isoliert dreifach grün, Baseline-Frame 1309/1309 OK,
+Rerun mit Änderungen deterministisch grün, Nachweis zu issue #10 ergänzt).
+Finaler Rerun-Voll-Frame: **1315 Tests / 1315 grün** (Discovery-Frame
+`unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p
+"test_*.py"`, Log `issue9-mail-final.log` im Harness-Scratch).
+`test_attachment_basename` selbst: 6/6 grün, zweifach deterministisch.
+
+## 31. Issue #8 — Read-only Event-Dossier-Fassade
 
 **Vorabprüfung:** `core/modes/dossier*.py` und Event-Matching existieren bereits;
 nur `scripts/mail_desk_event_dossier.py` fehlte. Neue Fassade über
@@ -1125,13 +1180,16 @@ Die Reparse-Fixture verwendet den kanonisch aufgelösten Langpfad statt eines
 Windows-8.3-Alias und prüft die tatsächliche Injektion mit einer Hit-Assertion
 (dokumentierte Testkorrektur, keine Abschwächung des Produktionsguards).
 
-**Abnahme 2026-10-16:** Vollsuite **1341 Tests: 1340 bestanden, ein Plattform-
-Skip, keine Fehler** (absolute Discovery-Pfade, `-B -m unittest discover`,
-`test_*.py`; `issue8-mail-final.log` im lokalen Harness-Scratch).
-Fassade: 32 Tests (31 bestanden, ein echter Symlink-Test mangels Berechtigung
-übersprungen; echter Hardlink- und synthetischer Reparse-Test bestanden).
-Event-Storage-Verträge separat 6/6. Vorlauf mit zwei bekannten MD-A3-Timing-
-Failures (#10; isoliert beide grün); finaler Voll-Lauf ohne diese Fehler.
-175 Dateien, 74 Scripts, davon 59 Core-Dateien, 82 Testmodule; Messung über
-`git ls-files --cached --others --exclude-standard`. Eigenprüfung abgeschlossen;
-unabhängiges PR-Review und Integration bleiben separat, kein APPROVE behauptet.
+**Abnahme 2026-10-16 (Issue-#8-Branch-Frame):** Vollsuite **1341 Tests:
+1340 bestanden, ein Plattform-Skip, keine Fehler** (absolute Discovery-Pfade,
+`-B -m unittest discover`, `test_*.py`; `issue8-mail-final.log` im lokalen
+Harness-Scratch). Fassade: 32 Tests (31 bestanden, ein echter Symlink-Test
+mangels Berechtigung übersprungen; echter Hardlink- und synthetischer Reparse-
+Test bestanden). Event-Storage-Verträge separat 6/6. Vorlauf mit zwei bekannten
+MD-A3-Timing-Failures (#10; isoliert beide grün); finaler Voll-Lauf ohne diese
+Fehler. 175 Dateien, 74 Scripts, davon 59 Core-Dateien, 82 Testmodule; Messung
+über `git ls-files --cached --others --exclude-standard`. Eigenprüfung
+abgeschlossen; unabhängiges PR-Review und Integration bleiben separat, kein
+APPROVE behauptet. **Merge-Frame-Abnahme 2026-10-17 (Reconcile mit `main`/#9
+und Copilot-Findings-Fixes):** finale Messwerte werden im Findings-Fix-Frame
+hier nachgetragen.
