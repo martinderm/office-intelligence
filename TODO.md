@@ -12,6 +12,13 @@
   synthetischen Artefakten und Source-/Output-Receipt. Der vorab nachweislich
   fehlende Event-Writer ist separat **GitHub issue #14**; keine Implementierung
   oder End-to-End-Writer-Abnahme wird mit der Fassade behauptet.
+- **PR-Governance 2026-10-17:** Lane-Branch mit `main` (#9) reconciliert;
+  vier Copilot-Merge-Findings am Fassaden-Code fixiert (Syntheseziel-Validator,
+  `needs_reply`-Boolean-Step, kanonische Ziel-Normalisierung im Handoff,
+  `inspect_requests` mit Client-`action`) samt Regression-Pins; Merge-Abnahme
+  und Attestation laufen nach PR-Merge-Governance
+  (`agent-architecture/governance/pr-merge-governance.md`, unabhängiges
+  Maschinen-Review in anderem Modell, Squash, Cleanup).
 
 ## 2026-10-16 — GELÖST → Issue #9: `test_attachment_basename` Vertragsbruch
 

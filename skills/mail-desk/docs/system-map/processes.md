@@ -13,17 +13,23 @@
 
 `mail_desk_event_dossier.process_request` delegiert an `core/event_dossier.py`:
 1. `plan`: explizite Ordner/Begriffe, bounded erste Envelope-Seite, foldergebundene
-   Inspect-IDs; keine Vollständigkeit, keine Live-Account-Behauptung.
+   Inspect-IDs; `search_requests` als Batch-Runner-Configs (`mode: "search"`),
+   `inspect_requests` im Client-Manifest-Vertrag (`action: "read"`); keine
+   Vollständigkeit, keine Live-Account-Behauptung.
 2. `review`: Search/Read/MIME-Locatoren exakt binden, Messages mit konsistentem
    Hash und Anhänge nach Hash deduplizieren, alle Provenienzen behalten.
    Content-Drift scheitert; Kalenderkonflikte/fehlende Parents verlangen Review.
+   `needs_reply` strikt als JSON-Boolean; `synthesis_targets` mit dem kanonischen
+   Execute-Validator vor Annahme geprüft (Freigabe-Bytes unverändert).
 3. `apply`: beide externen Receipts validieren (innerer Batch-Hash ohne Review,
    äußerer Dossier-Hash einschließlich finalem innerem Receipt). Nur Request-
    Übergabe, **keine Ausführung** (`applied: false`). Der Batch-Owner revalidiert
    Katalog, Account, Zielordner und Lock vor der eigentlichen Mutation.
 4. `handoff`: `_require_completed_apply` plus exakte Request-/Receipt-/Quellen-
-   und Syntheseziel-Paarung; nie Partial-Apply übernehmen. Work-Order an
-   `event-documentation`, weiterhin `pending_content_review`.
+   Paarung; Syntheseziele werden an die **kanonische Normalisierung** des
+   genehmigten Requests gebunden (nicht an Rohbytes), nie Partial-Apply
+   übernehmen. Work-Order an `event-documentation`, weiterhin
+   `pending_content_review`.
 5. `report`: Work-Order-/Source-Snapshot-Bindung und vollständige Output-Hashliste
    gegen echte lokale Dateien prüfen. Keine Content-Freigabe.
 

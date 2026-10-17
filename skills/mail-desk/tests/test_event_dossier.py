@@ -260,6 +260,51 @@ class EventDossierTests(unittest.TestCase):
         self.assertFalse(self.run_stage("apply", scope=self.scope(), sources=[source],
             operative_request=self.approved())["ok"])
 
+    # --- Copilot merge-review findings (PR #15), regression pins 2026-10-17 ---
+
+    def test_synthesis_targets_need_canonical_execute_validation(self):
+        for target in ({"file": "memory/references/projects/demo/notes.md", "type": "project", "execute": True},
+                       {"file": "memory/references/projects/demo/notes.md", "type": "not-a-slug"}):
+            operative = self.operative()
+            operative["execute_request"]["items"][0]["synthesis_targets"] = [target]
+            with self.subTest(target=target):
+                self.assertFalse(self.review(operative=operative)["ok"])
+                self.assertFalse(self.run_stage("apply", scope=self.scope(), sources=[self.source()],
+                    operative_request=operative)["ok"])
+
+    def test_apply_result_targets_bind_to_canonical_not_raw_request_bytes(self):
+        target = {"file": "memory/references/projects/demo/notes.md  ", "type": " project"}
+        operative = self.operative()
+        operative["execute_request"]["items"][0]["synthesis_targets"] = [copy.deepcopy(target)]
+        operative["execute_request"]["items"][0]["decision"]["needs_reply"] = False
+        execute = operative["execute_request"]
+        execute["review"] = {"required": True, "state": "approved", "approval_receipt": {
+            "reviewed_at": "2026-01-01T12:00:00Z", "reviewed_by": "human-fixture",
+            "execute_request_sha256": batch_hash(execute)}}
+        operative["review"] = {"required": True, "state": "approved", "approval_receipt": {
+            "reviewed_at": "2026-01-01T12:01:00Z", "reviewed_by": "human-fixture",
+            "execute_request_sha256": dossier_hash(execute)}}
+        applied = self.applied(operative)
+        applied["execute_summary"]["results"][0]["synthesis_targets"] = [
+            {"file": "memory/references/projects/demo/notes.md", "type": "project"}]
+        applied["synthesis_handoff"]["items"][0]["synthesis_targets"] = [
+            {"file": "memory/references/projects/demo/notes.md", "type": "project"}]
+        applied["synthesis_handoff"]["items"][0]["target_selection_required"] = False
+        handoff = self.handoff(operative, applied)
+        self.assertTrue(handoff["ok"])
+        before = copy.deepcopy(operative)
+        applied["execute_summary"]["results"][0]["synthesis_targets"] = [
+            {"file": "memory/references/projects/other/notes.md", "type": "project"}]
+        self.assertFalse(self.handoff(operative, applied)["ok"])
+        self.assertEqual(before, operative)
+
+    def test_decision_needs_reply_must_be_strict_boolean(self):
+        for value in ("false", 1, None, [], {}):
+            operative = self.operative()
+            operative["execute_request"]["items"][0]["decision"]["needs_reply"] = value
+            with self.subTest(value=value):
+                self.assertFalse(self.review(operative=operative)["ok"])
+
     def test_nested_unknown_fields_and_noncanonical_values_fail_closed(self):
         for section in ("search", "read", "attachments", "calendar"):
             source = self.source()
@@ -422,6 +467,9 @@ class EventDossierTests(unittest.TestCase):
         result = self.run_stage("plan", scope=scope, inspect_ids=["1"])
         self.assertTrue(result["ok"])
         self.assertEqual("INBOX", result["inspect_requests"][0]["folder"])
+        # Copilot finding 4: client manifest contract uses `action`, not `op`.
+        self.assertEqual("read", result["inspect_requests"][0]["action"])
+        self.assertEqual("search", result["search_requests"][0]["mode"])
         self.assertFalse(self.run_stage("plan", scope=scope, inspect_ids=["1", "1"])["ok"])
 
     def test_oversized_api_and_cli_requests_fail_without_echoing_payload(self):

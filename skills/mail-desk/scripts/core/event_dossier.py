@@ -20,6 +20,7 @@ from .modes.dossier_apply import (
     _require_dossier_execute_request, _require_review_receipt,
 )
 from .modes.dossier_synthesis import canonical_json_sha256, _require_completed_apply
+from .synthesis_targets import validate_execute_synthesis_targets
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -227,10 +228,23 @@ def _operative(value, scope, sources, *, approved=False):
         _shape(item["action"], {"type", "target_folder"}, {"type", "target_folder"})
         _shape(item["decision"], {"kind", "id", "confidence", "needs_reply"}, {"kind", "id"})
         _text(item["action"]["target_folder"])
+        # Copilot finding 2: needs_reply must be a strict JSON boolean. The
+        # execute owner tests this field for truthiness, so a truthy string
+        # would silently create a reply-needed entry for review-off items.
+        if "needs_reply" in item["decision"] and not isinstance(item["decision"]["needs_reply"], bool):
+            raise ValueError("Operative decision needs_reply must be a boolean")
         location = {"account": execute["account"], "folder": item["source_folder"],
                     "envelope_id": str(item["envelope_id"]), "message_id": normalize_message_id(_text(item["message_id"]))}
         if location not in locations:
             raise ValueError("Operative item is not bound to inspected evidence")
+    # Copilot finding 1: validate synthesis targets with the canonical execute
+    # owner validator before accepting the request. The call raises on invalid
+    # or unknown-field targets and returns normalized copies; the approved
+    # request's bytes are never replaced.
+    try:
+        validate_execute_synthesis_targets(items)
+    except ValueError:
+        raise ValueError("Operative synthesis targets failed canonical validation") from None
     ids = [normalize_message_id(item["message_id"]) for item in items]
     if len(set(ids)) != len(ids):
         raise ValueError("Duplicate operative source")
@@ -313,8 +327,14 @@ def _handoff(request, scope):
     expected = [normalize_message_id(item["message_id"]) for item in operative["execute_request"]["items"]]
     if [item["message_id"] for item in completed] != expected:
         raise ValueError("Partial or substituted apply result")
-    for source, item in zip(completed, operative["execute_request"]["items"]):
-        if source["synthesis_targets"] != item.get("synthesis_targets", []):
+    # Copilot finding 3: compare executor-normalized synthesis targets with the
+    # canonical normalization of the approved request, not with its raw bytes.
+    # The shared validator strips whitespace, so a valid padded request would
+    # otherwise execute successfully and then fail handoff as false drift. The
+    # saved operative request and its hashes stay untouched.
+    approved_targets = validate_execute_synthesis_targets(operative["execute_request"]["items"])
+    for source, normalized in zip(completed, approved_targets):
+        if source["synthesis_targets"] != normalized:
             raise ValueError("Apply result changed reviewed synthesis targets")
     # An event work order contains exactly the successfully applied source set,
     # never extra inspected candidates that were not approved for this apply.
@@ -476,7 +496,13 @@ def process_request(request: object, *, workspace_root: str | Path) -> dict:
                 result["search_requests"] = [{"mode": "search", "account": scope["account"],
                     "folder": folder, "folders": [folder], "query": term,
                     "page_size": scope["scan_limit_per_folder"]} for folder in scope["folders"] for term in scope["terms"]]
-                result["inspect_requests"] = [{"op": "read", "account": scope["account"],
+                # Copilot finding 4: the canonical client manifest dispatcher
+                # keys operations on `action` (mail_desk_himalaya_client.py),
+                # so inspection requests must carry `action: "read"` to be
+                # consumable without reshaping. Search requests deliberately
+                # stay as canonical batch-runner search configs (`mode` key,
+                # page-size bound); they are not client manifest operations.
+                result["inspect_requests"] = [{"action": "read", "account": scope["account"],
                     "folder": scope["folders"][0], "envelope_id": eid} for eid in inspect]
             elif stage in {"review", "apply"}:
                 reviewed = _review(request, scope, approved=stage == "apply")

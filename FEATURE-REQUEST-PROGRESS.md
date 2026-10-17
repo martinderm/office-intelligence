@@ -50,6 +50,18 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
   unabhängiges PR-Review/Integration stehen aus (kein APPROVE behauptet).
   Lokale Rohlogs: Harness-Scratch `issue8-mail-final.log` (finaler Code-Frame),
   `issue8-mail-suite.log` und `issue8-mail-acceptance.log` (Vorläufe).
+  **PR-Governance 2026-10-17:** Lane-Branch mit `main` (#9) reconciliert
+  (Explizitlösung, kein `-X`; #9 = L2-§30, Fassade = L2-§31). Die 4 konkreten
+  Copilot-Findings am Fassaden-Code (PR #15, Fundquelle nach §4.7) sind fixiert:
+  `synthesis_targets` mit dem kanonischen Execute-Validator vor Annahme geprüft,
+  `needs_reply` strikt als JSON-Boolean, Handoff-Ziel-Bindung an kanonische
+  Normalisierung statt Rohbytes, `inspect_requests` mit Client `action`-Key —
+  je Pin abgetestet (3 neue Regression-Pins; Fassade 35 Tests). Merge-Frame-
+  Abnahme: **1350 Tests, alle grün, 1 bekannter Plattform-Skip**; Event-Docs 6/6
+  (7 Writer-Errors = abgesteckte #14-Scope-Lücke, unverändert).
+  Log: Harness-Scratch `issue8-merge-full.log`. Unabhängiges Maschinen-Merge-
+  Review (Modell `deepseek-v4.1-flash`, anders als Autor-Modell), Attestation
+  und Squash-Merge nach `agent-architecture/governance/pr-merge-governance.md`.
 
 - GitHub [Issue #2](https://github.com/martinderm/office-intelligence/issues/2):
   Cloud-Atlas-Verzeichnisausschlüsse in isoliertem Worktree; Commit/Push am

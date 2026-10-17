@@ -52,8 +52,12 @@ ist zusätzlich ein Anzeige-Locator. Jeder Begriff ist eine separate literale
 Query, keine erfundene Boolean-Suchsyntax. Suchtreffer müssen insgesamt auf
 `inspect_limit` begrenzt werden. Optionale `inspect_ids` sind eindeutige
 Envelope-ID-Strings und benötigen genau einen expliziten Ordner; IDs ohne
-Ordnerbindung werden nie geraten. `inspect_requests` sind read-Operationen
-für den Client, keine neuen Batch-Modi.
+Ordnerbindung werden nie geraten. `inspect_requests` tragen den
+Client-Manifest-Vertrag `{"action": "read", "account", "folder",
+"envelope_id"}` (identisch mit dem Dispatcher-Dock in
+`mail_desk_himalaya_client.py`) und sind keine neuen Batch-Modi;
+`search_requests` bleiben Batch-Runner-Configs (`mode: "search"`, mit
+`page_size`-Bound) und sind entsprechend kein Client-Manifest-Op.
 
 `completeness.exhaustive` ist immer `false`, `scan_basis` immer
 `first_page_envelopes`; Account-Bindung bleibt
@@ -89,8 +93,14 @@ es gibt keinen bypassenden `reviewed: true`-Schalter.
 Request für **ein Projekt**, mit `account`, `project`, `execute_request`,
 `review` und `delete_input_on_success: false`. Die ausgewählten INBOX-Items
 müssen aus den inspizierten Locatoren stammen, zum selben Projekt gehören und
-per `copy_as_move` in einen einheitlichen Zielordner routen. Die Fassade erfindet
-keinen Katalogeintrag. Der Batch-Owner prüft vor Ausführung den tatsächlichen
+per `copy_as_move` in einen einheitlichen Zielordner routen. Item-`decision`
+verlangt `needs_reply`, wenn vorhanden, als strikten JSON-Boolean (der Execute-
+Owner testet Truthiness — ein truthy String erzeugt sonst still einen Reply-
+Bedarf). `synthesis_targets` werden mit dem kanonischen Execute-Owner-Validator
+(`core.synthesis_targets.validate_execute_synthesis_targets`) vor Annahme
+geprüft: unbekannte Felder und ungültige Labels scheitern; die Freigabe-Bytes
+des Requests werden dabei nie ersetzt. Die Fassade erfindet keinen
+Katalogeintrag. Der Batch-Owner prüft vor Ausführung den tatsächlichen
 Projektkatalog, Zielordner, Account und Workspace-Lock erneut.
 
 `review_binding.inner_sha256` verwendet `core.batch_contract` (ohne inneres
@@ -113,9 +123,14 @@ Pflichtfelder: `scope`, `sources`, `apply_request`, `apply_result`,
 `apply_result_sha256`, `event`. Nur vollständig erfolgreicher Execute **und**
 Verify mit exakt allen genehmigten Quellen in gleicher Reihenfolge, unverändertem
 Approval-Receipt und genehmigten Synthesezielen erlauben einen Handoff.
-`core.modes.dossier_synthesis._require_completed_apply` bleibt der gemeinsame
-Validator für die Ergebnis-Kette. Nicht angewendete Suchkandidaten werden nicht
-in den Work-Order aufgenommen.
+Ziel-Vergleich der Syntheseziele bindet Execute-Ergebnisse an die **kanonische
+Normalisierung** des genehmigten Requests (derselbe Validator), nicht an seine
+Rohbytes — ein gültig gepaddeter Request kann also in Execute normalisieren und
+erfolgreich sein, ohne im Handoff als falscher Drift zu scheitern; echte
+Abweichungen scheitern weiterhin. `core.modes.dossier_synthesis
+._require_completed_apply` bleibt der gemeinsame Validator für die Ergebnis-
+Kette. Nicht angewendete Suchkandidaten werden nicht in den Work-Order
+aufgenommen.
 
 `event`: `owner_kind: "project"`, `owner_id` gleich operativem Projekt,
 `id` (Slug), `title`, ISO-`start`, optional `end` nicht vor `start`.
