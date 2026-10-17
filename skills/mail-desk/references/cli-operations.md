@@ -257,11 +257,28 @@ python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -
   GroupWise-Konvention `Work In Progress`. Ist nichts davon vorhanden, bricht die
   Operation fail-loud mit einem begrenzten `drafts_folder_unresolved`-Fehler ab;
   ein hartkodierter Ordnername ist kein Fallback.
-- **UTF-8-sicher:** Die Nachricht wird als roher RFC-822-Literal in UTF-8
-  (SMTPUTF8) gebaut und als ein Argument an `message save` (IMAP APPEND) übergeben.
+- **UTF-8-sicher über stdin (Issue #11):** Die Nachricht wird als roher
+  RFC-822-Text in UTF-8 (SMTPUTF8, CRLF) gebaut und als exakte Bytes über die
+  **binäre stdin-Pipe** an `message save` (IMAP APPEND) übergeben — **nie** als
+  argv-Literal. Himalaya 1.2.0 (Rev `1b70c4e`) ignoriert das rohe
+  `MESSAGE`-Argument im Nicht-TTY-/Nicht-JSON-Modus vollständig und konsumiert
+  stdin (Rust `lines()` + CRLF-Join, finaler Zeilenabschluss entfällt). Deshalb
+  nutzt **jede** Draft-Größe den stdin-Pfad (Schwelle 0, kein Größen-Split): ein
+  argv-Pfad wäre still wirkungslos und würde bei > ~32 k Zeichen zusätzlich am
+  Windows-Kommandozeilenlimit (`WinError 206`) scheitern. `-o plain` ist
+  explizit gesetzt, damit der JSON-Zweig stdin nicht umgeht; ein zusätzliches
+  Transport-CRLF kompensiert die `lines()`-Normalisierung, sodass der
+  angehängte Entwurf byte-genau dem kanonischen Builder-Raw entspricht.
   Betreff, Empfänger und Body bleiben byte-erhalten; es entsteht kein
-  RFC-2047-Downgrade. Das Ergebnis trägt das Envelope
-  `{envelope_id, folder, subject, to, date}`.
+  RFC-2047-Downgrade. Der Payload wird strict als UTF-8 validiert, **bevor**
+  Executable-/Config-Auflösung und Subprozess starten (ungültige Bytes →
+  begrenzter `ValueError` ohne Payload-Inhalt; Himalaya würde via `lines()`
+  sonst still abschneiden). Das Ergebnis trägt das Envelope
+  `{envelope_id, folder, subject, to, date}`. Nur ein `HimalayaInvocationError`
+  endet klassifiziert (`draft_save_failed`) ohne Verifikation, ohne
+  Journal-Eintrag, ohne argv-Fallback und ohne Wiederholung (`max_retries=1`);
+  andere Fehler propagieren. `OSError` (Start oder Kommunikation, Payload- und
+  Nicht-Payload-Pfad) → `himalaya_launch_failed` mit unbekanntem Ausgang.
 - **Löschen ohne UID MOVE:** `delete-draft` setzt `\Deleted` direkt am Envelope
   (`flag add deleted`) und entfernt die markierte Nachricht danach mit
   `folder expunge`. `message delete` wird bewusst nicht verwendet: für einen

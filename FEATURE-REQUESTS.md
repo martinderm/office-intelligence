@@ -19,6 +19,17 @@ Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reco
 Vertrag und Runtime-Grenzen: Mail-Desk L2-System-Map §30 (Leserichtung je
 Pin-Gruppe) und `skills/mail-desk/docs/system-map/effects.md` §4.
 
+Issue-Nachweis (kein neuer FR-Record): [#11 — Draft-APPEND über die binäre
+stdin-Pipe](https://github.com/martinderm/office-intelligence/issues/11).
+Vertrag: `run_himalaya(..., stdin_bytes=...)` (keyword-only, binär, strict
+UTF-8 **vor** Executable-/Config-Auflösung, `-o plain`, kein APPEND-Retry,
+`himalaya_launch_failed` für Start/Kommunikation auf beiden Pfaden) und
+`save_draft` (Schwelle 0, Transport-CRLF, nur `HimalayaInvocationError` →
+`draft_save_failed`); Runtime-Grenzen in der Mail-Desk L2-System-Map §32.
+Abgrenzung: #18 (Attachment-/Quarantäne-Folgearbeiten) und #19
+(GroupWise-Abhängigkeitsanalyse) bleiben offen und werden von #11 nicht
+implementiert.
+
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in
 seinem Record-File unter [`docs/features/`](docs/features/).

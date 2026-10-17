@@ -5,6 +5,109 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- GitHub [Issue #11](https://github.com/martinderm/office-intelligence/issues/11):
+  Draft-APPEND transportiert den rohen RFC-822-Entwurf über die **binäre
+  stdin-Pipe** statt als argv-Literal. Quelle (public, gepinnt): Himalaya
+  `v1.2.0` Rev `1b70c4e0eaa72dee48353f0211e6cc0f0776fe98`,
+  `src/email/message/command/save.rs` — Nicht-TTY und nicht JSON ⇒ stdin
+  `lines()` + CRLF-Join, finaler Zeilenabschluss entfällt; argv-`MESSAGE`
+  wird ignoriert. Deshalb **Schwelle 0, kein Größen-Split**: jeder Entwurf
+  nutzt stdin; ein argv-Pfad wäre still wirkungslos und würde große Entwürfe
+  zusätzlich am Windows-Limit (`WinError 206`, 40 000-Zeichen-Repro des
+  Orchestrators) scheitern lassen. Implementierung: `run_himalaya` erhält den
+  keyword-only Seam `stdin_bytes` (Bytes-validiert, nicht leer, strict UTF-8
+  **vor** Executable-/Config-Auflösung und Subprozess, verlangt genau
+  `-o plain`, binäres `subprocess.run(input=...)` ohne `text=True`, kein
+  Payload-Retry, `himalaya_launch_failed`/`himalaya_stdin_failed` ohne
+  Payload-Leak), `save_draft` kodiert die kanonische SMTPUTF8-Nachricht UTF-8
+  und hängt ein Transport-CRLF an (kompensiert `lines()`/Join) und
+  klassifiziert ausschließlich `HimalayaInvocationError` als `draft_save_failed`
+  (Reason im `__cause__`) mit `max_retries=1`, ohne
+  Verifikation/Journal/argv-Fallback; andere Fehler propagieren.
+  Vorab RED (echte Tests zuerst, nur `resolve_himalaya_invocation` +
+  `subprocess.run` als Systemgrenzen gefakt): `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport
+  skills.mail-desk.tests.test_drafts_api` → 36 Tests, **13 Failures + 11
+  Errors, Exit 1**. GREEN nach Implementierung: dieselbe Auswahl **36 Tests,
+  alle grün, Exit 0**; zusätzlich `test_himalaya_client_deadlines` +
+  `test_maildesk_h6_himalaya_bootstrap` **31/31 grün** (Nicht-Payload-Pfad und
+  veröffentlichte Defaults `timeout=35`/`max_retries=5` unverändert) und
+  `compileall` Exit 0. Neue Datei `tests/test_draft_transport.py` (17 Tests,
+  kurze/8192-Byte-/>40 k-Unicode-Entwürfe ohne rohes argv-Token, exakte
+  UTF-8-Pipe-Bytes, realer synthetischer Python-Pipe-Roundtrip, Normalisierung
+  inkl. Leerzeilen, `-o plain`/`-a`/`-f`, kein JSON-Bypass, Fail-loud ohne
+  Retry). Adaptiert (nicht abgeschwächt): `tests/himalaya_fixtures.py`
+  modelliert die Upstream-Normalisierung und liest den Entwurf aus stdin;
+  `tests/test_drafts_api.py` parst den Fixture-Raw statt des letzten
+  argv-Tokens. Doku/Map synchron: `SKILL.md`, `references/cli-operations.md`,
+  `references/backends/himalaya.md`, L2-Map (`README.md` §32, §2, §6;
+  `processes.md` §6/§6.1; `objects.md` §5.4/§6), L1-Map (§2.1, Diagramm/Metrik
+  177 Dateien / 84 Testmodule nach Commit). **Nicht Teil von #11:**
+  [#18](https://github.com/martinderm/office-intelligence/issues/18)
+  (Attachment-/Quarantäne-Folgearbeiten) und
+  [#19](https://github.com/martinderm/office-intelligence/issues/19)
+  (GroupWise-Abhängigkeitsanalyse) sind nur benannt, explizit nicht gelöst und
+  ohne Implementierung. Kein neuer FR-Record (Issues statt Records).
+  Caveat: `build_draft_message` liefert weiterhin `str` (CRLF); die
+  Body-Transfer-Encoding wählt die SMTPUTF8-Policy (Inhalt bleibt verlustfrei).
+  Seam-Abgrenzung: verifiziert sind die Prozess-Bytes (echter
+  `subprocess.run(input=...)` plus synthetischer Pipe-Roundtrip) und der
+  kanonische Builder-Raw; der reale Himalaya-Backend-APPEND wurde nicht gegen
+  eine Live-Mailbox ausgeführt (keine Live-Mailkommandos).
+
+  **Fix-Runde 2026-10-17 (Review `opencode-go/glm-5.3-flash#high`, keine
+  Majors/Blocker; Adjudikation, 4 Findings):**
+  1. **Angenommen (OSError-Wortlaut):** `himalaya_launch_failed` behauptet nicht
+     mehr „no mailbox command ran", sondern „launch **or** communication
+     failed; outcome may be unknown, not retried". Die Klassifikation gilt
+     ausdrücklich für den Payload- **und** den Nicht-Payload-Pfad; ohne Payload
+     bleiben `DEVNULL`, `text=True` und die Retry-/Timeout-Defaults unverändert.
+     Neuer Pin `test_non_payload_oserror_is_classified_as_unknown_launch` plus
+     erweiterte Wortlaut-Pins am Payload-OSError-Test.
+  2. **Angenommen (Fehlertaxonomie):** `save_draft` fängt nur noch
+     `himalaya.HimalayaInvocationError`; ein Programmier-`ValueError` propagiert
+     unverändert (`test_programming_value_error_is_not_reclassified`), erwartete
+     Laufzeitfehler bleiben `draft_save_failed` mit Reason im `__cause__`
+     (`test_expected_invocation_error_is_classified`). `except Exception` ist
+     entfernt.
+  3. **Abgelehnt (Reviewer-Behauptung):** Der Reviewer hielt den literal
+     ausgeführten Befehl `python -B -m unittest
+     skills.mail-desk.tests.test_draft_transport
+     skills.mail-desk.tests.test_drafts_api` wegen der Bindestriche für ungültig.
+     Der Orchestrator hat exakt dieses Literal erfolgreich ausgeführt
+     (36/36, Exit 0); die dynamischen Importe von `unittest` akzeptieren
+     Bindestriche. Das Literal bleibt unverändert korrekt.
+  4. **Angenommen (UTF-8-Trunkierung):** Der Payload wird jetzt strict als UTF-8
+     validiert, **bevor** Executable-/Config-Auflösung und Subprozess laufen;
+     ungültige Bytes ergeben einen begrenzten `ValueError` ohne Payload-Inhalt
+     (`test_invalid_utf8_payload_is_rejected_before_any_resolution_or_execution`,
+     `build_himalaya_command` nachweislich nicht aufgerufen).
+
+  Fix-Runden-Evidenz (literal, sequenziell): RED `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport` → **17 Tests, 3 Failures + 1
+  Error, Exit 1**; GREEN `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport
+  skills.mail-desk.tests.test_drafts_api` → **40/40 OK, Exit 0**. Fix-Runde
+  bleibt in denselben 14 kumulativen Dateien (keine neue Datei).
+
+  Finale Orchestrator-Abnahme (2026-10-17): Mail-Desk-Vollsuite **1367 Tests,
+  1366 bestanden, 1 bekannter Plattform-Skip, Exit 0** (171,412 s).
+  Aufruf: `python -B -m unittest discover -s <lane>/skills/mail-desk/tests
+  -p 'test_*.py'`, CWD = tatsächlich ermittelter Shared-Skills-Root;
+  `<lane>` bezeichnet ausschließlich diesen isolierten #11-Worktree.
+  Grund: Der erste Lauf aus dem Worktree-CWD scheiterte an der bestehenden
+  Parent-/CWD-Suche nach dem kanonischen `workspace-lock`-Guard (1367 Tests,
+  2 Failures/134 Errors, Exit 1). Der zweite Lauf löst denselben gemeinsamen
+  Guard in place auf; kein Shim, keine Kopie und keine Produktionsänderung
+  zur Umgehung. Rohlogs im externen Harness-Scratch:
+  `oi11-final-mail-suite.log`, `oi11-final-mail-suite-resolved.log`.
+  `python -B -m compileall -q skills/mail-desk` und `git diff --check`:
+  jeweils Exit 0. `quick_validate.py` ist im tatsächlichen Shared-Skills-Baum
+  nicht vorhanden; dieser optionale externe Check ist nicht ausgeführt,
+  nicht als bestanden gewertet. Unabhängiges Re-Review des finalen Diffs
+  mit `opencode-go/glm-5.3-flash#high` wird separat an HEAD/Tree und
+  Inhaltsfingerprint gebunden; Autor ist `opencode-go/deepseek-v4.1-flash#high`.
+
 - GitHub [Issue #9](https://github.com/martinderm/office-intelligence/issues/9):
   Attachment-Basename Contract-Reconcile in isoliertem Worktree; Commit/Push am
   2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.

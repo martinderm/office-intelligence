@@ -123,44 +123,137 @@ def _insert_account_arg(args: list[str], account: str | None) -> list[str]:
     return cmd_tokens + ["-a", account]
 
 
-def run_himalaya(args: list[str], account: str | None = None, timeout: int = 35, max_retries: int = 5) -> str:
-    """Execute a non-interactive Himalaya command, retrying transient failures only."""
+def _explicit_plain_output_requested(args: list[str]) -> bool:
+    """Whether ``args`` carries exactly one explicit ``-o plain`` output format.
+
+    Himalaya ``message save`` chooses its stdin branch only when stdin is not a
+    TTY **and** the output format is not JSON (upstream rev
+    ``1b70c4e0eaa72dee48353f0211e6cc0f0776fe98``); a JSON output format would
+    silently fall back to the raw argv argument.  A payload command therefore
+    has to pin ``-o plain`` explicitly.
+    """
+    found: list[str] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in ("-o", "--output"):
+            if index + 1 < len(args):
+                found.append(args[index + 1])
+            index += 2
+            continue
+        if token.startswith("--output="):
+            found.append(token.split("=", 1)[1])
+        index += 1
+    return found == ["plain"]
+
+
+def _decode_process_stream(value: bytes | str | None) -> str:
+    """Decode a captured subprocess stream to text without newline translation."""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
+def run_himalaya(
+    args: list[str],
+    account: str | None = None,
+    timeout: int = 35,
+    max_retries: int = 5,
+    *,
+    stdin_bytes: bytes | None = None,
+) -> str:
+    """Execute a non-interactive Himalaya command, retrying transient failures only.
+
+    ``stdin_bytes`` is the optional binary payload channel for commands that
+    consume stdin instead of argv (Himalaya 1.2.0 ``message save``).  It is
+    keyword-only and defaults to ``None``, so every existing non-payload caller
+    keeps the unchanged ``stdin=DEVNULL``/``text=True`` path.  When a payload is
+    supplied it is validated as strict UTF-8 (upstream would silently truncate on
+    an invalid byte), written to the process pipe in binary mode (no newline
+    translation) and the command must carry an explicit ``-o plain`` output
+    format so the JSON branch cannot bypass stdin; a payload command is executed
+    exactly once (an APPEND must never be retried).  Launch/communication
+    ``OSError`` becomes ``himalaya_launch_failed`` for both the payload and the
+    non-payload path; its outcome may be unknown and it is never retried.
+    """
     if not isinstance(timeout, int) or timeout <= 0:
         raise ValueError("timeout must be a positive integer.")
     if not isinstance(max_retries, int) or max_retries < 1:
         raise ValueError("max_retries must be at least one.")
+    if stdin_bytes is not None:
+        if not isinstance(stdin_bytes, bytes) or not stdin_bytes:
+            raise ValueError("stdin_bytes must be a non-empty bytes object.")
+        # Himalaya 1.2.0 reads stdin with ``lines().map_while(Result::ok)`` and
+        # would silently truncate at the first invalid byte, so the payload must
+        # be validated as strict UTF-8 before any executable/config resolution
+        # or subprocess.  The validation message never contains the payload.
+        try:
+            stdin_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                "stdin_bytes must be valid UTF-8; the payload was not sent."
+            ) from exc
+        if not _explicit_plain_output_requested(args):
+            raise ValueError(
+                "stdin_bytes requires exactly one explicit '-o plain' output format; "
+                "JSON output would bypass stdin."
+            )
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
     cmd = build_himalaya_command(args, account)
 
+    # A payload command is never retried: the caller's attempt budget cannot
+    # turn one draft into a duplicate APPEND.
+    attempts = 1 if stdin_bytes is not None else max_retries
     last_err = None
-    for attempt in range(max_retries):
+    for attempt in range(attempts):
         try:
-            res = subprocess.run(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                env=env_vars,
-                timeout=timeout,
-            )
+            if stdin_bytes is None:
+                res = subprocess.run(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    env=env_vars,
+                    timeout=timeout,
+                )
+            else:
+                res = subprocess.run(
+                    cmd,
+                    input=stdin_bytes,
+                    capture_output=True,
+                    env=env_vars,
+                    timeout=timeout,
+                )
             if res.returncode != 0:
-                err_msg = res.stderr.strip()
+                err_msg = _decode_process_stream(res.stderr).strip()
                 # Check for transient connection errors
                 if _is_transient_himalaya_error(err_msg):
                     last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
-                    if attempt < max_retries - 1:
+                    if attempt < attempts - 1:
                         time.sleep(2.0 * (attempt + 1))
                         continue
                     break
                 raise HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {err_msg}")
-            return res.stdout
+            return _decode_process_stream(res.stdout)
         except subprocess.TimeoutExpired as te:
             raise HimalayaInvocationError(
                 "himalaya_timeout", "Himalaya timed out; refusing to retry the mailbox command."
             ) from te
+        except BrokenPipeError as bp:
+            raise HimalayaInvocationError(
+                "himalaya_stdin_failed",
+                "Himalaya closed its stdin before the message payload was fully written; "
+                "the command was not retried.",
+            ) from bp
+        except OSError as exc:
+            raise HimalayaInvocationError(
+                "himalaya_launch_failed",
+                "Himalaya could not be launched or communication failed; "
+                "the command outcome may be unknown and it was not retried.",
+            ) from exc
 
     raise last_err or HimalayaInvocationError("himalaya_timeout", "Himalaya timed out.")
 

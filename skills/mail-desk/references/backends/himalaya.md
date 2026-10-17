@@ -94,10 +94,29 @@ journal.
   none resolves, the operation fails loud with a bounded
   `drafts_folder_unresolved` error instead of hard-coding a folder name. An explicit
   `-f/--folder` skips the resolution.
-- **Append (UTF-8):** `save-draft` builds the raw RFC-822 message with the SMTPUTF8
-  policy and passes it as one argument to `message save -f <folder> <raw>`
-  (IMAP APPEND), so non-ASCII subject, recipients and body survive without a 7-bit
-  downgrade. The result carries `{envelope_id, folder, subject, to, date}`.
+- **Append (UTF-8 via stdin, Issue #11):** `save-draft` builds the raw RFC-822
+  message with the SMTPUTF8 policy (CRLF) and writes its exact UTF-8 bytes to the
+  **binary stdin pipe** of `message save` (`message save -o plain -f <folder>`,
+  no raw argv literal). Himalaya 1.2.0 (rev
+  `1b70c4e0eaa72dee48353f0211e6cc0f0776fe98`,
+  `src/email/message/command/save.rs`) ignores the `MESSAGE` argument whenever
+  stdin is not a TTY and the output format is not JSON, and instead reads stdin
+  with Rust `lines()`, joins the lines with CRLF and drops the final line
+  terminator. Every draft size therefore uses stdin (threshold 0, no size
+  split); an argv payload is silently ineffective and, above roughly 32k
+  characters, also fails with `WinError 206` on Windows. The explicit `-o plain`
+  keeps the JSON branch from bypassing stdin, and one extra transport CRLF
+  compensates the `lines()`/join normalization so the appended message equals
+  the canonical builder raw byte for byte. The payload is validated as strict
+  UTF-8 before any executable/config resolution or subprocess (an invalid byte
+  would otherwise be silently truncated by upstream `lines()`); a bounded
+  `ValueError` without payload content is raised. Non-ASCII subject, recipients
+  and body survive without a 7-bit downgrade. Only a
+  `HimalayaInvocationError` becomes `draft_save_failed` (no verification, no
+  journal item, no argv fallback, no retry `max_retries=1`); other errors
+  propagate. An `OSError` (launch or communication, payload and non-payload
+  path) becomes `himalaya_launch_failed` with an unknown outcome and is not
+  retried. The result carries `{envelope_id, folder, subject, to, date}`.
 - **Delete without UID MOVE:** `delete-draft` runs
   `flag add deleted <envelope_id> -f <folder>` and then
   `folder expunge <folder>`. `message delete` is deliberately not used: Himalaya
