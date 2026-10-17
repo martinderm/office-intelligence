@@ -790,6 +790,75 @@ def convert_to_markdown_raw(src_abs):
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
 
+def extract_pdf_form_field_values(src_abs):
+    """Extract filled PDF AcroForm field values (MarkItDown ignores them).
+
+    Returns a list of dicts with page/field/type/value entries, empty when the
+    PDF has no filled widgets or PyMuPDF is unavailable.
+    """
+    try:
+        import pymupdf
+    except ImportError:
+        try:
+            import fitz as pymupdf
+        except ImportError:
+            return []
+    try:
+        doc = pymupdf.open(get_safe_path(src_abs))
+    except Exception:
+        return []
+    filled = []
+    try:
+        for page in doc:
+            for widget in page.widgets() or []:
+                value = widget.field_value
+                if value is None:
+                    continue
+                text = str(value).replace("\r", " ").replace("\n", " ").strip()
+                if text and text not in ("/Off", "Off"):
+                    filled.append({
+                        "page": page.number + 1,
+                        "field": widget.field_name or "",
+                        "type": widget.field_type_string or "",
+                        "value": text,
+                    })
+    except Exception:
+        return filled
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+    return filled
+
+def append_pdf_form_fields_section(md_text, src_abs):
+    """Append a table of filled AcroForm field values to the markdown mirror."""
+    fields = extract_pdf_form_field_values(src_abs)
+    if not fields:
+        return md_text, 0
+    def md_escape(value):
+        return value.replace("|", "\\|")
+    lines = [
+        "",
+        "## Formularfelder (ausgefüllt)",
+        "",
+        "Direkt aus den PDF-Formularfeldern (AcroForm) extrahiert; MarkItDown liest diese Werte nicht mit.",
+        "",
+        "| Seite | Feld | Typ | Wert |",
+        "| ----- | ---- | --- | ---- |",
+    ]
+    for item in fields:
+        # Join multi-digit page numbers naturally; keep value text intact.
+        lines.append(
+            "| {page} | {field} | {type} | {value} |".format(
+                page=item["page"],
+                field=md_escape(item["field"]),
+                type=md_escape(item["type"]),
+                value=md_escape(item["value"]),
+            )
+        )
+    return md_text.rstrip() + "\n" + "\n".join(lines) + "\n", len(fields)
+
 def convert_to_markdown(src_abs, enable_ocr=True, ocr_policy="local_derivative", redo_ocr=False):
     text = convert_to_markdown_raw(src_abs)
     ocr_applied = False
@@ -886,14 +955,16 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 if raw_convert_err:
                     send_conversion_required(conn, raw_convert_err, task.get("src_sha256"))
                     return
+                result_text, form_fields_filled = append_pdf_form_fields_section(raw_text, src_abs)
                 conn.send(("ok", {
-                    "text": raw_text,
+                    "text": result_text,
                     "ocr_applied": False,
                     "ocr_policy": task_ocr_policy,
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "markitdown-direct",
-                    "potential_quality_loss": None
+                    "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
                 }))
                 return
 
@@ -927,14 +998,16 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                     return
                 except Exception:
                     final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF extrahiert]\n"
+                result_text, form_fields_filled = append_pdf_form_fields_section(final_text, src_abs)
                 conn.send(("ok", {
-                    "text": final_text,
+                    "text": result_text,
                     "ocr_applied": True,
                     "ocr_policy": "enrich_source",
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "ocrmypdf-inplace",
                     "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
                     "new_src_sha256": fresh_sha256,
                     "new_src_size": os.path.getsize(get_safe_path(src_abs)),
                     "new_src_mtime": os.stat(get_safe_path(src_abs)).st_mtime
@@ -963,24 +1036,28 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                     "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt. "
                     "Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
                 )
+                result_text, form_fields_filled = append_pdf_form_fields_section(final_text, src_abs)
                 conn.send(("ok", {
-                    "text": final_text,
+                    "text": result_text,
                     "ocr_applied": True,
                     "ocr_policy": "local_derivative",
                     "derivative_path": task["derivative_rel"],
                     "derivative_sha256": deriv_sha256,
                     "conversion_method": "ocrmypdf-derivative",
-                    "potential_quality_loss": quality_loss_note
+                    "potential_quality_loss": quality_loss_note,
+                    "form_fields_filled": form_fields_filled,
                 }))
             else:
+                result_text, form_fields_filled = append_pdf_form_fields_section(raw_text, src_abs)
                 conn.send(("ok", {
-                    "text": raw_text,
+                    "text": result_text,
                     "ocr_applied": False,
                     "ocr_policy": task_ocr_policy,
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "markitdown-direct",
-                    "potential_quality_loss": None
+                    "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
                 }))
         else:
             res_text = convert_to_markdown_raw(src_abs)
@@ -1068,6 +1145,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                             "new_src_sha256": payload.get("new_src_sha256"),
                             "new_src_size": payload.get("new_src_size"),
                             "new_src_mtime": payload.get("new_src_mtime"),
+                            "form_fields_filled": payload.get("form_fields_filled", 0),
                             "error": None
                         }
                         ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""
@@ -1110,6 +1188,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                                 "new_src_sha256": payload.get("new_src_sha256"),
                                 "new_src_size": payload.get("new_src_size"),
                                 "new_src_mtime": payload.get("new_src_mtime"),
+                                "form_fields_filled": payload.get("form_fields_filled", 0),
                                 "error": None
                             }
                             ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""

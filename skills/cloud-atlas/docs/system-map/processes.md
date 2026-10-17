@@ -18,6 +18,7 @@
            ├─► [Phase 1: convert_cloud_docs.py]          │
            │       ├─► Pandoc / LibreOffice Bridge      │
            │       ├─► OCR-Verzweigung (Tesseract)       │
+           │       ├─► PDF-Formularfelder (AcroForm)     │
            │       └─► Schreibt Markdown-Mirrors        │
            │                                            │
            └─► [Phase 2: gen_filemap.py]                │

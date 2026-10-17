@@ -19,6 +19,12 @@ Cloud-Atlas steuert mehrere externe Konverter an, bindet diese jedoch hermetisch
 
 ---
 
+## 1a. PDF-Formularfelder-Extraktion (AcroForm)
+
+Bei der PDF-Konvertierung (`convert_cloud_docs.py`, Worker-Pfad `is_pdf`) werden **gefüllte PDF-Formularfelder (AcroForm) via PyMuPDF** (`pymupdf`/fallback `fitz`, rein lesend) extrahiert und als Abschnitt „Formularfelder (ausgefüllt)" (Tabelle Seite/Feld/Typ/Wert) an den Markdown-Mirror angehängt, weil MarkItDown Widget-Werte nicht liest. Keine Mutationspfade; PyMuPDF fehlt → Spiegel bleibt unverändert (kein `conversion_required`). Fehl-/Kodierungsartefakte (z. B. „¬" statt „€") werden **getreu zum Original-PDF** übernommen, nicht repariert. Testabdeckung unter `tests/test_pdf_form_field_extraction.py`.
+
+---
+
 ## 2. Windows Pfadlängen-Beschränkung (`EXTERNAL_CONVERTER_PATH_LIMIT`)
 
 Externe Windows-Binaries (insbesondere LibreOffice und ältere Pandoc-Builds) scheitern trotz aktivierter Windows-10-Long-Paths-Option häufig an Pfaden über ~260 Zeichen.
