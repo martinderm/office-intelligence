@@ -340,6 +340,19 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
     [`references/log-schema.md`](references/log-schema.md). Kurzbericht mit Routing,
     Reply/Todo, Wissenspflege und offenem Review liefern.
 
+## Event-Dossier-Komposition (Issue #8)
+
+Für begrenzte Event-Vorbereitung verwendet
+`scripts/mail_desk_event_dossier.py` die read-only Stages
+`plan → review → apply → handoff → report`. `apply` **komponiert nur** einen
+separat auszuführenden `dossier_apply`-Request (`applied: false`); beide
+externen Approval-Gates sowie die bestehenden Batch-/Workspace-Lock-Prüfungen
+bleiben erhalten. Keine automatische Mailbox-, Cloud-, Task- oder Event-Mutation,
+keine Vollständigkeits- oder Content-Approval-Behauptung. Die externe
+Event-Writer-Implementierung fehlt noch (GitHub #14).
+Request-/Receipt-Verträge, Bounds und Beispiele:
+[`references/event-dossier.md`](references/event-dossier.md).
+
 ## Fachliche Entscheidungsregeln
 
 - Starke Project-Signale sind Projekt-ID/Akronym, Kontakt/Partner, Workpackage,

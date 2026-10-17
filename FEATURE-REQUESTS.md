@@ -9,6 +9,12 @@
 Issue-Nachweis (kein neuer FR-Record): [#2 — Cloud-Atlas-Verzeichnisausschlüsse](https://github.com/martinderm/office-intelligence/issues/2).
 Vertrag und Runtime-Grenzen: `skills/cloud-atlas/SKILL.md` und L2-System-Map.
 
+Issue-Nachweis: [#8 — Event-Dossier-Fassade](https://github.com/martinderm/office-intelligence/issues/8),
+Vertrag `skills/mail-desk/references/event-dossier.md`;
+separate, vorab bestätigte Writer-Lücke
+[#14](https://github.com/martinderm/office-intelligence/issues/14).
+Keine neuen FR-Record-Files.
+
 Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reconcile](https://github.com/martinderm/office-intelligence/issues/9).
 Vertrag und Runtime-Grenzen: Mail-Desk L2-System-Map §30 (Leserichtung je
 Pin-Gruppe) und `skills/mail-desk/docs/system-map/effects.md` §4.

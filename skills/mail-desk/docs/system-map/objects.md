@@ -9,6 +9,19 @@
 
 ## 1. Versionierter Quarantäneindex (`attachment-quarantine-index.json`)
 
+**Separater Event-Dossier-DTO (Issue #8):** `core/event_dossier.py` besitzt
+`schema_version: 1` mit den Stages `plan/review/apply/handoff/report` und
+stufenspezifischen Feld-Allowlisten. Expliziter `scope`: Account, Ordner,
+Begriffe, Scan-/Inspect-Limits. Source-Snapshots bewahren normalisierte Message-ID,
+Content-Hash, sämtliche Search-/Read-Locations, Thread-Parents und Kalenderdaten;
+Attachment-Hash-Dedupe bewahrt alle MIME-Provenienzen. `review_binding` hält
+`inner_sha256`, `outer_sha256`, `approval_order`; operative Requests bleiben
+unverändert. `work_order` enthält Event, Sources, Attachments, begrenzte
+Completeness und `source_snapshot_sha256`. `output_receipt` bindet den exakten
+Work-Order, dessen Source-Snapshot und jede Output-Datei samt Byte-Hash.
+Keine dieser Strukturen ist ein Quarantäne-Index oder eine neue Autorität;
+vollständiger Vertrag: `references/event-dossier.md` (Writer-Abhängigkeit #14).
+
 Der Quarantäneindex ist die zentrale Buchführung über alle isolierten Dateianhänge.
 
 * **Dateipfad:** `data/mail-desk/attachment-quarantine-index.json`
