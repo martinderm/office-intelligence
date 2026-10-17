@@ -191,6 +191,7 @@ class FilemapCurationOverlayTests(unittest.TestCase):
             ({"target": {"id": "other"}}, "identity"),
             ({"entries": {"../escape.pdf": {"description": "no"}}}, "path"),
             ({"entries": {"data/cloud/CURATED/contract.pdf": {"custom": {"size": "no"}}}}, "generated"),
+            ({"entries": {"data/cloud/CURATED/contract.pdf": {"custom": {"form_fields": {"status": "forged"}}}}}, "generated_form_fields"),
         ]
         for overrides, label in variants:
             with self.subTest(label=label):
@@ -225,6 +226,78 @@ class FilemapCurationOverlayTests(unittest.TestCase):
         }]), encoding="utf-8")
         configs = filemap.resolve_all_sync_configs(str(self.root), "topic", True, "store", "sub")
         self.assertEqual("curation/filemap-curation.json", configs["store"]["curation_json"])
+
+    def test_custom_form_fields_is_rejected_by_the_loader(self) -> None:
+        key, _ = self.entry("contract.pdf", "contract")
+        self.overlay({key: {"custom": {"form_fields": {"status": "forged"}}}})
+        with self.assertRaises(CurationOverlayError):
+            load_curation_overlay(
+                self.root, "curation/filemap-curation.json", scope="project",
+                target_id="curated", storage_id="default", scan_dir="data/cloud/CURATED",
+            )
+
+    def test_overlay_active_conversion_skip_keeps_form_fields(self) -> None:
+        key, _ = self.entry("contract.pdf", "contract")
+        self.overlay({})  # active overlay without an entry: no legacy carry-over
+        source_sha = sha("contract")
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / "filemap.json").write_text(json.dumps({"files": {
+            key: {
+                "sha256": source_sha,
+                "description": "-",
+                "form_fields": {"status": "complete", "count": 1, "tool": "pymupdf"},
+            }
+        }}), encoding="utf-8")
+        (self.output / "contract.md").write_text(
+            "---\n" f'source_sha256: "{source_sha}"\n' "---\n\nBody long enough to skip.\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(convert, "run_conversion_tasks") as tasks, \
+             mock.patch.object(convert.sys, "argv", [
+                 "convert_cloud_docs.py", "--project-id", "curated",
+                 "--workspace-root", str(self.root), "--no-ocr",
+             ]), contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            exit_code = convert.main()
+
+        self.assertEqual(0, exit_code)
+        tasks.assert_not_called()
+        got = json.loads((self.output / "filemap.json").read_text(encoding="utf-8"))["files"][key]
+        self.assertEqual("complete", got["form_fields"]["status"])
+
+    def test_overlay_active_generation_keeps_form_fields_for_unchanged_source(self) -> None:
+        key, _ = self.entry("contract.pdf", "contract")
+        self.overlay({})
+        source_sha = sha("contract")
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / "filemap.json").write_text(json.dumps({"files": {
+            key: {
+                "sha256": source_sha,
+                "description": "-",
+                "form_fields": {"status": "complete", "count": 1, "tool": "pymupdf"},
+            }
+        }}), encoding="utf-8")
+
+        self.assertEqual(0, self.run_generator())
+        got = json.loads((self.output / "filemap.json").read_text(encoding="utf-8"))["files"][key]
+        self.assertEqual("complete", got["form_fields"]["status"])
+
+    def test_changed_source_does_not_inherit_stale_form_fields(self) -> None:
+        # A different content hash must not carry the previous contract forward.
+        key, _ = self.entry("contract.pdf", "contract")
+        self.overlay({})
+        self.output.mkdir(parents=True, exist_ok=True)
+        (self.output / "filemap.json").write_text(json.dumps({"files": {
+            key: {
+                "sha256": sha("a completely different earlier revision"),
+                "description": "-",
+                "form_fields": {"status": "complete", "count": 9, "tool": "pymupdf"},
+            }
+        }}), encoding="utf-8")
+
+        self.assertEqual(0, self.run_generator())
+        got = json.loads((self.output / "filemap.json").read_text(encoding="utf-8"))["files"][key]
+        self.assertNotIn("form_fields", got)
 
 
 if __name__ == "__main__":

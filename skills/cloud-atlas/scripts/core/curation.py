@@ -21,7 +21,7 @@ CURATION_SCHEMA_URI = (
 GENERATED_FILEMAP_FIELDS = frozenset({
     "version", "mtime", "size", "sha256", "markdown_mirror", "derivative",
     "conversion_status", "conversion_error", "ocr_applied", "ocr_policy",
-    "artifact_metadata",
+    "artifact_metadata", "form_fields",
 })
 _ENTRY_FIELDS = frozenset({"source_sha256", "description", "custom"})
 _SHA256 = re.compile(r"^[a-fA-F0-9]{64}$")
@@ -221,5 +221,10 @@ def merge_curated_metadata(
         if "description" in overlay_entry:
             result["description"] = overlay_entry["description"]
         for key, value in overlay_entry.get("custom", {}).items():
+            # Generated metadata always wins: a reserved key can never be
+            # forged through an overlay custom entry, even if validation is
+            # bypassed by a direct caller.
+            if key in GENERATED_FILEMAP_FIELDS:
+                continue
             result[key] = value
     return result

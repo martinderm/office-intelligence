@@ -54,8 +54,9 @@ python -m pip install -r .agents/skills/cloud-atlas/requirements-conversion.txt
 ```
 
 `requirements-conversion.txt` enthält `markitdown` (Python-Bibliothek; alternativ
-kann ein kompatibles `markitdown`-CLI im `PATH` bereitstehen) und `ocrmypdf` (stellt
-das `ocrmypdf`-CLI bereit). Für OCR müssen zusätzlich hostseitig **Ghostscript** sowie
+kann ein kompatibles `markitdown`-CLI im `PATH` bereitstehen), `ocrmypdf` (stellt
+das `ocrmypdf`-CLI bereit) und `pymupdf` (rein lesende AcroForm-Extraktion, siehe
+unten). Für OCR müssen zusätzlich hostseitig **Ghostscript** sowie
 **Tesseract** mit den benötigten Sprachdaten verfügbar sein; der aktuelle Aufruf nutzt
 `-l deu` und benötigt deshalb insbesondere das deutsche Tesseract-Sprachpaket. Diese
 Systemvoraussetzungen werden weder vom Bundle noch von der Python-Requirements-Datei
@@ -74,6 +75,63 @@ Zustand `state: "ConversionRequired"` mit `error.type: "ConversionRequired"` und
 maschinell lesbaren `error.requirements` (jeweils `storage_id`, `source`,
 `capability`, `message`; bei OCR insbesondere `tesseract_deu` oder `tesseract_hocr`). Der Aufrufer entscheidet anschließend ausdrücklich, ob er
 die optionale Funktion bereitstellt oder die Datei unverändert katalogisiert lässt.
+
+### PDF-Formularfelder (AcroForm) — optionaler Capability-Vertrag
+
+MarkItDown liest gefüllte AcroForm-Widget-Werte nicht mit. Cloud Atlas ergänzt sie
+deshalb rein lesend über **PyMuPDF** (`import pymupdf`, mit Fallback auf den
+Legacy-Alias `import fitz`) als Abschnitt „Formularfelder (ausgefüllt)“
+(Tabelle Seite/Feld/Typ/Wert) am Mirror. PyMuPDF ist **optional**: fehlt es oder
+lässt es sich nicht importieren, bleibt der Mirror unverändert und der Lauf gilt
+weiterhin als erfolgreich (kein `conversion_required`). Jede Extraktion liefert einen
+begrenzten Status:
+
+* `complete` — alle Widgets ohne Lesefehler gelesen, mindestens ein gefülltes Feld;
+* `no_fields` — Dokument geöffnet, aber kein gefülltes Feld;
+* `partial` — einzelne Seiten/Widgets unlesbar, Feld-/Warnungs-/Text-/Name-/Typlimits erreicht;
+* `dependency_missing` — `pymupdf`/`fitz` fehlt oder ist nicht importierbar (auch Nicht-`ImportError`);
+* `error` — PDF nicht öffnbar oder Dokument-Iteration ohne gelesene Felder abgebrochen
+  (wird **nicht** als leere Extraktion dargestellt); mit bereits gelesenen Feldern ⇒ `partial`.
+
+Alle Widget-Metadaten (`field_value`/`field_name`/`field_type_string`), die lazy
+Widget-Iteration (`page.widgets()`) und die lazy Dokument-Iteration sind einzeln
+guardiert: ein defektes Widget wird zu einer begrenzten Warnung, gute Felder bleiben
+erhalten, das Dokument-Handle wird immer geschlossen.
+
+Der Status wird zusammen mit `count`, `tool`/`tool_version`, begrenzten `warnings`,
+dem Quell-`source_sha256` und `extracted_before_ocr` als `form_fields`-Objekt durch
+Worker und Scheduler transportiert und **im Filemap-Eintrag** (`files[<quelle>]
+.form_fields`) persistiert. Bewusste Grenzen:
+
+* **Kein Frontmatter-Wachstum.** Das kanonische Frontmatter behält exakt seine
+  Pflichtschlüssel. Für den zusammengesetzten Mirror (MarkItDown-Body + AcroForm-Tabelle)
+  bleibt `converter` die **Basis-Konvertierungsmethode** (z. B. `markitdown-direct`);
+  die PyMuPDF-Herkunft lebt ausschließlich im Filemap-`form_fields`-Objekt.
+* **Reserviert & Retention.** `form_fields` ist ein generated Feld: ein Curation-Overlay
+  darf es weder über `custom` setzen noch überschreiben. Bei **unverändertem** Quell-Hash
+  wird der bestehende Vertrag im Skip-Pfad und in `gen_filemap.py` explizit
+  weitergetragen; bei geändertem/neuem Quell-Hash wird er verworfen.
+* **Literal & einzeilig.** Feldname, Typ und Wert werden einzeilig und literal
+  dargestellt (Zeilenumbrüche/Steuerzeichen sowie U+2028/U+2029 zu Leerzeichen;
+  Nicht-umbrechende Leerzeichen bleiben erhalten; `None` ⇒ leere Zelle; HTML
+  entity-escaped; Markdown-Metazeichen escaped), damit weder Zeilenumbrüche noch
+  Markdown-Bilder/HTML den Mirror umstrukturieren. `Off`/`/Off` wird **exakt** und nur
+  für Button-Familien (Checkbox/Radio/Button) als ungeprüft verworfen; bei
+  Text-/Choice-Feldern und benutzerdefinierten Checked-Werten wie `OFF`/`off` bleibt
+  der Wert erhalten.
+* **Reihenfolge vor destruktiver OCR.** Bei `enrich_source` werden die Felder **vor**
+  der In-Place-OCR aus dem Original gelesen und mit dem Pre-OCR-Hash geführt
+  (`extracted_before_ocr: true`), weil die OCR-Neuschreibung Widget-Werte verlieren
+  kann. Bei `local_derivative` werden die Felder weiterhin aus dem unveränderten
+  Original gelesen, nie aus dem Derivat.
+* **Begrenzungen.** Feldanzahl, Wert-, Namens- und Typlänge sowie Warnungsanzahl sind
+  begrenzt (`MAX_PDF_FORM_FIELDS`, `MAX_PDF_FORM_FIELD_TEXT`,
+  `MAX_PDF_FORM_FIELD_NAME`, `MAX_PDF_FORM_FIELD_TYPE`, `MAX_PDF_FORM_FIELD_WARNINGS`);
+  überschreitende Fälle werden als `partial` mit `*_truncated`-Warnung geführt, auch
+  wenn das Warnungsbudget erschöpft ist.
+* **Kein automatischer Rebuild.** Bereits gespiegelte unveränderte Quellen werden
+  nicht automatisch nachgerüstet. Ein gezielter `--force`-Lauf (bzw. ein `redo_ocr`-Lauf)
+  erzeugt die Mirrors neu; es gibt keinen impliziten Live-Rebuild.
 
 ### Mutations- und Lock-Vorbedingung
 

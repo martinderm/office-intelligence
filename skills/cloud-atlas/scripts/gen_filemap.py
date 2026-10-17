@@ -946,6 +946,17 @@ def run_generation(args):
                 "sha256": sha256,
                 "description": "-"
             }
+
+            # Carry the converter's form-field contract forward only for an
+            # unchanged source (identical content hash).  A changed or new source
+            # must not inherit a stale status/provenance contract, and the
+            # generated-field reservation stops the generic legacy carry-over.
+            if (
+                isinstance(existing_info, dict)
+                and existing_info.get("sha256") == sha256
+                and isinstance(existing_info.get("form_fields"), dict)
+            ):
+                file_entry["form_fields"] = existing_info["form_fields"]
             
             markdown_mirror = select_markdown_mirror(
                 workspace_root,

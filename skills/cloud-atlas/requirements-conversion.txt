@@ -2,3 +2,8 @@
 # They are intentionally not requirements of the Office Intelligence bundle.
 markitdown>=0.1.0
 ocrmypdf>=17.0.0
+# Read-only AcroForm (filled PDF form field) extraction. PyMuPDF is an optional
+# capability: when it is missing the Markdown mirror simply stays unchanged (no
+# conversion_required). The module is imported as `pymupdf` with a read-only
+# fallback to the legacy `fitz` alias.
+pymupdf>=1.24.0
