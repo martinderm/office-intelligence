@@ -40,6 +40,26 @@ Die Bearbeitung von E-Mails und die Erfassung von Aufgaben sind strikt getrennt:
    - `task-desk` prüft auf Duplikate, priorisiert nach Dringlichkeit/Impact und bereitet die Synchronisation mit dem Task-Tracker (z. B. Todoist) vor.
    - `mail-desk` selbst legt **keine** Todos im Aufgaben-Tracker an.
 
+**Zweiter Batch-Eingang (Issue #16, doc-only):** Neben dem bestehenden
+`dossier_handoff` (unverändert; EVID-Anker `mail_message_id`, `action_candidates`,
+`state: review_and_dedupe_required`) konsumiert `task-desk` den
+`mail-desk`-`synthesis_handoff` **nur** über das quellengebundene Release-Gate:
+`completion_report.status: "completed"` **und** `handoff_released: true`, dessen
+`verified_message_ids` alle Quell-IDs decken, plus passender freigegebener
+`data.synthesis_handoff` mit `status: "pending"`. Erzeugt wird der Report
+ausschließlich über die bestehenden Seams `core/completion.py`, `modes/verify.py`
+und `modes/reconcile.py` (Vertex-Referenzen: `references/batch-runner.md`
+§Synthese-Handoff/§Completion-Gate); ein bare `pending` oder ein `results: success`
+genügt **nicht**. Bei der ersten Kandidatenaufnahme vergibt `task-desk` eine
+persistierte, opake `action_id` (UUID4) und schreibt `review-queue.json` (inkl.
+nichtleerem `title` und geprüftem `evidence_ref={file,anchor}`); die
+Wiedererkennung erfolgt ausschließlich über `action_ref` mit exakt passender
+`source`. Reply-Kandidaten stammen aus `data/mail-desk/replies-needed.jsonl` und sind
+nur bei `reply_status: "needed"` mit passender normalisierter Quelle im freigegebenen
+`synthesis_handoff` zulässig (nur dieser zweite Eingang; `dossier_handoff` bleibt ein
+separater Vertrag). Register-Zielverträge:
+[`../../skills/task-desk/references/task-schemas.md`](../../skills/task-desk/references/task-schemas.md).
+
 ---
 
 ## 3. Meeting- & Event-Intake-Workflow

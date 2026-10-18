@@ -5,6 +5,46 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- **Issue #16 — Task-Desk Batch-Handoff & persistierte Kandidatenverträge
+  (doc-only, 2026-10-18):** Ausschließlich Dokumentations-/Vertragspaket, **kein**
+  ausführbarer Validator/Runner, **keine** Test- oder Produktionscodeänderung. Neu:
+  `skills/task-desk/references/task-schemas.md`; geändert:
+  `skills/task-desk/SKILL.md`, `skills/task-desk/references/task-routing.md`,
+  die vier L1-Karten (`docs/system-map/{README,objects,processes,effects}.md`),
+  die vier Mail-Desk-L2-Karten
+  (`skills/mail-desk/docs/system-map/{README,objects,processes,effects}.md`),
+  `FEATURE-REQUESTS.md` (Issue-Nachweis) und diese Progress-Datei. Inhalt:
+  zweiter Batch-Eingang `synthesis_handoff` nur über den quellengebundenen
+  `completion_report` konsumierbar; Reply-Fälle nur bei `reply_status: needed`
+  mit passender normalisierter Quelle im freigegebenen Handoff; persistierte
+  `action_id` (UUID4) + `action_ref` + geprüftes `evidence_ref={file,anchor}`
+  bei erster Kandidatenaufnahme; vollständige **5-Zeilen**-Attribution
+  (Aktion/Quelle/Trace-ID/action_id/source.type) mit neutralem, vorhandenem
+  Beleg (kein erfundener Producer-EVID); Register-Zielverträge Version 2 für
+  `review-queue.json`/`created-tasks.json` mit präzisen Typen/Nullable/
+  Unknown-Key-/Uniqueness-Regeln, `title`+`evidence_ref` als Pflicht,
+  `outcome` bei `resolved`, Resume-`awaiting_dispatch`→`dispatch_unknown`/Review
+  ohne Nichtversandnachweis, **Bootstrap nur nach autorisiertem leerem
+  Register-Kontext**; Legacy-`version: 1` read-only (keine Migration, v1 nicht
+  als „unknown“). **Doc-only-Evidenz, kein synthetisches RED:** Scope-Prüfung
+  (13 Markdown-Dateien), `git diff --check`, parsebare JSON-Beispiele, neue
+  Link-Ziele sowie In-Memory-Syntaxprüfung aller 196 Python-Dateien grün.
+  Die erste Worktree-Vollprüfung scheiterte an fehlenden Shared-Sibling-Ressourcen.
+  Ein byteidentischer Scratch-Snapshot (277 Dateien, echte Shared-Lock-/Schema-
+  Ressourcen, separat kopierter Quellindex) ergab Cloud 241 + 134 Subtests,
+  Event 73 (1 Plattform-Skip), Projektkatalog 28 jeweils Exit 0; Mail 1371
+  (1 Plattform-Skip) mit einem unveränderten MD-A3-Timing-Failure (1.3207 s
+  bei Grenze 1.0 s), Exit 1. Dieser rote Frame ist **keine Abnahme**.
+  Coder: `opencode-go/deepseek-v4.1-flash#high`; unabhängiger Reviewer:
+  `opencode-go/glm-5.3-flash#high` (jeweils per offizieller Session-Metadaten
+  bestätigt). Review-Findings F1–F5 gebündelt behoben und nachgeprüft;
+  keine offenen inhaltlichen Findings. Integration: `openai/gpt-6.1-sol`.
+  Die vollständige Vier-Suiten-Nachprüfung, finale Head-/Tree-Bindung und
+  unabhängige Bestätigung werden im PR mit ihren tatsächlichen Ergebnissen
+  festgehalten, nicht aus dem roten Vorframe abgeleitet. Kein neuer FR-Record.
+  **High Risk unabhängig bestätigt** (normative Schemas, Dedupe, Locks)
+  ⇒ Human-Merge-Gate; Commit/Push/PR ausdrücklich autorisiert, **kein Merge**.
+
 - **PR #23 / Issue #20 — Reconcile nach #14 und #11, 2026-10-18:** Explizite
   Single-Writer-Übergabe; aktuelles Main `920ac3a` (menschlicher Writer-Merge
   `7a7d3f7`, danach Draft-Transport-Squash). Reguläre Integration ohne Rebase,

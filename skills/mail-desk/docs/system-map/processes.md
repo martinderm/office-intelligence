@@ -94,6 +94,20 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 2. Bestätigt das physische Vorhandensein der verschobenen Mails am Zielort.
 3. Bleibt der unabhängige Gesamt-Batch-Nachlauf; die execute-seitige Copy-Verifikation (Phase 3, Punkt 5) reduziert den zuvor flakigen Recovery-Fall, ersetzt Phase 4 aber nicht.
 
+### 2.1 Release & Task-Desk-Handoff (Issue #16, doc-only)
+
+`execute` ist bewusst **keine** Completion-Grenze: es hält nur einen
+quellengebundenen `synthesis_candidate`, während `data.synthesis_handoff` kanonisch
+leer bleibt. Erst ein erfolgreicher, quellengebundener `verify` (direkt oder in
+`pipeline`) oder ein abgeschlossener `reconcile` liefert genau einen freigegebenen
+`synthesis_handoff` plus `completion_report`. Konsumierbar für `task-desk` ist der
+Handoff nur bei `completion_report.status: "completed"` **und**
+`handoff_released: true` mit gedeckten `verified_message_ids`. Die alte
+`dossier_handoff`-Fassade bleibt unverändert; `mail-desk` schreibt **keine**
+Task-Desk-/Todoist-Zustände. Reply-Kandidaten entstehen über
+`data/mail-desk/replies-needed.jsonl` (Actual Writer `modes/execute.py`). Details:
+[`objects.md`](objects.md) §5.5/§6 und die L2-§34.
+
 ---
 
 ## 3. Die Attachment-Quarantäne-Pipeline (MD-Q1 / MD-Q2)

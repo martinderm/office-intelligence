@@ -56,7 +56,7 @@ Vier-Suiten-Abnahme wird im zugehörigen Run und Feature-Ledger referenziert.
 | [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | Aktuelle Metrik: L2-Kopfzeile (Issue #20) | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), optionale AcroForm-Formularfelder-Extraktion via PyMuPDF (begrenzter Status/Warnungs-Vertrag in `files[].form_fields`, Issue #20), Cloud-Sync, Promotion-Refresh-Consumer (`promotion_refresh.py`); gemeinsamer Storage-Scan-Scope mit `exclude_dirs` für Projekte, Topics und Subtopics. |
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
-| [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 2 Dateien | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung. |
+| [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien (`git ls-files --cached --others --exclude-standard`, 2026-10-18) | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung; zweiter Batch-Eingang `synthesis_handoff` mit Release-Gate, persistierte `action_id`/`action_ref` und Register-Zielverträge (Issue #16). |
 | [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Evidenz-Überführung einzelner Meetings (Fireflies, Zoom). |
 | [`event-documentation`](../../skills/event-documentation/SKILL.md) | Kompakt (Paket-Map) | 8 Dateien (Issue #14, 2026-10-18, `git ls-files --cached --others --exclude-standard`) | [`processes.md`](processes.md#3-meeting--event-intake-workflow) | Source-bound ungeprüfte Event-Entwürfe für Projekte und katalogisierte Topic/Subtopic-Events; Writer-Vertrag in `references/event-writer.md`. |
 
@@ -300,3 +300,44 @@ unter `scripts/core/quarantine/`; die alten `core/attachment_*.py`-Pfade sind d�
 `sys.modules`-aliasende Shims mit Objektidentität für Importe, Monkeypatch-Seams und
 `core.__init__`-Re-Exports (804 Tests grün, `classifier_revision` unrotiert).
 L2-Detail: [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §6 und §7.
+
+---
+
+## 7. Issue #16 — Task-Desk Batch-Handoff & persistierte Kandidatenverträge (doc-only)
+
+**Status:** Dokumentations-/Vertragspaket. Kein ausführbarer Validator/Runner, keine
+Produktionscodeänderung, keine neuen Tests; **High Risk** (normative Schemas, Dedupe,
+Locks) mit **Human-Merge-Gate**.
+
+**Zweiter Batch-Eingang:** Neben dem bestehenden `dossier_handoff` (unverändert)
+konsumiert `task-desk` den `mail-desk`-`synthesis_handoff` nur, wenn der
+**quellengebundene `completion_report`** `status: "completed"` und
+`handoff_released: true` meldet, die verifizierten IDs alle Quell-IDs decken und der
+freigegebene `data.synthesis_handoff` `pending` trägt. Erzeugt wird der Report nur
+über `core/completion.py`, `modes/verify.py` und `modes/reconcile.py`; ein bare
+`pending`, ein `results: success` oder ein Rohlauf genügen **nicht**. Kein neuer
+Freigabemechanismus; `batch-*-synthesis.md` ist kein kanonischer Produceroutput.
+
+**Persistierte Kandidatenverträge:** `task-desk` vergibt bei der ersten Aufnahme eine
+opake, persistierte `action_id` (zufällige UUID4, nicht aus Text/Message-ID/
+Fingerprint abgeleitet); `action_ref` (`{action_id, source}`) ist die **einzige**
+Rückreferenz. Wiedererkennung nur über exakt passende `source`; ähnlicher Text allein
+ist kein Merge/Skip/Neuanlage. `review-queue.json` (Zielvertrag `version: 2`,
+`updated_at`, `entries`) ist ein kleines Audit-/Candidate-Register, kein
+Todoist-Spiegel; `created-tasks.json` übernimmt dieselbe `action_id`/`source` plus
+Adapter-/Task-ID nach bestätigtem Erfolg. Dispatch-Persistenzlücken enden
+`dispatch_unknown` (kein blindes Retry, keine Exactly-once-Behauptung). Vollständige
+Verträge: [`../../skills/task-desk/references/task-schemas.md`](../../skills/task-desk/references/task-schemas.md).
+
+**Legacy-Lesestatus:** Der beobachtete Bestand ist `version: 1` (read-only,
+`legacy_read_only`/`review_required`) und **nicht** mit v2 kompatibel; kein
+`fingerprint`→`action_id`-Alias, keine automatische Migration/Normalisierung.
+Aktivierung von v2 und Bestandstransfer sind **separat autorisiert**. Details in der
+Task-Desk-Referenz und in [`objects.md`](objects.md) §3.5, [`processes.md`](processes.md)
+§2 und [`effects.md`](effects.md) §2/§3.
+
+**Lock/Write-Grenze:** Consumer-`workspace-lock`-Lease (`allow_legacy=False`) vor
+jedem lokalen Task-Desk-Write und Dispatch; atomar je JSON-Datei (`tempfile` +
+`os.replace`), **keine** Multi-File-/SaaS-Atomarität (L1 [`effects.md`](effects.md)
+§2/§3). Mail-Desk-Seite:
+[`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §34.

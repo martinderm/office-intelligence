@@ -1348,3 +1348,37 @@ skills.mail-desk.tests.test_draft_transport` → **17 Tests, 3 Failures + 1
 Error, Exit 1**; GREEN `python -B -m unittest
 skills.mail-desk.tests.test_draft_transport
 skills.mail-desk.tests.test_drafts_api` → **40/40 OK, Exit 0**.
+
+## 34. Issue #16 — Task-Desk-Consumer-Grenze (doc-only)
+
+**Status:** Dokumentations-/Vertragspaket, **kein** Mail-Desk-Produktionscode, **keine**
+neuen Tests. Der Mail-Desk-**Producer bleibt unverändert**; beschrieben wird nur die
+bestehende Consumer-Grenze zum `task-desk`.
+
+**Release-Gate (Producer unverändert):** `execute` liefert nur einen unreleased
+`synthesis_candidate`; `data.synthesis_handoff` bleibt bis zur vollständigen
+Verifikation kanonisch leer. Erst der quellengebundene `completion_report` aus
+`core/completion.py` (`release_synthesis_handoff`, `completion_report`) mit
+`status: "completed"` und `handoff_released: true`, gedeckten `verified_message_ids`
+und passendem freigegebenem `data.synthesis_handoff` `status: "pending"` ist
+konsumierbar. Report-Erzeuger sind `modes/verify.py` (Verify/Pipeline) und
+`modes/reconcile.py` (abgeschlossener Reconcile). Ein bare `pending`, ein
+`results: success` oder ein `batch-*-synthesis.md`-Artefakt genügen **nicht**.
+
+**Konsumierte Form:** `synthesis_handoff`-Root exakt `schema_version`/`status`/`items`;
+Item exakt `message_id`, `subject`, `kind` (`project`/`topic`), `id`,
+`synthesis_targets`, `target_selection_required`; **kein** `context`, **kein**
+`needs_reply`. Der bestehende `dossier_handoff` (EVID-Anker `mail_message_id`,
+`action_candidates`, `state: review_and_dedupe_required`) bleibt **byte-gleich**.
+
+**Reply-Kandidaten:** `data/mail-desk/replies-needed.jsonl` (Actual Writer
+`modes/execute.py`) trägt `timestamp`, `envelope_id`, `message_id`, `subject`, `from`,
+`folder`, `reply_status`, `reply_note`; `reply_status` genau `needed` ist nur mit
+passender normalisierter Quelle im freigegebenen `synthesis_handoff` konsumierbar (sonst Review,
+kein Dispatch).
+
+**Grenze:** Mail-Desk schreibt **keine** Task-Desk-/Todoist-Zustände und erzeugt
+**keine** Task-Freigabe; Kandidaten bleiben untrusted data. Task-Desk-Register sind
+Zielverträge (Version 2, noch nicht laufzeitunterstützt); Legacy `version: 1` bleibt
+read-only. Vollständige Consumer-Verträge:
+[`task-schemas.md`](../../../task-desk/references/task-schemas.md).
