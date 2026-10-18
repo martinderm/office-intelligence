@@ -1,5 +1,12 @@
 # TODO — office-intelligence (offene Altlasten)
 
+> Historischer Altlastenbericht, kein aktiver Backlog. Aktueller Workstatus:
+> [GitHub Issues](https://github.com/martinderm/office-intelligence/issues),
+> insbesondere [#10](https://github.com/martinderm/office-intelligence/issues/10)
+> für die offene READY-/Timing-Restursache. Die datierten Vorschläge unten sind
+> keine neue Umsetzungserlaubnis. Damalige Progress-Nachweise sind über den
+> [Archiv-Stub](FEATURE-REQUEST-PROGRESS.md) erreichbar, aktuelle im Issue/PR/Run.
+
 ## 2026-10-18 — Issue #14: Writer-Implementierung zur User-Abnahme
 
 Die historische Writer-Lücke unten wird durch den source-bound Writer für

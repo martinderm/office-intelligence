@@ -119,14 +119,21 @@ Reply-Heuristik- und Identitäts-Konfiguration des konsumierenden Workspaces.
 * **Fallback-Vertrag:** Fehlende Datei = **leere** Trigger-Liste (keine Anrede-Trigger ohne Katalog); Schema-Drift = fail-loud `ValueError`.
 
 ### 3.4 Feature-Request-System (`docs/features/`)
-Record library (ICM Form 3) für Feature Requests; Katalog-File am Root.
 
-* **Katalog:** `FEATURE-REQUESTS.md` (Root) — Status-Tabelle + Reihenfolge, kein Spec-Inhalt.
-* **Records (aktive FRs):** `docs/features/FR-<n>.md` — YAML-Frontmatter (`id`, `type: feature-request`, `status`, `packages`, `next_package`, `blocker`) plus verbindliche Paketkarte (SSOT je FR).
-* **Archiv:** `docs/features/_archive.md` — abgeschlossene FRs (Archivstatus-Tabelle + FR-Sektionen); Root-Stub `FEATURE-REQUEST-ARCHIVE.md` ist reiner Link-Stub.
-* **Progress (ephemeres L4-Produkt):** `FEATURE-REQUEST-PROGRESS.md` (Root) — Arbeitsdokument, wird nach Abnahme bereinigt.
-* **Folder-Vertrag:** [`docs/features/CONTEXT.md`](../features/CONTEXT.md) (Record-Format, Routing, Archivierungsregeln).
-* **Surfaces:** Daedalus-Kernel-Loop (Run-Manifeste verweisen via `spec_reference` auf den Katalog), Coding-Agents (Paketlektüre), Human Review.
+* **Aktiver Backlog:** [GitHub Issues](https://github.com/martinderm/office-intelligence/issues);
+  Workstatus und Abnahme im Issue/PR und dessen Run, kein paralleles Root-Ledger.
+* **Aktuelle Verträge/Specs:** Fachreferenzen und betroffene L1/L2-System-Maps;
+  Änderungen werden dort synchron dokumentiert, nicht in alten Statuszeilen.
+* **Legacy-Records:** `docs/features/FR-<n>.md` — unverändertes historisches
+  Frontmatter und Paketkarten; offene Altstatus werden nicht als erledigt umgedeutet.
+* **Archiv:** `docs/features/_archive.md` bleibt historisch erhalten;
+  `FEATURE-REQUEST-ARCHIVE.md`, `FEATURE-REQUESTS.md` und
+  `FEATURE-REQUEST-PROGRESS.md` sind nur Linkstubs.
+* **Snapshot/Provenienz:** [`docs/archive/feature-ledgers/README.md`](../archive/feature-ledgers/README.md),
+  bytegetreue Textkopien der Root-Ledger, keine neue Fortschrittstabelle.
+* **Routing:** [`docs/features/CONTEXT.md`](../features/CONTEXT.md).
+  Alte `catalog`/`progress`- und externe `spec_reference`-Verweise bleiben über
+  Stubs historisch lesbar; sie erteilen keine Kernel-Bindung oder neue Ledgerpflicht.
 
 ### 3.5 Task-Desk-Register (Issue #16, Zielverträge)
 
