@@ -7,8 +7,10 @@
 Sie komponieren Requests oder verifizieren vorhandene Outputs; sie führen keine
 Mailbox-, Attachment-, Event-, Cloud- oder Task-Writes aus. Sie erzeugen keine
 Freigaben. Der bestehende Batch-Runner bleibt der operative Owner; der externe
-Event-Writer ist noch nicht implementiert und wird separat in
-[#14](https://github.com/martinderm/office-intelligence/issues/14) verfolgt.
+Event-Writer ist separat implementiert unter
+[`event-documentation`](../../event-documentation/references/event-writer.md)
+([#14](https://github.com/martinderm/office-intelligence/issues/14)); die Fassade
+führt ihn niemals selbst aus.
 
 ```text
 python -B <bundle>/skills/mail-desk/scripts/mail_desk_event_dossier.py \
@@ -158,14 +160,28 @@ Pflichtfelder: `artifacts` (explizite vollständige Pfadliste), der unverändert
 }
 ```
 
-Dies ist die explizite Integrationsgrenze für #14; kein existierender Writer
-wird behauptet. Der historische E2E-Pin aus `0896334` wurde nachvollziehbar
+Dies ist die explizite Integrationsgrenze für #14. Der historische E2E-Pin aus `0896334` wurde nachvollziehbar
 auf synthetische Writer-Bytes mit echtem Receipt umgestellt. Alle übrigen
 historischen Verhaltenspins bleiben, zusätzliche Negativtests härten die Grenze.
 
+`test_event_dossier_writer_integration.py` ergänzt den echten lokalen Pfad
+Handoff → `event-documentation.apply_event` → Report mit allen fünf Writer-
+Outputs. Nur das operative Apply davor ist eine synthetische Fixture; kein
+Live-Mailbox-E2E wird behauptet. Der Writer kennzeichnet alle Inhalte als
+ungeprüften Entwurf und erzeugt keine Inhaltsfreigabe.
+
+**Report-Erweiterung:** `event.owner_kind: "topic"` verlangt zusätzlich
+`subtopic_id`. Referenz-Scope ist exakt
+`memory/references/topics/<topic>/subtopics/<subtopic>/events/<event>/`,
+Evidence-Scope exakt `memory/evidence/topics/<topic>/events/<event>/`.
+Topic/Subtopic/Event-IDs sind strikte Slugs. Der Handoff bleibt ausschließlich
+projektgebunden; Topic-Work-Orders kommen separat vom Caller. Report verlangt
+weiterhin den vollständigen Rich-Source-/Completeness-Vertrag, nicht das
+vereinfachte Basisprofil des Writers. Er verifiziert keine Katalogautorität.
+
 Report prüft Source-Snapshot, Work-Order-Bindung, exakte Output-Menge und jeden
 Dateihash. `index.md` ist erforderlich; weitere Outputs sind ausschließlich
-im exakten Projekt-/Event-Scope unter `memory/references/` oder
+im exakten Projekt-/Event- beziehungsweise Topic/Subtopic-Event-Scope unter `memory/references/` oder
 `memory/evidence/` zulässig. Absolute/Traversal-/ADS-Pfade, fehlende Dateien,
 Symlinks/Reparse-Points und Hardlinks scheitern. Der Report ist eine lokale
 Integritätsprüfung, keine Race-freie oder kryptographisch authentifizierte

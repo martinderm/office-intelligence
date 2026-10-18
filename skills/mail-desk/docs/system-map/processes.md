@@ -33,8 +33,12 @@
 5. `report`: Work-Order-/Source-Snapshot-Bindung und vollständige Output-Hashliste
    gegen echte lokale Dateien prüfen. Keine Content-Freigabe.
 
-Der externe Event-Writer fehlt (GitHub #14); die Writer-Grenze ist synthetisch
-getestet. Vollständige DTOs und Bounds: `references/event-dossier.md`.
+Der separate Event-Writer (GitHub #14) schreibt ausschließlich lokale ungeprüfte
+Entwürfe. `test_event_dossier_writer_integration.py` prüft echte Handoff→Writer→
+Report-Komposition und Topic-Writer→Report; nur das vorgelagerte operative Apply
+bleibt synthetisch. Keine Live-Mailbox-E2E-Behauptung und kein Topic-Handoff.
+Die historischen synthetischen Boundary-Pins bleiben unverändert erhalten.
+Vollständige DTOs und Bounds: `references/event-dossier.md`.
 
 ```
 [Mailbox / Himalaya]

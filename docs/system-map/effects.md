@@ -11,7 +11,7 @@
 Das Repository `office-intelligence` (einschließlich aller Unterordner in `skills/`) ist ein **statisches Code- und Dokumentations-Paket**.
 
 * **Invariant:** Kein Skript aus dem Bundle modifiziert zur Laufzeit Dateien innerhalb von `skills/office-intelligence/`.
-* **Keine Bundle-Control-Plane:** Es werden keine `.agents/session.lock`-Dateien oder temporäre Cache-Dateien im Bundle-Root angelegt oder committed.
+* **Keine Bundle-Control-Plane:** Fachliche Runtime erzeugt keinen Bundle-Zustand. Bundle-Wartung darf ausschließlich die transiente, gitignorierte `.agents/session.lock`-Lease des Shared-Skills halten (AGENTS.md); sie wird nie committed.
 * **Zielort aller Mutationen:** Schreiboperationen finden ausnahmslos in den explizit deklarierten Verzeichnissen des Ziel-Workspaces statt (`memory/`, `data/`).
 
 ---
@@ -40,6 +40,22 @@ Keine schreibende Skriptoperation schreibt direkt in eine bestehende Zieldatei:
 ### 3.2 Pfad-Disziplin & Relativität
 * Generell **keine absoluten Host-Pfade** (`C:\Users\...`, `/home/...`) in generierte JSON-Dateien, Kataloge oder Evidenzprotokolle schreiben.
 * Alle Pfadreferenzen innerhalb von Katalogen und Indizes sind **relativ zum Workspace-Root** zu halten (Portabilität und Vermeidung von Datenlecks bei Git-Push).
+
+### 3.3 Event-Writer: begrenztes No-Clobber (Issue #14)
+
+Abweichend von Replace-Semantik werden neue Event-Outputs exklusiv gestagt und
+per `os.link` ohne Überschreiben veröffentlicht, danach alle Dateiidentitäten
+und Bytes verifiziert. Es gibt kein Crash-Gesamttransaktionsversprechen oder
+Journal. Rollback nur eigener unveränderter neuer Dateien/Verzeichnisse unter
+weiterhin eigener Lease und erneut geprüften Elternketten; Lease-Verlust oder
+fremde Änderungen hinterlassen gegebenenfalls expliziten Recovery-Bedarf.
+Teilbestände, leere Zielverzeichnisse und Staging-Reste stoppen vor neuem Apply.
+Shared Guard bleibt in place (`allow_legacy=False`); explizite Dependency-Wahl
+ist vertrauenswürdige Operator-Konfiguration, nie Inhalt des Work-Orders.
+Kataloge/Outputs werden auf Reparse-/Hardlink-/Pfad-Escapes geprüft. Untrusted
+Markdown/HTML wird inert gerendert. Keine Race-Freiheit gegen einen gleichzeitig
+umhängenden bösartigen Dateisystemakteur; keine fachliche Freigabe aus Hashes.
+Normative Entwurfs-/Bootstrap-Zulassung ist High Risk und erfordert User-Merge.
 
 ---
 

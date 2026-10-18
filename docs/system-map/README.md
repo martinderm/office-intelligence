@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (176 Dateien)│       │ (L2-Metrik)  │       │ - project-catalog-entry  │
+│ (L2-Metrik)  │       │ (L2-Metrik)  │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -54,7 +54,7 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
 | [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 2 Dateien | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung. |
 | [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Evidenz-Überführung einzelner Meetings (Fireflies, Zoom). |
-| [`event-documentation`](../../skills/event-documentation/SKILL.md) | Schlank (Paket-Map) | 9 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Umfassende Dokumentation von Konferenzen und Symposien. |
+| [`event-documentation`](../../skills/event-documentation/SKILL.md) | Kompakt (Paket-Map) | 8 Dateien (Issue #14, 2026-10-18, `git ls-files --cached --others --exclude-standard`) | [`processes.md`](processes.md#3-meeting--event-intake-workflow) | Source-bound ungeprüfte Event-Entwürfe für Projekte und katalogisierte Topic/Subtopic-Events; Writer-Vertrag in `references/event-writer.md`. |
 
 
 #### 2.1 Mail-Desk – Verantwortlichkeits-Detail (Status je FR-Paket)
@@ -62,7 +62,10 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert
 nur den vorhandenen `dossier_apply`-Request, Handoff verlangt vollständige
 quellengebundene Apply-/Verify-Ergebnisse. Report verifiziert Source-/Output-
-Receipts ohne Inhaltsfreigabe. Externer Event-Writer separat offen (#14).
+Receipts ohne Inhaltsfreigabe. **Issue #14:** separater `event-documentation`-
+Writer für ungeprüfte mailbasierte Entwürfe, Topic-Bootstrap nach Katalogisierung,
+No-Clobber und begrenzte fail-closed Recovery; Report unterstützt beide Owner.
+Handoff bleibt projektgebunden, Matcher unverändert. High Risk: User-Merge-Gate.
 Details und aktuelle Messwerte: L2-Kopfzeile sowie
 [`references/event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
 

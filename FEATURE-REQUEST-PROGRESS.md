@@ -5,6 +5,67 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- GitHub [Issue #14](https://github.com/martinderm/office-intelligence/issues/14),
+  2026-10-18: explizite Single-Writer-Übergabe; Full-Auto nur eigener Branch/
+  Commit/Push/PR, **kein Merge**. User bestätigt Projekte UND Topic/Subtopic,
+  mailbasierte ungeprüfte Entwürfe, Topic-Bootstrap nach gültiger Katalogisierung
+  und begrenzte fail-closed Atomarität ohne Journal/Crash-Gesamttransaktion.
+  Writer, echte lokale Fassaden-Integration, Owner-/Profil-/Receipt-/OS-Boundary-
+  Tests; die sieben historischen Pins und sechs Storage-Pins bleiben unverändert.
+  Genuine Baseline-RED: 7 Writer-Importfehler; initiale neue Tests RED 31 + 3
+  Importfehler; Fix-RED 16 Security-Failures + 1 Integrations-Failure; zusätzliche
+  Orchestrator-Regressionen RED 3 Ownership-Failures und Doku RED 2 Failures +
+  1 fehlender Vertrag. Ownership-/Doku-Regressionen anschließend jeweils 3/3 grün.
+  Alle Zähler sind Testausführungen, keine aus historischen Dokumenten kopierte
+  Abnahme. Vollsuite und unabhängiges Review: tatsächliche Frames siehe unten.
+  Autoren: `opencode-go/deepseek-v4.1-flash#high` (Implementation/Fixes),
+  `openai/gpt-6.1-sol` (Orchestrierung, weitere Safety-Fixes, Verträge/Maps).
+  Explorer `opencode-go/deepseek-v4.1-flash#low`, Reviewer vorgesehen
+  `opencode-go/glm-5.3-flash#high`; beide ausgewählten Worker-Runtimes haben auf
+  echte Preflight-Dispatches geantwortet (keine unabhängige Serving-Attestation).
+  Katalog 2026-10-18: Ausgabe DeepSeek 0.60, GLM 0.50 USD/M Tokens, Routineband
+  0.833× des bepreisten Implementierungsautors; Sol-Katalog hat keine Preiswerte,
+  dafür wird kein Vergleich erfunden. Keine Ollama-/Providerfallback-Nutzung und
+  kein kostenpflichtiges automatisches GitHub-Review ungefragt aktiviert.
+  **Fortsetzung nach User-Pause:** Vor Mutation HEAD/Index/alle 274 Produktdateien
+  gegen Checkpoint-SHA-Inventar geprüft: keine fremden oder sonstigen Änderungen;
+  Main weiterhin `39229fe`, Index leer, eigene neue offizielle Lease erworben.
+  Niedrige GLM-Findings: Rollback-I/O-Recovery und untrusted Code-Spans behoben;
+  Projektstatus-Asymmetrie bewusst beibehalten (Projekt hat keinen Topic-Event-
+  Active-only-Routingvertrag; explizite Archiv-Entwürfe bleiben zulässig),
+  dokumentiert und charakterisiert. Historischer #8-Status ausdrücklich als
+  abgelöst markiert; ignorierte Cache-Dateien werden nicht committed.
+  Neue Findings-Regressionen: RED 3 Failures unter 7 Tests, danach 7/7 grün;
+  zusätzlich Bedarf-ja/nein statt missverständlicher Erledigt-Checkboxen:
+  RED 1 Failure, anschließend 1/1 grün. Keine Lockerung vorhandener Pins.
+  Die zwei neuen Reparse-Fixtures wurden auf kanonische Windows-Langpfade
+  korrigiert, Hit-Assertions bleiben erhalten; `mklink`-Ausgaben bleiben Bytes,
+  damit OEM-Encoding keine Hintergrund-Decoderfehler erzeugt.
+  Erster vollständiger Prüfsnapshot war **rot**, nicht abgenommen: fehlende
+  Shared-Memory-Schema-Verknüpfung, fehlender Git-Index und zwei verfehlte neue
+  Reparse-Injektionen. Der korrigierte Kontext besitzt SHA-identische Produkte,
+  separat kopierten identischen Quellindex (kein Re-Staging), read-only echte
+  Shared-Lock-/Shared-Memory-Junctions; keine Fehlerausnahme.
+  Zusätzlicher externer Shared-Skills-Katalogcheck: Exit 1 wegen fehlendem
+  `jev-integration/SKILL.md`, außerhalb dieses Repos/Änderungssatzes, nicht grün
+  gezählt und nicht verändert. Lokaler Projekt-Schema-Validator: Exit 0.
+  **Vollständiger Repo-Frame:** Vier isolierte `python -B -m unittest discover`
+  Prozesse mit `-s/-t skills/<desk>/tests -p "test_*.py"`: Cloud 182, Event 73,
+  Mail 1354, Projektkatalog 28; **1637 Tests, 1635 bestanden, 2 bekannte
+  Symlink-Privileg-Skips, 0 Failures/Errors, alle vier Exit 0**. Echte Junction-
+  und attributbasierte Reparse-Pins grün. Snapshot-Frame `oi14-gate-ebf4brrr`,
+  SHA-Inventar `5322c9bcfb81c616fe6eafe2abc6d74fc8aebd791052d91b8d66ee9817664d0a`,
+  274 identische Produktdateien, Quell-/Snapshot-Bytes und Quellindex unverändert;
+  Syntaxprüfung aller Python-Dateien ebenfalls grün. Vorframe `oi14-gate-idxcjmzk`
+  mit **identischem** Inventar hatte 1 unveränderten #10-OCR-Timing-Failure
+  (2.568 s bei Grenze 2.5 s); dieser Frame wurde rot gezählt, keine Ausnahme und
+  keine Änderung der Timing-Pins. Danach kompletter Vier-Suiten-Rerun grün.
+  Unabhängige GLM-Nachprüfung: alle fünf vorherigen Findings geschlossen oder
+  ausdrücklich akzeptiert adjudiziert, 0 offene actionable Findings; High Risk
+  bestätigt. WIP-Bezug: Basis `39229fe` plus tatsächlicher 22-Dateien-Diff.
+  Abschließende Commit-/Tree-Bindung und erneute Verifikation des committed
+  Stands werden im PR festgehalten, nicht als Agenten-Merge-Autorität ausgegeben.
+
 - GitHub [Issue #9](https://github.com/martinderm/office-intelligence/issues/9):
   Attachment-Basename Contract-Reconcile in isoliertem Worktree; Commit/Push am
   2026-10-16 ausdrücklich im Modus Full-Auto-Push freigegeben.

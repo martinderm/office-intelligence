@@ -20,7 +20,12 @@ unverändert. `work_order` enthält Event, Sources, Attachments, begrenzte
 Completeness und `source_snapshot_sha256`. `output_receipt` bindet den exakten
 Work-Order, dessen Source-Snapshot und jede Output-Datei samt Byte-Hash.
 Keine dieser Strukturen ist ein Quarantäne-Index oder eine neue Autorität;
-vollständiger Vertrag: `references/event-dossier.md` (Writer-Abhängigkeit #14).
+vollständiger Vertrag: `references/event-dossier.md`. Issue #14 ergänzt den
+realen Writer und Topic-Report-DTO: `owner_kind: "topic"`, `owner_id`,
+`subtopic_id`, Event-ID/Titel/ISO-Daten. Topic-Referenz bleibt subtopicgebunden,
+Topic-Evidence liegt ohne Subtopic-Segment unter `topics/<topic>/events/<event>`.
+Report verlangt weiterhin den vollständigen Rich-Snapshot, nicht das Basisprofil
+des Writers. Handoff bleibt ausschließlich projektgebunden.
 
 Der Quarantäneindex ist die zentrale Buchführung über alle isolierten Dateianhänge.
 

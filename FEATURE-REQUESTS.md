@@ -11,8 +11,11 @@ Vertrag und Runtime-Grenzen: `skills/cloud-atlas/SKILL.md` und L2-System-Map.
 
 Issue-Nachweis: [#8 — Event-Dossier-Fassade](https://github.com/martinderm/office-intelligence/issues/8),
 Vertrag `skills/mail-desk/references/event-dossier.md`;
-separate, vorab bestätigte Writer-Lücke
-[#14](https://github.com/martinderm/office-intelligence/issues/14).
+separater source-bound Writer
+[#14](https://github.com/martinderm/office-intelligence/issues/14): Projekt- und
+Topic/Subtopic-Entwürfe, normative Bootstrap-Ausnahme, begrenztes No-Clobber;
+Vertrag `skills/event-documentation/references/event-writer.md`.
+High Risk; unabhängiges Review und User-Merge-Gate, kein Agenten-Merge.
 Keine neuen FR-Record-Files.
 
 Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reconcile](https://github.com/martinderm/office-intelligence/issues/9).
