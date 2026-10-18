@@ -585,3 +585,5 @@ Workstatus und Run-Abnahme stehen im Issue/PR und dessen Run, nicht in Root-Ledg
 Historische FR-Nachweise: [`../../docs/features/CONTEXT.md`](../../docs/features/CONTEXT.md).
 Aktuelle Verträge: Fachreferenzen und System Map L2 (`docs/system-map`);
 historische Paketkarten und Ticket-IDs sind kein aktueller Backlog.
+
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; historische Ticket-IDs sind kein aktueller Backlog.
