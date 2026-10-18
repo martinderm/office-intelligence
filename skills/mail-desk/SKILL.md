@@ -141,9 +141,26 @@ Entwurf in den Drafts-Ordner legt.
   GroupWise-Konvention `Work In Progress`); ist nichts davon vorhanden, endet die
   Operation fail-loud, ohne hartkodierten Fallback. Ein explizites `--folder`
   überspringt die Auflösung.
-- **UTF-8:** Betreff, Empfänger und Body gehen als roher RFC-822-Literal
-  (SMTPUTF8) in das APPEND, ohne 7-bit-Downgrade; das Ergebnis trägt
-  `{envelope_id, folder, subject, to, date}`.
+- **UTF-8 über stdin:** Die Nachricht wird als roher RFC-822-Text (SMTPUTF8,
+  CRLF) gebaut und als exakte UTF-8-Bytes über die **binäre stdin-Pipe** an
+  `message save` übergeben — nie als argv-Literal. Himalaya 1.2.0 liest im
+  Nicht-TTY-/Nicht-JSON-Modus ausschließlich stdin (Rust `lines()` + CRLF-Join,
+  ohne finalen Zeilenabschluss) und ignoriert das rohe `MESSAGE`-Argument;
+  deshalb nutzt **jede** Draft-Größe stdin (Schwelle 0, kein Größen-Split), ein
+  argv-Pfad wäre still wirkungslos und würde bei großen Entwürfen zusätzlich am
+  Windows-Kommandozeilenlimit (`WinError 206`) scheitern. Ein expliziter
+  `-o plain`-Ausgabeformat-Wert verhindert, dass der JSON-Zweig stdin umgeht;
+  ein Transport-CRLF kompensiert die `lines()`-Normalisierung, sodass der
+  angehängte Entwurf byte-genau dem kanonischen Builder-Raw entspricht. Der
+  Payload wird strict als UTF-8 validiert, **bevor** Executable-/Config-Auflösung
+  und Subprozess starten (ungültige Bytes → begrenzter `ValueError` ohne
+  Payload-Inhalt; Himalaya würde sonst via `lines()` still abschneiden). Kein
+  7-bit-Downgrade; das Ergebnis trägt `{envelope_id, folder, subject, to, date}`.
+  Nur ein `HimalayaInvocationError` wird als `draft_save_failed` klassifiziert
+  (keine Verifikation, kein Journal-Eintrag, kein argv-Fallback, keine
+  Wiederholung `max_retries=1`); andere Fehler propagieren. `OSError` (Start
+  oder Kommunikation, Payload- und Nicht-Payload-Pfad) endet als
+  `himalaya_launch_failed` mit unbekanntem Ausgang, nicht wiederholt.
 - **Löschen ohne UID MOVE:** `\Deleted` wird direkt am Envelope gesetzt und die
   markierte Nachricht danach per `folder expunge` entfernt; ein `message delete`
   (das eine Nicht-Trash-Nachricht in den Trash-Ordner verschiebt) wird bewusst
@@ -349,7 +366,10 @@ separat auszuführenden `dossier_apply`-Request (`applied: false`); beide
 externen Approval-Gates sowie die bestehenden Batch-/Workspace-Lock-Prüfungen
 bleiben erhalten. Keine automatische Mailbox-, Cloud-, Task- oder Event-Mutation,
 keine Vollständigkeits- oder Content-Approval-Behauptung. Die externe
-Event-Writer-Implementierung fehlt noch (GitHub #14).
+Event-Writer-Implementierung liegt separat bei `event-documentation`:
+quellengebundene ungeprüfte Entwürfe für Projekt- und Topic/Subtopic-Events,
+ohne Content-Freigabe. Diese Fassade startet den Writer nicht; ihr read-only
+Report kann beide Owner-Arten verifizieren, der Handoff bleibt projektgebunden.
 Request-/Receipt-Verträge, Bounds und Beispiele:
 [`references/event-dossier.md`](references/event-dossier.md).
 

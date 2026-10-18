@@ -5,6 +5,10 @@
 > **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand Issue #20 (Review-Fixes Runde 2), 2026-10-18: 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 241 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
+Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
+PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
+Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz.
+
 ---
 
 ## 1. Systemübersicht

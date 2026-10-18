@@ -137,8 +137,15 @@ class TargetSaveDraftTests(unittest.TestCase):
         save_call = save_calls[0]
         folder_index = save_call.index("-f")
         self.assertEqual("Drafts", save_call[folder_index + 1], "saved into the resolved Drafts folder")
+        self.assertIn("-o", save_call, "an explicit plain output format must keep stdin in charge")
+        self.assertEqual("plain", save_call[save_call.index("-o") + 1])
 
-        raw = save_call[-1]
+        # The raw RFC-822 message travels only through the binary stdin pipe.
+        self.assertEqual(1, len(runner.saved_stdin))
+        raw = runner.saved_raw[0]
+        for token in save_call:
+            self.assertNotIn(raw, token)
+            self.assertNotIn(UTF8_BODY, token)
         parsed = email.message_from_string(raw, policy=email.policy.SMTPUTF8)
         self.assertEqual(UTF8_SUBJECT, parsed["Subject"])
         self.assertEqual(UTF8_TO, parsed["To"])
@@ -267,6 +274,8 @@ class _DeleteStepJournalProbe(DraftRunner):
         account: str | None = None,
         timeout: int = 35,
         max_retries: int = 5,
+        *,
+        stdin_bytes: bytes | None = None,
         **kwargs: Any,
     ) -> str:
         if (
@@ -278,7 +287,12 @@ class _DeleteStepJournalProbe(DraftRunner):
                 self.journal_path.read_text(encoding="utf-8") if self.journal_path.exists() else ""
             )
         return super().__call__(
-            args, account=account, timeout=timeout, max_retries=max_retries, **kwargs
+            args,
+            account=account,
+            timeout=timeout,
+            max_retries=max_retries,
+            stdin_bytes=stdin_bytes,
+            **kwargs,
         )
 
 

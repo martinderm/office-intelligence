@@ -11,8 +11,11 @@ Vertrag und Runtime-Grenzen: `skills/cloud-atlas/SKILL.md` und L2-System-Map.
 
 Issue-Nachweis: [#8 — Event-Dossier-Fassade](https://github.com/martinderm/office-intelligence/issues/8),
 Vertrag `skills/mail-desk/references/event-dossier.md`;
-separate, vorab bestätigte Writer-Lücke
-[#14](https://github.com/martinderm/office-intelligence/issues/14).
+separater source-bound Writer
+[#14](https://github.com/martinderm/office-intelligence/issues/14): Projekt- und
+Topic/Subtopic-Entwürfe, normative Bootstrap-Ausnahme, begrenztes No-Clobber;
+Vertrag `skills/event-documentation/references/event-writer.md`.
+High Risk; unabhängiges Review und User-Merge-Gate, kein Agenten-Merge.
 Keine neuen FR-Record-Files.
 
 Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reconcile](https://github.com/martinderm/office-intelligence/issues/9).
@@ -30,6 +33,22 @@ kanonischen Mirror-Frontmatters, als **reserviertes generated Feld** gegen
 Curation-Forging geschützt und nur bei unverändertem Quell-Hash weitergereicht).
 Finale Cloud-Atlas-Suite: 241 Tests / 134 Subtests bestanden, 0 Skips; unabhängiges
 GLM-Go-Re-Review ohne blockierende Findings. Übergabe für PR-Prüfung, kein Merge.
+Diese Abnahme ist der historische PDF-Frame vor Integration von #14/#11.
+PR #23 integriert danach Main `920ac3a`; neue Gesamtprüfung und Merge-Gates
+werden separat am integrierten Head gebunden, nicht aus alten Freigaben geerbt.
+
+Issue-Nachweis (kein neuer FR-Record): [#11 — Draft-APPEND über die binäre
+stdin-Pipe](https://github.com/martinderm/office-intelligence/issues/11).
+Vertrag: `run_himalaya(..., stdin_bytes=...)` (keyword-only, binär, strict
+UTF-8 **vor** Executable-/Config-Auflösung, `-o plain`, kein APPEND-Retry,
+`himalaya_launch_failed` für Start/Kommunikation auf beiden Pfaden) und
+`save_draft` (Schwelle 0, Transport-CRLF, nur `HimalayaInvocationError` →
+`draft_save_failed`); Runtime-Grenzen in der Mail-Desk L2-System-Map §33.
+Reconcile mit menschlich gemergtem #14/PR #24 am 2026-10-18: Writer und
+separater L2-§32 bleiben unverändert; neue Abnahme erfolgt auf aktuellem Main.
+Abgrenzung: #18 (Attachment-/Quarantäne-Folgearbeiten) und #19
+(GroupWise-Abhängigkeitsanalyse) bleiben offen und werden von #11 nicht
+implementiert.
 
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in

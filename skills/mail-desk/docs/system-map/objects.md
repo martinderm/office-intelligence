@@ -20,7 +20,12 @@ unverändert. `work_order` enthält Event, Sources, Attachments, begrenzte
 Completeness und `source_snapshot_sha256`. `output_receipt` bindet den exakten
 Work-Order, dessen Source-Snapshot und jede Output-Datei samt Byte-Hash.
 Keine dieser Strukturen ist ein Quarantäne-Index oder eine neue Autorität;
-vollständiger Vertrag: `references/event-dossier.md` (Writer-Abhängigkeit #14).
+vollständiger Vertrag: `references/event-dossier.md`. Issue #14 ergänzt den
+realen Writer und Topic-Report-DTO: `owner_kind: "topic"`, `owner_id`,
+`subtopic_id`, Event-ID/Titel/ISO-Daten. Topic-Referenz bleibt subtopicgebunden,
+Topic-Evidence liegt ohne Subtopic-Segment unter `topics/<topic>/events/<event>`.
+Report verlangt weiterhin den vollständigen Rich-Snapshot, nicht das Basisprofil
+des Writers. Handoff bleibt ausschließlich projektgebunden.
 
 Der Quarantäneindex ist die zentrale Buchführung über alle isolierten Dateianhänge.
 
@@ -271,6 +276,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **Draft-Envelope & Draft-Journal (Client, ungesendet)** ([`scripts/core/drafts.py`](../scripts/core/drafts.py)):
   * Das **Draft-Envelope** ist `{envelope_id, folder, subject, to, date, message_id}` und damit analog zu `get_single_email_details` aufgebaut. Es ist **kein** `DraftManifest`: der `DraftManifest`-Review-Vertrag oben gehört zum Batch-`draft`-Lauf, das Draft-Envelope zur einzelnen, ungesendeten Client-Operation ohne Approval-Gate.
   * `DraftError`/`DraftsFolderUnresolvedError`/`DraftJournalCorruptedError` tragen begrenzte `reason_code`s (`drafts_folder_unresolved`, `draft_verification_failed`, `draft_journal_corrupted`); `REPLACE_CRASH_WINDOW` dokumentiert das Crash-Fenster der Replace-Reihenfolge, `DRAFT_JOURNAL_FILENAME` benennt das getrennte Journal (§5.4).
+  * **Draft-APPEND-Transport (Issue #11):** Die kanonische SMTPUTF8-Nachricht (CRLF, finales CRLF) geht als exakte UTF-8-Bytes über den keyword-only Seam `run_himalaya(..., stdin_bytes=...)` in die **binäre stdin-Pipe** von `message save -o plain -f <folder>`; **jede** Größe nutzt stdin (Schwelle 0, kein Größen-Split, kein argv-Rohliteral). Der Puffer wird strict als UTF-8 validiert, **bevor** Executable-/Config-Auflösung und Subprozess laufen (ungültige Bytes → begrenzter `ValueError` ohne Payload; Himalaya 1.2.0 würde sonst via `lines().map_while(Result::ok)` still abschneiden). Ein Transport-CRLF kompensiert Himalaya 1.2.0s `lines()`/CRLF-Join; `-o plain` verhindert den JSON-Bypass; Payload-Kommandos laufen genau einmal. `save_draft` übersetzt nur `HimalayaInvocationError` in `DRAFT_SAVE_FAILED_REASON = "draft_save_failed"` (Reason im `__cause__`, weder Verifikation noch Journal-Eintrag); andere Fehler propagieren. `OSError` (Start oder Kommunikation, Payload- **und** Nicht-Payload-Pfad) → `himalaya_launch_failed` mit unbekanntem Ausgang/nicht wiederholt, `BrokenPipeError` → `himalaya_stdin_failed`.
 * **Begrenzter Decision-Output & Runner-Envelope-Contracts (OUT-P1, 2026-10-16, Issues #5/#6):**
   * `decision.suppressed_candidates` ist eine **Ausgabebegrenzung**: höchstens `core.classifier.MAX_SUPPRESSED_CANDIDATES_OUT` (3) Katalogdaten-Zeilen (`kind`, `id`, `suppression_reason`) plus `decision.suppressed_count` (Gesamtzahl). Die interne DNR-/Newsletter-Auswertung konsumiert weiterhin die vollständige Liste; kein Downstream-Leser benötigt sie. Feldspiegel: [`references/folder-rules.md`](../references/folder-rules.md).
   * **PartialFailure-Envelope** ([`scripts/mail_desk_batch_runner.py`](../scripts/mail_desk_batch_runner.py), `_result_envelope`): `data.results` trägt nur die fehlgeschlagenen Items; die erfolgreichen erscheinen als `data.succeeded_count` + `data.succeeded_envelope_ids` (IDs genügen). Das Recovery-Journal bleibt die vollständige Quelle. `data.execute_summary` und der Success-Envelope bleiben unverändert.

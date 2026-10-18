@@ -33,8 +33,12 @@
 5. `report`: Work-Order-/Source-Snapshot-Bindung und vollständige Output-Hashliste
    gegen echte lokale Dateien prüfen. Keine Content-Freigabe.
 
-Der externe Event-Writer fehlt (GitHub #14); die Writer-Grenze ist synthetisch
-getestet. Vollständige DTOs und Bounds: `references/event-dossier.md`.
+Der separate Event-Writer (GitHub #14) schreibt ausschließlich lokale ungeprüfte
+Entwürfe. `test_event_dossier_writer_integration.py` prüft echte Handoff→Writer→
+Report-Komposition und Topic-Writer→Report; nur das vorgelagerte operative Apply
+bleibt synthetisch. Keine Live-Mailbox-E2E-Behauptung und kein Topic-Handoff.
+Die historischen synthetischen Boundary-Pins bleiben unverändert erhalten.
+Vollständige DTOs und Bounds: `references/event-dossier.md`.
 
 ```
 [Mailbox / Himalaya]
@@ -333,6 +337,7 @@ Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
    - Fügt Account-Parameter `-a <account>` an vordefinierter Position ein.
 3. **Ausführung mit Timeout:**
    - Führt den Subprozess aus; bei Überschreiten des Timeouts erfolgt sofortiger harter Abbruch ohne Retries (`himalaya_timeout`).
+   - **Optionaler binärer Payload-Seam (Issue #11):** `run_himalaya(..., stdin_bytes=<bytes>)` validiert den Puffer strict als UTF-8 **vor** Executable-/Config-Auflösung und Subprozess (ungültige Bytes → begrenzter `ValueError` ohne Payload-Inhalt; sonst würde Himalaya 1.2.0 an `lines().map_while(Result::ok)` still abschneiden), verlangt bei gesetztem Payload genau ein explizites `-o plain` (sonst `ValueError`), schreibt exakte Bytes in die stdin-Pipe (`subprocess.run(input=...)`, kein `text=True`, keine Newline-Transformation) und führt Payload-Kommandos genau einmal aus (kein APPEND-Retry). `OSError` (Start **oder** Kommunikation) wird auf **beiden** Pfaden als `himalaya_launch_failed` klassifiziert — Wortlaut „outcome may be unknown, not retried" —, `BrokenPipeError` als `himalaya_stdin_failed`, jeweils ohne Payload-Leak. Ohne Payload bleiben `stdin=DEVNULL`, `text=True` sowie Timeout-/Retry-Defaults unverändert.
 
 ### 6.1 Ungesendete Draft-Operationen (Client, ohne Approval-Gate)
 
@@ -349,9 +354,17 @@ bleibt unberührt.
      `Work In Progress`. Ist nichts davon vorhanden, bricht die Operation begrenzt ab;
      es gibt keinen hartkodierten Ordnernamen als stillen Fallback. Ein explizites
      `-f/--folder` überspringt die Auflösung vollständig.
-2. **Entwurf anlegen (`save_draft`):** `build_draft_message` erzeugt den rohen
-   RFC-822-Literal (SMTPUTF8, keine RFC-2047-Kodierung, Body als UTF-8), der als ein
-   Argument an `message save -f <folder> <raw>` geht (IMAP APPEND). Danach wird der
+2. **Entwurf anlegen (`save_draft`, Issue #11):** `build_draft_message` erzeugt den
+   rohen RFC-822-Text (SMTPUTF8, CRLF, keine RFC-2047-Kodierung, Body als UTF-8).
+   Seine exakten UTF-8-Bytes gehen über die **binäre stdin-Pipe** von
+   `message save -o plain -f <folder>` (IMAP APPEND) — nie als argv-Literal, weil
+   Himalaya 1.2.0 im Nicht-TTY-/Nicht-JSON-Modus nur stdin liest (`lines()` +
+   CRLF-Join, finaler Zeilenabschluss entfällt) und ein großes argv-Argument
+   zusätzlich am Windows-Limit (`WinError 206`) scheitert. *Jede* Größe nutzt
+   stdin (Schwelle 0, kein Größen-Split); ein Transport-CRLF kompensiert die
+   `lines()`-Normalisierung, `-o plain` verhindert den JSON-Bypass. Ein
+   APPEND-Fehler endet klassifiziert (`draft_save_failed`) ohne Verifikation,
+   ohne Journal-Eintrag, ohne argv-Fallback und ohne Wiederholung. Danach wird der
    neue Entwurf über den kanonischen `verify_in_target_folder`-Seam wiedergefunden;
    scheitert das, endet der Lauf als `draft_verification_failed` statt als
    scheinbarer Erfolg. Ergebnis: `{envelope_id, folder, subject, to, date}`.

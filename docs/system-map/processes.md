@@ -55,8 +55,17 @@ Nur vollständige, quellenidentische Execute-/Verify-Ergebnisse erlauben den
 `event-documentation`-Work-Order (`pending_content_review`). `report` prüft
 Source-/Work-Order-/Output-Hashes und alle receiptierten Dateien im exakten
 Projekt-/Event-Scope; nie Content-Approval oder Vollständigkeit behaupten.
-Der externe Event-Writer fehlt weiterhin (GitHub #14); keine E2E-Writer-
-Funktionalität wird hier behauptet. Vertrag:
+Der separate Event-Writer (GitHub #14) führt nach vollständigem Katalog-/Source-/
+Lock-/Pfad-/Konflikt-Preflight lokale No-Clobber-Writes aus. Projekte und
+Topic/Subtopic-Events sind unterstützt. **Normative Bootstrap-Ausnahme:** Ein
+gültig katalogisiertes Topic-Event darf sein fehlendes `index.md` erstmals als
+ausdrücklich ungeprüften mailbasierten Entwurf erhalten; vorhandene menschliche
+Dossiers werden nie überschrieben, Matcher-Anforderungen bleiben unverändert.
+Vollständiger gleicher Dateisatz → unveränderte Wiederholung; Teilbestand oder
+Staging-Reste → Stop, keine automatische Recovery. Echte lokale Integration:
+Fassaden-Handoff → Writer → Report (operatives Mailbox-Apply davor synthetisch);
+Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
+[Writer](../../skills/event-documentation/references/event-writer.md) und
 [`event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
 
 1. **Intake (`meeting-desk` bzw. `event-documentation`):**

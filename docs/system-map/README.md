@@ -28,7 +28,7 @@
        ▼                      ▼                      ▼
 ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
 │  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (176 Dateien)│       │ (L2-Metrik)  │       │ - project-catalog-entry  │
+│ (L2-Metrik)  │       │ (L2-Metrik)  │       │ - project-catalog-entry  │
 │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
 │              │       │              │       │ - task-desk              │
 │              │       │              │       │ - meeting-desk           │
@@ -46,6 +46,10 @@
 
 Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-Overload ist die System Map föderiert:
 
+PR #23 integriert den PDF-Stand mit Main `920ac3a` (#14 und #11). Die
+deskbezogenen historischen Metriken bleiben Snapshots; die frische vollständige
+Vier-Suiten-Abnahme wird im zugehörigen Run und Feature-Ledger referenziert.
+
 | Sub-Skill | Komplexitäts-Klasse | Dateien / Tests | Dokumentationspfad | Primäre Aufgabe |
 | :--- | :--- | :--- | :--- | :--- |
 | [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | Kurzstatus: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) · aktuelle Metrik: [§3](#3-navigationsmatrix-der-paket-map) | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, Quarantäne, Receipts, Draft-/Evaluierungs-Pipeline, Classifier-Routing, Himalaya-Adapter, Dossier-Synthese — Detailstatus je FR-Paket: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) |
@@ -54,7 +58,7 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
 | [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 2 Dateien | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung. |
 | [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Evidenz-Überführung einzelner Meetings (Fireflies, Zoom). |
-| [`event-documentation`](../../skills/event-documentation/SKILL.md) | Schlank (Paket-Map) | 9 Dateien | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Umfassende Dokumentation von Konferenzen und Symposien. |
+| [`event-documentation`](../../skills/event-documentation/SKILL.md) | Kompakt (Paket-Map) | 8 Dateien (Issue #14, 2026-10-18, `git ls-files --cached --others --exclude-standard`) | [`processes.md`](processes.md#3-meeting--event-intake-workflow) | Source-bound ungeprüfte Event-Entwürfe für Projekte und katalogisierte Topic/Subtopic-Events; Writer-Vertrag in `references/event-writer.md`. |
 
 
 #### 2.1 Mail-Desk – Verantwortlichkeits-Detail (Status je FR-Paket)
@@ -62,7 +66,10 @@ Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-O
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert
 nur den vorhandenen `dossier_apply`-Request, Handoff verlangt vollständige
 quellengebundene Apply-/Verify-Ergebnisse. Report verifiziert Source-/Output-
-Receipts ohne Inhaltsfreigabe. Externer Event-Writer separat offen (#14).
+Receipts ohne Inhaltsfreigabe. **Issue #14:** separater `event-documentation`-
+Writer für ungeprüfte mailbasierte Entwürfe, Topic-Bootstrap nach Katalogisierung,
+No-Clobber und begrenzte fail-closed Recovery; Report unterstützt beide Owner.
+Handoff bleibt projektgebunden, Matcher unverändert. High Risk: User-Merge-Gate.
 Details und aktuelle Messwerte: L2-Kopfzeile sowie
 [`references/event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
 
@@ -129,6 +136,21 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    erhalten (keine Sanitization-Launderung) und werden im Fetch vor I/O
    erneut fail-closed validiert (`FilenameDriftError` bei Drift). Leserichtung
    je Pin-Gruppe dokumentiert in L2-Map §30.
+ - **Draft-APPEND über die binäre stdin-Pipe (Issue #11):** `run_himalaya`
+   erhält den keyword-only Seam `stdin_bytes`; der Payload wird strict als
+   UTF-8 validiert (`ValueError` ohne Payload-Inhalt, bevor Executable-/Config-
+   Auflösung und Subprozess laufen — upstream würde ungültige Bytes still
+   abschneiden), dann geht jeder Draft als exakte UTF-8-Bytes über stdin
+   (`message save -o plain`, Schwelle 0, kein Größen-Split, kein
+   argv-Rohliteral), weil Himalaya 1.2.0 im Nicht-TTY-/Nicht-JSON-Modus nur
+   stdin liest (`lines()` mit CRLF-Join); ein großes argv-Argument scheitert
+   zusätzlich an `WinError 206`. Ein Transport-CRLF kompensiert die
+   Normalisierung, `-o plain` verhindert den JSON-Bypass; `save_draft` fängt nur
+   `HimalayaInvocationError` und klassifiziert ihn als `draft_save_failed` ohne
+   Verifikation/Journal/Fallback/Retry, andere Fehler propagieren. `OSError`
+   (Start oder Kommunikation, Payload- und Nicht-Payload-Pfad) →
+   `himalaya_launch_failed` mit unbekanntem Ausgang/nicht wiederholt. Detail:
+   L2-Map §33.
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---

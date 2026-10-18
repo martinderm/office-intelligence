@@ -23,11 +23,14 @@ Für jedes größere Event (z. B. Jahrestagung, Konferenz, mehrtägiges Seminar)
 ```
 memory/
 ├── references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/
-│   └── index.md                # Die offizielle Event-Übersicht (Programm, Keynotes, Links)
+│   └── index.md                # Geprüfte Übersicht ODER ausdrücklich ungeprüfter Entwurf
 │
 └── evidence/topics/<topic>/events/<event-slug>/
     ├── YYYY-MM.md              # Quellengebundene Mail- und Veranstaltungs-Evidence
     ├── action-items.md         # Triage-Liste offener Aufgaben vor Todoist
+    ├── source-log.json         # Writer: gebundene Quellen und begrenzte Completeness
+    ├── attachment-inventory.json # Writer: MIME-Provenienz, keine Anhangsdownloads
+    ├── compliance-report.json  # Writer: Integrität, ausdrücklich keine Content-Freigabe
     ├── recordings/             # Lokale Meeting-Zusammenfassungen & Transkripte (*.summary.md)
     └── notes/                  # Manuelle Notizen, Mitschriften & Beobachtungen
 ```
@@ -35,6 +38,14 @@ memory/
 ---
 
 ## `index.md` (Template — Säule 1)
+
+Die folgende normative Vorlage ist das **fachlich geprüfte Zielbild**, nicht das
+Ausgabeformat des mailbasierten Writers. Dessen `index.md` trägt ausdrücklich
+`evidence_level: unreviewed-draft`, `review_state: unreviewed`, `status: draft`
+und den sichtbaren Hinweis `MAILBASED UNGEPRUEFTER ENTWURF`. Der Writer vergibt
+keine fachliche Freigabe und setzt keine katalogisierte Event-Phase um.
+Beobachtete Entscheidungen stehen als ungeprüfte Meldungen in `action-items.md`,
+der Index verlinkt nur relativ dorthin. Vertrag: [event-writer.md](event-writer.md).
 
 ```md
 ---
@@ -131,7 +142,7 @@ Aus den Sitzungen extrahierte Aufgaben und To-Dos. Nach Durchsicht und Triage we
 ---
 
 ## Pfad- und Linkregeln
-1. **Katalog zuerst:** Ein Topic-Event wird vor jeder Ordneranlage als strukturell valider `subtopics[].events[]`-Eintrag erfasst: slug, Titel, ISO-Start/optional Ende und kanonisches Dossier. Cloud-Speicher ist keine Voraussetzung. Ein nichtkanonisches oder fehlendes Dossier bleibt Review.
+1. **Katalog zuerst:** Ein Topic-Event wird vor jeder Ordneranlage als strukturell valider `subtopics[].events[]`-Eintrag erfasst: slug, Titel, ISO-Start/optional Ende und kanonisches Dossier. Cloud-Speicher ist keine Voraussetzung. **Bootstrap-Ausnahme:** Der Writer darf nach gültiger Katalogisierung ein fehlendes kanonisches Dossier erstmals als ausdrücklich ungeprüften Entwurf initialisieren. Das lockert keine Matcher-Prüfung; nichtkanonische oder weiterhin fehlende Dossiers bleiben Review. Bestehende menschliche Dossiers niemals überschreiben.
 2. **Workspace-Links:** Innerhalb des Workspace immer **relative** Pfade verwenden. Vom Topic-/Subtopic-Event-`index.md` führt ein Link zu `memory/evidence/topics/<topic>/events/<event-slug>/recordings/...` über `../../../../../../../evidence/topics/<topic>/events/<event-slug>/recordings/...`; vom Projekt-Event-`index.md` über `../../../../../evidence/projects/<project>/events/<event-slug>/recordings/...`. Bei anderen Quell- oder Zielpfaden den relativen Link aus den tatsächlichen Workspace-Pfaden ableiten, nicht eines dieser Beispiele übernehmen.
 3. **Cloud-Atlas-Routing:** Ein Event besitzt kein `cloud_sync`. Cloud-Assets verwenden geeignete Konfigurationen des Projekts beziehungsweise des Parent-Topics/Subtopics: kein Kandidat bedeutet keine Cloud-Verarbeitung, ein Kandidat wird geerbt, mehrere Kandidaten erfordern einen expliziten Selektor. `cloud_storage.scope: topic` löst eine ID nur im Parent-`cloud_sync` auf, `scope: subtopic` nur im Subtopic-`cloud_sync`; es gibt keinen Fallback. `scan_dir`, `output_dir` und die Filemap-Ausgaben daraus auflösen; alle müssen workspace-relativ sein. Keine neuen Mounts, absoluten Benutzerpfade oder unkonfigurierten Legacy-Ablagen.
 4. **Cloud-Atlas-Links:** Falls Cloud-Assets existieren, werden Originale aus dem aufgelösten `scan_dir`, Markdown-Mirrors aus dem aufgelösten `output_dir` und Filemap-Verweise aus `output_json`/`output_md` relativ zum Event-Ordner verlinkt. Optionale `cloud_storage_scope`-, `cloud_storage_id`- und `cloud_filemap`-Metadaten müssen zur geerbten Konfiguration passen.

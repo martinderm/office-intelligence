@@ -5,6 +5,20 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- **PR #23 / Issue #20 — Reconcile nach #14 und #11, 2026-10-18:** Explizite
+  Single-Writer-Übergabe; aktuelles Main `920ac3a` (menschlicher Writer-Merge
+  `7a7d3f7`, danach Draft-Transport-Squash). Reguläre Integration ohne Rebase,
+  Force oder `ours/theirs`; die zwei Ledger-Konflikte werden durch Erhalt aller
+  #20-/#11-/#14-Einträge aufgelöst. Eventwriter, Draft-Transport und deren
+  Verträge/Tests bleiben bytegleich zu Main; Cloud-Atlas-Code bleibt bytegleich
+  zum geprüften PDF-Fix-Stand `d6dd355`. Historische Messwerte unten sind
+  Snapshots, keine Abnahme des integrierten Heads. Neue Vier-Suiten-Ergebnisse,
+  Counter-Quellen und eine neue Head-/Tree-gebundene Review-/Attestationsprüfung
+  werden im eigenen Run und im PR nachgewiesen. Bedingter Remote-Squash-Merge
+  ist nur bei vollständig belegten low/medium-Gates autorisiert; keine Waiver
+  für unbekannte Autorenherkunft oder fehlende Modellunabhängigkeit. Keine
+  neue Arbeit an #16/#18/#19 und keine Superprojekt-Pointeränderung.
+
 - GitHub [Issue #20](https://github.com/martinderm/office-intelligence/issues/20):
   PDF-AcroForm-Erweiterung abgesichert, Review-Findings der isolierten
   Feature-Erweiterung (Branch `feat/cloud-atlas-pdf-form-fields`, Commit
@@ -99,6 +113,179 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
    bleibt unbekannt; **keine governance-konforme Merge-Freigabe behauptet**.
    Technisches Übergaberisiko konservativ mittel; kein Merge-Auftrag und keine
    Live-Konvertierung, Installation oder automatische Mirror-Nachrüstung.
+
+- GitHub [Issue #11](https://github.com/martinderm/office-intelligence/issues/11):
+  **Reconcile 2026-10-18:** PR #24 wurde vom Menschen als `7a7d3f7`
+  gemergt und regulär in diesen Lane-Branch integriert. Die drei echten
+  Dokumentkonflikte wurden einzeln aufgelöst: beide Issue-Einträge erhalten,
+  #14 behält L2-§32, #11 erhält §33, historische Messwerte bleiben Snapshots.
+  Neu gemessen: 178 Mail-Desk-Dateien, 74 Scripts, 59 Core-Dateien,
+  85 Testmodule. Keine Änderung am menschlich abgenommenen Writer oder seinen
+  Tests/Verträgen; keine Scope-Ausweitung auf #18/#19 oder PDF #23.
+  Frühere Reviews sind durch neuen Head/Base ungültig; frische Vier-Suiten-
+  Abnahme und unabhängige Merge-Freigabe werden im PR/Run belegt.
+  Draft-APPEND transportiert den rohen RFC-822-Entwurf über die **binäre
+  stdin-Pipe** statt als argv-Literal. Quelle (public, gepinnt): Himalaya
+  `v1.2.0` Rev `1b70c4e0eaa72dee48353f0211e6cc0f0776fe98`,
+  `src/email/message/command/save.rs` — Nicht-TTY und nicht JSON ⇒ stdin
+  `lines()` + CRLF-Join, finaler Zeilenabschluss entfällt; argv-`MESSAGE`
+  wird ignoriert. Deshalb **Schwelle 0, kein Größen-Split**: jeder Entwurf
+  nutzt stdin; ein argv-Pfad wäre still wirkungslos und würde große Entwürfe
+  zusätzlich am Windows-Limit (`WinError 206`, 40 000-Zeichen-Repro des
+  Orchestrators) scheitern lassen. Implementierung: `run_himalaya` erhält den
+  keyword-only Seam `stdin_bytes` (Bytes-validiert, nicht leer, strict UTF-8
+  **vor** Executable-/Config-Auflösung und Subprozess, verlangt genau
+  `-o plain`, binäres `subprocess.run(input=...)` ohne `text=True`, kein
+  Payload-Retry, `himalaya_launch_failed`/`himalaya_stdin_failed` ohne
+  Payload-Leak), `save_draft` kodiert die kanonische SMTPUTF8-Nachricht UTF-8
+  und hängt ein Transport-CRLF an (kompensiert `lines()`/Join) und
+  klassifiziert ausschließlich `HimalayaInvocationError` als `draft_save_failed`
+  (Reason im `__cause__`) mit `max_retries=1`, ohne
+  Verifikation/Journal/argv-Fallback; andere Fehler propagieren.
+  Vorab RED (echte Tests zuerst, nur `resolve_himalaya_invocation` +
+  `subprocess.run` als Systemgrenzen gefakt): `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport
+  skills.mail-desk.tests.test_drafts_api` → 36 Tests, **13 Failures + 11
+  Errors, Exit 1**. GREEN nach Implementierung: dieselbe Auswahl **36 Tests,
+  alle grün, Exit 0**; zusätzlich `test_himalaya_client_deadlines` +
+  `test_maildesk_h6_himalaya_bootstrap` **31/31 grün** (Nicht-Payload-Pfad und
+  veröffentlichte Defaults `timeout=35`/`max_retries=5` unverändert) und
+  `compileall` Exit 0. Neue Datei `tests/test_draft_transport.py` (17 Tests,
+  kurze/8192-Byte-/>40 k-Unicode-Entwürfe ohne rohes argv-Token, exakte
+  UTF-8-Pipe-Bytes, realer synthetischer Python-Pipe-Roundtrip, Normalisierung
+  inkl. Leerzeilen, `-o plain`/`-a`/`-f`, kein JSON-Bypass, Fail-loud ohne
+  Retry). Adaptiert (nicht abgeschwächt): `tests/himalaya_fixtures.py`
+  modelliert die Upstream-Normalisierung und liest den Entwurf aus stdin;
+  `tests/test_drafts_api.py` parst den Fixture-Raw statt des letzten
+  argv-Tokens. Doku/Map synchron: `SKILL.md`, `references/cli-operations.md`,
+  `references/backends/himalaya.md`, L2-Map (`README.md` §33, §2, §6;
+  `processes.md` §6/§6.1; `objects.md` §5.4/§6), L1-Map (§2.1, Diagramm/Metrik
+  historischer #11-Frame: 177 Dateien / 84 Testmodule). **Nicht Teil von #11:**
+  [#18](https://github.com/martinderm/office-intelligence/issues/18)
+  (Attachment-/Quarantäne-Folgearbeiten) und
+  [#19](https://github.com/martinderm/office-intelligence/issues/19)
+  (GroupWise-Abhängigkeitsanalyse) sind nur benannt, explizit nicht gelöst und
+  ohne Implementierung. Kein neuer FR-Record (Issues statt Records).
+  Caveat: `build_draft_message` liefert weiterhin `str` (CRLF); die
+  Body-Transfer-Encoding wählt die SMTPUTF8-Policy (Inhalt bleibt verlustfrei).
+  Seam-Abgrenzung: verifiziert sind die Prozess-Bytes (echter
+  `subprocess.run(input=...)` plus synthetischer Pipe-Roundtrip) und der
+  kanonische Builder-Raw; der reale Himalaya-Backend-APPEND wurde nicht gegen
+  eine Live-Mailbox ausgeführt (keine Live-Mailkommandos).
+
+  **Fix-Runde 2026-10-17 (Review `opencode-go/glm-5.3-flash#high`, keine
+  Majors/Blocker; Adjudikation, 4 Findings):**
+  1. **Angenommen (OSError-Wortlaut):** `himalaya_launch_failed` behauptet nicht
+     mehr „no mailbox command ran", sondern „launch **or** communication
+     failed; outcome may be unknown, not retried". Die Klassifikation gilt
+     ausdrücklich für den Payload- **und** den Nicht-Payload-Pfad; ohne Payload
+     bleiben `DEVNULL`, `text=True` und die Retry-/Timeout-Defaults unverändert.
+     Neuer Pin `test_non_payload_oserror_is_classified_as_unknown_launch` plus
+     erweiterte Wortlaut-Pins am Payload-OSError-Test.
+  2. **Angenommen (Fehlertaxonomie):** `save_draft` fängt nur noch
+     `himalaya.HimalayaInvocationError`; ein Programmier-`ValueError` propagiert
+     unverändert (`test_programming_value_error_is_not_reclassified`), erwartete
+     Laufzeitfehler bleiben `draft_save_failed` mit Reason im `__cause__`
+     (`test_expected_invocation_error_is_classified`). `except Exception` ist
+     entfernt.
+  3. **Abgelehnt (Reviewer-Behauptung):** Der Reviewer hielt den literal
+     ausgeführten Befehl `python -B -m unittest
+     skills.mail-desk.tests.test_draft_transport
+     skills.mail-desk.tests.test_drafts_api` wegen der Bindestriche für ungültig.
+     Der Orchestrator hat exakt dieses Literal erfolgreich ausgeführt
+     (36/36, Exit 0); die dynamischen Importe von `unittest` akzeptieren
+     Bindestriche. Das Literal bleibt unverändert korrekt.
+  4. **Angenommen (UTF-8-Trunkierung):** Der Payload wird jetzt strict als UTF-8
+     validiert, **bevor** Executable-/Config-Auflösung und Subprozess laufen;
+     ungültige Bytes ergeben einen begrenzten `ValueError` ohne Payload-Inhalt
+     (`test_invalid_utf8_payload_is_rejected_before_any_resolution_or_execution`,
+     `build_himalaya_command` nachweislich nicht aufgerufen).
+
+  Fix-Runden-Evidenz (literal, sequenziell): RED `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport` → **17 Tests, 3 Failures + 1
+  Error, Exit 1**; GREEN `python -B -m unittest
+  skills.mail-desk.tests.test_draft_transport
+  skills.mail-desk.tests.test_drafts_api` → **40/40 OK, Exit 0**. Fix-Runde
+  bleibt in denselben 14 kumulativen Dateien (keine neue Datei).
+
+  Finale Orchestrator-Abnahme (2026-10-17): Mail-Desk-Vollsuite **1367 Tests,
+  1366 bestanden, 1 bekannter Plattform-Skip, Exit 0** (171,412 s).
+  Aufruf: `python -B -m unittest discover -s <lane>/skills/mail-desk/tests
+  -p 'test_*.py'`, CWD = tatsächlich ermittelter Shared-Skills-Root;
+  `<lane>` bezeichnet ausschließlich diesen isolierten #11-Worktree.
+  Grund: Der erste Lauf aus dem Worktree-CWD scheiterte an der bestehenden
+  Parent-/CWD-Suche nach dem kanonischen `workspace-lock`-Guard (1367 Tests,
+  2 Failures/134 Errors, Exit 1). Der zweite Lauf löst denselben gemeinsamen
+  Guard in place auf; kein Shim, keine Kopie und keine Produktionsänderung
+  zur Umgehung. Rohlogs im externen Harness-Scratch:
+  `oi11-final-mail-suite.log`, `oi11-final-mail-suite-resolved.log`.
+  `python -B -m compileall -q skills/mail-desk` und `git diff --check`:
+  jeweils Exit 0. `quick_validate.py` ist im tatsächlichen Shared-Skills-Baum
+  nicht vorhanden; dieser optionale externe Check ist nicht ausgeführt,
+  nicht als bestanden gewertet. Unabhängiges Re-Review des finalen Diffs
+  mit `opencode-go/glm-5.3-flash#high` wird separat an HEAD/Tree und
+  Inhaltsfingerprint gebunden; Autor ist `opencode-go/deepseek-v4.1-flash#high`.
+
+- GitHub [Issue #14](https://github.com/martinderm/office-intelligence/issues/14),
+  2026-10-18: explizite Single-Writer-Übergabe; Full-Auto nur eigener Branch/
+  Commit/Push/PR, **kein Merge**. User bestätigt Projekte UND Topic/Subtopic,
+  mailbasierte ungeprüfte Entwürfe, Topic-Bootstrap nach gültiger Katalogisierung
+  und begrenzte fail-closed Atomarität ohne Journal/Crash-Gesamttransaktion.
+  Writer, echte lokale Fassaden-Integration, Owner-/Profil-/Receipt-/OS-Boundary-
+  Tests; die sieben historischen Pins und sechs Storage-Pins bleiben unverändert.
+  Genuine Baseline-RED: 7 Writer-Importfehler; initiale neue Tests RED 31 + 3
+  Importfehler; Fix-RED 16 Security-Failures + 1 Integrations-Failure; zusätzliche
+  Orchestrator-Regressionen RED 3 Ownership-Failures und Doku RED 2 Failures +
+  1 fehlender Vertrag. Ownership-/Doku-Regressionen anschließend jeweils 3/3 grün.
+  Alle Zähler sind Testausführungen, keine aus historischen Dokumenten kopierte
+  Abnahme. Vollsuite und unabhängiges Review: tatsächliche Frames siehe unten.
+  Autoren: `opencode-go/deepseek-v4.1-flash#high` (Implementation/Fixes),
+  `openai/gpt-6.1-sol` (Orchestrierung, weitere Safety-Fixes, Verträge/Maps).
+  Explorer `opencode-go/deepseek-v4.1-flash#low`, Reviewer vorgesehen
+  `opencode-go/glm-5.3-flash#high`; beide ausgewählten Worker-Runtimes haben auf
+  echte Preflight-Dispatches geantwortet (keine unabhängige Serving-Attestation).
+  Katalog 2026-10-18: Ausgabe DeepSeek 0.60, GLM 0.50 USD/M Tokens, Routineband
+  0.833× des bepreisten Implementierungsautors; Sol-Katalog hat keine Preiswerte,
+  dafür wird kein Vergleich erfunden. Keine Ollama-/Providerfallback-Nutzung und
+  kein kostenpflichtiges automatisches GitHub-Review ungefragt aktiviert.
+  **Fortsetzung nach User-Pause:** Vor Mutation HEAD/Index/alle 274 Produktdateien
+  gegen Checkpoint-SHA-Inventar geprüft: keine fremden oder sonstigen Änderungen;
+  Main weiterhin `39229fe`, Index leer, eigene neue offizielle Lease erworben.
+  Niedrige GLM-Findings: Rollback-I/O-Recovery und untrusted Code-Spans behoben;
+  Projektstatus-Asymmetrie bewusst beibehalten (Projekt hat keinen Topic-Event-
+  Active-only-Routingvertrag; explizite Archiv-Entwürfe bleiben zulässig),
+  dokumentiert und charakterisiert. Historischer #8-Status ausdrücklich als
+  abgelöst markiert; ignorierte Cache-Dateien werden nicht committed.
+  Neue Findings-Regressionen: RED 3 Failures unter 7 Tests, danach 7/7 grün;
+  zusätzlich Bedarf-ja/nein statt missverständlicher Erledigt-Checkboxen:
+  RED 1 Failure, anschließend 1/1 grün. Keine Lockerung vorhandener Pins.
+  Die zwei neuen Reparse-Fixtures wurden auf kanonische Windows-Langpfade
+  korrigiert, Hit-Assertions bleiben erhalten; `mklink`-Ausgaben bleiben Bytes,
+  damit OEM-Encoding keine Hintergrund-Decoderfehler erzeugt.
+  Erster vollständiger Prüfsnapshot war **rot**, nicht abgenommen: fehlende
+  Shared-Memory-Schema-Verknüpfung, fehlender Git-Index und zwei verfehlte neue
+  Reparse-Injektionen. Der korrigierte Kontext besitzt SHA-identische Produkte,
+  separat kopierten identischen Quellindex (kein Re-Staging), read-only echte
+  Shared-Lock-/Shared-Memory-Junctions; keine Fehlerausnahme.
+  Zusätzlicher externer Shared-Skills-Katalogcheck: Exit 1 wegen fehlendem
+  `jev-integration/SKILL.md`, außerhalb dieses Repos/Änderungssatzes, nicht grün
+  gezählt und nicht verändert. Lokaler Projekt-Schema-Validator: Exit 0.
+  **Vollständiger Repo-Frame:** Vier isolierte `python -B -m unittest discover`
+  Prozesse mit `-s/-t skills/<desk>/tests -p "test_*.py"`: Cloud 182, Event 73,
+  Mail 1354, Projektkatalog 28; **1637 Tests, 1635 bestanden, 2 bekannte
+  Symlink-Privileg-Skips, 0 Failures/Errors, alle vier Exit 0**. Echte Junction-
+  und attributbasierte Reparse-Pins grün. Snapshot-Frame `oi14-gate-ebf4brrr`,
+  SHA-Inventar `5322c9bcfb81c616fe6eafe2abc6d74fc8aebd791052d91b8d66ee9817664d0a`,
+  274 identische Produktdateien, Quell-/Snapshot-Bytes und Quellindex unverändert;
+  Syntaxprüfung aller Python-Dateien ebenfalls grün. Vorframe `oi14-gate-idxcjmzk`
+  mit **identischem** Inventar hatte 1 unveränderten #10-OCR-Timing-Failure
+  (2.568 s bei Grenze 2.5 s); dieser Frame wurde rot gezählt, keine Ausnahme und
+  keine Änderung der Timing-Pins. Danach kompletter Vier-Suiten-Rerun grün.
+  Unabhängige GLM-Nachprüfung: alle fünf vorherigen Findings geschlossen oder
+  ausdrücklich akzeptiert adjudiziert, 0 offene actionable Findings; High Risk
+  bestätigt. WIP-Bezug: Basis `39229fe` plus tatsächlicher 22-Dateien-Diff.
+  Abschließende Commit-/Tree-Bindung und erneute Verifikation des committed
+  Stands werden im PR festgehalten, nicht als Agenten-Merge-Autorität ausgegeben.
 
 - GitHub [Issue #9](https://github.com/martinderm/office-intelligence/issues/9):
   Attachment-Basename Contract-Reconcile in isoliertem Worktree; Commit/Push am

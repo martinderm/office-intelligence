@@ -132,6 +132,23 @@ Record library (ICM Form 3) für Feature Requests; Katalog-File am Root.
 
 ## 4. Sub-Skill-spezifische Objektwelten (Verweise)
 
+### Source-bound Event-Writer (Issue #14)
+
+`skills/event-documentation/scripts/event_documentation.py:apply_event` nimmt
+Schema 1 mit genau `work_order/content` neben der Schemaversion entgegen.
+Zwei strikt getrennte Source-Profile: Basis ohne Attachments/Locator-Behauptung;
+Rich mit gebundenen Locations, Thread-/Kalenderdaten, MIME-Provenienz und
+kanonischem Scope/Completeness. Work-Order- und Snapshot-Hashes binden die
+unveränderten Eingaben; `output_receipt` bindet alle fünf Output-Datei-Bytes.
+Projekt-Owner und Topic→Subtopic→Event werden kataloggebunden aufgelöst.
+Topic-Referenz enthält Subtopic, Topic-Evidence ausdrücklich nicht; gleiche
+Event-IDs in Geschwister-Subtopics stoppen wegen Pfadkollision.
+Index: `evidence_level: unreviewed-draft`, `review_state: unreviewed`,
+`status: draft`; kein Content-Approval. Operative Entscheidungen bleiben als
+ungeprüfte Meldungen in `action-items.md`, ergänzt durch `source-log.json`,
+`attachment-inventory.json`, `compliance-report.json`. Vollständiger Vertrag:
+[`event-writer.md`](../../skills/event-documentation/references/event-writer.md).
+
 Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezialisierte L2-Objektkarten:
 
 ### 4.1 Mail-Desk Objekte → [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md)
