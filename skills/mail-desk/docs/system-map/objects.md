@@ -266,6 +266,25 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   Root-Form endet mit `DraftJournalCorruptedError` (`draft_journal_corrupted`);
   die Datei wird nie stillschweigend überschrieben oder geleert.
 
+### 5.5 Replies-Needed-Log (`replies-needed.jsonl`) — Task-Desk-Eingang (Issue #16, doc-only)
+
+* **Dateipfad:** `data/mail-desk/replies-needed.jsonl` (JSON-Lines; nur `execute` **appendet** je Eintrag, `resolve`/Archivierung entfernt aktive Einträge — **nicht** durchgehend append-only)
+* **Actual Writer:** [`scripts/core/modes/execute.py`](../../scripts/core/modes/execute.py)
+  (bzw. `skills/mail-desk/scripts/core/action_log.py:append_replies_needed_entry`)
+* **Eintragsfelder (tatsächlich geschrieben):** `timestamp`, `envelope_id`,
+  `message_id`, `subject`, `from`, `folder`, `reply_status`, `reply_note`;
+  optional ergänzt der Writer `reply_candidate`. Ein Consumer darf **nicht** zwingend
+  `needs_reply`, `schema_version` oder `mailbox` fordern.
+* **Consumer-Grenze:** Der `task-desk` konsumiert einen Reply-Fall nur bei
+  `reply_status` exakt `needed` **und** passender normalisierter Quelle im
+  **freigegebenen `synthesis_handoff`** (Release-Gate L2-§34; `dossier_handoff` ist
+  ein separater Eingang mit eigenem reviewed-/provenance-gebundenem Vertrag). Sonst
+  Klärung/Review, kein Dispatch. `drafted` wird nicht neu entworfen, `sent`/`dismissed`
+  sind kein Reply-Fall. Der Handoff-Source ist keine Task-Freigabe; Mail-Metadaten
+  bleiben untrusted data.
+* **Details:** [`task-schemas.md`](../../../task-desk/references/task-schemas.md) und
+  die L2-§34.
+
 ---
 
 ## 6. DTOs, Verträge und In-Memory-Strukturen
@@ -297,7 +316,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * Bindet `coverage_evidence` deterministisch in `compute_candidate_hash()` ein.
   * Ergänzt bei eingeschränkter Abdeckung (`analysis_completeness != "full"`) einen transparenten Hinweistext im `reason`-Feld.
 * **`Dossier`** ([`scripts/core/modes/dossier.py`](../scripts/core/modes/dossier.py)): Strukturierte Fallakte mit klassifizierten Workpackages (`WP...`), Aufgaben und Signalstärken.
-* **`SynthesisHandoff`** ([`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py)): Bereinigtes Übergabepaket für identifizierte Action Items zur Weitergabe an `task-desk`.
+* **`SynthesisHandoff`** ([`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py)): Quellenpaket mit **reviewbaren Kandidatenquellen** (keine bereits identifizierten Action Items) zur Weitergabe an `task-desk`. Root exakt `schema_version`/`status`/`items`; Item exakt `message_id`, `subject`, `kind` (`project`/`topic`), `id`, `synthesis_targets`, `target_selection_required` (kein `context`, kein `needs_reply`, **kein** `evidence_anchor`). **Release-Gate (Issue #16, unverändert):** `execute` liefert nur den unreleased `synthesis_candidate`; konsumierbar wird der Handoff erst über den quellengebundenen `completion_report` (`status: "completed"`, `handoff_released: true`, gedeckte `verified_message_ids`) aus `core/completion.py`, `modes/verify.py` oder `modes/reconcile.py`. Consumer-Verträge: Task-Desk [`task-schemas.md`](../../../task-desk/references/task-schemas.md) §1.
 * **Staged `attachment_evaluation` + validierter `attachment_analysis_handoff` (FR-15 / MD-E1-T04/T05/T06)** ([`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py)):
   * Kanonisches, staged Zwischenergebnis des öffentlichen `attachment_evaluate`-Orchestrators. Der Erfolgs-Envelope ist exakt `{"attachment_evaluation": {…}, "attachment_analysis_handoff": {…}}`; der zweite Schlüssel trägt den mit `validate_attachment_handoff` validierten, gekapselten Handoff. Ein `failed`-Envelope enthält **nur** `attachment_evaluation` (kein Handoff-Geschwister).
   * Felder des staged Objekts: `status ∈ {completed, not_needed, skipped, failed}` (beschreibt nur die Evaluierungsstufe), ein bounded `reason` (Laufzeit: `classification_clear`, `no_attachments`, `no_allowed_attachments`, `handoff_ready`, `still_ambiguous`, `lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`, `handoff_invalid`; `evaluation_pending` bleibt nur als historische T04-Konstante und ist **nicht** Teil der bounded runtime-Menge), `authorization ∈ {auto_evaluated, not_applicable}`, ein bounded `files[]` mit genau `{filename, sha256, mime_type, chars, coverage, run_id}` (`coverage ∈ {full, truncated}`), `used_for_classification` **immer** `false`, `classifier_revision` **immer** `null`.

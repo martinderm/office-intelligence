@@ -50,6 +50,20 @@ Abgrenzung: #18 (Attachment-/Quarantäne-Folgearbeiten) und #19
 (GroupWise-Abhängigkeitsanalyse) bleiben offen und werden von #11 nicht
 implementiert.
 
+Issue-Nachweis (kein neuer FR-Record): [#16 — Task-Desk Batch-Handoff &
+persistierte Kandidatenverträge](https://github.com/martinderm/office-intelligence/issues/16).
+**Dokumentations-/Vertragspaket, kein ausführbarer Validator/Runner und keine
+Produktionscodeänderung** (High Risk: normative Schemas, Dedupe, Locks;
+Human-Merge-Gate). Zweiter Batch-Eingang `synthesis_handoff` mit
+quellengebundenem Release-Gate (`completion_report`); persistierte `action_id`
+(UUID4)/`action_ref`; Register-Zielverträge Version 2 (`review-queue.json`,
+`created-tasks.json`) mit Legacy-`version: 1` **read-only** (keine Migration,
+kein `fingerprint`→`action_id`-Alias); einheitliche Factored Attribution mit
+`Trace-ID`; Lock-/Write-Grenzen. Verträge:
+`skills/task-desk/references/task-schemas.md`,
+`skills/task-desk/references/task-routing.md`, `skills/task-desk/SKILL.md`;
+Map-Sync in den L1-Karten und den Mail-Desk-L2-Karten (§34).
+
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in
 seinem Record-File unter [`docs/features/`](docs/features/).

@@ -128,6 +128,46 @@ Record library (ICM Form 3) für Feature Requests; Katalog-File am Root.
 * **Folder-Vertrag:** [`docs/features/CONTEXT.md`](../features/CONTEXT.md) (Record-Format, Routing, Archivierungsregeln).
 * **Surfaces:** Daedalus-Kernel-Loop (Run-Manifeste verweisen via `spec_reference` auf den Katalog), Coding-Agents (Paketlektüre), Human Review.
 
+### 3.5 Task-Desk-Register (Issue #16, Zielverträge)
+
+Doc-only Zielverträge der beiden `task-desk`-Register im konsumierenden Workspace
+(`memory/evidence/todos/`); vollständig in
+[`../../skills/task-desk/references/task-schemas.md`](../../skills/task-desk/references/task-schemas.md).
+**Nicht** laufzeitunterstützt und **nicht** mit dem beobachteten Legacy-Bestand
+kompatibel; Aktivierung/Migration separat autorisiert.
+
+* **`review-queue.json` (Zielvertrag Version 2):** Root exakt `version: 2`,
+  `updated_at` (UTC RFC3339 mit `Z`), `entries`; Eintrag mit `action_id` (UUID4),
+  `source` (`{type, id}`), `action_ref` (`{action_id, source}`), `admitted_at`,
+  `status` (`pending_triage`, `awaiting_dispatch`, `dispatch_unknown`, `dispatched`,
+  `review_required`, `resolved`), nichtleerem `title` und geprüftem
+  `evidence_ref={file,anchor}`. Kleines Audit-/Candidate-Register, kein
+  Todoist-Spiegel; `action_id` wird bei der ersten Aufnahme vergeben. Optionale
+  `context={kind,id}` nur aus project/topic-Handoff; `routing`/`due_date` optional
+  (`due_date: null` = bewusst keine Frist). Bestätigter Erfolg führt **zuerst** zu
+  `dispatched` (mit `external_ref` + identischem `created`-Eintrag), **danach**
+  optional `resolved(outcome: created)`; `resolved` ohne Creation trägt `outcome`
+  (`dismissed`/`no_action`) + `reason`. Ein resumed `awaiting_dispatch` ohne
+  Nichtversandnachweis geht zuerst `dispatch_unknown`/Review (kein blindes Retry).
+* **`created-tasks.json` (Zielvertrag Version 2):** Root wie oben; Eintrag mit
+  derselben `action_id`/`source`/`action_ref`, `created_at`, `title`, `evidence_ref`
+  (gleicher Wert) und `external_ref` (`{adapter, task_id}`, optional
+  `project_id`/`section_id`) nach bestätigtem Adaptererfolg; 1:1 zu einem
+  `dispatched`- oder `resolved(outcome created)`-Queue-Eintrag; nur letzter
+  bestätigter Snapshot, **kein** Livezustand.
+* **Identität/`action_ref`:** Wiedererkennung ausschließlich über vorhandenen
+  `action_ref` mit exakt passender `source`; `action_id` ist opak/zufällig (UUID4),
+  **nicht** aus Text/Message-ID/Fingerprint abgeleitet. `fingerprint`→`action_id`
+  ist **kein** Alias.
+* **Legacy `version: 1` (beobachtet):** read-only `legacy_read_only`/
+  `review_required`; bestehende Bytes/IDs/Referenzen bleiben erhalten; keine
+  automatische Normalisierung oder Migration.
+* **`replies-needed.jsonl` (Actual Writer `modes/execute.py`):** Eintrag mit
+  `timestamp`, `envelope_id`, `message_id`, `subject`, `from`, `folder`,
+  `reply_status`, `reply_note`; `reply_status` genau `needed` nur mit passender
+  normalisierter Quelle im freigegebenen `synthesis_handoff` (sonst Review, kein
+  Dispatch).
+
 ---
 
 ## 4. Sub-Skill-spezifische Objektwelten (Verweise)
