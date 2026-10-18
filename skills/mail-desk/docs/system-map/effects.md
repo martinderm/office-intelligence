@@ -18,7 +18,10 @@ Partial-Mengen, Traversal/ADS, Symlinks/Reparse-Points und Hardlinks scheitern.
 Diese lokale Integritätsprüfung ist keine Race-freie Writer-Attestation.
 CLI-Eingaben maximal 2 MiB, striktes JSON, Parser-/Schema-/I/O-Fehler bounded
 ohne Rohdaten-/Pfad-Echo. Account bleibt live zu revalidieren, Content bleibt
-menschlich zu prüfen. Externer Writer und dessen Writes separat in #14.
+menschlich zu prüfen. Der separate Writer aus #14 benötigt die eigene echte
+Consumer-Lease, vollständigen Preflight und No-Clobber; er schreibt ungeprüfte
+Entwürfe für beide Owner-Arten. Der Report erweitert nur die read-only Pfad-/
+Receipt-Grenze für Topic/Subtopic und erteilt keine Katalog- oder Content-Freigabe.
 
 ### 1.1 Reparse-Point- & Symlink-Erkennung (NTFS 0x400)
 Zur Abwehr von Junction-Escapes und Symlink-Angriffen in Quarantäneverzeichnissen implementieren [`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py) und [`quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py) eine strikte Attributprüfung:

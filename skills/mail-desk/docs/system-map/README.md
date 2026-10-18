@@ -1,8 +1,17 @@
 # Mail-Desk — Subsystem System Map
 
+**Aktueller Reconcile-Frame #11 × #14, 2026-10-18:** 178 Dateien,
+74 Scripts, davon 59 Core-Dateien, 85 Testmodule (`git ls-files`).
+Draft-Transport: §33; menschlich abgenommener Event-Writer unverändert: §32.
+
+**Issue-#14-Frame, 2026-10-18 (historisch):** 177 Dateien, 74 Scripts, davon
+59 Core-Dateien, 84 Testmodule (`git ls-files --cached --others --exclude-standard`).
+Die nachfolgenden Merge-/Abnahmewerte bleiben historische Snapshots.
+Vertragserweiterung und Integrationsgrenzen: §32.
+
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
 > **Subsystem**: [`skills/mail-desk`](../SKILL.md)
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`, Kanonik-Ebene; **Merge-Frame 2026-10-17, Issue #8 × #9**: 176 getrackte Dateien, mit Issue #11 (Draft-APPEND über stdin) 177; 74 getrackte Dateien unter `scripts/`, davon 59 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 83 Testmodule, mit Issue #11 (`tests/test_draft_transport.py`, 17 Tests) 84 (das neue Modul war beim Schreiben dieser Zeile noch untracked); Suite im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"`. Historische Frames: Post-Altlasten 171 Dateien, 1309 Tests (1306 grün; beide Altlasten-Module `test_event_dossier`/`test_attachment_basename` entfernt, Spec in Git-History `0896334`, Nachverfolgung issues #8/#9); **#9-Frame: `test_attachment_basename` (6 Pins) wiederhergestellt → 1315 Tests / 1315 grün, Leserichtung je Pin-Gruppe in §30**); **#8 stellt die Event-Dossier-Fassade samt Pins wieder her (§31), Merge-Frame-Abnahme 2026-10-17: siehe §31-Ende**; verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, inkl. `flaky_lock_marker_mda3.txt`-Marker-Race-Fund) → Ergebnis je Lauf um diese Familie schwankend; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**; **Issue #11 (Draft-APPEND über die binäre stdin-Pipe, §32) ergänzt `tests/test_draft_transport.py` (17 Tests)**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`, Kanonik-Ebene; **Merge-Frame 2026-10-17, Issue #8 × #9**: 176 getrackte Dateien; 74 getrackte Dateien unter `scripts/`, davon 59 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 83 Testmodule; Suite im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"`. Historische Frames: Post-Altlasten 171 Dateien, 1309 Tests (1306 grün; beide Altlasten-Module `test_event_dossier`/`test_attachment_basename` entfernt, Spec in Git-History `0896334`, Nachverfolgung issues #8/#9); **#9-Frame: `test_attachment_basename` (6 Pins) wiederhergestellt → 1315 Tests / 1315 grün, Leserichtung je Pin-Gruppe in §30**); **#8 stellt die Event-Dossier-Fassade samt Pins wieder her (§31), Merge-Frame-Abnahme 2026-10-17: siehe §31-Ende**; verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, inkl. `flaky_lock_marker_mda3.txt`-Marker-Race-Fund) → Ergebnis je Lauf um diese Familie schwankend; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
 ---
@@ -121,7 +130,7 @@ Verzeichnislevel. Vollständige Suite 804/804 grün. **MD-M2 ist abgenommen; FR-
 geschlossen.**
 | **MD-E2 Draft-Integration (FR-15/MD-E2-T01/T02)** | [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py) | Standardmäßig aktive `draft`-Auswertung: nur unklare Items rufen `attachment_evaluate`, der validierte `ready`-Handoff wird genau einmal als getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein additives finales `attachment_evaluation`; `classifier_revision` bindet den Classifier-Regel-AST, Kataloge und konsumierte Hashes. Fail-closed-Härtung: bounded Outcome-Matrix in Review/`INBOX`, kanonische Handoff-Revalidierung, fail-loud `AttachmentReclassificationContractError`, deterministische `already_fetched`-Idempotenz. Keine zweite Fetch-/MIME-/Hash-Validierung. |
 | **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
-| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §32), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
+| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
@@ -1198,7 +1207,44 @@ Event-Storage-Verträge 6/6 grün; die 7 `test_event_writer`-Errors in demselben
 Suite-Directory sind die abgesteckte **#14-Scope-Lücke** (nie implementierte
 Writer-Spec-Tests, mit der Fassade nie behauptet) und bleiben unverändert offen.
 
-## 32. Issue #11 — Draft-APPEND über die binäre stdin-Pipe (abgeschlossen)
+Dieser historische #8-Status wird durch die Implementierung und den separaten
+Abnahmenachweis von #14 (§32) abgelöst; die historischen Messwerte bleiben erhalten.
+
+## 32. Issue #14 — Source-bound ungeprüfter Event-Writer
+
+**Normative Änderung (High Risk, User-Merge):** Mailbasierte Entwürfe sind mit
+sichtbarer Herkunft/Unsicherheit zulässig. Nach gültiger Topic/Subtopic-Event-
+Katalogisierung darf der Writer ein fehlendes kanonisches Dossier erstmals als
+ungeprüften Entwurf anlegen. Vorhandene menschliche Dossiers bleiben unverändert;
+Matcher-Anforderungen wurden nicht gelockert. Projekt- und Topic/Subtopic-Owner
+sind ab V1 unterstützt; keine Katalog-/SaaS-Mutationen oder Content-Freigaben.
+
+**Seams:** `event-documentation/scripts/event_documentation.py:apply_event`
+validiert beide Source-Profile, Katalogbindung und eigene Shared-Lease vor allen
+Writes; fünf deterministische Dual-Evidence-Outputs mit vollständigem Receipt.
+Exklusives Staging und `os.link`-No-Clobber, abschließende Datei-/Byte-Verifikation.
+Rollback nur eigener unveränderter Artefakte unter weiterhin eigener Lease und
+geprüften Elternketten. Teil-/Staging-Bestände stoppen, kein Autofill, kein Journal
+und keine crashfeste Gesamttransaktion. Keine Runtime-Mutation im Bundle.
+
+`core/event_dossier.py` erweitert ausschließlich Report-DTO und Output-Scope auf
+Topic/Subtopic; der operative Handoff bleibt projektgebunden. Rich-Profil bleibt
+Pflicht im Report. Kein Importzyklus oder Kopie des Shared-Lock-Guards.
+
+**Evidenztiefe:** `test_event_dossier_writer_integration.py` fährt echten lokalen
+Handoff→Writer→Report plus Topic-Writer→Report; das vorgelagerte Mailbox-Apply ist
+explizit synthetisch. Historische Boundary-Fixture und sieben Writer-Pins bleiben
+byte-identisch. Neue Security-Pins prüfen echte Leases, OS-Fehler, Parent-/Stage-/
+Target-Substitution, Lease-Verlust auch beim Rollback, Quelle/Scope/MIME-Bindung,
+Owner-Kollisionen und inerte ungeprüfte Ausgaben. Ein Symlink-Privileg-Skip ersetzt
+keinen Schutztest: echte Junction und attributbasierte Reparse-Pins ergänzen ihn.
+
+Vollständiger Vertrag und Recovery-Grenzen:
+[`event-writer.md`](../../../event-documentation/references/event-writer.md).
+Neue Verifikationsergebnisse stehen im Issue-#14-Eintrag des Root-Progress-Ledgers;
+historische #8-Abnahmewerte oben bleiben unverändert.
+
+## 33. Issue #11 — Draft-APPEND über die binäre stdin-Pipe (abgeschlossen)
 
 **Problem:** Der rohe RFC-822-Entwurf ging als ein argv-Literal an
 `himalaya message save`. Ein 40 000-Zeichen-Entwurf ließ `CreateProcess` mit

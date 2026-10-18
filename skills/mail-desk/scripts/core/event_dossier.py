@@ -25,6 +25,7 @@ from .synthesis_targets import validate_execute_synthesis_targets
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _SLUG = re.compile(r"[a-z0-9][a-z0-9_-]{0,99}\Z")
+_STRICT_SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 _STAGES = {
     "plan": {"scope", "inspect_ids"},
     "review": {"scope", "sources", "operative_request", "attachment_requests"},
@@ -313,6 +314,26 @@ def _event(value, project):
     return deepcopy(event)
 
 
+def _topic_event(value):
+    """Validate a topic/subtopic-bound event descriptor for report-time paths."""
+    required = {"owner_kind", "owner_id", "id", "title", "start", "subtopic_id"}
+    event = _shape(value, required | {"end"}, required)
+    if event["owner_kind"] != "topic":
+        raise ValueError("Event owner must be a topic")
+    for field in ("owner_id", "subtopic_id", "id"):
+        if not isinstance(event[field], str) or not _STRICT_SLUG.fullmatch(event[field]):
+            raise ValueError("Invalid topic event identifier")
+    _text(event["title"])
+    start = date.fromisoformat(event["start"])
+    if start.isoformat() != event["start"]:
+        raise ValueError("Event start must use ISO YYYY-MM-DD")
+    if "end" in event:
+        end = date.fromisoformat(event["end"])
+        if end.isoformat() != event["end"] or end < start:
+            raise ValueError("Invalid event end")
+    return deepcopy(event)
+
+
 def _handoff(request, scope):
     reviewed = _review({"sources": request.get("sources"), "operative_request": request.get("apply_request")},
                        scope, approved=True)
@@ -359,8 +380,17 @@ def _safe_output(root, raw, event):
     if (path.is_absolute() or path.as_posix() != raw or any(p in {".", ".."} for p in path.parts)
             or "\\" in raw or ":" in raw):
         raise ValueError("Expected canonical workspace-relative output")
-    tails = [PurePosixPath("memory") / zone / "projects" / event["owner_id"] / "events" / event["id"]
-             for zone in ("references", "evidence")]
+    if event.get("owner_kind") == "topic":
+        # Topic evidence deliberately carries no subtopic segment; the reference
+        # dossier does. Both must stay inside the exact event scope.
+        tails = [
+            PurePosixPath("memory") / "evidence" / "topics" / event["owner_id"] / "events" / event["id"],
+            PurePosixPath("memory") / "references" / "topics" / event["owner_id"] / "subtopics"
+            / event["subtopic_id"] / "events" / event["id"],
+        ]
+    else:
+        tails = [PurePosixPath("memory") / zone / "projects" / event["owner_id"] / "events" / event["id"]
+                 for zone in ("references", "evidence")]
     if not any(path.is_relative_to(prefix) and path != prefix for prefix in tails):
         raise ValueError("Output outside exact event data zones")
     target = root
@@ -380,10 +410,18 @@ def _report(request, root):
     if (type(order["schema_version"]) is not int or order["schema_version"] != 1
             or order["owner"] != "event-documentation" or order["status"] != "pending_content_review"):
         raise ValueError("Invalid work order")
-    event_value = _shape(order["event"], {"owner_kind", "owner_id", "id", "title", "start", "end"}, {"owner_id"})
-    event = _event(event_value, event_value["owner_id"])
-    if not _SLUG.fullmatch(event["owner_id"]):
-        raise ValueError("Invalid event owner ID")
+    event_value = order["event"]
+    owner_kind = event_value.get("owner_kind") if isinstance(event_value, dict) else None
+    if owner_kind == "topic":
+        event = _topic_event(event_value)
+    elif owner_kind == "project":
+        event_value = _shape(event_value, {"owner_kind", "owner_id", "id", "title", "start", "end"},
+                             {"owner_id"})
+        event = _event(event_value, event_value["owner_id"])
+        if not _SLUG.fullmatch(event["owner_id"]):
+            raise ValueError("Invalid event owner ID")
+    else:
+        raise ValueError("Invalid event owner kind")
     if order["source_snapshot_sha256"] != canonical_json_sha256({"sources": order["sources"], "attachments": order["attachments"]}):
         raise ValueError("Source snapshot drift")
     _list(order["sources"], 100, nonempty=True)
@@ -451,7 +489,11 @@ def _report(request, root):
     paths = [output["path"] for output in outputs]
     if len(set(paths)) != len(paths) or len(set(artifacts)) != len(artifacts) or set(paths) != set(artifacts):
         raise ValueError("Report must verify exactly every receipted output")
-    index = f"memory/references/projects/{event['owner_id']}/events/{event['id']}/index.md"
+    if event["owner_kind"] == "topic":
+        index = (f"memory/references/topics/{event['owner_id']}/subtopics/{event['subtopic_id']}"
+                 f"/events/{event['id']}/index.md")
+    else:
+        index = f"memory/references/projects/{event['owner_id']}/events/{event['id']}/index.md"
     if index not in paths:
         raise ValueError("Event index is required")
     for output in outputs:

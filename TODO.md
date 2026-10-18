@@ -1,5 +1,14 @@
 # TODO — office-intelligence (offene Altlasten)
 
+## 2026-10-18 — Issue #14: Writer-Implementierung zur User-Abnahme
+
+Die historische Writer-Lücke unten wird durch den source-bound Writer für
+Projekt- und katalogisierte Topic/Subtopic-Events bearbeitet. Echte lokale
+Fassaden-Integration ergänzt die bisherigen synthetischen Boundary-Pins; keine
+Live-Mailbox-Abnahme. Normative Entwurfs-/Bootstrap-Änderung ist High Risk,
+unabhängiges finales Review und User-Merge bleiben verpflichtend. Aktueller
+Nachweis: `FEATURE-REQUEST-PROGRESS.md`; historische Angaben bleiben erhalten.
+
 ## 2026-10-16 — GELÖST → Issue #8: `test_event_dossier` referenziert fehlendes Skript
 
 - **Auflösung:** Die beiden diff-fremden Altlasten-Module
