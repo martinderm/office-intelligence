@@ -22,6 +22,21 @@ Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reco
 Vertrag und Runtime-Grenzen: Mail-Desk L2-System-Map §30 (Leserichtung je
 Pin-Gruppe) und `skills/mail-desk/docs/system-map/effects.md` §4.
 
+Issue-Nachweis (kein neuer FR-Record): [#20 — PDF-AcroForm-Absicherung](https://github.com/martinderm/office-intelligence/issues/20).
+Fix der Review-Findings der isolierten Feature-Erweiterung (Branch
+`feat/cloud-atlas-pdf-form-fields`) in zwei Runden (Fix-Runde 1 + unabhängiges
+GLM-Go-Review A1–A7). Vertrag und Runtime-Grenzen:
+`skills/cloud-atlas/SKILL.md` (AcroForm-Capability-Vertrag),
+`skills/cloud-atlas/docs/system-map/` (README/effects/objects/processes) und das
+additive Filemap-Objekt `files[<quelle>].form_fields` (bewusst **außerhalb** des
+kanonischen Mirror-Frontmatters, als **reserviertes generated Feld** gegen
+Curation-Forging geschützt und nur bei unverändertem Quell-Hash weitergereicht).
+Finale Cloud-Atlas-Suite: 241 Tests / 134 Subtests bestanden, 0 Skips; unabhängiges
+GLM-Go-Re-Review ohne blockierende Findings. Übergabe für PR-Prüfung, kein Merge.
+Diese Abnahme ist der historische PDF-Frame vor Integration von #14/#11.
+PR #23 integriert danach Main `920ac3a`; neue Gesamtprüfung und Merge-Gates
+werden separat am integrierten Head gebunden, nicht aus alten Freigaben geerbt.
+
 Issue-Nachweis (kein neuer FR-Record): [#11 — Draft-APPEND über die binäre
 stdin-Pipe](https://github.com/martinderm/office-intelligence/issues/11).
 Vertrag: `run_himalaya(..., stdin_bytes=...)` (keyword-only, binär, strict

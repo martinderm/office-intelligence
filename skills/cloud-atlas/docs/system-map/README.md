@@ -2,8 +2,12 @@
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)  
 > **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand Issue #2, 2026-10-16: 32 getrackte Dateien im freigegebenen Commit-Frame (`git ls-files skills/cloud-atlas/`), Vollsuite 182/182 grün (`unittest discover` mit absoluten Testpfaden); davon 15 neue Ausschluss-Regressionstests.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand Issue #20 (Review-Fixes Runde 2), 2026-10-18: 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 241 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
+
+Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
+PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
+Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz.
 
 ---
 
@@ -47,7 +51,7 @@
 | :--- | :--- | :--- |
 | **Sync-Orchestrierung** | [`scripts/sync_project_cloud.py`](../scripts/sync_project_cloud.py) | Geordneter 2-Phasen-Lauf: Konvertierung gefolgt von Filemap-Aktualisierung für Projekte oder Topics. |
 | **Filemap-Engine** | [`scripts/gen_filemap.py`](../scripts/gen_filemap.py) | Rekursiver Dateisystemscan, SHA-256 Hashing, Schema-1-Generierung, Validierung gegen `filemap.schema.json`. |
-| **Konvertierungs-Engine** | [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py) | Pandoc-/LibreOffice-Bridge, PDF-OCR-Pipeline (`local_derivative` vs. `enrich_source`), Frontmatter-Injektion. |
+| **Konvertierungs-Engine** | [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py) | Pandoc-/LibreOffice-Bridge, PDF-OCR-Pipeline (`local_derivative` vs. `enrich_source`), optionale AcroForm-Formularfelder-Extraktion (PyMuPDF, Status/Warnungen → Filemap), Frontmatter-Injektion. |
 | **Metadaten & Frontmatter** | [`scripts/core/metadata.py`](../scripts/core/metadata.py) | Validierung der 12 Pflichtschlüssel und kanonischen Frontmatter-Eigenschaften. |
 | **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
 | **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen. |

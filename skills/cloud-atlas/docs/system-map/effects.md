@@ -19,6 +19,25 @@ Cloud-Atlas steuert mehrere externe Konverter an, bindet diese jedoch hermetisch
 
 ---
 
+## 1a. PDF-Formularfelder-Extraktion (AcroForm, optional)
+
+Bei der PDF-Konvertierung (`convert_cloud_docs.py`, Worker-Pfad `is_pdf`) werden **gefüllte PDF-Formularfelder (AcroForm) via PyMuPDF** (`pymupdf`/Fallback `fitz`, rein lesend) extrahiert und als Abschnitt „Formularfelder (ausgefüllt)“ (Tabelle Seite/Feld/Typ/Wert) an den Markdown-Mirror angehängt, weil MarkItDown Widget-Werte nicht liest. Keine Mutationspfade; PyMuPDF fehlt → Spiegel bleibt unverändert (kein `conversion_required`). Fehl-/Kodierungsartefakte (z. B. „¬“ statt „€“) werden **getreu zum Original-PDF** übernommen, nicht repariert.
+
+**Abgrenzungen (Issue #20):**
+
+* **Expliziter, begrenzter Status.** `extract_pdf_form_fields()` liefert `complete`/`no_fields`/`partial`/`dependency_missing`/`error` plus `tool`/`tool_version` und begrenzte `warnings`. **Alle** Widget-Metadaten (`field_value`/`field_name`/`field_type_string`), die **lazy Widget-Iteration** (`page.widgets()`) und die **lazy Dokument-Iteration** (statt eager `list(doc)`) sind einzeln guardiert; Öffnungs-, Parser- und Iterationsfehler werden nicht mehr als leere bzw. scheinbar erfolgreiche Teilliste verschluckt. Grenzlogik: Lesefehler mit bereits gelesenen Feldern ⇒ `partial`; Dokument-Iterationsfehler **ohne** Felder ⇒ `error`; das Dokument-Handle wird in jedem Pfad geschlossen.
+* **Literal & einzeilig.** Feldname/Typ/Wert werden über `literal_markdown_cell()` einzeilig und literal gerendert (Whitespace-Kollaps inkl. U+2028/U+2029, HTML entity-escaped, Markdown-Metazeichen escaped); NBSP bleibt erhalten, `None` wird zur leeren Zelle. Zeilenumbrüche/HTML-Bilder können den Mirror nicht umstrukturieren.
+* **Typabhängiges `Off` (exakt).** Nur Button-Familien (Button/Checkbox/Radio) verwerfen die **exakten** Marker `Off`/`/Off`; Text-/Choice-Werte und benutzerdefinierte Checked-Werte wie `OFF`/`off` bleiben erhalten (kein `casefold`).
+* **Transport, Persistenz & Besitz.** Das `form_fields`-Objekt (Status/Count/Tool/Version/Warnungen/`source_sha256`/`extracted_before_ocr`) erreicht über Worker und Scheduler den **Filemap-Eintrag** (`files[<quelle>].form_fields`). Es ist ein **reserviertes generated Feld** (`GENERATED_FILEMAP_FIELDS`): Curation-Overlays dürfen es weder setzen noch überschreiben. Für eine **unveränderte** Quelle (gleicher Inhalt-Hash) wird es im Skip-Pfad und im Generator explizit weitergetragen; für eine geänderte/neue Quelle wird kein veralteter Vertrag übernommen. Das kanonische Frontmatter wächst **nicht**; `converter` bleibt die Basis-Konvertierungsmethode des zusammengesetzten Mirrors.
+* **OCR-Reihenfolge.** Bei `enrich_source` werden die Felder vor der destruktiven In-Place-OCR gelesen (`extracted_before_ocr: true`, Pre-OCR-`source_sha256`); `local_derivative` liest weiter aus dem unveränderten Original.
+* **Optionalität/Härtung.** `_load_pymupdf` behandelt **jeden** Importfehler als fehlende Capability (nicht nur `ImportError`; Legacy-`fitz`-Fallback), ohne die Basis-Konvertierung zu killen.
+* **Bounds.** `MAX_PDF_FORM_FIELDS`/`MAX_PDF_FORM_FIELD_TEXT`/`MAX_PDF_FORM_FIELD_NAME`/`MAX_PDF_FORM_FIELD_TYPE`/`MAX_PDF_FORM_FIELD_WARNINGS` begrenzen Feldanzahl, Wert-, Namens- und Typlänge sowie Warnungen; Überschreitung ⇒ `partial` + `*_truncated`-Warnung — sichtbar auch bei ausgeschöpftem Warnungsbudget.
+* **Rebuild.** Bestehende Mirrors unveränderter Quellen werden nicht automatisch nachgerüstet; nur ein gezielter `--force`-Lauf erzeugt sie neu (kein Live-Rebuild).
+
+Testabdeckung unter `tests/test_pdf_form_field_extraction.py` (inkl. Non-`ImportError`-Importfehler, Legacy-`fitz`-Fallback und fehlende Option ohne modulweiten Skip) und `tests/test_filemap_curation_overlay.py` (Overlay-Reservierung + Retention bei unverändertem/geändertem Quell-Hash).
+
+---
+
 ## 2. Windows Pfadlängen-Beschränkung (`EXTERNAL_CONVERTER_PATH_LIMIT`)
 
 Externe Windows-Binaries (insbesondere LibreOffice und ältere Pandoc-Builds) scheitern trotz aktivierter Windows-10-Long-Paths-Option häufig an Pfaden über ~260 Zeichen.

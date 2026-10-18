@@ -46,10 +46,14 @@
 
 Das Bundle ist intern stark asymmetrisch aufgebaut. Zur Vermeidung von Context-Overload ist die System Map föderiert:
 
+PR #23 integriert den PDF-Stand mit Main `920ac3a` (#14 und #11). Die
+deskbezogenen historischen Metriken bleiben Snapshots; die frische vollständige
+Vier-Suiten-Abnahme wird im zugehörigen Run und Feature-Ledger referenziert.
+
 | Sub-Skill | Komplexitäts-Klasse | Dateien / Tests | Dokumentationspfad | Primäre Aufgabe |
 | :--- | :--- | :--- | :--- | :--- |
 | [`mail-desk`](../../skills/mail-desk/SKILL.md) | **Schwergewicht** (L2 System Map) | Kurzstatus: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) · aktuelle Metrik: [§3](#3-navigationsmatrix-der-paket-map) | [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) | Mail-Ingest, Klassifikation, Quarantäne, Receipts, Draft-/Evaluierungs-Pipeline, Classifier-Routing, Himalaya-Adapter, Dossier-Synthese — Detailstatus je FR-Paket: [§2.1](#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket) |
-| [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | Aktuelle Metrik: L2-Kopfzeile (Issue #2) | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), Cloud-Sync, Promotion-Refresh-Consumer (`promotion_refresh.py`); gemeinsamer Storage-Scan-Scope mit `exclude_dirs` für Projekte, Topics und Subtopics. |
+| [`cloud-atlas`](../../skills/cloud-atlas/SKILL.md) | **Schwergewicht** (L2 System Map) | Aktuelle Metrik: L2-Kopfzeile (Issue #20) | [`../../skills/cloud-atlas/docs/system-map/README.md`](../../skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung (`gen_filemap.py`), Dokumentkonvertierung & OCR (`convert_cloud_docs.py`), optionale AcroForm-Formularfelder-Extraktion via PyMuPDF (begrenzter Status/Warnungs-Vertrag in `files[].form_fields`, Issue #20), Cloud-Sync, Promotion-Refresh-Consumer (`promotion_refresh.py`); gemeinsamer Storage-Scan-Scope mit `exclude_dirs` für Projekte, Topics und Subtopics. |
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
 | [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 2 Dateien | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung. |

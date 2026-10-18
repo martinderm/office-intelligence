@@ -46,6 +46,42 @@ MARKDOWN_IMAGE_LINK_RE = re.compile(
     r"!\[(?P<alt>[^\]]*)\]\(\s*(?P<target><[^>]+>|[^\s)]+)(?:\s+\"[^\"]*\")?\s*\)"
 )
 
+# Filled PDF AcroForm extraction (optional PyMuPDF capability).  The statuses are
+# deliberate and bounded; they are transported through the worker/scheduler and
+# persisted in the filemap so an empty or partial extraction is never mistaken
+# for "the PDF has no filled fields".
+FORM_FIELD_STATUS_COMPLETE = "complete"
+FORM_FIELD_STATUS_NO_FIELDS = "no_fields"
+FORM_FIELD_STATUS_PARTIAL = "partial"
+FORM_FIELD_STATUS_DEPENDENCY_MISSING = "dependency_missing"
+FORM_FIELD_STATUS_ERROR = "error"
+PDF_FORM_FIELD_STATUSES = (
+    FORM_FIELD_STATUS_COMPLETE,
+    FORM_FIELD_STATUS_NO_FIELDS,
+    FORM_FIELD_STATUS_PARTIAL,
+    FORM_FIELD_STATUS_DEPENDENCY_MISSING,
+    FORM_FIELD_STATUS_ERROR,
+)
+# Bound the persisted payload against the per-file worker timeout/resource
+# contract: a hostile PDF with thousands of oversized widgets must not create an
+# unbounded mirror body or filemap entry.
+MAX_PDF_FORM_FIELDS = 500
+MAX_PDF_FORM_FIELD_TEXT = 2000
+MAX_PDF_FORM_FIELD_NAME = 500
+MAX_PDF_FORM_FIELD_TYPE = 200
+MAX_PDF_FORM_FIELD_WARNINGS = 50
+PDF_FORM_FIELDS_HEADING = "## Formularfelder (ausgefüllt)"
+_FORM_FIELD_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# Only ASCII line/column whitespace (plus the Unicode line/paragraph separators,
+# which some renderers treat as line breaks) is collapsed: collapsing Unicode
+# spacing such as a non-breaking space would silently alter a value that the
+# mirror is required to carry faithfully.
+_FORM_FIELD_WHITESPACE_RE = re.compile(r"[ \t\r\n\u2028\u2029]+")
+# Markdown/HTML metacharacters that could change the table structure or become
+# active content.  Backslash is escaped first so later escapes stay single.
+FORM_FIELD_MARKDOWN_ESCAPE_CHARS = ("\\", "`", "*", "_", "[", "]", "|", "~")
+FORM_FIELD_BUTTON_TYPE_NAMES = frozenset({"button", "checkbox", "radiobutton", "pushbutton"})
+
 # Mirrors are Cloud-zone artifacts.  New writes are deliberately constrained to
 # the data-zone schema properties so conversion/OCR implementation details stay
 # in filemap.json instead of becoming an unbounded frontmatter format.
@@ -790,6 +826,304 @@ def convert_to_markdown_raw(src_abs):
         except Exception as e:
             raise RuntimeError(f"CLI conversion failed: {e}")
 
+def _single_line_form_text(value):
+    """Collapse one widget value/name/type onto a single faithful line (no escaping)."""
+    text = "" if value is None else str(value)
+    text = _FORM_FIELD_CONTROL_CHARS_RE.sub(" ", text)
+    return _FORM_FIELD_WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _bound_form_text(text, limit):
+    """Return ``(bounded_text, was_truncated)`` for one bounded field component."""
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
+def literal_markdown_cell(value):
+    """Render one Markdown table cell as a single-line, literal string.
+
+    Field names, types and values come from an untrusted PDF.  A raw newline
+    would break out of the table row (for example to inject a heading) and raw
+    Markdown/HTML would become active content.  Whitespace (including newlines
+    and tabs) collapses to single spaces, raw HTML is entity-escaped and the
+    Markdown metacharacters that could change structure or inline rendering are
+    backslash-escaped.  The result is safe to place between two table pipes.
+    ``None`` renders as an empty cell rather than the literal ``"None"``.
+    """
+    text = _single_line_form_text(value)
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    for char in FORM_FIELD_MARKDOWN_ESCAPE_CHARS:
+        text = text.replace(char, "\\" + char)
+    return text
+
+
+def _load_pymupdf():
+    """Return ``(module, tool_name)`` for PyMuPDF or its legacy ``fitz`` alias.
+
+    Never raises.  Any import failure (missing module, or a broken optional
+    install that raises something other than ``ImportError``) is reported as
+    ``(None, None)`` so the caller keeps the mirror unchanged instead of failing
+    the whole conversion.
+    """
+    for module_name in ("pymupdf", "fitz"):
+        try:
+            module = __import__(module_name)
+        except Exception:
+            continue
+        return module, module_name
+    return None, None
+
+
+def _pymupdf_version(module):
+    version = getattr(module, "__version__", None)
+    if isinstance(version, str) and version:
+        return version
+    version = getattr(module, "version", None)
+    if isinstance(version, (tuple, list)) and version:
+        parts = [str(part) for part in version if part]
+        if parts:
+            return ".".join(parts)
+    return None
+
+
+def _record_form_field_warning(result, code, message):
+    warnings = result["warnings"]
+    if len(warnings) >= MAX_PDF_FORM_FIELD_WARNINGS:
+        return
+    warnings.append({"code": code, "message": bounded_text(message)})
+
+
+def _widget_is_button(widget, module):
+    """True for button-family widgets (push button, checkbox, radio button).
+
+    Only these widgets use ``Off``/``/Off`` as an unchecked marker; for text and
+    choice fields the same string is a legitimate value that must be preserved.
+    """
+    field_type = getattr(widget, "field_type", None)
+    if field_type is not None:
+        button_types = {
+            getattr(module, name) for name in (
+                "PDF_WIDGET_TYPE_BUTTON",
+                "PDF_WIDGET_TYPE_CHECKBOX",
+                "PDF_WIDGET_TYPE_RADIOBUTTON",
+            ) if hasattr(module, name)
+        }
+        if button_types:
+            return field_type in button_types
+    type_name = getattr(widget, "field_type_string", None)
+    if isinstance(type_name, str) and type_name:
+        return type_name.replace(" ", "").casefold() in FORM_FIELD_BUTTON_TYPE_NAMES
+    return False
+
+
+def extract_pdf_form_fields(src_abs):
+    """Extract filled PDF AcroForm widgets with an explicit, bounded status.
+
+    Returns a dict with ``status`` (one of ``PDF_FORM_FIELD_STATUSES``),
+    ``fields``, bounded ``warnings``, and the ``tool``/``tool_version`` used.
+    Distinguishing ``no_fields`` from ``error``/``partial``/``dependency_missing``
+    is the point: a silent empty list hid open failures and later parser errors.
+    """
+    result = {
+        "status": FORM_FIELD_STATUS_NO_FIELDS,
+        "fields": [],
+        "warnings": [],
+        "tool": None,
+        "tool_version": None,
+    }
+    module, tool_name = _load_pymupdf()
+    if module is None:
+        result["status"] = FORM_FIELD_STATUS_DEPENDENCY_MISSING
+        result["warnings"].append({
+            "code": "pymupdf_missing",
+            "message": "PyMuPDF (pymupdf or legacy fitz) is not importable.",
+        })
+        return result
+    result["tool"] = tool_name
+    result["tool_version"] = _pymupdf_version(module)
+
+    try:
+        doc = module.open(get_safe_path(src_abs))
+    except Exception as exc:
+        result["status"] = FORM_FIELD_STATUS_ERROR
+        result["warnings"].append({"code": "open_failed", "message": bounded_text(exc)})
+        return result
+
+    fields = result["fields"]
+    degraded_reasons = set()
+    truncated = {"value": False, "name": False, "type": False}
+    try:
+        limit_reached = False
+        try:
+            # Iterate lazily: a document iterator can raise after some pages, in
+            # which case the fields already read are kept (partial) instead of
+            # being discarded as a hard error.
+            for page in doc:
+                page_number = getattr(page, "number", None)
+                try:
+                    widgets = page.widgets() or []
+                except Exception as exc:
+                    degraded_reasons.add("page_read_failed")
+                    _record_form_field_warning(result, "page_read_failed", f"Page {page_number}: {exc}")
+                    continue
+                try:
+                    # ``page.widgets()`` may be a lazy iterator; a failure while
+                    # iterating it must not lose the fields read so far or abort
+                    # the remaining pages.
+                    for widget in widgets:
+                        try:
+                            raw_value = widget.field_value
+                            is_button = _widget_is_button(widget, module)
+                            field_name = _single_line_form_text(widget.field_name)
+                            type_string = _single_line_form_text(
+                                getattr(widget, "field_type_string", "")
+                            )
+                        except Exception as exc:
+                            # A corrupt widget must degrade to a bounded warning,
+                            # never fail the whole conversion.
+                            degraded_reasons.add("widget_read_failed")
+                            _record_form_field_warning(result, "widget_read_failed", str(exc))
+                            continue
+                        if raw_value is None:
+                            continue
+                        text = _single_line_form_text(raw_value)
+                        if not text:
+                            continue
+                        # Only the exact unchecked markers of button-family
+                        # widgets are dropped: a custom checked export value such
+                        # as "OFF"/"off" is data and must survive.
+                        if is_button and text in ("Off", "/Off"):
+                            continue
+                        if len(fields) >= MAX_PDF_FORM_FIELDS:
+                            limit_reached = True
+                            degraded_reasons.add("field_limit_reached")
+                            _record_form_field_warning(
+                                result,
+                                "field_limit_reached",
+                                f"Only the first {MAX_PDF_FORM_FIELDS} filled fields were captured.",
+                            )
+                            break
+                        text, value_cut = _bound_form_text(text, MAX_PDF_FORM_FIELD_TEXT)
+                        field_name, name_cut = _bound_form_text(field_name, MAX_PDF_FORM_FIELD_NAME)
+                        type_string, type_cut = _bound_form_text(type_string, MAX_PDF_FORM_FIELD_TYPE)
+                        if value_cut:
+                            degraded_reasons.add("field_text_truncated")
+                            truncated["value"] = True
+                        if name_cut:
+                            degraded_reasons.add("field_name_truncated")
+                            truncated["name"] = True
+                        if type_cut:
+                            degraded_reasons.add("field_type_truncated")
+                            truncated["type"] = True
+                        page_value = (page_number + 1) if isinstance(page_number, int) else None
+                        fields.append({
+                            "page": page_value,
+                            "field": field_name,
+                            "type": type_string,
+                            "value": text,
+                        })
+                except Exception as exc:
+                    degraded_reasons.add("page_read_failed")
+                    _record_form_field_warning(
+                        result,
+                        "page_read_failed",
+                        f"Page {page_number} widget iteration failed: {exc}",
+                    )
+                if limit_reached:
+                    break
+        except Exception as exc:
+            degraded_reasons.add("document_iteration_failed")
+            _record_form_field_warning(result, "document_iteration_failed", exc)
+
+        for code, was_truncated, message in (
+            ("field_text_truncated", truncated["value"],
+             f"At least one field value exceeded {MAX_PDF_FORM_FIELD_TEXT} characters."),
+            ("field_name_truncated", truncated["name"],
+             f"At least one field name exceeded {MAX_PDF_FORM_FIELD_NAME} characters."),
+            ("field_type_truncated", truncated["type"],
+             f"At least one field type exceeded {MAX_PDF_FORM_FIELD_TYPE} characters."),
+        ):
+            if was_truncated:
+                _record_form_field_warning(result, code, message)
+    finally:
+        try:
+            doc.close()
+        except Exception:
+            pass
+
+    if degraded_reasons:
+        # A failed document iteration with no fields read is a hard error; with
+        # fields already read it is a partial extraction.  The bounded warning
+        # list never hides the incomplete status.
+        if not fields and "document_iteration_failed" in degraded_reasons:
+            result["status"] = FORM_FIELD_STATUS_ERROR
+        else:
+            result["status"] = FORM_FIELD_STATUS_PARTIAL
+    elif fields:
+        result["status"] = FORM_FIELD_STATUS_COMPLETE
+    else:
+        result["status"] = FORM_FIELD_STATUS_NO_FIELDS
+    return result
+
+
+def extract_pdf_form_field_values(src_abs):
+    """Backward-compatible accessor returning only the extracted field list.
+
+    Prefer :func:`extract_pdf_form_fields` for the status/warnings/tool contract.
+    """
+    return extract_pdf_form_fields(src_abs)["fields"]
+
+
+def render_pdf_form_fields_section(md_text, extraction):
+    """Append the literal "Formularfelder" table for an extraction result."""
+    fields = extraction.get("fields", []) if isinstance(extraction, dict) else []
+    if not fields:
+        return md_text, 0
+    lines = [
+        "",
+        PDF_FORM_FIELDS_HEADING,
+        "",
+        "Direkt aus den PDF-Formularfeldern (AcroForm) extrahiert; MarkItDown liest diese Werte nicht mit.",
+        "",
+        "| Seite | Feld | Typ | Wert |",
+        "| ----- | ---- | --- | ---- |",
+    ]
+    for item in fields:
+        lines.append(
+            "| {page} | {field} | {type} | {value} |".format(
+                page=literal_markdown_cell(item.get("page", "")),
+                field=literal_markdown_cell(item.get("field", "")),
+                type=literal_markdown_cell(item.get("type", "")),
+                value=literal_markdown_cell(item.get("value", "")),
+            )
+        )
+    return md_text.rstrip() + "\n" + "\n".join(lines) + "\n", len(fields)
+
+
+def build_form_fields_contract(extraction, source_sha256=None, extracted_before_ocr=False):
+    """Build the persisted filemap ``form_fields`` contract from an extraction.
+
+    ``source_sha256`` is the hash of the exact PDF the values were read from.  For
+    ``enrich_source`` that is the *pre-OCR* hash (the in-place OCR replaces the
+    file afterwards), which is why ``extracted_before_ocr`` records the ordering.
+    """
+    return {
+        "status": extraction.get("status", FORM_FIELD_STATUS_ERROR),
+        "count": len(extraction.get("fields", [])),
+        "tool": extraction.get("tool"),
+        "tool_version": extraction.get("tool_version"),
+        "warnings": list(extraction.get("warnings", [])),
+        "source_sha256": source_sha256,
+        "extracted_before_ocr": bool(extracted_before_ocr),
+    }
+
+
+def append_pdf_form_fields_section(md_text, src_abs):
+    """Backward-compatible wrapper: extract from ``src_abs`` and render it."""
+    return render_pdf_form_fields_section(md_text, extract_pdf_form_fields(src_abs))
+
+
 def convert_to_markdown(src_abs, enable_ocr=True, ocr_policy="local_derivative", redo_ocr=False):
     text = convert_to_markdown_raw(src_abs)
     ocr_applied = False
@@ -886,14 +1220,18 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                 if raw_convert_err:
                     send_conversion_required(conn, raw_convert_err, task.get("src_sha256"))
                     return
+                extraction = extract_pdf_form_fields(src_abs)
+                result_text, form_fields_filled = render_pdf_form_fields_section(raw_text, extraction)
                 conn.send(("ok", {
-                    "text": raw_text,
+                    "text": result_text,
                     "ocr_applied": False,
                     "ocr_policy": task_ocr_policy,
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "markitdown-direct",
-                    "potential_quality_loss": None
+                    "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
+                    "form_fields": build_form_fields_contract(extraction, task.get("src_sha256")),
                 }))
                 return
 
@@ -914,6 +1252,12 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                     send_conversion_required(conn, "Cloud source PDF is read-only; cannot enrich in-place", task.get("src_sha256"), "ocr_policy")
                     return
 
+                # Capture filled form values before the destructive in-place OCR
+                # replaces the source: the OCR rewrite may drop the widget values,
+                # so extracting afterwards would silently lose them.
+                pre_ocr_extraction = extract_pdf_form_fields(src_abs)
+                pre_ocr_sha256 = task.get("src_sha256") or calculate_sha256(src_abs)
+
                 ok, msg = run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=task_redo_ocr, timeout=task.get("file_timeout", 60), expected_src_sha256=task.get("src_sha256"), check_signature=True)
                 if not ok:
                     send_conversion_required(conn, f"OCR enrichment failed: {msg}", task.get("src_sha256"))
@@ -927,14 +1271,19 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                     return
                 except Exception:
                     final_text = f"# {os.path.basename(src_abs)}\n\n[Inhalt aus OCR-PDF extrahiert]\n"
+                result_text, form_fields_filled = render_pdf_form_fields_section(final_text, pre_ocr_extraction)
                 conn.send(("ok", {
-                    "text": final_text,
+                    "text": result_text,
                     "ocr_applied": True,
                     "ocr_policy": "enrich_source",
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "ocrmypdf-inplace",
                     "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
+                    "form_fields": build_form_fields_contract(
+                        pre_ocr_extraction, pre_ocr_sha256, extracted_before_ocr=True,
+                    ),
                     "new_src_sha256": fresh_sha256,
                     "new_src_size": os.path.getsize(get_safe_path(src_abs)),
                     "new_src_mtime": os.stat(get_safe_path(src_abs)).st_mtime
@@ -963,24 +1312,34 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
                     "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt. "
                     "Bei kritischen Auswertungen (Zahlen, Namen, Beträge) bitte im Original-PDF gegenchecken."
                 )
+                # The derivative carries only the OCR text layer; the AcroForm
+                # values belong to the untouched original PDF.
+                extraction = extract_pdf_form_fields(src_abs)
+                result_text, form_fields_filled = render_pdf_form_fields_section(final_text, extraction)
                 conn.send(("ok", {
-                    "text": final_text,
+                    "text": result_text,
                     "ocr_applied": True,
                     "ocr_policy": "local_derivative",
                     "derivative_path": task["derivative_rel"],
                     "derivative_sha256": deriv_sha256,
                     "conversion_method": "ocrmypdf-derivative",
-                    "potential_quality_loss": quality_loss_note
+                    "potential_quality_loss": quality_loss_note,
+                    "form_fields_filled": form_fields_filled,
+                    "form_fields": build_form_fields_contract(extraction, task.get("src_sha256")),
                 }))
             else:
+                extraction = extract_pdf_form_fields(src_abs)
+                result_text, form_fields_filled = render_pdf_form_fields_section(raw_text, extraction)
                 conn.send(("ok", {
-                    "text": raw_text,
+                    "text": result_text,
                     "ocr_applied": False,
                     "ocr_policy": task_ocr_policy,
                     "derivative_path": None,
                     "derivative_sha256": None,
                     "conversion_method": "markitdown-direct",
-                    "potential_quality_loss": None
+                    "potential_quality_loss": None,
+                    "form_fields_filled": form_fields_filled,
+                    "form_fields": build_form_fields_contract(extraction, task.get("src_sha256")),
                 }))
         else:
             res_text = convert_to_markdown_raw(src_abs)
@@ -1068,6 +1427,8 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                             "new_src_sha256": payload.get("new_src_sha256"),
                             "new_src_size": payload.get("new_src_size"),
                             "new_src_mtime": payload.get("new_src_mtime"),
+                            "form_fields_filled": payload.get("form_fields_filled", 0),
+                            "form_fields": payload.get("form_fields"),
                             "error": None
                         }
                         ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""
@@ -1110,6 +1471,8 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
                                 "new_src_sha256": payload.get("new_src_sha256"),
                                 "new_src_size": payload.get("new_src_size"),
                                 "new_src_mtime": payload.get("new_src_mtime"),
+                                "form_fields_filled": payload.get("form_fields_filled", 0),
+                                "form_fields": payload.get("form_fields"),
                                 "error": None
                             }
                             ocr_flag = " [OCR]" if payload.get("ocr_applied") else ""
@@ -1860,6 +2223,16 @@ def run_conversion(args, run_state):
                     "markdown_mirror": dest_rel_workspace,
                     "conversion_status": "converted"
                 }
+                # A skipped conversion means the source hash is unchanged, so the
+                # previously persisted form-field contract still describes this
+                # exact source and must be carried forward explicitly (the
+                # generated-field reservation prevents the generic carry-over).
+                if (
+                    isinstance(base_existing, dict)
+                    and base_existing.get("sha256") == t["src_sha256"]
+                    and isinstance(base_existing.get("form_fields"), dict)
+                ):
+                    updated_entry["form_fields"] = base_existing["form_fields"]
                 if t.get("derivative_rel") and os.path.exists(get_safe_path(t["derivative_abs"])):
                     deriv_sha = base_existing.get("derivative", {}).get("sha256") or calculate_sha256(t["derivative_abs"])
                     deriv_format = "docx" if t.get("is_doc") else "pdf"
@@ -1976,6 +2349,13 @@ def run_conversion(args, run_state):
                     if res.get("ocr_applied"):
                         file_entry["ocr_applied"] = True
                         file_entry["ocr_policy"] = res.get("ocr_policy", ocr_policy)
+
+                    # Persist the deliberate form-field contract (status, count,
+                    # tool/version, bounded warnings, provenance) in the filemap.
+                    # It never becomes canonical frontmatter: the mirror keeps its
+                    # fixed 12 required keys and the base converter provenance.
+                    if isinstance(res.get("form_fields"), dict):
+                        file_entry["form_fields"] = res["form_fields"]
 
                     # Safety check before writing mirror
                     assert_not_in_cloud_dir(dest_abs, cloud_path_abs)

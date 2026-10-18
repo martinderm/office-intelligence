@@ -92,6 +92,10 @@ Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
 2. **Kuratierung & Konvertierung:**
    - Binärformate (Word, Excel, PowerPoint) werden via Pandoc / LibreOffice nach Markdown übersetzt.
    - Bildbasierte PDFs durchlaufen OCR (Default: `local_derivative`).
+   - Gefüllte PDF-AcroForm-Felder werden optional über PyMuPDF rein lesend extrahiert
+     (Issue #20) und mit begrenztem Status/Warnungen in `files[<quelle>].form_fields`
+     persistiert; fehlt PyMuPDF, bleibt der Mirror unverändert. Bei `enrich_source`
+     werden die Felder vor der destruktiven In-Place-OCR gelesen.
 3. **Spiegelung in den Workspace:**
    - Ablage unter `memory/cloud/projects/<project-id>/` bzw. `memory/cloud/topics/<topic-id>/`.
     - Das Projekt-Desk verlinkt diese lokalen Spiegel in den Projekt-Notizen (`memory/references/projects/<id>/`).
@@ -130,4 +134,4 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
   ohne Sanitization-Launderung, fail-closed Alias-/Traversal-Validierung vor I/O,
   Dossier-Synthese)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
-  *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, Mirror-Sync)*
+  *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, optionale AcroForm-Formularfelder-Extraktion mit Capture-vor-OCR-Reihenfolge Issue #20, Mirror-Sync)*

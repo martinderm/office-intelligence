@@ -69,6 +69,7 @@ Das Bundle steuert bei Bedarf externe CLI-Tools an, kapselt diese jedoch strikt:
 | **Pandoc** | Markdown-Konvertierung (`cloud-atlas`) | Subprozess mit isolierten Argumenten und Timeout; keine Ausführung von eingebetteten Skripten. |
 | **LibreOffice** | Headless-Konvertierung (`cloud-atlas`) | Ausführung im Headless-Modus (`--headless --convert-to`); Isolation vor GUI-Abhängigkeiten. |
 | **Tesseract OCR** | PDF/Bild-Texterkennung (`cloud-atlas`) | Beschränkt auf lokale Bildanalyse; Fallback auf Originaldatei bei Nichterreichbarkeit. |
+| **PyMuPDF** | AcroForm-Formularfelder lesen (`cloud-atlas`, optional) | In-Prozess-Bibliothek (kein Subprozess), rein lesend; fehlt die Abhängigkeit, bleibt der Mirror unverändert (kein `conversion_required`). Legacy-Alias `fitz` als Fallback. |
 
 ---
 
@@ -79,4 +80,4 @@ Vertiefende systemspezifische Schutz- und Isolationseffekte sind in den L2-Effek
 * **Mail-Desk Deep Dive:** [`../../skills/mail-desk/docs/system-map/effects.md`](../../skills/mail-desk/docs/system-map/effects.md)  
   *(Windows Reparse-Point-Blockade 0x400, Symlink-Bann, Filterung verbotener Inhalte in Metadaten/Receipts, Inventory-Lock, Monotone Discard-Recovery-Integrität, Fail-Closed Drift-Abbruch, additive Draft-Integration mit genau einem `attachment_evaluation` je Item und content-addressed `classifier_revision` FR-15/MD-E2-T01, fail-closed-Härtung mit kanonischer Handoff-Revalidierung, `still_ambiguous`-Erhalt und deterministischer `already_fetched`-Idempotenz FR-15/MD-E2-T02, opt-in `inspect`-`manifest_proposal` ohne neuen Schreibpfad und mit `manifest_file`-Grenze FR-15/MD-E2-T03, MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` FR-15/MD-E2-T04)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/effects.md`](../../skills/cloud-atlas/docs/system-map/effects.md)  
-  *(Schutz signierter PDFs vor In-Place-Mutation, Differenzierung `enrich_source` vs. `local_derivative`, Tool-Timeouts)*
+  *(Schutz signierter PDFs vor In-Place-Mutation, Differenzierung `enrich_source` vs. `local_derivative`, Tool-Timeouts, optionale AcroForm-Formularfelder-Extraktion mit robusten Widget-/Iterator-/Dokument-Guards, begrenztem Status-/Warnungs-Vertrag und reserviertem generated Feld Issue #20)*

@@ -5,6 +5,115 @@ Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben
 über Git-Historie und Tests nachvollziehbar.
 
+- **PR #23 / Issue #20 — Reconcile nach #14 und #11, 2026-10-18:** Explizite
+  Single-Writer-Übergabe; aktuelles Main `920ac3a` (menschlicher Writer-Merge
+  `7a7d3f7`, danach Draft-Transport-Squash). Reguläre Integration ohne Rebase,
+  Force oder `ours/theirs`; die zwei Ledger-Konflikte werden durch Erhalt aller
+  #20-/#11-/#14-Einträge aufgelöst. Eventwriter, Draft-Transport und deren
+  Verträge/Tests bleiben bytegleich zu Main; Cloud-Atlas-Code bleibt bytegleich
+  zum geprüften PDF-Fix-Stand `d6dd355`. Historische Messwerte unten sind
+  Snapshots, keine Abnahme des integrierten Heads. Neue Vier-Suiten-Ergebnisse,
+  Counter-Quellen und eine neue Head-/Tree-gebundene Review-/Attestationsprüfung
+  werden im eigenen Run und im PR nachgewiesen. Bedingter Remote-Squash-Merge
+  ist nur bei vollständig belegten low/medium-Gates autorisiert; keine Waiver
+  für unbekannte Autorenherkunft oder fehlende Modellunabhängigkeit. Keine
+  neue Arbeit an #16/#18/#19 und keine Superprojekt-Pointeränderung.
+
+- GitHub [Issue #20](https://github.com/martinderm/office-intelligence/issues/20):
+  PDF-AcroForm-Erweiterung abgesichert, Review-Findings der isolierten
+  Feature-Erweiterung (Branch `feat/cloud-atlas-pdf-form-fields`, Commit
+   `67ccfe3`) behoben. Der Worker übergibt alle Änderungen **unstaged**; die
+  Session ist für **#20 ausschließlich** in Full-Auto freigegeben (Parent
+  committet/pusht/öffnet den PR) — **ein Merge ist nicht Teil des Auftrags**.
+  Geänderte Dateien: `skills/cloud-atlas/scripts/convert_cloud_docs.py`
+  (Status-Contract, literale Zellen, typabhängiges `Off`, Worker/Scheduler-Transport,
+  Filemap-Persistenz, OCR-Capture-vor-Mutation), `skills/cloud-atlas/SKILL.md`,
+  `skills/cloud-atlas/requirements-conversion.txt` (neue optionale `pymupdf`-Zeile),
+  L2-Map (`docs/system-map/{README,effects,objects,processes}.md`), L1-Map
+  (`docs/system-map/{README,effects,objects,processes}.md`),
+  `skills/cloud-atlas/tests/test_pdf_form_field_extraction.py` (durable Pins,
+  kein modulweiter Skip) und `skills/cloud-atlas/tests/test_optional_dependency_isolation.py`.
+  1. **Markdown-Injektion:** alle Zellen (Name/Typ/Wert) über
+  `literal_markdown_cell()` einzeilig und literal — Whitespace-Kollaps,
+  HTML-Entity-Escaping, Markdown-Escaping; Bild-/Link-/Heading-Injektion gepinnt.
+  2. **`Off`-Verlust:** nur Button-Familien (Button/Checkbox/Radio) verwerfen
+  `Off`/`/Off`; Text-/Choice-Werte bleiben erhalten.
+  3. **Stille Fehler:** `extract_pdf_form_fields()` liefert begrenzten Status
+  `complete`/`no_fields`/`partial`/`dependency_missing`/`error` + `tool`/`tool_version`
+  + bounded `warnings`; transportiert über Worker/Scheduler, persistiert in
+  `files[<quelle>].form_fields` (kein Frontmatter-Wachstum, `converter` bleibt
+  Basis-Methode).
+  4. **OCR-Grenze:** `enrich_source` liest Felder **vor** der destruktiven OCR
+  (`extracted_before_ocr: true`, Pre-OCR-`source_sha256`); `local_derivative` liest
+  weiter aus dem Original.
+  5. **Optionalität:** `pymupdf>=1.24.0` in `requirements-conversion.txt`
+  (keine Installation); Legacy-Alias `fitz` als Fallback; fehlende Option ⇒ Mirror
+  unverändert, kein `conversion_required`. Kein automatischer Rebuild; nur gezieltes
+  `--force`.
+  **TDD-Evidenz (lokal, reproduzierbar):** RED gegen die unveränderte Produktion
+  `python -B -m pytest -p no:cacheprovider skills/cloud-atlas/tests/test_pdf_form_field_extraction.py -q`
+  → **33 failed, 3 passed, exit 1** (Log Harness-Scratch `oi20-red-01.log`).
+  GREEN (Runde-1-Pin-Stand) → **37 passed, 0 skips, exit 0** (`oi20-green-final.log`).
+  Die drei Dependency-/Fallback-Pins zur Optionalität (`pymupdf` in
+  `requirements-conversion.txt`, `pymupdf`/`fitz` in `SKILL.md`, kein
+  `pytest.importorskip` im Feature-Test) waren gegen den alten Stand nachweislich rot
+  (HEAD-`requirements-conversion.txt` ohne `pymupdf`, HEAD-`SKILL.md` ohne
+  `pymupdf`/`fitz`, HEAD-Feature-Test mit `pytest.importorskip`).
+
+- **Issue #20 — unabhängiges GLM-Go-Review, Runde 2 (Actionables A1–A7, alle im
+  #20-Scope umgesetzt).** Änderungen: `convert_cloud_docs.py` — A1 robuste Guards
+  um **alle** Widget-Metadaten (`field_value`/`field_name`/`field_type_string`),
+  um die **lazy Widget-Iteration** (`page.widgets()`) und um die **lazy
+  Dokument-Iteration** statt eager `list(doc)`; ein Fehler hinterlässt gute Felder
+  (`partial`) bzw. `error` ohne Felder, `doc.close()` bleibt garantiert; A2 exakter
+  `Off`/`/Off`-Vergleich statt `casefold` (ein benutzerdefinierter Checked-Wert
+  `OFF`/`off` bleibt erhalten); A5 `literal_markdown_cell(None) == ""` (keine
+  `"None"`-Zelle); A6 Name-/Typ-Boundings (`MAX_PDF_FORM_FIELD_NAME`/
+  `MAX_PDF_FORM_FIELD_TYPE`) mit `field_name_truncated`/`field_type_truncated`,
+  U+2028/U+2029-Kollaps bei NBSP-Erhalt; A3 expliziter `form_fields`-Carry im
+  Convert-Skip-Pfad (nur bei gleichem Quell-Hash). `gen_filemap.py` — A3 Carry nur
+  bei unverändertem Quell-Hash. `core/curation.py` — A4 `form_fields` in
+  `GENERATED_FILEMAP_FIELDS` reserviert (Loader lehnt `custom.form_fields` ab) plus
+  Merge-Guard, damit generated Werte nie überschrieben werden. `_load_pymupdf` — A7
+  fängt jeden Importfehler (nicht nur `ImportError`) als fehlende Capability, ohne
+  die Basis-Konvertierung zu killen. Tests erweitert in
+  `test_pdf_form_field_extraction.py` und `test_filemap_curation_overlay.py`.
+  **TDD Runde 2:** RED
+  `python -B -m pytest -p no:cacheprovider skills/cloud-atlas/tests/test_pdf_form_field_extraction.py skills/cloud-atlas/tests/test_filemap_curation_overlay.py -q`
+  → **17 failed, 52 passed, 5 subtests passed, exit 1** (`oi20-r2-red-01.log`).
+   GREEN (finaler Fokus inklusive Dependency-Isolation) → **72 passed,
+   6 subtests passed, exit 0** (`oi20-r2-green-final.log`). Fokussierte Nachbar-Module (u. a. `test_convert_cloud_docs_contract`,
+  `test_gen_filemap`, `test_gen_filemap_contract`, `test_metadata_preservation`,
+  `test_optional_dependency_isolation`) → **65 passed, 20 subtests passed, exit 0**
+  (`oi20-r2-focused-modules.log`). `TMP`/`TEMP` + `--basetemp` im Harness-Scratch,
+  `-B`/`PYTHONDONTWRITEBYTECODE=1`, pytest-Cache aus; Syntax nur in-memory via
+   `compile()` (`oi20_syntax.py`), **kein weiteres `compileall`**. Die 18 durch den
+   Runde-1-`compileall` erzeugten Bytecode-Dateien wurden gezielt entfernt;
+   sechs bereits vor dieser Fix-Runde vorhandene Dateien blieben unangetastet.
+  A2-Grenze (explizit): ein echtes benutzerdefiniertes Checkbox-On-State `OFF`/`off`
+   konnte mit der verwendeten PyMuPDF-Setter-Fixture nicht erzeugt werden (sie
+   normalisierte den Wert auf `Off`); die exakte Vergleichssemantik ist deshalb
+   durch Fake-Pins festgeschrieben, nicht durch eine echte Custom-On-State-Fixture.
+  Bewusste Grenzen/Residuen: bestehende Mirrors unveränderter Quellen werden nicht
+  automatisch nachgerüstet (nur `--force`); das Filemap-`form_fields`-Objekt ist
+   additiv und reserviert (nicht per Overlay fälschbar); die bestehende permissive
+   Filemap-Schema-Validierung prüft seine innere Struktur nicht gesondert.
+   **Parent-Finalframe 2026-10-18:** komplette Cloud-Atlas-pytest-Suite im legitimen
+   Shared-Skills-Kontext mit absolutem Testpfad, `-B`, deaktiviertem Bytecode/
+   pytest-Cache und Fixtures/Rohlog ausschließlich im Harness-Scratch:
+   **241 passed, 134 subtests passed, 0 skips, Exit 0** (`oi20-final-cloud.log`).
+   Projektkatalog unverändert: externer Worktree **26 passed, 2 failed, Exit 1**
+   (vorbestehender relativer Sibling-Lock-Pfad; `oi20-parent-project.log`), derselbe
+   unveränderte Code im regulären Shared-Skills-Checkout **28 passed, 0 skips,
+   Exit 0** (`oi20-project-shared.log`); keine Pfad-Shims oder Produkt-Workarounds.
+   Unabhängiges Re-Review: `opencode-go/glm-5.3-flash#high`, keine blockierenden
+   Findings; alle A1–A7 geschlossen. Autor der Fixes: `opencode-go/deepseek-v4.1-flash#high`;
+   Integration/Evidenz: `openai/gpt-6.1-sol`. Modell/Variante der Go-Worker durch
+   Harness-Session-Metadaten bestätigt. Ursprüngliches Autor-Modell von `67ccfe3`
+   bleibt unbekannt; **keine governance-konforme Merge-Freigabe behauptet**.
+   Technisches Übergaberisiko konservativ mittel; kein Merge-Auftrag und keine
+   Live-Konvertierung, Installation oder automatische Mirror-Nachrüstung.
+
 - GitHub [Issue #11](https://github.com/martinderm/office-intelligence/issues/11):
   **Reconcile 2026-10-18:** PR #24 wurde vom Menschen als `7a7d3f7`
   gemergt und regulär in diesen Lane-Branch integriert. Die drei echten

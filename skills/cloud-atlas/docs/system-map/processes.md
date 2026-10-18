@@ -18,6 +18,7 @@
            ├─► [Phase 1: convert_cloud_docs.py]          │
            │       ├─► Pandoc / LibreOffice Bridge      │
            │       ├─► OCR-Verzweigung (Tesseract)       │
+           │       ├─► PDF-Formularfelder (AcroForm)     │
            │       └─► Schreibt Markdown-Mirrors        │
            │                                            │
            └─► [Phase 2: gen_filemap.py]                │
@@ -63,6 +64,18 @@ Bei PDFs prüft der Konverter, ob digitaler Text vorhanden ist. Fehlt dieser (re
                                   (Ausnahme)             In-Place Injektion der OCR-Ebene
                                                          in das Cloud-PDF mit Provenienz-Log.
 ```
+
+**Formularfelder-Reihenfolge (Issue #20):** Unabhängig von der OCR-Policy werden
+gefüllte AcroForm-Werte über `extract_pdf_form_fields()` rein lesend erfasst. Bei
+`enrich_source` geschieht das **vor** der destruktiven In-Place-OCR (der Pre-OCR-Hash
+wird als `source_sha256` gebunden, `extracted_before_ocr: true`); bei
+`local_derivative` stammen die Werte aus dem unveränderten Original, nie aus dem
+Derivat. Der begrenzte Status (`complete`/`no_fields`/`partial`/`dependency_missing`/
+`error`) und die Warnungen werden durch Worker und Scheduler transportiert und in den
+Filemap-Eintrag `files[<quelle>].form_fields` geschrieben; das kanonische Mirror-
+Frontmatter wächst dabei nicht. `form_fields` ist ein **reserviertes generated Feld**
+(nicht per Curation-Overlay fälschbar) und wird nur bei **unverändertem** Quell-Hash
+(Convert-Skip-Pfad und Filemap-Generator) weitergetragen.
 
 ### Phase 4: Nachbereitung & Atomarer Write
 1. **Bildlink-Neutralisierung:** `neutralize_missing_local_image_links()` ersetzt Verweise auf lokale Bilder, die nicht extrahiert wurden, durch neutrale Text-Hinweise.

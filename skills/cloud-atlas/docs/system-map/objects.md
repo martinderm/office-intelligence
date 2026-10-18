@@ -41,6 +41,54 @@ Verzeichnispfade. `scripts/core/scan_scope.py` validiert sowohl Projekt-/Topic-
 als auch Subtopic-Konfigurationen; `gen_filemap.validate_filemap()` prüft die
 kanonische Provenienz und das Fehlen ausgeschlossener Dateieinträge.
 
+### 1.2 PDF-Formularfelder-Vertrag (`files[<quelle>].form_fields`)
+
+Für PDF-Quellen schreibt der Konverter (Issue #20) ein additives, begrenztes
+Objekt neben `conversion_status`/`derivative`:
+
+```json
+"form_fields": {
+  "status": "complete",
+  "count": 3,
+  "tool": "pymupdf",
+  "tool_version": "1.28.2",
+  "warnings": [],
+  "source_sha256": "a1b2c3d4…",
+  "extracted_before_ocr": false
+}
+```
+
+* `status` ∈ `complete` | `no_fields` | `partial` | `dependency_missing` | `error`.
+  Grenzlogik: Dokument-Iterationsfehler **ohne** gelesene Felder ⇒ `error`, mit
+  gelesenen Feldern ⇒ `partial`.
+* `tool`/`tool_version` belegen die tatsächliche Extraktionsquelle (`pymupdf` oder
+  Legacy-`fitz`); `dependency_missing` bedeutet fehlende optionale Fähigkeit
+  (fehlender **oder** nicht importierbarer Modul, z. B. Nicht-`ImportError`).
+* `warnings` ist begrenzt (max. `MAX_PDF_FORM_FIELD_WARNINGS`) und trägt Codes wie
+  `open_failed`, `document_iteration_failed`, `page_read_failed`,
+  `widget_read_failed`, `field_limit_reached`, `field_text_truncated`,
+  `field_name_truncated`, `field_type_truncated`, `pymupdf_missing`. Die begrenzte
+  Liste verbirgt den `partial`-Status nicht (`degraded_reasons` steuern ihn).
+* `source_sha256` bindet den Hash des PDFs, aus dem die Werte gelesen wurden; bei
+  `enrich_source` ist das der **Pre-OCR**-Hash und `extracted_before_ocr` ist `true`.
+
+Begrenzungen: `MAX_PDF_FORM_FIELDS`, `MAX_PDF_FORM_FIELD_TEXT`,
+`MAX_PDF_FORM_FIELD_NAME`, `MAX_PDF_FORM_FIELD_TYPE`,
+`MAX_PDF_FORM_FIELD_WARNINGS` (Wert/Name/Typ werden hart gekürzt; die Zelle wird
+über `literal_markdown_cell()` einzeilig und literal gerendert).
+
+**Besitz & Retention (Issue #20, A3/A4):** `form_fields` ist ein **generated Feld**
+(`core/curation.py:GENERATED_FILEMAP_FIELDS`) — ein Curation-Overlay darf es weder
+über `custom` setzen noch überschreiben (Loader: `CurationOverlayError`;
+Merge-Guard: generated Werte gewinnen). Für eine **unveränderte** Quelle (gleicher
+`sha256`) tragen der Convert-Skip-Pfad und `gen_filemap.py` den bestehenden Vertrag
+explizit weiter; bei geändertem/neuem Quell-Hash wird er **nicht** übernommen.
+
+Das Objekt ist **nicht** Teil des kanonischen Mirror-Frontmatters (die 12
+Pflichtschlüssel bleiben unverändert); ein unbekanntes `form_fields`-Frontmatter wäre
+eine Vertragsverletzung. `gen_filemap.py` und die Schema-Validierung behandeln das
+Feld additiv.
+
 ---
 
 ## 2. Das Kuratierungs-Overlay (`filemap-curation.json`)

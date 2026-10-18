@@ -167,3 +167,4 @@ Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezial
 * **`filemap.json`**: Vollständiges Verzeichnisabbild der Cloud-Speicher inklusive Metadaten und Hashes.
 * **`filemap-curation.json`**: Kuratierungs-Overlay zur manuellen Steuerung von Konvertierungsregeln.
 * **Markdown-Derivate**: Konvertierte Office-Dokumente und OCR-Ergebnisse.
+* **`files[<quelle>].form_fields`** (Issue #20): additiver, begrenzter Statusvertrag der optionalen AcroForm-Formularfelder-Extraktion (`status` ∈ `complete`/`no_fields`/`partial`/`dependency_missing`/`error`, `count`, `tool`/`tool_version`, bounded `warnings`, `source_sha256`, `extracted_before_ocr`). Reserviertes **generated Feld** (nicht per Curation-Overlay setzbar/überschreibbar) und nur bei unverändertem Quell-Hash weitergereicht. Er bleibt **außerhalb** des kanonischen Mirror-Frontmatters.
