@@ -270,6 +270,17 @@ Vor Ausgabe prüfen:
   Events erhalten nie eigene Mounts, Pfade oder `cloud_sync`-Felder. Doppelte IDs,
   ungültige Daten, fehlende Dossiers oder ungültige explizite Selektoren bleiben
   reviewbar und dürfen nicht automatisch als Event aufgelöst werden.
+- **Bootstrap-Ausnahme (normative Vertragsänderung):** Nach vorhandener gültiger
+  Topic/Subtopic-Event-Katalogisierung darf `event-documentation` das fehlende
+  kanonische `index.md` erstmals als deutlich gekennzeichneten **UNGEPRÜFTEN
+  Entwurf** aus gebundenen Mailquellen initialisieren. Matcher-Anforderungen bleiben unverändert:
+  vorhandenes kanonisches Dossier, gültige Katalogdaten und Selektoren bleiben
+  Voraussetzung für automatisches Matching. Vorhandene menschliche Dossiers
+  niemals überschreiben; der Writer legt keine Katalogeinträge an und erteilt
+  keine Content-Freigabe. Gleiche Event-IDs in unterschiedlichen Subtopics
+  kollidieren beim Writer wegen der gemeinsamen Topic-Evidence-Ablage und
+  stoppen vor Writes; es entsteht kein neuer Evidence-Pfad.
+  Vertrag: [`../event-documentation/references/event-writer.md`](../event-documentation/references/event-writer.md).
 - Bei Arbeit an einem Subtopic den `cloud_sync` des übergeordneten Topics als potenzielle Kontextquelle berücksichtigen und bei plausibler Relevanz dessen Filemap oder passende Spiegelungen prüfen; zusätzliche, ausschließlich subtopic-spezifische Speicher dürfen als `subtopics[].cloud_sync` im Cloud-Atlas-Schema gepflegt werden.
 - `schema_version = 1`
 - `reference_md` passt zum `<slug>/index.md`-Pfad (außer bewusstes Legacy-Override)

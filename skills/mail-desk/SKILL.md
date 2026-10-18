@@ -349,7 +349,10 @@ separat auszuführenden `dossier_apply`-Request (`applied: false`); beide
 externen Approval-Gates sowie die bestehenden Batch-/Workspace-Lock-Prüfungen
 bleiben erhalten. Keine automatische Mailbox-, Cloud-, Task- oder Event-Mutation,
 keine Vollständigkeits- oder Content-Approval-Behauptung. Die externe
-Event-Writer-Implementierung fehlt noch (GitHub #14).
+Event-Writer-Implementierung liegt separat bei `event-documentation`:
+quellengebundene ungeprüfte Entwürfe für Projekt- und Topic/Subtopic-Events,
+ohne Content-Freigabe. Diese Fassade startet den Writer nicht; ihr read-only
+Report kann beide Owner-Arten verifizieren, der Handoff bleibt projektgebunden.
 Request-/Receipt-Verträge, Bounds und Beispiele:
 [`references/event-dossier.md`](references/event-dossier.md).
 

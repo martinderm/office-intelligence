@@ -15,7 +15,7 @@ Größere Veranstaltungen werden nach dem Dual-Evidence-Standard sauber in norma
 - **Topic-Pfad:** `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event-slug>/index.md`
 - **Projekt-Pfad:** `memory/references/projects/<projekt>/events/<event-slug>/index.md`
 - **Inhalt:**
-  - `index.md` — Die offizielle Event-Übersicht (Programm, Keynotes, Metadaten, Session-Beschreibungen und relative Links zu den über Cloud Atlas erschlossenen Originalen und Mirrors).
+- `index.md` — Event-Übersicht mit getrenntem Reviewstatus: fachlich geprüfte Referenz oder deutlich gekennzeichneter **UNGEPRÜFTER Entwurf**, nie allein durch den Ablageort eine offizielle Tatsache.
 
 ### Säule 2: De Facto / Empirisch (`memory/evidence/`)
 - **Topic-Pfad:** `memory/evidence/topics/<topic>/events/<event-slug>/`
@@ -59,7 +59,16 @@ Bestehende `/Agent-Share/`-Links sind Migrationsaltbestand: Sie werden nicht neu
   auflösen (`topic` nur gegen Parent, `subtopic` nur gegen Subtopic), ohne Fallback.
 - Erst nach gültigem Katalogeintrag die 2-Säulen-Ordner gemäß
   `references/event-folder-template.md` anlegen und das kanonische `index.md` als
-  Dossier verwenden. Das Event-Dossier wird nicht aus Mailtext abgeleitet.
+   Dossier verwenden. **Normative Vertragsänderung:** Quellengebundene mailbasierte
+   Dossiers sind als **UNGEPRÜFTER Entwurf** zulässig. Herkunft, Unsicherheit und
+   begrenzte Vollständigkeit müssen sichtbar bleiben; daraus entstehen weder
+   offizielle Event-Fakten noch eine Content-Freigabe.
+- **Bootstrap-Ausnahme:** Nach vorhandener gültiger Topic/Subtopic-Event-
+  Katalogisierung darf der Writer das fehlende kanonische `index.md` erstmals
+  als ungeprüften Entwurf initialisieren. Matcher-Anforderungen bleiben unverändert:
+  automatisches Matching verlangt weiterhin das vorhandene kanonische Dossier.
+  Vorhandene menschliche Dossiers werden niemals überschrieben. Nur ein vollständig
+  byte-identischer Writer-Dateisatz ist eine unveränderte Wiederholung.
 - Trage die Eckdaten immer ein. Storage-Scope, Storage-ID und Filemap-Pfad nur dann,
   wenn Cloud-Assets über eine konkret aufgelöste geerbte Konfiguration vorliegen.
 
@@ -95,6 +104,18 @@ Bestehende `/Agent-Share/`-Links sind Migrationsaltbestand: Sie werden nicht neu
     ```
 
 ---
+
+## Source-bound Writer (lokal, keine Synchronisation)
+
+`scripts/event_documentation.py` exportiert `apply_event(...)`. Der Writer
+unterstützt Projekte und explizite Topic/Subtopic-Events ab Version 1, prüft
+Katalogbindung, echte Workspace-Lease und sämtliche Zielpfade vor Writes und
+veröffentlicht fünf Dateien mit No-Clobber. Beobachtete Entscheidungen bleiben
+als ungeprüfte Meldungen in Evidence; im Index steht nur ein relativer Verweis.
+Er erzeugt keine Tasks, Cloud-Dateien, Katalogeinträge oder Freigaben und mutiert
+sein eigenes Bundle nie zur Laufzeit. Teilbestände werden nicht automatisch
+repariert. API, Source-Profile, Receipt, Bootstrap und Recovery:
+[`references/event-writer.md`](references/event-writer.md).
 
 ## Template-Referenz
 
