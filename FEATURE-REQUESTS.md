@@ -22,6 +22,12 @@ Issue-Nachweis (kein neuer FR-Record): [#9 — Attachment-Basename Contract-Reco
 Vertrag und Runtime-Grenzen: Mail-Desk L2-System-Map §30 (Leserichtung je
 Pin-Gruppe) und `skills/mail-desk/docs/system-map/effects.md` §4.
 
+Issue-Nachweis (kein neuer FR-Record): [#10 — Suite-Flake-Familie](https://github.com/martinderm/office-intelligence/issues/10).
+Minimaler Test-Fixture-Fix: privater Workspace-Marker statt globalem System-Temp-
+Zustand für MD-A3-Lockverlust. Produktionsgrenzen unverändert; die READY-/Timing-
+Familie wird nicht allein dadurch als behoben erklärt. Diagnose und Grenzen:
+`docs/analysis/issue-10-stability.md`; finale Checks/HEAD/Tree im PR und lokalen Run.
+
 Issue-Nachweis (kein neuer FR-Record): [#20 — PDF-AcroForm-Absicherung](https://github.com/martinderm/office-intelligence/issues/20).
 Fix der Review-Findings der isolierten Feature-Erweiterung (Branch
 `feat/cloud-atlas-pdf-form-fields`) in zwei Runden (Fix-Runde 1 + unabhängiges

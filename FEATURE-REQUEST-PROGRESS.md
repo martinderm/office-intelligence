@@ -1,5 +1,20 @@
 # Feature Request Progress & Code Review
 
+- **Issue #10 — begrenzte Fixture-Stabilisierung (2026-10-18):** Frisch gefetchte
+  Basis `86f49f4` (#25/#16 erhalten), eigener Branch `fix/issue-10-stability`.
+  Vor jedem Eingriff MD-A3 und MDE1 isoliert ausgeführt: erste Frames rot wegen
+  unerreichbarem kanonischen Shared-Lock-Guard im externen Worktree; mit echtem
+  Guard über Shared-Skills-CWD 37 bzw. 112 Tests grün. Deterministisches RED:
+  zwei verschachtelte Lockverlust-Fixtures teilen den globalen Temp-Marker;
+  der erste Aufruf der zweiten Fixture wirft fälschlich. GREEN nach ausschließlich
+  testlokalem Marker unter `data_dir`, kein Produktcode-/Timeout-/Assert-Abbau.
+  End-to-End-Prüfung behält echten Spawn und OCR bei, prüft zusätzlich unveränderte
+  Quelle und verbrauchten Marker. Diagnose: `docs/analysis/issue-10-stability.md`.
+  READY-/Timing-Rest bleibt ausdrücklich offen, bis reproduziert oder verstanden.
+  Konservativ **High Risk** (sicherheitsrelevanter Prüfstand); unabhängige Freigabe
+  und finale Vier-Suiten-/Guard-Evidenz werden an HEAD/Tree im PR gebunden.
+  Kein Merge, keine Umsetzung von #12/#18/#19, keine Consumer-/Live-Mutation.
+
 Diese ephemere Arbeitsdatei enthält nur den aktuellen Übergabestand zwischen
 Implementierung und Review. Abgeschlossene Feature Requests stehen kompakt in
 [`docs/features/_archive.md`](docs/features/_archive.md); ihre Details bleiben

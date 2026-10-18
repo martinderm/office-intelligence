@@ -160,8 +160,9 @@ def _mock_ocr_same_content(source: Path, deriv: Path, max_pages: int = 3, pages:
     return _DETERMINISTIC_SAMPLE_PDF, "OCR Same Content", 1
 
 
-def _flaky_lock_verifier(*args: Any, **kwargs: Any) -> None:
-    marker = Path(tempfile.gettempdir()) / "flaky_lock_marker_mda3.txt"
+def _workspace_scoped_lock_loss_verifier(*args: Any, **kwargs: Any) -> None:
+    """Share call state across spawn only inside this test's temporary workspace."""
+    marker = Path(kwargs["data_dir"]) / ".lock-loss-marker-mda3"
     if not marker.exists():
         marker.write_text("1", encoding="utf-8")
         return None
@@ -1117,6 +1118,25 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
     # --------------------------------------------------------------------------
     # 19. Adversarial: Workspace Lock Loss Immediately Before Promotion Aborts
     # --------------------------------------------------------------------------
+    def test_lock_loss_fixture_isolates_interleaved_workspaces(self) -> None:
+        """An interrupted or overlapping test must not consume another test's lock check."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            first = root / "first"
+            second = root / "second"
+            first.mkdir()
+            second.mkdir()
+            # Isolate the historical global marker too: never touch another run's
+            # real system-temp state while reproducing its interleaving.
+            with patch.object(tempfile, "gettempdir", return_value=str(root)) as system_temp:
+                _workspace_scoped_lock_loss_verifier(data_dir=first)
+                _workspace_scoped_lock_loss_verifier(data_dir=second)
+                with self.assertRaises(afetch.WorkspaceLockError):
+                    _workspace_scoped_lock_loss_verifier(data_dir=first)
+                with self.assertRaises(afetch.WorkspaceLockError):
+                    _workspace_scoped_lock_loss_verifier(data_dir=second)
+                system_temp.assert_not_called()
+
     def test_workspace_lock_loss_immediately_before_promotion_aborts(self) -> None:
         pdf_bytes = self._create_image_only_pdf(num_pages=2)
         pdf_sha = hashlib.sha256(pdf_bytes).hexdigest()
@@ -1138,15 +1158,17 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 "effective_mime_type": "application/pdf",
             }
 
-            with self.assertRaises(afetch.WorkspaceLockError):
+            with self.assertRaisesRegex(afetch.WorkspaceLockError, "Lock expired during long OCR execution"):
                 aextract.extract_attachment_content(
                     fetch_res,
                     expected_sha256=pdf_sha,
                     data_dir=data_dir,
                     _ocr_runner=_mock_ocr_pdf_2pages,
-                    _lock_verifier=_flaky_lock_verifier,
+                    _lock_verifier=_workspace_scoped_lock_loss_verifier,
                 )
 
+            self.assertFalse((data_dir / ".lock-loss-marker-mda3").exists())
+            self.assertEqual(pdf_bytes, pdf_path.read_bytes())
             # Derivative file was NOT promoted
             deriv_file = run_dir / "derivatives" / "scanned.ocr.pdf"
             self.assertFalse(deriv_file.exists())
