@@ -1,5 +1,13 @@
 # Mail-Desk — Subsystem System Map
 
+**Issue #10, 2026-10-18:** Die MD-A3-Lockverlust-Fixture verwendet einen
+Workspace-lokalen Marker im privaten `TemporaryDirectory`; verschachtelte
+Testläufe teilen keinen System-Temp-Zustand mehr. Eine deterministische
+Interleaving-Regression und der echte Spawn-/OCR-Promotionspfad sichern dies ab.
+Keine Änderung an Produktions-Timeouts, READY/START, Confinement oder Quarantäne.
+READY-/Last-Stabilität bleibt separat nachzuweisen; historische Flake-Zahlen unten
+sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
+
 **Aktueller Reconcile-Frame #11 × #14, 2026-10-18:** 178 Dateien,
 74 Scripts, davon 59 Core-Dateien, 85 Testmodule (`git ls-files`).
 Draft-Transport: §33; menschlich abgenommener Event-Writer unverändert: §32.

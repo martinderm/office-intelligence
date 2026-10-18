@@ -37,6 +37,11 @@
 ```
 
 ### Abgrenzung & Rolle
+* **Issue #10, Fixture-Isolation:** MD-A3-Lockverlust-Simulation hält ihren
+  Aufrufzustand im jeweiligen temporären Test-Workspace statt in einem globalen
+  System-Temp-Marker. Produktions-Lock-, Quarantäne- und Timeout-Verträge bleiben
+  unverändert; READY-/Last-Stabilität ist damit nicht nachgewiesen. Diagnose:
+  [`docs/analysis/issue-10-stability.md`](../analysis/issue-10-stability.md).
 * **Kein Agent-Workspace:** Das Bundle verfügt über keine eigene Agent-Control-Plane (kein `.agents/`, keine Session-Lifecycles, keine Dummy-Data-Zones). Es ist eine Funktionsbibliothek und Desk-Föderation für konsumierende Agent-Workspaces (vgl. [`COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md`](../../COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md)).
 * **Single Responsibility pro Sub-Skill:** Jeder Sub-Skill kapselt genau eine fachliche Domäne.
 
