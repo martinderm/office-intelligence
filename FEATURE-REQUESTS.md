@@ -1,5 +1,9 @@
 # Feature Requests — aktiver Backlog
 
+Safe diagnosis final guard frame: strict UTF-8 and diagnostic-directory confinement
+are verified by real test-first regressions (focused suite: 72 passed, zero skips).
+No live APPEND reproduction or closure of the underlying GroupWise issue is claimed.
+
 > **Neue Feature Requests ab sofort als GitHub Issues** im Repo
 > `martinderm/office-intelligence` anlegen (nicht mehr als FR-Record-File in
 > `docs/features/`). Diese Datei bleibt als Katalog der historischen
@@ -69,6 +73,25 @@ kein `fingerprint`→`action_id`-Alias); einheitliche Factored Attribution mit
 `skills/task-desk/references/task-schemas.md`,
 `skills/task-desk/references/task-routing.md`, `skills/task-desk/SKILL.md`;
 Map-Sync in den L1-Karten und den Mail-Desk-L2-Karten (§34).
+
+Issue-Nachweis (kein neuer FR-Record): [#19 — Gebundene, begrenzte Draft-Diagnose](https://github.com/martinderm/office-intelligence/issues/19).
+Explizit menschlich autorisierter, **rein diagnostischer** Vertrag (kein neuer
+FR-Record, keine neue Mailbox-Berechtigung): opt-in/Default-aus, geschlossener
+versionierter Request (Account **explizit und nicht-null**, `workspace_id`==Root)
+plus **separater** hashgebundener Operator-Review-Input, genau ein
+`message save` über den **bestehenden** `run_himalaya`-Seam
+(`diagnostic_capture`), alle read-only Preflights **vor** dem Einmal-Marker,
+fester Kindfilter und begrenzter fail-closed Parser (exakte Continuation-
+Byte-Signatur), additive Evidenz unter `data/mail-desk/diagnostics/` ohne
+Mailfelder/Zugangsdaten/Pfade und ohne rohen Kind-stdout. Der normale
+Draft-/Batch-/Anhangspfad bleibt unverändert.
+Vertrag/Grenzen: `skills/mail-desk/SKILL.md`,
+`skills/mail-desk/references/backends/himalaya.md`,
+`skills/mail-desk/references/cli-operations.md` und Mail-Desk L2-System-Map §35.
+High Risk: neue Validierungs-/Approval-/Security-Grenze, Human-Merge-Gate.
+Die GroupWise-Abhängigkeit selbst bleibt offen; der frühere GroupWise-Fehler ist
+seit der Draft-Transportarbeit nicht reproduziert. PR referenziert (#19), ohne
+`Fixes`/`Closes`.
 
 Katalog über laufende und geplante Feature Requests. Routing und Status-Tabelle
 liegen hier; die verbindliche Spezifikation (Paketkarte, SSOT) jedes FR liegt in

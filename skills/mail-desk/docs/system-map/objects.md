@@ -285,6 +285,50 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **Details:** [`task-schemas.md`](../../../task-desk/references/task-schemas.md) und
   die L2-§34.
 
+### 5.6 Draft-Diagnose-Objekte (`diagnostics/`) — Issue #19 (opt-in)
+
+* **Dateipfade:** `data/mail-desk/diagnostics/attempts/<request_hash>.json` (Einmal-Marker)
+  und `data/mail-desk/diagnostics/evidence/<request_hash>.json` (additive Evidenz),
+  beide atomar JSON; Owner [`scripts/core/diagnostics.py`](../scripts/core/diagnostics.py).
+* **Request/Receipt (Schema 1, geschlossen):** `DiagnosticRequest` bindet exakt
+  `schema_version`, `kind` (`mail_desk_diagnostic_save_draft`), `opt_in`,
+  `workspace_id`, `account`, `folder`, `operation` (`save_draft`) und `draft`.
+  `account` ist **explizit und nicht-null** und muss der Backend-Konfiguration
+  entsprechen; `workspace_id` muss dem aufgelösten Rootnamen entsprechen.
+  `DiagnosticReviewReceipt` bindet exakt `schema_version`, `kind`
+  (`mail_desk_diagnostic_review`), `receipt_id` (festes Token), `request_hash`,
+  `approved_at` (realer Zeitpunkt), `approved_by`. `canonical_request_sha256()`
+  bindet Workspace, Account, Folder, Operation und Draft deterministisch;
+  unbekannte Schlüssel (z. B. `reviewed`) werden ohne Key-Echo abgewiesen.
+* **Capture & Grenzen:** `DiagnosticTraceCapture` (keyword-only
+  `diagnostic_capture` an `run_himalaya`, Default `None` = Originalpfad) trägt
+  die feste Kindumgebung und die Bounds (64 KiB stderr, 64 KiB stdout, 128
+  sichere Events, 4 KiB Read-Chunks) und parst die **eingefrorenen** stderr-
+  Chunks (`parse_stderr`); nur strukturierte, feste Kinds plus Zählwerte werden
+  aufgezeichnet, nie Roh-stdout/-stderr. Geteilte Puffer/Flags laufen unter einem
+  Lock; nach **einem** begrenzten Cleanup-Budget (~5 s) wird der Zustand
+  eingefroren; ein noch lebender Reader ⇒ `cleanup_incomplete` ⇒ unbekannt.
+* **Einmal-Marker:** `{schema_version, request_hash, workspace_id, account,
+  folder, operation, consumed_at, phase: "attempt_consumed"}`; exklusiv-erzeugt
+  (`O_CREAT|O_EXCL`) in einer Write-All-Schleife **vor** dem ersten Prozess.
+  Zweiter Konsum → `diagnostic_replay_refused`; Schreibfehler →
+  `diagnostic_attempt_marker_failed` (kein Retry/Cleanup).
+* **Evidenz (keine Mailfelder/Zugangsdaten/Pfade):** `schema_version`, `kind`
+  (`mail_desk_diagnostic_evidence`), `request_hash`, `workspace_id`, `account`,
+  `folder`, `operation`, `operator_label`, `receipt_id`, `outcome`
+  (`appended`/`failed`/`unknown`), `child_exit_code`, `child_timed_out`,
+  `child_reaped`, `cleanup_incomplete`, `stderr_bytes`, `stderr_overflow`,
+  `stdout_overflow`, `events_overflow`, `reader_error`, `safe_events[]`
+  (je `{ordinal, kind, count?, total?}`, nur feste Kinds), `dropped_unknown`,
+  `dropped_malformed`, `stdout_bytes`, `stdout_truncated`, `generated_at`; bei
+  Fehler zusätzlich `reason_code`. Nur ein realer Nicht-Null-Exit ist `failed`,
+  alles andere ist `unknown`.
+* **Fester Kindfilter:** `off,imap_client::stream=trace,imap_codec::response=warn`
+  (`DIAGNOSTIC_TRACING_FILTER`); feste Env-Overrides für den Kindprozess
+  (`DIAGNOSTIC_CHILD_ENV_OVERRIDES`), globale Umgebung unverändert.
+* **Grenze:** rein diagnostisch, ein `save_draft`, keine Verifikation, kein
+  Retry; ergänzt keine Mailbox-Berechtigung. Details: L2-§35.
+
 ---
 
 ## 6. DTOs, Verträge und In-Memory-Strukturen

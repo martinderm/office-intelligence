@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -154,6 +155,303 @@ def _decode_process_stream(value: bytes | str | None) -> str:
     return value or ""
 
 
+#: Reasons raised by the bounded diagnostic capture branch of ``run_himalaya``.
+HIMALAYA_DIAGNOSTIC_OVERFLOW_REASON = "himalaya_diagnostic_overflow"
+HIMALAYA_DIAGNOSTIC_OUTCOME_UNKNOWN_REASON = "himalaya_outcome_unknown"
+HIMALAYA_DIAGNOSTIC_READER_FAILED_REASON = "himalaya_reader_failed"
+
+#: Bounded post-kill reap/join budget (seconds) for the diagnostic branch.
+_DIAGNOSTIC_REAP_BUDGET_SECONDS = 5.0
+
+#: The process OS boundary for the bounded diagnostic branch.  It is a module
+#: attribute so tests can fake *only* the process boundary without touching the
+#: global ``subprocess.Popen`` used by the shared workspace-lock CLI.
+_POPEN = subprocess.Popen
+
+
+def _write_all_binary(stream: Any, payload: bytes) -> None:
+    """Write the full payload, looping over short/no-progress writes.
+
+    A single ``stream.write`` call may deliver only part of the buffer (or return
+    ``None`` for a non-blocking stream).  The loop guarantees the whole payload is
+    delivered or raises, so a ``message save`` payload is never silently
+    truncated; the caller treats any error as an unknown APPEND outcome.
+    """
+    view = memoryview(payload)
+    total = 0
+    while total < len(view):
+        written = stream.write(view[total:])
+        if written is None or written <= 0:
+            raise OSError("stdin write made no progress")
+        total += int(written)
+
+
+def _run_himalaya_diagnostic(cmd: list[str], *, stdin_bytes: bytes, timeout: float, capture: Any) -> str:
+    """Run one bounded diagnostic child through the caller's capture object.
+
+    The capture owns the fixed child environment, the resource bounds and the
+    bounded stderr parser.  Only fixed, structured data is recorded; no raw
+    stderr or stdout is ever stored on the capture.
+
+    All shared mutable state (raw chunk buffers and flags) is written under one
+    lock and snapshotted ("frozen") under a bounded acquire after the single
+    cleanup deadline.  Background reader threads can therefore never mutate the
+    finalized evidence, and any thread that is still alive at freeze time forces
+    an *unknown* outcome with ``cleanup_incomplete`` set.
+    """
+    env = capture.child_environment(os.environ)
+    read_chunk = capture.read_chunk_bytes
+    stderr_cap = capture.stderr_cap_bytes
+    stdout_cap = capture.stdout_cap_bytes
+
+    lock = threading.Lock()
+    state: dict[str, Any] = {
+        "stderr_chunks": [],
+        "stderr_bytes": 0,
+        "stderr_overflow": False,
+        "stdout_chunks": [],
+        "stdout_bytes": 0,
+        "stdout_truncated": False,
+        "stdout_overflow": False,
+        "reader_error": False,
+        "stdin_error": False,
+        "frozen": False,
+    }
+
+    def _kill() -> None:
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            pass
+
+    try:
+        process = _POPEN(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            bufsize=0,
+        )
+    except OSError:
+        raise HimalayaInvocationError(
+            "himalaya_launch_failed",
+            "Himalaya could not be launched; the diagnostic APPEND outcome is unknown and it was not retried.",
+        ) from None
+
+    def _record(mutator) -> None:
+        with lock:
+            if not state["frozen"]:
+                mutator()
+
+    def _write_stdin() -> None:
+        stream = process.stdin
+        if stream is None:
+            _record(lambda: state.__setitem__("stdin_error", True))
+            _kill()
+            return
+        try:
+            _write_all_binary(stream, stdin_bytes)
+            stream.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            _record(lambda: state.__setitem__("stdin_error", True))
+            _kill()
+        finally:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+    def _append_bounded(key_chunks: str, key_bytes: str, key_overflow: str, cap: int, chunk: bytes) -> bool:
+        overflow = False
+        with lock:
+            if state["frozen"]:
+                return False
+            remaining = cap - state[key_bytes]
+            if remaining <= 0:
+                state[key_overflow] = True
+                return True
+            state[key_chunks].append(bytes(chunk[:remaining]))
+            state[key_bytes] += min(len(chunk), remaining)
+            if len(chunk) > remaining:
+                state[key_overflow] = True
+                overflow = True
+        return overflow
+
+    def _drain_stdout() -> None:
+        stream = process.stdout
+        if stream is None:
+            _record(lambda: state.__setitem__("reader_error", True))
+            _kill()
+            return
+        try:
+            while True:
+                chunk = stream.read(read_chunk)
+                if not chunk:
+                    break
+                if _append_bounded("stdout_chunks", "stdout_bytes", "stdout_overflow", stdout_cap, chunk):
+                    _record(lambda: state.__setitem__("stdout_truncated", True))
+                    _kill()
+                    break
+        except (OSError, ValueError):
+            _record(lambda: state.__setitem__("reader_error", True))
+            _kill()
+
+    def _drain_stderr() -> None:
+        stream = process.stderr
+        if stream is None:
+            _record(lambda: state.__setitem__("reader_error", True))
+            _kill()
+            return
+        try:
+            while True:
+                chunk = stream.read(read_chunk)
+                if not chunk:
+                    break
+                if _append_bounded("stderr_chunks", "stderr_bytes", "stderr_overflow", stderr_cap, chunk):
+                    _kill()
+                    break
+        except (OSError, ValueError):
+            # A swallowed reader error would hide an unknown outcome; record it.
+            _record(lambda: state.__setitem__("reader_error", True))
+            _kill()
+
+    threads = [
+        threading.Thread(target=_write_stdin, name="diagnostic-stdin", daemon=True),
+        threading.Thread(target=_drain_stdout, name="diagnostic-stdout", daemon=True),
+        threading.Thread(target=_drain_stderr, name="diagnostic-stderr", daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    timed_out = False
+    killed = False
+    waited = False
+    exit_code: int | None = None
+    run_deadline = time.monotonic() + float(timeout)
+    try:
+        exit_code = process.wait(timeout=max(0.0, run_deadline - time.monotonic()))
+        waited = True
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        killed = True
+        _kill()
+
+    # One single bounded cleanup budget (not one per join/wait).
+    cleanup_deadline = time.monotonic() + max(0.0, _DIAGNOSTIC_REAP_BUDGET_SECONDS)
+    if killed:
+        try:
+            exit_code = process.wait(timeout=max(0.0, cleanup_deadline - time.monotonic()))
+            waited = True
+        except Exception:  # noqa: BLE001 - reaping must never mask the timeout
+            exit_code = None
+    for thread in threads:
+        thread.join(max(0.0, cleanup_deadline - time.monotonic()))
+    alive = [thread for thread in threads if thread.is_alive()]
+
+    # Freeze and snapshot under a bounded acquire; a still-running thread must
+    # never mutate the evidence we are about to finalize.
+    acquired = lock.acquire(timeout=max(0.001, cleanup_deadline - time.monotonic()))
+    snapshot: dict[str, Any] | None = None
+    if acquired:
+        state["frozen"] = True
+        snapshot = {
+            "stderr_chunks": list(state["stderr_chunks"]),
+            "stderr_overflow": bool(state["stderr_overflow"]),
+            "stdout_chunks": list(state["stdout_chunks"]),
+            "stdout_bytes": int(state["stdout_bytes"]),
+            "stdout_truncated": bool(state["stdout_truncated"]),
+            "stdout_overflow": bool(state["stdout_overflow"]),
+            "reader_error": bool(state["reader_error"] or state["stdin_error"]),
+        }
+        lock.release()
+
+    cleanup_incomplete = bool(alive) or snapshot is None
+    child_reaped = bool(waited and exit_code is not None)
+
+    if not alive and not cleanup_incomplete:
+        for stream_name in ("stdin", "stdout", "stderr"):
+            stream = getattr(process, stream_name, None)
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+
+    if snapshot is None:
+        stderr_result = {
+            "stderr_bytes": 0,
+            "safe_events": [],
+            "event_count": 0,
+            "dropped_unknown": 0,
+            "dropped_malformed": 0,
+            "events_overflow": True,
+        }
+        stdout_data = b""
+    else:
+        stderr_result = capture.parse_stderr(snapshot["stderr_chunks"])
+        stdout_data = b"".join(snapshot["stdout_chunks"])
+
+    over_budget = bool(
+        cleanup_incomplete
+        or stderr_result["events_overflow"]
+        or timed_out
+        or (snapshot is not None and (snapshot["stderr_overflow"] or snapshot["stdout_overflow"]))
+    )
+    result = {
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "stderr": stderr_result,
+        "stderr_overflow": bool(snapshot["stderr_overflow"]) if snapshot else True,
+        "stdout_overflow": bool(snapshot["stdout_overflow"]) if snapshot else False,
+        "stdout_bytes": int(snapshot["stdout_bytes"]) if snapshot else 0,
+        "stdout_truncated": bool(snapshot["stdout_truncated"]) if snapshot else False,
+        "reader_error": bool(snapshot["reader_error"]) if snapshot else True,
+        "cleanup_incomplete": cleanup_incomplete,
+        "child_reaped": child_reaped,
+        "over_budget": over_budget,
+    }
+    capture.record_run(result)
+
+    if cleanup_incomplete:
+        raise HimalayaInvocationError(
+            HIMALAYA_DIAGNOSTIC_READER_FAILED_REASON,
+            "The diagnostic stream cleanup did not complete; the APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if timed_out:
+        raise HimalayaInvocationError(
+            "himalaya_timeout",
+            "Himalaya timed out; the diagnostic APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if stderr_result["events_overflow"] or result["stderr_overflow"]:
+        raise HimalayaInvocationError(
+            HIMALAYA_DIAGNOSTIC_OVERFLOW_REASON,
+            "The diagnostic stderr exceeded its bound; the APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if result["stdout_overflow"]:
+        raise HimalayaInvocationError(
+            HIMALAYA_DIAGNOSTIC_OVERFLOW_REASON,
+            "The diagnostic stdout exceeded its bound; the APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if result["reader_error"]:
+        raise HimalayaInvocationError(
+            HIMALAYA_DIAGNOSTIC_READER_FAILED_REASON,
+            "The diagnostic pipe stream failed; the APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if exit_code is None:
+        raise HimalayaInvocationError(
+            HIMALAYA_DIAGNOSTIC_OUTCOME_UNKNOWN_REASON,
+            "The diagnostic child exit status is unknown; the APPEND outcome is unknown and it was not retried.",
+        ) from None
+    if exit_code != 0:
+        raise HimalayaInvocationError(
+            "himalaya_command_failed",
+            "Himalaya failed; the diagnostic APPEND outcome was recorded without raw output.",
+        ) from None
+    return stdout_data.decode("utf-8", errors="replace")
+
+
 def run_himalaya(
     args: list[str],
     account: str | None = None,
@@ -161,6 +459,7 @@ def run_himalaya(
     max_retries: int = 5,
     *,
     stdin_bytes: bytes | None = None,
+    diagnostic_capture: Any | None = None,
 ) -> str:
     """Execute a non-interactive Himalaya command, retrying transient failures only.
 
@@ -175,6 +474,11 @@ def run_himalaya(
     exactly once (an APPEND must never be retried).  Launch/communication
     ``OSError`` becomes ``himalaya_launch_failed`` for both the payload and the
     non-payload path; its outcome may be unknown and it is never retried.
+
+    ``diagnostic_capture`` is an optional, typed, keyword-only internal object
+    (see ``core.diagnostics``) that switches a payload command onto the bounded
+    diagnostic branch: exactly one child, bounded concurrent pipe drain and no
+    retry.  It defaults to ``None``, so the original path stays byte-identical.
     """
     if not isinstance(timeout, int) or timeout <= 0:
         raise ValueError("timeout must be a positive integer.")
@@ -198,9 +502,18 @@ def run_himalaya(
                 "stdin_bytes requires exactly one explicit '-o plain' output format; "
                 "JSON output would bypass stdin."
             )
+    cmd = build_himalaya_command(args, account)
+    if diagnostic_capture is not None:
+        # Opt-in bounded diagnostic branch: exactly one child, bounded drain, no
+        # retry.  ``stdin_bytes`` is required (a payload command); validation
+        # above already ran.
+        if stdin_bytes is None:
+            raise ValueError("diagnostic_capture requires a payload stdin_bytes.")
+        return _run_himalaya_diagnostic(
+            cmd, stdin_bytes=stdin_bytes, timeout=float(timeout), capture=diagnostic_capture
+        )
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
-    cmd = build_himalaya_command(args, account)
 
     # A payload command is never retried: the caller's attempt budget cannot
     # turn one draft into a duplicate APPEND.

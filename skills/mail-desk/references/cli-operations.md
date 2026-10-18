@@ -294,6 +294,81 @@ python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -
   `old_envelope_id` und `crash_window`. Das Journal ist bewusst eine eigene Datei
   und **nicht** das `batch-recovery-journal.json` des Batch-Pfads.
 
+## Gebundene Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
+
+Zusätzlich zu den drei Entwurfsoperationen existiert ein **rein diagnostischer**
+Pfad, der genau **einen** `message save`-APPEND beobachtet, ohne Rohprotokoll,
+Zugangsdaten oder Mailinhalte offenzulegen. Er ist **ausdrücklich opt-in und
+standardmäßig aus**: `--opt-in` in der CLI *und* `opt_in: true` im Request sind
+beide nötig; sonst stoppt der Aufruf vor jedem lokalen Write und jedem Prozess.
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py diagnose-draft --request req.json --review rev.json --opt-in --json
+```
+
+- **Geschlossener, versionierter Request:** Das Request-Manifest bindet exakt
+  `workspace_id`, `account`, `folder`, `operation: "save_draft"` und den
+  `draft`-Inhalt. Die Schlüsselmenge ist geschlossen: unbekannte Schlüssel (etwa
+  `reviewed: true` im selben Manifest) werden fail-closed abgewiesen, und genau
+  **eine** Operation `save_draft` ist erlaubt — kein `replace`/`delete`, keine
+  Account-Overrides, keine Mehrfachoperationen. `account` ist **explizit und
+  nicht-null** und muss exakt zur Workspace-Backend-Konfiguration passen;
+  `workspace_id` muss dem aufgelösten Workspace-Wurzelnamen entsprechen
+  (`<root>/data/mail-desk`-Layout; Link-/Junction-Vorfahren werden abgewiesen,
+  gleichnamiger Klon bleibt eine dokumentierte Restgrenze). `folder` ist der
+  reviewte Zielordner (die explizite Vorgabe ersetzt jede Ordner-Erkennung).
+- **Separater, hashgebundener Review-Input:** Die Freigabe steht **nicht** im
+  Request, sondern in einer eigenen Operator-Datei (`--review`,
+  `DiagnosticReviewReceipt`, exakt `schema_version`, `kind`, `receipt_id`,
+  `request_hash`, `approved_at`, `approved_by`; `receipt_id` als festes Token,
+  `approved_at` als realer Zeitpunkt). Sie ist an den exakten kanonischen
+  Request-Hash gebunden (inkl. Workspace/Account/Folder/Operation); Drift wird
+  abgewiesen. Wie die übrigen Receipts ist dies eine Struktur-/Hash-Bindung und
+  **keine** kryptografische Authentisierung.
+- **Read-only-Preflight vor dem Marker:** Request, Receipt, Timeout, Workspace-/
+  Account-Bindung, Draft-Bau (Header-Injektions-Abweisung), strikte
+  UTF-8-Validierung des Payloads und die Config-/Executable-Auflösung laufen
+  **vollständig vor** dem Einmal-Marker; ein fehlgeschlagener Preflight verbraucht
+  keinen Versuch.
+- **Einmalig, ein Prozess über `run_himalaya`:** Der begrenzte Lauf nutzt den
+  bestehenden `run_himalaya`-Seam mit dem keyword-only `diagnostic_capture`
+  (Default `None` → unverändert). Danach wird der Einmal-Marker atomar unter
+  `data/mail-desk/diagnostics/attempts/<request_hash>.json` konsumiert; ein Replay
+  wird abgewiesen. Es läuft genau ein `message save -o plain -f <reviewter
+  Ordner>` — keine Ordner-Erkennung, keine Verifikation, kein Retry, kein
+  Fallback. Crash, Timeout, Cap-Überlauf, Reader-Fehler oder unbekannter Exit
+  hinterlassen einen **unbekannten** APPEND-Ausgang. Der Workspace-Lock wird über
+  den shared Guard mit `allow_legacy=False` geprüft; die Lease/Conversation kommt
+  aus den bestehenden `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID`.
+- **Fester Kindfilter:** nur `off,imap_client::stream=trace,imap_codec::response
+  =warn`; `tasks`, `resolver` und `wire` bleiben aus. Die Umgebung des
+  Kindprozesses erhält feste Overrides (`RUST_LOG`, `RUST_BACKTRACE=0`,
+  `NO_COLOR=1`, …); die globale Umgebung wird nie verändert.
+- **Begrenzter Parser:** stderr wird inkrementell gelesen (Cap 64 KiB / 128
+  sichere Events); unbekannte Targets, falsche Levels, Spans, ANSI-Escapes,
+  Multiline-Fragmente und Oversize-Zeilen werden **verworfen**, nie redigiert.
+  Erkannt werden nur die drei festen `imap_client::stream`-Meldungen und die
+  Continuation-Warnung **nur** als vollständiges, exakt gepinntes 3-Zeilen-Record
+  mit `WARN imap_codec::response:`-Präfix (eingebettetes CR/LF, über
+  Chunk-Grenzen); eine bloße Signatur in unbekanntem Inhalt ergibt **keinen**
+  Event. Ein sicheres Event trägt nur den festen Kind-Namen und begrenzte
+  Zählwerte. Ein Cap-Überlauf tötet/reapt den Prozess.
+- **Ausgang & Cleanup:** Nur ein realer Nicht-Null-Exit ist ein definitiver
+  Fehler; Timeout, Cap-Überlauf, Reader-Fehler, `cleanup_incomplete` (ein Reader
+  lebt nach dem einen begrenzten Cleanup-Budget noch) und `exit None` sind
+  **unbekannt**, nie „failed"; ein Resolve-Fehler nach bestandenem Preflight ist
+  unbekannter Transport. Geteilte Puffer werden nach dem Cleanup-Budget unter
+  Lock eingefroren; `child_reaped` nur bei echtem Reap.
+- **Additive Evidence, kein Kind-stdout:** strukturierte Diagnose unter
+  `data/mail-desk/diagnostics/evidence/<request_hash>.json` — ohne Mailfelder,
+  Zugangsdaten oder Pfade. Der kanonische Erfolgs-Envelope bleibt unverändert; der
+  rohe Kind-stdout wird **nicht** durchgereicht. Request/Review werden
+  größenbegrenzt (2 MiB/16 KiB) und strikt (Duplicate-Keys/NaN/UTF-8) ohne
+  Key-Echo gelesen.
+
+Der reguläre Entwurfs-, Batch- und Anhangspfad bleibt unberührt; dieser Pfad
+ergänzt keine Mailbox-Berechtigung und sendet nie.
+
 ## Policygebundene Anhang-Auswertung (Inspect → Fetch → Extract → Handoff)
 
 Der `attachment_evaluate`-Orchestrator (`scripts/core/attachment_evaluation.py`) ist der

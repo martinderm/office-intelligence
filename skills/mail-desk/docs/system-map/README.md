@@ -1,5 +1,10 @@
 # Mail-Desk — Subsystem System Map
 
+**Final diagnostic guard frame:** strict UTF-8 text validation and refusal of
+linked diagnostic/attempt/evidence directories precede the one-shot attempt.
+The focused suite passed 72 tests, zero skips (2026-10-18); full-suite results
+and independent HEAD/tree review are bound separately in the PR/run evidence.
+
 **Issue #10, 2026-10-18:** Die MD-A3-Lockverlust-Fixture verwendet einen
 Workspace-lokalen Marker im privaten `TemporaryDirectory`; verschachtelte
 Testläufe teilen keinen System-Temp-Zustand mehr. Eine deterministische
@@ -1390,3 +1395,176 @@ kein Dispatch).
 Zielverträge (Version 2, noch nicht laufzeitunterstützt); Legacy `version: 1` bleibt
 read-only. Vollständige Consumer-Verträge:
 [`task-schemas.md`](../../../task-desk/references/task-schemas.md).
+
+## 35. Issue #19 — Gebundene, begrenzte Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
+
+**Status:** Eng begrenzter, rein diagnostischer Vertrag, **explizit menschlich
+autorisiert** für Issue #19. Er ergänzt **keine** Mailbox-Berechtigung; der
+normale Draft-, Batch-, Dossier- und Anhangspfad bleibt unverändert. Kein neues
+Bundle-Control-Plane und keine neue Architektur: der shared `workspace-lock`-Guard
+wird in place und ausnahmslos mit `allow_legacy=False` genutzt.
+
+**Problem:** Issue #19 analysiert GroupWise-/IMAP-Abhängigkeiten (u. a. den
+Drafts-Ordner-Fallback `Work In Progress` und die Continuation-Request-Warnung).
+Dafür braucht der Operator einen begrenzten Blick in die Himalaya-Trace-Ausgabe —
+ohne Rohprotokoll, Zugangsdaten oder Mailinhalte offenzulegen.
+
+**Umsetzung (`skills/mail-desk/scripts/core/diagnostics.py`, verdrahtet als
+`diagnose-draft` im JSON-Manifest-Client):**
+
+- **Opt-in, Default aus:** `run_diagnostic_save_draft(..., opt_in=True)` **und**
+  `opt_in: true` im Request sind beide nötig. Fehlt eines, stoppt der Lauf vor
+  jedem lokalen Write und jedem Prozess (`diagnostics_opt_in_required`).
+- **Kanonischer, geschlossener Request** (`DiagnosticRequest`, Schema 1): exakt
+  `schema_version`, `kind`, `opt_in`, `workspace_id`, `account`, `folder`,
+  `operation` und `draft`. `workspace_id` ist ein portabler Token ohne
+  Pfadtrenner (keine Host-/BOKU-Hardcodes) und muss dem aufgelösten
+  Workspace-Wurzelnamen entsprechen (`<root>/data/mail-desk`-Layout; Link-/
+  Junction-Vorfahren werden abgewiesen; ein gleichnamiger Klon bleibt eine
+  dokumentierte, nicht-kryptografische Restgrenze). `account` ist **explizit und
+  nicht-null** und muss exakt der Workspace-Backend-Konfiguration entsprechen
+  (kein Default-/`null`-Account). `operation` ist genau `save_draft`
+  (Multi-Operation, `replace`, `delete` und Account-Overrides werden
+  abgewiesen); die `draft`-Schlüssel sind geschlossen und Header-Injektion wird
+  abgewiesen. `canonical_request_sha256` bindet Workspace, Account, Folder,
+  Operation und Draft deterministisch. Der Client liest Request/Review
+  **größenbegrenzt** (Request ≤ 2 MiB, Review-Receipt ≤ 16 KiB), verlangt gültiges
+  UTF-8 und parst **strikt** (duplizierte JSON-Schlüssel und nicht-finite Literale
+  `NaN`/`Infinity` werden ohne Key-Echo abgewiesen); die Draft-Felder sind
+  zusätzlich feldbegrenzt (`body` ≤ 1 048 576, `subject` ≤ 4 096, Header-Felder
+  ≤ 2 048 Zeichen).
+- **Separater Review-Input** (`DiagnosticReviewReceipt`, Schema 1): exakt
+  `schema_version`, `kind`, `receipt_id`, `request_hash`, `approved_at`,
+  `approved_by`; der Hash muss dem kanonischen Request-Hash entsprechen
+  (`diagnostic_approval_drift`). Ein `reviewed: true` im Request-Manifest ist
+  wegen der geschlossenen Schlüsselmenge keine Autorität. Der Vertrag ist eine
+  Struktur-/Hash-Bindung wie die übrigen Receipts und behauptet **keine**
+  kryptografische Authentisierung.
+- **Workspace-/Account-Bindung:** Der Account wird read-only über den echten
+  Loader `readiness.bind_workspace_account` gegen `.agents/mail-desk-backend.json`
+  gebunden (Owner `core/readiness.py`); ein Drift stoppt fail-closed
+  (`diagnostic_workspace_binding_failed`).
+- **Lock & Einmal-Marker:** Vor dem Marker laufen **alle** read-only Preflights
+  (Request, Receipt, Timeout, Workspace-/Account-Bindung, Draft-Bau inkl.
+  Header-Injektions-Abweisung, strikte UTF-8-Payload-Validierung und
+  Config-/Executable-Auflösung); ein fehlgeschlagener Preflight verbraucht keinen
+  Versuch. Der shared Guard wird mit `allow_legacy=False` aufgerufen
+  (`diagnostic_lock_unavailable` bei fehlendem/fremdem Lock); die Lease/
+  Conversation kommt aus dem Argument oder den bestehenden
+  `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID`, und der geteilte
+  Guard wird über einen begrenzten, vertrauenswürdigen Root geladen (explizites
+  `lock_root` > `MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT` > bundle-relativer
+  Default; kein Vertrauen in einen vorhandenen `sys.modules`-Eintrag). Danach
+  wird der Einmal-Marker atomar (`O_CREAT|O_EXCL`) unter
+  `data/mail-desk/diagnostics/attempts/<request_hash>.json` **vor** dem ersten
+  Prozess konsumiert; ein Replay endet `diagnostic_replay_refused`. Der Marker
+  wird in einer Write-All-Schleife vollständig geschrieben; ein Schreibfehler
+  endet fail-closed als `diagnostic_attempt_marker_failed` (kein Hintergrund-
+  Retry, kein Cleanup).
+- **Genau ein Prozess über `run_himalaya`:** Der begrenzte Lauf geht durch den
+  **bestehenden** `run_himalaya`-Seam mit dem keyword-only
+  `diagnostic_capture`-Objekt (`default None` → Originalpfad byte-unverändert);
+  keine separate Ausführungsfassade. Es läuft genau **ein** Kindprozess
+  `message save -o plain -f <reviewter Ordner>` mit Popen-Nebendrain (kein
+  `communicate`); keine Ordner-Erkennung, keine Verifikation, kein Retry, kein
+  Fallback, keine Aufräumprozesse. Alle geteilten Puffer/Flags laufen unter einem
+  Lock; nach **einem einzigen** begrenzten Cleanup-Budget (~5 s, nicht pro Join)
+  wird der Zustand „eingefroren" und unter begrenztem Lock-Acquire gesnapshottet,
+  sodass kein Hintergrund-Reader die finalisierte Evidenz noch verändert. Ist ein
+  Reader-Thread danach noch am Leben (oder der Snapshot nicht erreichbar), ist der
+  Ausgang **unbekannt** (`cleanup_incomplete`). Nur ein real gelaufener Kindprozess
+  mit Nicht-Null-Exit ist ein definitiver Fehler (`diagnostic_append_failed`);
+  Timeout, Cap-Überlauf, Reader-Fehler, `cleanup_incomplete`, `exit None` und ein
+  Bootstrap-/Resolve-Fehler nach bestandenem Preflight (TOCTOU) sind **unbekannt**
+  (`diagnostic_append_outcome_unknown` bzw. `diagnostic_transport_error`), nie
+  „failed". `child_reaped` wird nur gesetzt, wenn der Prozess tatsächlich
+  abgewartet wurde.
+- **Fester, restriktiver Kindfilter:** `off,imap_client::stream=trace,
+  imap_codec::response=warn` (nur diese zwei Targets, exakt TRACE bzw. WARN);
+  `tasks`, `resolver` und `wire` bleiben aus. Feste Env-Overrides
+  (`RUST_LOG`, `RUST_BACKTRACE=0`, `RUST_LIB_BACKTRACE=0`, `NO_COLOR=1`,
+  `RUST_LOG_STYLE=never`, …) überschreiben jede geerbte Manipulation; die globale
+  Umgebung wird nie verändert, kein `--trace`.
+- **Begrenzter, fail-closed Parser (`BoundedTraceParser`):** inkrementelles Lesen
+  mit Cap 64 KiB stderr / 128 sicheren Events. Positiv erkannt werden die festen
+  Formen `wrote N bytes`, `more input needed`, `read N/M bytes` (Target
+  `imap_client::stream`) und die Continuation-Warnung **nur** als vollständiges,
+  exakt gepinntes **3-Zeilen-Record** (`WARN imap_codec::response:`-Präfix + die
+  drei gepinnten Segmente mit eingebettetem CR/LF, über Chunk-Grenzen hinweg). Die
+  bloße Byte-Signatur irgendwo im Rohstrom (z. B. in unbekanntem Serverinhalt)
+  erzeugt **keinen** Event; nur die festen, bekannten Formen werden positiv
+  akzeptiert, alles andere wird verworfen. Spans, ANSI-Escapes, freie Felder,
+  unbekannte Targets, falsche Levels und Oversize-Zeilen werden **verworfen**
+  (nicht redigiert); eine Overlong-Zeile wird bis zum nächsten Newline verworfen,
+  ihr Suffix nie als neue Zeile erkannt. Nur **klassifizierte** Events zählen auf
+  das Event-Cap (Unbekanntes nach 128 zählt nicht als Overflow). Ein sicherer
+  Event trägt nur einen festen Kind-Namen plus begrenzte Zählwerte und eine
+  Ordinal; dynamische Texte werden nie persistiert. stderr- **und** stdout-
+  Überlauf töten/reapen den Kindprozess prompt und enden als unbekannter Ausgang.
+- **Additive Evidenz, kein Kind-stdout:** strukturiertes, PII-/pfad-/
+  credential-freies Evidence unter
+  `data/mail-desk/diagnostics/evidence/<request_hash>.json` (keine Betreff-/To-/
+  Body-Felder). Der kanonische Erfolgs-Envelope bleibt unverändert; der rohe
+  Kind-stdout wird **nicht** durchgereicht. Fehler sind generisch (`from None`)
+  und enthalten nie rohes stderr oder rohe Ausnahme-Ketten.
+
+**Quellfakten (gepinnt, kein Rust-/Binary-Eingriff):** Himalaya 1.2.0 (Rev
+`1b70c4e0eaa72dee48353f0211e6cc0f0776fe98`) mit `imap-client` 0.3.0,
+`imap-codec` 2.0.0-alpha.7, `imap-next` 0.3.4, `imap-types` 2.0.0-alpha.6,
+`pimalaya-tui` 0.3.1. Die zwei erlaubten Targets stammen aus der öffentlichen
+Quelle: `imap-client` 0.3.0 `src/stream.rs` enthält ausschließlich die drei
+genannten `trace!`-Formen. Die Continuation-Request-Warnung stammt **exakt** aus
+`imap-codec` 2.0.0-alpha.7 `src/response.rs`:
+`log::warn!("Rectified faulty continuation request `+\r\n` to `+ ...\r\n`")` —
+das Rust-Stringliteral enthält reale CR/LF-Bytes und **keinen** dynamischen
+Servertext, ist also eine reine Konstante; der Parser akzeptiert sie positiv nur
+als vollständiges 3-Zeilen-Record nach dem `WARN imap_codec::response:`-Präfix
+(per `webfetch` aus der öffentlichen Quelle gelesen, nicht geraten). **Quell-
+Grenzen:** Die Warnung ist upstream an das Build-Feature `quirk_empty_continue_req`
+gebunden — ihr Fehlen ist also **kein** Beweis, dass der Quirk inaktiv ist; die
+Cargo-`lock`-Versionen sind Versionsangaben, **keine** Feature-Flags, und es gibt
+**keinen** Binary-/Live-Nachweis. `tasks::trace!(?command, "enqueue task")` ist
+**unsicher** (Literales Debug des echten Payloads) und bleibt daher aus. Es wird
+**keine** Live-Filter-Wirkung am installierten Binary behauptet; die Filter-Form
+ist über Quelle und Offline-Fixtures gepinnt.
+
+**Abgrenzung:** PR referenziert Issue #19 (`Refs #19`), ohne `Fixes`/`Closes`.
+Die GroupWise-Abhängigkeit selbst bleibt offen; der frühere GroupWise-Fehler ist
+seit der Draft-Transportarbeit nicht mehr reproduziert. Kein Rust, keine
+Installation, keine Instrumentierung, kein Proxy und kein neuer Transport.
+
+**Pflichttests:** `tests/test_maildesk_diagnostics.py` (**69 Tests**, hermetisch:
+gefakte Prozess-OS-Grenze `himalaya._POPEN` und gefakte Command-Auflösung; der
+Workspace-Lock ist der **echte** shared Guard mit realer Lease in einem
+temporären Consumer-Workspace). Gepinnt sind Request-/Receipt-Kontrakt
+(inkl. festem `receipt_id`-Token, echtem `approved_at`, kein Key-Echo),
+expliziter Account, `workspace_id`==Rootname, Opt-in-Default-aus, Replay und
+Drift, Bindungs-/Lock-Drift, genau ein Prozess, Marker-vor-Prozess,
+Preflight-vor-Marker (Marker nicht verbrannt), exakte Payload-Bytes (UTF-8 +
+Transport-CRLF), reale kanonische Args/Account (`-a`/`-c`/`message save -o plain
+-f`), begrenzte Parser-Events (positives 3-Zeilen-Record über Chunk-Grenzen,
+Roh-Signatur im Serverinhalt **nicht** akzeptiert, Overlong-Suffix, Cap nur nach
+Klassifikation), stderr-/stdout-Flood, Reader-Fehler, blockierender/nie-endender
+Reader (`cleanup_incomplete` → unbekannt), kurze Marker-/Payload-Writes
+(Write-All-Schleifen), Outcome-Mapping (nur realer Nicht-Null-Exit = failed),
+Feldgrenzen, striktes JSON (Duplicate-Keys/NaN/Unicode/Overgröße), manipulierte
+geerbte Logging-Umgebung, generische Fehler ohne Canary in
+`traceback.format_exception` und **kein** Kind-stdout im Envelope/Evidence.
+
+**Testchronologie (ehrlich, nicht retroaktiv umetikettiert):** Die
+Implementierung dieses Pakets entstand vor dem Testlauf; der RED wurde als
+**Regression-RED** erzeugt, indem die zuvor gesicherte Vor-Fix-Fassung
+(HEAD-`himalaya.py` + vorheriges `core.diagnostics` + vorheriger Client-Loader)
+temporär wiederhergestellt und danach wieder entfernt wurde — **kein** reiner
+test-first-RED. Messungen dieser Runde:
+- 2026-10-18 (erste Runde, historisch, nicht überschrieben): **58 Tests, 15
+  Failures + 30 Errors, Exit 1** (Regression-RED) → **58/58 OK, Exit 0**.
+- 2026-10-18 (zweite/aktuelle Runde): `python -B
+  skills/mail-desk/tests/test_maildesk_diagnostics.py` gegen die Vor-Fix-Fassung →
+  **69 Tests, 3 Failures + 9 Errors, Exit 1** (Regression-RED; u. a. fehlendes
+  `RECTIFIED_CONTINUATION_SEGMENTS`, kein `cleanup_incomplete`,
+  Nicht-Ablehnung von Duplicate-Keys/NaN, ungebremster Marker-Write,
+  `_outcome_for_reason` als „failed"); **GREEN** danach mit
+  `-W error::ResourceWarning` → **69/69 OK, Exit 0**. Die finale Zahl und die
+  Vier-Suiten-Evidenz ergänzt die Parent-Session am HEAD/Tree. Die reale
+  Filterwirkung am installierten Himalaya ist damit nicht behauptet.

@@ -132,3 +132,33 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 
 * **Kein interaktiver Setup-Wizard:** Fehlt `config.toml`, wirft `resolve_himalaya_invocation()` sofort `HimalayaInvocationError("himalaya_config_missing")`. Ein interaktives Blockieren des Prozesses ist ausgeschlossen.
 * **Timeout-Abbruch:** Hängt die IMAP-Verbindung, greift der Subprozess-Timeout. Ein Timeout führt zu `himalaya_timeout` und wird **nicht** wiederholt (kein Retry-Loop bei hängenden Prozessen).
+
+### 5.1 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
+
+* **Ein Prozess, keine Retries/Fallbacks/Cleanups:** Der diagnostische Pfad
+  ([`scripts/core/diagnostics.py`](../scripts/core/diagnostics.py)) geht durch den
+  bestehenden `run_himalaya`-Seam (keyword-only `diagnostic_capture`, Default
+  `None` = unverändert) und startet genau **einen** `message save -o plain -f
+  <reviewter Ordner>` über `subprocess.Popen` mit begrenztem Nebendrain
+  (stdout/stderr in eigenen Threads, stdin in eigenem Thread mit Write-All-
+  Schleife — kein `communicate`, das unbegrenzt puffern würde, kein
+  Stdin-Deadlock, keine Kurzschreib-Verluste). Kein `folder list`, keine
+  Verifikation, keine Aufräumprozesse. Ein Timeout, ein stderr-/stdout-Cap-
+  Überlauf, ein Reader-Fehler, ein nach **einem** begrenzten Cleanup-Budget
+  (~5 s) noch lebender Reader (`cleanup_incomplete`) oder ein unbekannter Exit
+  endet `diagnostic_append_outcome_unknown`; nur ein realer Nicht-Null-Exit ist
+  `diagnostic_append_failed`, ein Resolve-Fehler nach bestandenem Preflight ist
+  unbekannter Transport. Geteilte Puffer werden nach dem Cleanup-Budget unter
+  Lock eingefroren; `child_reaped` nur bei echtem Reap. Nichts wird wiederholt.
+* **Keine Secret-Persistenz:** Der feste Kindfilter
+  (`off,imap_client::stream=trace,imap_codec::response=warn`) und feste
+  Env-Overrides werden nur am Kindprozess gesetzt; die globale Umgebung bleibt
+  unverändert. Der begrenzte Parser persistiert nur feste Kinds plus begrenzte
+  Zählwerte; Auth-/SASL-/Header-/Body-Canaries werden **verworfen**, nie
+  redigiert, und erreichen weder Evidence noch Envelope oder Exception-Kette.
+* **Additive Evidenz ohne Mailfelder:** nur unter
+  `data/mail-desk/diagnostics/evidence/`; der kanonische Erfolgs-Envelope und die
+  bestehenden Draft-/Batch-/Anhangspfade bleiben unverändert.
+* **Lock & Einmaligkeit:** shared Guard mit `allow_legacy=False`; der
+  Einmal-Marker wird vor dem ersten Prozess konsumiert (Replay →
+  `diagnostic_replay_refused`).

@@ -1,5 +1,91 @@
 # Feature Request Progress & Code Review
 
+## Safe diagnostics — final candidate verification frame
+
+The final encoding and data-zone guards were added test-first by the orchestrator:
+two encoding tests RED (Exit 1: one failure, nine subtest errors), then GREEN
+(Exit 0); one real temporary junction escape test RED (Exit 1), then GREEN.
+The complete focused diagnostic suite subsequently passed 72 tests, zero skips,
+Exit 0. Earlier worker regression-red runs are not claimed as test-first evidence.
+The final four-suite frame and independent HEAD/tree review are recorded separately
+in the PR/run evidence; historical measurements below remain dated snapshots.
+
+- **Issue #19 — Gebundene, begrenzte Draft-Diagnose (opt-in, Default aus,
+  2026-10-18):** Rein diagnostischer, **explizit menschlich autorisierter**
+  Vertrag; **keine** neue Mailbox-Berechtigung, normaler Draft-/Batch-/Anhangspfad
+  unverändert. Neu: `skills/mail-desk/scripts/core/diagnostics.py` und
+  `skills/mail-desk/tests/test_maildesk_diagnostics.py`; geändert:
+  `skills/mail-desk/scripts/core/himalaya.py` (keyword-only `diagnostic_capture`
+  am **bestehenden** `run_himalaya`; Default `None` = Originalpfad unverändert),
+  `skills/mail-desk/scripts/mail_desk_himalaya_client.py` (Subcommand
+  `diagnose-draft`; `core/__init__.py` **unverändert**, keine großen Exporte),
+  `SKILL.md`, `references/cli-operations.md`, `references/backends/himalaya.md`,
+  die vier Mail-Desk-L2-Karten (`README.md` §35, `objects.md` §5.6,
+  `processes.md` §6.2, `effects.md` §5.1), die vier L1-Karten, `FEATURE-REQUESTS.md`
+  (Issue-Nachweis) und diese Progress-Datei.
+  **Korrigierter Vertrag nach unabhängigem Review (GLM-WIP):** `DiagnosticRequest`
+  geschlossen (`workspace_id`/`account`/`folder`/`operation: save_draft`/`draft`),
+  `account` **explizit und nicht-null** (exakte Backend-Übereinstimmung, kein
+  `null`-Default), `workspace_id`==aufgelöster Rootname (Link-/Junction-Vorfahren
+  abgewiesen; gleichnamiger Klon = dokumentierte Restgrenze); separater
+  hashgebundener `DiagnosticReviewReceipt` (festes `receipt_id`-Token, realer
+  `approved_at`); **alle** read-only Preflights (Request, Receipt, Timeout,
+  Workspace-/Account-Bindung, Draft-Bau inkl. Header-Injektions-Abweisung, strict
+  UTF-8, Config-/Executable-Auflösung) **vor** dem Einmal-Marker (Marker wird bei
+  fehlgeschlagenem Preflight nicht verbrannt); Lock über den echten shared Guard
+  mit `allow_legacy=False` und Lease/Conversation aus Argument oder
+  `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID`; Guard-Loader über
+  einen begrenzten, vertrauenswürdigen Root (`lock_root` >
+  `MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT` > bundle-relativ; kein
+  `sys.modules`-Vertrauen). Genau **ein** Kindprozess über `run_himalaya` mit
+  Popen-Nebendrain, stdin-Write-All-Schleife (Kurzschreib-Verluste unmöglich),
+  Worker-Reader-Fehler → unbekannt, `exit None` → unbekannt (nicht Fehler),
+  stderr-/stdout-Cap-Überlauf tötet/reapt prompt, Event-Cap zählt nur
+  **klassifizierte** Events, Overlong-Zeilen werden bis zum Newline verworfen
+  (Suffix nie als Zeile). Die Continuation-Warnung wird über die **exakte**,
+  gepinnte Byte-Signatur aus `imap-codec`-Quelle erkannt
+  (`log::warn!("Rectified faulty continuation request `+\r\n` to `+ ...\r\n`")`,
+  mit eingebettetem CR/LF, kein dynamischer Rest). Fehler generisch (`from None`);
+  **kein roher Kind-stdout** im Envelope/Evidence.
+  **Testchronologie (ehrlich, nicht retroaktiv umetikettiert):** Die
+  Implementierung entstand jeweils vor dem Testlauf; der RED wurde als
+  **Regression-RED** erzeugt, indem die zuvor gesicherte Vor-Fix-Fassung
+  (HEAD-`himalaya.py` ohne `diagnostic_capture` + vorheriges `core.diagnostics`
+  bzw. vorheriger Client-Loader) temporär wiederhergestellt und danach wieder
+  entfernt wurde — **kein** reiner test-first-RED.
+  - 2026-10-18 (erste Runde, historisch): `python -B
+    skills/mail-desk/tests/test_maildesk_diagnostics.py` → **58 Tests, 15 Failures
+    + 30 Errors, Exit 1** (Regression-RED) → **58/58 OK, Exit 0**; fokussierte
+    Nachbar-Suiten `test_drafts_api + test_draft_transport +
+    test_cli_group_a_envelopes + test_himalaya_client_deadlines +
+    test_maildesk_h6_himalaya_bootstrap + test_docs_no_ticket_labels +
+    test_quarantine_compatibility_contract` → **148 Tests, alle grün, Exit 0**
+    (Default-`None`-Pfad und Draft-Verhalten unverändert).
+  - 2026-10-18 (zweite/aktuelle Runde): **69 Tests, 3 Failures + 9 Errors, Exit 1**
+    gegen die Vor-Fix-Fassung (Regression-RED; u. a. fehlendes
+    `RECTIFIED_CONTINUATION_SEGMENTS`, kein `cleanup_incomplete`,
+    Nicht-Ablehnung von Duplicate-Keys/NaN, ungebremster Marker-Write,
+    `_outcome_for_reason` als „failed") → **69/69 OK, Exit 0** mit
+    `-W error::ResourceWarning`. In dieser Runde behoben: Ein-Puffer/Freeze-
+    Snapshot unter Lock mit **einem** Cleanup-Budget (~5 s), `any alive` →
+    unbekannt/`cleanup_incomplete`, `child_reaped` nur bei echtem Reap; nur
+    realer Nicht-Null-Exit = `diagnostic_append_failed`, sonst unbekannt/Transport;
+    Client-JSON größenbegrenzt (2 MiB/16 KiB), strikt (Duplicate-Keys/NaN/UTF-8)
+    ohne Key-Echo; Marker-Write-All-Schleife (`diagnostic_attempt_marker_failed`);
+    Parser akzeptiert die Continuation positiv nur als vollständiges 3-Zeilen-
+    Record (Roh-Signatur im Serverinhalt ergibt **keinen** Event); Feldgrenzen.
+  Kein Rust, keine Installation, keine Instrumentierung des installierten
+  Binaries, kein Proxy, kein neuer Transport; keine Live-Filter-Wirkungs-
+  Behauptung (Quelle + Offline-Fixtures; die Warnung ist upstream an
+  `quirk_empty_continue_req` gebunden, `lock`-Versionen sind keine Features, kein
+  Binary-Nachweis). Die finale Zahl und die Vier-Suiten-Evidenz ergänzt die
+  Parent-Session am HEAD/Tree. GroupWise selbst bleibt offen. **High Risk** (neue
+  Validierungs-/Approval-/Security-Grenze); unabhängige Freigabe und finale
+  Vier-Suiten-Evidenz werden von der Parent-Session an HEAD/Tree im PR gebunden;
+  kein Merge. PR referenziert #19 (`Refs #19`), ohne `Fixes`/`Closes`.
+  Eingefrorene `core.__all__`-Baseline unverändert (`core/__init__.py` nicht
+  angefasst).
+
 - **Issue #10 — begrenzte Fixture-Stabilisierung (2026-10-18):** Frisch gefetchte
   Basis `86f49f4` (#25/#16 erhalten), eigener Branch `fix/issue-10-stability`.
   Vor jedem Eingriff MD-A3 und MDE1 isoliert ausgeführt: erste Frames rot wegen

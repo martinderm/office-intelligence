@@ -152,6 +152,8 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
   persistierten Projekt-`DraftManifest` FR-15/MD-E2-T04, Read-only Reconcile,
   Basename-Contract-Reconcile Issue #9: Raw-MIME-`original_filename`-Provenienz
   ohne Sanitization-Launderung, fail-closed Alias-/Traversal-Validierung vor I/O,
-  Dossier-Synthese)*
+  Dossier-Synthese, sowie die gebundene Draft-Diagnose Issue #19: opt-in/Default-aus,
+  geschlossener Request plus separater hashgebundener Review-Input, Einmal-Marker vor
+  dem einzigen `message save`, fester Kindfilter und begrenzter fail-closed Parser)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, optionale AcroForm-Formularfelder-Extraktion mit Capture-vor-OCR-Reihenfolge Issue #20, Mirror-Sync)*
