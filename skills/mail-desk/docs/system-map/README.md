@@ -1,6 +1,10 @@
 # Mail-Desk — Subsystem System Map
 
-**Aktueller Issue-#14-Frame, 2026-10-18:** 177 Dateien, 74 Scripts, davon
+**Aktueller Reconcile-Frame #11 × #14, 2026-10-18:** 178 Dateien,
+74 Scripts, davon 59 Core-Dateien, 85 Testmodule (`git ls-files`).
+Draft-Transport: §33; menschlich abgenommener Event-Writer unverändert: §32.
+
+**Issue-#14-Frame, 2026-10-18 (historisch):** 177 Dateien, 74 Scripts, davon
 59 Core-Dateien, 84 Testmodule (`git ls-files --cached --others --exclude-standard`).
 Die nachfolgenden Merge-/Abnahmewerte bleiben historische Snapshots.
 Vertragserweiterung und Integrationsgrenzen: §32.
@@ -126,7 +130,7 @@ Verzeichnislevel. Vollständige Suite 804/804 grün. **MD-M2 ist abgenommen; FR-
 geschlossen.**
 | **MD-E2 Draft-Integration (FR-15/MD-E2-T01/T02)** | [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py) | Standardmäßig aktive `draft`-Auswertung: nur unklare Items rufen `attachment_evaluate`, der validierte `ready`-Handoff wird genau einmal als getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein additives finales `attachment_evaluation`; `classifier_revision` bindet den Classifier-Regel-AST, Kataloge und konsumierte Hashes. Fail-closed-Härtung: bounded Outcome-Matrix in Review/`INBOX`, kanonische Handoff-Revalidierung, fail-loud `AttachmentReclassificationContractError`, deterministische `already_fetched`-Idempotenz. Keine zweite Fetch-/MIME-/Hash-Validierung. |
 | **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
-| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND (`message save`), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
+| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
@@ -1239,3 +1243,108 @@ Vollständiger Vertrag und Recovery-Grenzen:
 [`event-writer.md`](../../../event-documentation/references/event-writer.md).
 Neue Verifikationsergebnisse stehen im Issue-#14-Eintrag des Root-Progress-Ledgers;
 historische #8-Abnahmewerte oben bleiben unverändert.
+
+## 33. Issue #11 — Draft-APPEND über die binäre stdin-Pipe (abgeschlossen)
+
+**Problem:** Der rohe RFC-822-Entwurf ging als ein argv-Literal an
+`himalaya message save`. Ein 40 000-Zeichen-Entwurf ließ `CreateProcess` mit
+`WinError 206` (Exit 1) scheitern. Unabhängig davon ignoriert Himalaya 1.2.0
+(Rev `1b70c4e0eaa72dee48353f0211e6cc0f0776fe98`,
+`src/email/message/command/save.rs`) das rohe `MESSAGE`-Argument, sobald stdin
+kein TTY und die Ausgabe nicht JSON ist: es liest stdin mit Rust `lines()`,
+joint die Zeilen mit CRLF und verwirft den finalen Zeilenabschluss.
+`run_himalaya` startet Himalaya bereits mit `stdin=DEVNULL` (Nicht-TTY), der
+argv-Entwurf war also im Plain-Modus ohnehin wirkungslos.
+
+**Umsetzung:**
+- **Transport-Seam:** `run_himalaya` erhält den keyword-only Parameter
+  `stdin_bytes: bytes | None = None`. Ohne Payload bleibt der publizierte Pfad
+  (`stdin=DEVNULL`, `text=True`, `timeout=35`, `max_retries=5`) unverändert;
+  mit Payload wird der Puffer binär über `subprocess.run(input=...)` in die Pipe
+  geschrieben (kein `text=True`, keine Newline-Transformation).
+- **Strikte UTF-8-Validierung:** Ein gesetzter Payload wird noch **vor**
+  Executable-/Config-Auflösung und jedem Subprozess als strict UTF-8 geprüft
+  (Himalaya 1.2.0 würde an `lines().map_while(Result::ok)` am ersten ungültigen
+  Byte still abschneiden). Ungültige Bytes enden mit begrenztem `ValueError`
+  ohne Payload-Inhalt in der Meldung.
+- **Schwelle 0 (kein Größen-Split):** *jede* Draft-Größe nutzt stdin. Ein
+  argv-Pfad wäre im Nicht-TTY-/Nicht-JSON-Modus still wirkungslos und würde
+  große Entwürfe zusätzlich am Windows-Limit scheitern lassen; eine
+  Größenschwelle würde also nur zwei Fehlerklassen erhalten.
+- **Kein JSON-Bypass:** Bei gesetztem `stdin_bytes` verlangt der Seam genau ein
+  explizites `-o plain`; fehlt es oder steht `-o json`/`--output json`, endet
+  der Aufruf fail-loud mit `ValueError`. (Nur `-o`/`--output` mit Wert `plain`.)
+- **Kein APPEND-Retry:** Eine Payload-Kommandoausführung wird immer genau
+  einmal ausgeführt (`attempts = 1`), unabhängig vom Aufrufer-Budget; `save_draft`
+  übergibt zusätzlich `max_retries=1`.
+- **Klassifizierte Fehler ohne Payload-Leak:** `OSError` (Start **oder**
+  Kommunikation) → `himalaya_launch_failed` mit „Ergebnis ggf. unbekannt,
+  nicht wiederholt"; die Klassifikation gilt **für den Payload- und den
+  Nicht-Payload-Pfad** (`BrokenPipeError` bleibt `himalaya_stdin_failed`),
+  beide tragen nur begrenzte Texte. `save_draft` übersetzt ausschließlich
+  `HimalayaInvocationError` in `DraftError("draft_save_failed")` mit Reason im
+  `__cause__`, ohne Verifikation, ohne Journal-Eintrag und ohne argv-Fallback;
+  jeder andere Fehler (z. B. ein Programmier-`ValueError`) propagiert
+  unverändert.
+- **Kanonische Bytes:** `build_draft_message` liefert (weiterhin `str`) die
+  kanonische SMTPUTF8-Nachricht mit CRLF und finalem CRLF; `save_draft` kodiert
+  sie UTF-8 und hängt ein Transport-CRLF an, das die `lines()`/Join-Normalisierung
+  exakt kompensiert. Der von Himalaya angehängte Text entspricht damit byte-genau
+  dem Builder-Raw (inkl. Leerzeilen), und `Content-Transfer-Encoding` bleibt dem
+  SMTPUTF8-Policy-Verhalten überlassen.
+
+**Abgrenzung (nicht gelöst, keine Implementierung):**
+[#18](https://github.com/martinderm/office-intelligence/issues/18) (Attachment-/
+Quarantäne-Folgearbeiten) und
+[#19](https://github.com/martinderm/office-intelligence/issues/19)
+(GroupWise-Abhängigkeitsanalyse, u. a. des Drafts-Ordner-Fallbacks
+`Work In Progress`) werden hier nur benannt; #11 ändert weder den
+Ordner-Auflösungsvertrag noch die Quarantäne.
+
+**Pflichttests:** `tests/test_draft_transport.py` (17 Tests, hermetisch: nur `resolve_himalaya_invocation` und `subprocess.run` sind
+gefakte Systemgrenzen, plus ein echter synthetischer Python-Pipe-Roundtrip).
+Gepinnt sind kurze/8192-Byte-/>40 k-Byte-Unicode-Entwürfe ohne rohes
+argv-Token, exakte UTF-8-Pipe-Bytes, `-o plain`/`-a`/`-f`-Flags, die
+einmalige `lines()`/Join-Normalisierung inkl. Leerzeilen, klassifizierte
+Fehler ohne Verifikation/Journal/Fallback/Retry sowie die unveränderte
+Nicht-Payload-Signatur. `tests/test_drafts_api.py` liest den Fixture-Raw
+`DraftRunner` jetzt aus der stdin-Pipe statt aus dem letzten argv-Token
+(explizite Fixture-Anpassung, keine Abschwächung); `himalaya_fixtures.py`
+modelliert die Upstream-Normalisierung in `himalaya_stdin_normalize`.
+
+**Seam-Abgrenzung:** Verifiziert sind die *Prozess-Bytes* (echter
+`subprocess.run(input=...)`-Pfad plus synthetischer Pipe-Roundtrip) und der
+kanonische Builder-Raw. Der *reale Himalaya-Backend-APPEND* wurde nicht gegen
+eine Live-Mailbox ausgeführt; die `lines()`/CRLF-Join-Semantik ist über die
+öffentliche Quelle (Rev `1b70c4e`) modelliert, nicht über einen Live-Lauf
+behauptet.
+
+**Fix-Runde 2026-10-17 (Review `opencode-go/glm-5.3-flash#high`, keine
+Majors/Blocker; Adjudikation):**
+1. **Angenommen (OSError-Wortlaut):** `himalaya_launch_failed` behauptet nicht
+   mehr „no mailbox command ran", sondern „launch **or** communication failed;
+   outcome may be unknown, not retried". Die Klassifikation deckt ausdrücklich
+   den Payload- **und** den Nicht-Payload-Pfad; der Nicht-Payload-Pfad bleibt
+   sonst (`DEVNULL`, `text=True`, Retry-/Timeout-Defaults) unverändert.
+2. **Angenommen (Fehlertaxonomie):** `save_draft` fängt nur noch
+   `himalaya.HimalayaInvocationError`; ein Programmier-`ValueError` propagiert
+   unverändert (Boundary-Pin), erwartete Laufzeitfehler bleiben
+   `draft_save_failed` mit Reason im `__cause__`.
+3. **Abgelehnt (Reviewer-Behauptung):** Der Reviewer hielt den literal
+   ausgeführten Befehl `python -B -m unittest
+   skills.mail-desk.tests.test_draft_transport
+   skills.mail-desk.tests.test_drafts_api` wegen der Bindestriche für ungültig.
+   Der Orchestrator hat exakt dieses Literal **erfolgreich mit 36/36, Exit 0**
+   ausgeführt; die dynamischen Importe von `unittest` akzeptieren Bindestriche.
+   Das Literal bleibt unverändert korrekt.
+4. **Angenommen (UTF-8-Trunkierung):** Ein Payload wird jetzt strict als UTF-8
+   validiert, **bevor** Executable-/Config-Auflösung und Subprozess laufen;
+   ungültige Bytes ergeben einen begrenzten `ValueError` ohne Payload-Inhalt.
+   RED zuerst (das neue Regressionsmodul war mit 3 Failures + 1 Error rot),
+   danach minimaler Fix.
+
+Fix-Runden-Nachweis: RED `python -B -m unittest
+skills.mail-desk.tests.test_draft_transport` → **17 Tests, 3 Failures + 1
+Error, Exit 1**; GREEN `python -B -m unittest
+skills.mail-desk.tests.test_draft_transport
+skills.mail-desk.tests.test_drafts_api` → **40/40 OK, Exit 0**.

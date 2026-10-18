@@ -132,6 +132,21 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    erhalten (keine Sanitization-Launderung) und werden im Fetch vor I/O
    erneut fail-closed validiert (`FilenameDriftError` bei Drift). Leserichtung
    je Pin-Gruppe dokumentiert in L2-Map §30.
+ - **Draft-APPEND über die binäre stdin-Pipe (Issue #11):** `run_himalaya`
+   erhält den keyword-only Seam `stdin_bytes`; der Payload wird strict als
+   UTF-8 validiert (`ValueError` ohne Payload-Inhalt, bevor Executable-/Config-
+   Auflösung und Subprozess laufen — upstream würde ungültige Bytes still
+   abschneiden), dann geht jeder Draft als exakte UTF-8-Bytes über stdin
+   (`message save -o plain`, Schwelle 0, kein Größen-Split, kein
+   argv-Rohliteral), weil Himalaya 1.2.0 im Nicht-TTY-/Nicht-JSON-Modus nur
+   stdin liest (`lines()` mit CRLF-Join); ein großes argv-Argument scheitert
+   zusätzlich an `WinError 206`. Ein Transport-CRLF kompensiert die
+   Normalisierung, `-o plain` verhindert den JSON-Bypass; `save_draft` fängt nur
+   `HimalayaInvocationError` und klassifiziert ihn als `draft_save_failed` ohne
+   Verifikation/Journal/Fallback/Retry, andere Fehler propagieren. `OSError`
+   (Start oder Kommunikation, Payload- und Nicht-Payload-Pfad) →
+   `himalaya_launch_failed` mit unbekanntem Ausgang/nicht wiederholt. Detail:
+   L2-Map §33.
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---

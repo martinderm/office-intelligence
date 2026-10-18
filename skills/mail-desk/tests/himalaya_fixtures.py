@@ -10,15 +10,23 @@ optionally sleeps an injected duration per call and optionally raises an injecte
 per-call ``himalaya_timeout`` error.
 
 ``DraftRunner`` (below) fakes the standalone draft operations the same way: it
-answers the ``folder list -o json`` catalog, records ``message save`` raw
-literals (APPEND) and hands the appended message back through the ``envelope
-list`` + ``message read -H Message-Id`` seams that ``verify_in_target_folder``
-uses, plus the in-place ``flag add deleted`` (``\\Deleted``) and ``folder
-expunge`` pair.  ``message delete`` is modelled faithfully to Himalaya 1.2.0
-(``message delete --help``: "if the given folder points to the trash folder, it
-adds the 'deleted' flag to its envelope, otherwise it moves it to the trash
-folder"), so a regression back to that command leaves the draft in ``Trash``
-instead of expunging it in place.
+answers the ``folder list -o json`` catalog, records the ``message save`` raw
+message exactly as the real binary receives it (APPEND) **only** through the
+``stdin_bytes`` transport keyword and hands the appended message back through
+the ``envelope list`` + ``message read -H Message-Id`` seams that
+``verify_in_target_folder`` uses, plus the in-place ``flag add deleted``
+(``\\Deleted``) and ``folder expunge`` pair.  ``message delete`` is modelled
+faithfully to Himalaya 1.2.0 (``message delete --help``: "if the given folder
+points to the trash folder, it adds the 'deleted' flag to its envelope,
+otherwise it moves it to the trash folder"), so a regression back to that
+command leaves the draft in ``Trash`` instead of expunging it in place.
+
+Himalaya 1.2.0 (rev ``1b70c4e``, ``message save``) ignores the raw ``MESSAGE``
+argument whenever stdin is not a TTY and the output format is not JSON: it
+reads stdin with Rust ``lines()``, joins the lines with CRLF and therefore drops
+the final line terminator.  ``himalaya_stdin_normalize`` reproduces exactly that
+normalization, so a fixture can distinguish the canonical wire bytes we send
+from the message the upstream binary actually appends.
 
 This module is deliberately not named ``test_*.py`` so unittest discovery does
 not collect it as a suite.
@@ -181,7 +189,24 @@ DEFAULT_DRAFT_FOLDERS: tuple[str, ...] = ("INBOX", "Sent", "Drafts")
 def is_message_save(args: Sequence[str]) -> bool:
     """Whether an argv token list is a ``message save`` (APPEND) command."""
     tokens = list(args)
-    return len(tokens) >= 2 and tokens[0] == "message" and tokens[1] == "save"
+    return "message" in tokens and "save" in tokens
+
+
+def himalaya_stdin_normalize(payload: bytes) -> str:
+    """Reproduce Himalaya 1.2.0 ``message save`` stdin normalization exactly.
+
+    Public upstream source (``src/email/message/command/save.rs``, rev
+    ``1b70c4e0eaa72dee48353f0211e6cc0f0776fe98``) runs
+    ``io::stdin().lock().lines().map_while(Result::ok).collect::<Vec<String>>()
+    .join("\\r\\n")`` when stdin is not a TTY and the output is not JSON.
+    Rust ``lines()`` strips the final line terminator and every ``\\r``, and
+    the join consequently has no trailing CRLF.
+    """
+    text = payload.decode("utf-8")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return "\r\n".join(line[:-1] if line.endswith("\r") else line for line in lines)
 
 
 def is_message_delete(args: Sequence[str]) -> bool:
@@ -241,8 +266,9 @@ class DraftRunner:
     It models the minimal mailbox state the draft operations need: a folder
     catalog, per-folder envelopes (with transient ``id`` and durable
     ``Message-ID``), the system flags of an envelope and an explicit expunge.
-    Every call is recorded so tests can pin command order and the appended raw
-    literal.
+    Every call is recorded so tests can pin command order.  A ``message save``
+    without ``stdin_bytes`` is rejected: the raw message must travel through the
+    binary stdin pipe, never as an argv literal.
     """
 
     def __init__(
@@ -257,6 +283,9 @@ class DraftRunner:
         self._envelopes: dict[str, list[dict[str, Any]]] = {}
         self._lock = threading.Lock()
         self.calls: list[list[str]] = []
+        #: Exact binary payload handed to each ``message save`` stdin pipe.
+        self.saved_stdin: list[bytes] = []
+        #: Raw message after the upstream ``lines()``/CRLF-join normalization.
         self.saved_raw: list[str] = []
 
     # -- recording ---------------------------------------------------------
@@ -287,6 +316,8 @@ class DraftRunner:
         account: str | None = None,
         timeout: int = 35,
         max_retries: int = 5,
+        *,
+        stdin_bytes: bytes | None = None,
         **kwargs: Any,
     ) -> str:
         with self._lock:
@@ -295,7 +326,7 @@ class DraftRunner:
         if is_folder_list(tokens):
             return json.dumps(self._folder_entries())
         if is_message_save(tokens):
-            return self._handle_save(tokens)
+            return self._handle_save(tokens, stdin_bytes)
         if is_flag_add(tokens):
             return self._handle_flag_add(tokens)
         if is_message_delete(tokens):
@@ -312,10 +343,18 @@ class DraftRunner:
     def _folder_entries(self) -> list[Any]:
         return [entry if isinstance(entry, dict) else {"name": str(entry)} for entry in self.folders]
 
-    def _handle_save(self, tokens: list[str]) -> str:
+    def _handle_save(self, tokens: list[str], stdin_bytes: bytes | None) -> str:
+        if stdin_bytes is None:
+            raise AssertionError(
+                "message save must receive the raw message through stdin_bytes, "
+                "never as an argv literal"
+            )
         folder = _value_after(tokens, "-f") or "INBOX"
-        raw = tokens[-1]
+        # Model the upstream binary: stdin lines are joined with CRLF and the
+        # final terminator is dropped before IMAP APPEND.
+        raw = himalaya_stdin_normalize(stdin_bytes)
         with self._lock:
+            self.saved_stdin.append(stdin_bytes)
             self.saved_raw.append(raw)
             envelope_id = str(self._next_id)
             self._next_id += 1

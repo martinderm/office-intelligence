@@ -6,9 +6,19 @@ contract is never touched -- the draft journal is a separate file with its own
 schema.
 
 Draft creation uses the Himalaya ``message save`` command (IMAP APPEND).  The
-raw RFC-822 message is built with the ``SMTPUTF8`` email policy and passed as a
-single argv literal, so non-ASCII subject / recipient / body bytes are preserved
-without a 7-bit downgrade.  The appended message is then located through the
+raw RFC-822 message is built with the ``SMTPUTF8`` email policy (CRLF line
+endings) and passed through the binary stdin pipe -- never as an argv literal.
+Himalaya 1.2.0 (rev ``1b70c4e0eaa72dee48353f0211e6cc0f0776fe98``,
+``src/email/message/command/save.rs``) ignores the raw ``MESSAGE`` argument
+whenever stdin is not a TTY and the output format is not JSON: it reads stdin
+with Rust ``lines()``, joins the lines with CRLF and drops the final line
+terminator.  ``run_himalaya`` starts the process with a non-TTY stdin, so every
+draft size must use stdin (threshold 0); an argv payload would be ignored and
+would additionally trip the Windows command-line limit (``WinError 206``) for
+large drafts.  ``save_draft`` compensates the upstream normalization with one
+extra transport CRLF, so the appended message equals the canonical builder raw
+byte for byte.  Non-ASCII subject / recipient / body bytes are preserved without
+a 7-bit downgrade.  The appended message is then located through the
 canonical ``verify_in_target_folder`` seam, and the returned envelope carries
 ``{envelope_id, folder, subject, to, date}`` analogous to
 ``get_single_email_details``.
@@ -80,6 +90,16 @@ DRAFT_VERIFICATION_FAILED_REASON = "draft_verification_failed"
 
 #: Bounded reason code for an unreadable draft journal.
 DRAFT_JOURNAL_CORRUPTED_REASON = "draft_journal_corrupted"
+
+#: Bounded reason code for a failed draft APPEND (classified, fail-loud).
+DRAFT_SAVE_FAILED_REASON = "draft_save_failed"
+
+#: SMTPUTF8 policy with canonical CRLF line endings for the wire/APPEND bytes.
+SMTPUTF8_CRLF = SMTPUTF8.clone(linesep="\r\n")
+
+#: One transport CRLF compensates Himalaya's ``lines()``/CRLF-join path, which
+#: drops the final line terminator of the canonical raw message.
+_STDIN_TRANSPORT_TERMINATOR = b"\r\n"
 
 #: Documented crash window of the new-then-delete replace order.
 #:
@@ -227,17 +247,20 @@ def build_draft_message(
     date: str | None = None,
     message_id: str | None = None,
 ) -> tuple[str, str, str]:
-    """Build a UTF-8 (SMTPUTF8) raw RFC-822 draft message.
+    """Build a UTF-8 (SMTPUTF8) raw RFC-822 draft message with CRLF lines.
 
     Returns ``(raw_message, normalized_message_id, date_header)``.  Headers are
-    written as raw UTF-8 (no RFC 2047 encoded-word downgrade) and the body is
-    carried as an 8-bit UTF-8 literal, so no content is mangled.
+    written as raw UTF-8 (no RFC 2047 encoded-word downgrade); the body is
+    carried as a UTF-8 payload whose transfer encoding is chosen by the policy
+    (``Content-Transfer-Encoding``), so no content is mangled.  The raw message
+    uses canonical CRLF line endings and ends with a final CRLF, ready for the
+    SMTP/IMAP wire and for the binary stdin transport.
     """
     generated_id = message_id or email.utils.make_msgid()
     normalized_id = normalize_message_id(generated_id)
     date_header = date or email.utils.formatdate(localtime=True)
 
-    message = EmailMessage(policy=SMTPUTF8)
+    message = EmailMessage(policy=SMTPUTF8_CRLF)
     if from_addr:
         message["From"] = str(from_addr)
     message["To"] = str(to)
@@ -248,7 +271,11 @@ def build_draft_message(
     message["Message-ID"] = generated_id if str(generated_id).startswith("<") else f"<{generated_id}>"
     message.set_content(str(body), subtype="plain", charset="utf-8")
 
-    return message.as_string(), normalized_id, date_header
+    raw_message = message.as_string()
+    if not raw_message.endswith("\r\n"):
+        raw_message += "\r\n"
+
+    return raw_message, normalized_id, date_header
 
 
 def _resolve_saved_envelope(
@@ -293,9 +320,19 @@ def save_draft(
     journal: "DraftJournal | None" = None,
     folders: Iterable[Any] | None = None,
 ) -> dict[str, Any]:
-    """Append a UTF-8 draft into the (resolved) Drafts folder.
+    """Append a UTF-8 draft into the (resolved) Drafts folder through stdin.
 
     Returns the envelope ``{envelope_id, folder, subject, to, date, message_id}``.
+
+    Every draft size uses the binary stdin transport (threshold 0): in
+    Himalaya's non-TTY plain mode an argv ``MESSAGE`` is ignored and a large one
+    trips the Windows command-line limit.  The explicit ``-o plain`` output
+    format keeps the JSON branch from bypassing stdin, the payload is sent as
+    exact UTF-8 bytes (validated strictly at the seam, since upstream silently
+    truncates invalid bytes), and the APPEND is attempted exactly once.  A
+    classified ``HimalayaInvocationError`` becomes ``draft_save_failed`` with no
+    verification, no journal item and no argv fallback; every other exception
+    (e.g. a programming ``ValueError``) propagates unchanged.
     """
     target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
     raw_message, normalized_id, date_header = build_draft_message(
@@ -307,7 +344,23 @@ def save_draft(
         date=date,
         message_id=message_id,
     )
-    himalaya.run_himalaya(["message", "save", "-f", target_folder, raw_message], account=account)
+    stdin_payload = raw_message.encode("utf-8") + _STDIN_TRANSPORT_TERMINATOR
+    try:
+        himalaya.run_himalaya(
+            ["message", "save", "-o", "plain", "-f", target_folder],
+            account=account,
+            stdin_bytes=stdin_payload,
+            max_retries=1,
+        )
+    except himalaya.HimalayaInvocationError as exc:
+        # Only the classified fail-loud runtime error becomes a ``DraftError``;
+        # programming errors (e.g. ``ValueError`` about a bad contract) keep
+        # propagating unchanged so they are never masked as a save failure.
+        raise DraftError(
+            DRAFT_SAVE_FAILED_REASON,
+            f"Draft APPEND to folder '{target_folder}' failed ({exc.reason_code}); "
+            "no verification or journal write was attempted.",
+        ) from exc
     envelope = _resolve_saved_envelope(
         target_folder, normalized_id, subject, to, date_header, account
     )
