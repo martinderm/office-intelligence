@@ -397,3 +397,53 @@ bleibt unberührt.
    `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, beim Ersetzen zusätzlich
    `old_envelope_id` und `crash_window`. Ein unlesbares Journal endet fail-loud
    (`draft_journal_corrupted`).
+
+### 6.2 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
+
+Implementiert in [`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py)
+und im JSON-Manifest-Client als Subcommand `diagnose-draft`. Der Lifecycle ist
+strikt sequenziell und fail-closed:
+
+1. **Opt-in-Gate:** ohne `opt_in=True` (Code *und* Request) kein lokaler Write und
+   kein Prozess.
+2. **Request-Shape:** geschlossener, versionierter `DiagnosticRequest`; genau
+   `save_draft`, portabler `workspace_id`, keine Account-Overrides.
+3. **Review-Input:** separater `DiagnosticReviewReceipt`, hashgebunden an den
+   exakten kanonischen Request (Workspace/Account/Folder/Operation); Drift →
+   `diagnostic_approval_drift`.
+4. **Preflight (read-only, vor dem Marker):** Account read-only über
+   `readiness.bind_workspace_account` gegen `.agents/mail-desk-backend.json`
+   (Account explizit und nicht-null, exakte Übereinstimmung; Drift →
+   `diagnostic_workspace_binding_failed`); Workspace-Identität
+   (`<root>/data/mail-desk`, `workspace_id`==Rootname, keine Link-/Junction-
+   Vorfahren); Timeout-Validierung; Draft-Bau inkl. Header-Injektions-Abweisung;
+   strikte UTF-8-Validierung des Payloads; Config-/Executable-Auflösung. Ein
+   fehlgeschlagener Preflight verbraucht **keinen** Versuch.
+5. **Lock:** shared `workspace_lock_guard` in place mit `allow_legacy=False`
+   (begrenzter vertrauenswürdiger Root; kein `sys.modules`-Vertrauen); Lease/
+   Conversation aus Argument oder `WORKSPACE_LOCK_LEASE_ID`/
+   `WORKSPACE_LOCK_CONVERSATION_ID`; fehlend/fremd → `diagnostic_lock_unavailable`.
+6. **Einmal-Marker:** atomarer `O_CREAT|O_EXCL`-Marker unter
+   `data/mail-desk/diagnostics/attempts/<request_hash>.json` **vor** dem ersten
+   Prozess; Replay → `diagnostic_replay_refused`.
+7. **Genau ein Kindprozess über `run_himalaya`:** der Payload-Seam erhält den
+   keyword-only `diagnostic_capture` (Default `None` = unverändert) und startet
+   genau ein `message save -o plain -f <reviewter Ordner>` mit festem Kindfilter
+   und Popen-Nebendrain (kein `communicate`, begrenzter Speicher); stdout/stderr
+   gleichzeitig, stdin in eigenem Thread mit Write-All-Schleife (kein Deadlock,
+   keine Kurzschreib-Verluste). Kein `folder list`, keine Verifikation, kein
+   Retry, kein Fallback, keine Aufräumprozesse.
+8. **Parser & Evidenz:** der begrenzte `BoundedTraceParser` (Cap 64 KiB / 128
+   sichere Events) emittiert nur feste Kinds plus begrenzte Zählwerte; die
+   Continuation-Warnung wird positiv **nur** als vollständiges 3-Zeilen-Record
+   erkannt (Roh-Signatur im Serverinhalt ergibt keinen Event; Cap zählt nur
+   klassifizierte Events). Geteilte Puffer/Flags laufen unter einem Lock; nach
+   **einem** begrenzten Cleanup-Budget (~5 s) wird eingefroren. stderr-/stdout-
+   Überlauf, Reader-Fehler, Timeout, `cleanup_incomplete` oder unbekannter Exit
+   setzen `child_reaped` nur bei echtem Reap und enden
+   `diagnostic_append_outcome_unknown` (nur ein realer Nicht-Null-Exit ist
+   `failed`). Strukturierte Evidenz unter `data/mail-desk/diagnostics/evidence/`
+   ohne Mailfelder/Zugangsdaten/Pfade; der kanonische Erfolgs-Envelope bleibt
+   unverändert (roher Kind-stdout wird **nicht** durchgereicht).
+
+Details: L2-§35 und [`objects.md`](objects.md) §5.6.

@@ -175,6 +175,79 @@ Entwurf in den Drafts-Ordner legt.
 Details: [`references/cli-operations.md`](references/cli-operations.md),
 [`references/backends/himalaya.md`](references/backends/himalaya.md).
 
+### Gebundene Diagnose eines Draft-APPEND (`diagnose-draft`, opt-in, Default aus)
+
+Neben der normalen Draft-API gibt es einen **eng begrenzten, rein diagnostischen**
+Pfad, mit dem ein Operator genau **einen** `message save`-APPEND beobachten kann,
+ohne Rohprotokoll, Zugangsdaten oder Mailinhalte offenzulegen. Er ist
+**ausdrücklich opt-in und standardmäßig aus** (`--opt-in` in der CLI *und*
+`opt_in: true` im Request); ohne beides stoppt der Aufruf vor jedem lokalen Write
+und jedem Prozess.
+
+- **Kanonischer, geschlossener Request (Schema 1):** bindet exakt `workspace_id`,
+  `account`, `folder`, `operation: "save_draft"` und `draft`. Der `workspace_id`
+  muss portabel sein und dem aufgelösten Workspace-Wurzelnamen entsprechen
+  (`<root>/data/mail-desk`-Layout; Link-/Junction-Vorfahren werden abgewiesen;
+  ein gleichnamiger Klon bleibt eine dokumentierte, nicht-kryptografische
+  Restgrenze). Der `account` ist **explizit und nicht-null** und muss exakt der
+  Workspace-Backend-Konfiguration entsprechen. Die Schlüsselmenge ist geschlossen:
+  unbekannte Schlüssel (etwa `reviewed: true` im selben Manifest) werden
+  fail-closed abgewiesen; genau **eine** Operation `save_draft` ist erlaubt (kein
+  `replace`/`delete`, keine Account-Overrides, keine Mehrfachoperationen).
+- **Separater, hashgebundener Review-Input:** Die Freigabe steht **nicht** im
+  Request-Manifest, sondern in einer eigenen Operator-Datei (`--review`,
+  `DiagnosticReviewReceipt`). Sie ist an den exakten kanonischen Request-Hash
+  gebunden (inkl. Workspace/Account/Folder/Operation); Drift wird abgewiesen.
+  `approved_at` wird als realer Zeitpunkt geprüft, `receipt_id` als festes Token.
+  Diese Prüfung ist eine Struktur-/Hash-Bindung wie bei den übrigen Receipts und
+  behauptet **keine** kryptografische Authentisierung.
+- **Read-only-Preflight vor dem Marker:** Request, Receipt, Timeout, Workspace-/
+  Account-Bindung, Draft-Bau inkl. Header-Injektions-Abweisung, strikte
+  UTF-8-Validierung des Payloads und die Config-/Executable-Auflösung laufen
+  **vollständig vor** dem Einmal-Marker; ein fehlgeschlagener Preflight
+  verbraucht keinen Versuch.
+- **Einmalig, ein Prozess:** Danach wird der Einmal-Marker atomar unter
+  `data/mail-desk/diagnostics/attempts/` konsumiert (Replay wird abgewiesen). Es
+  läuft genau ein `message save -o plain -f <reviewter Ordner>`; keine
+  Ordner-Erkennung, keine Verifikation, kein Retry, kein Fallback. Crash/Timeout/
+  Cap-Überlauf/Reader-Fehler/unbekannter Exit hinterlassen einen unbekannten
+  APPEND-Ausgang.
+- **Bestehender Einstiegspunkt:** Der begrenzte Lauf geht durch den vorhandenen
+  `run_himalaya`-Seam: der optionale, keyword-only `diagnostic_capture`-Parameter
+  (Default `None`, dann ist der Pfad byte-unverändert) schaltet auf einen
+  einzelnen, begrenzt gedraineten Kindprozess (Popen-Nebendrain, kein
+  `communicate`) um. Der normale Draft-/Batch-Pfad bleibt unberührt.
+- **Fester, restriktiver Kindfilter:** Nur `off,imap_client::stream=trace,
+  imap_codec::response=warn` wird als Ausgabe-Filter gesetzt; `tasks`, `resolver`
+  und `wire` bleiben aus. Der Kindprozess erhält feste Env-Overrides
+  (`RUST_LOG`, `RUST_BACKTRACE=0`, `NO_COLOR=1` …); die globale Umgebung wird nie
+  verändert.
+- **Begrenzter, fail-closed Parser:** stderr wird inkrementell gelesen (64 KiB/
+  128 sichere Events); Spans, ANSI, freie Felder, unbekannte Targets und dynamische
+  Resttexte werden **verworfen**, nie redigiert. Ein sicheres Event trägt nur den
+  festen Kind-Namen und begrenzte Zählwerte. Nur die drei festen
+  `imap_client::stream`-Meldungen und die Continuation-Warnung werden positiv
+  erkannt — letztere **nur** als vollständiges, exakt gepinntes 3-Zeilen-Record
+  mit `WARN imap_codec::response:`-Präfix (eingebettetes CR/LF, über
+  Chunk-Grenzen); die bloße Signatur in unbekanntem Inhalt ergibt **keinen**
+  Event. Nur klassifizierte Events zählen auf das Cap. Kein Auth-/Header-/Body-
+  Canary erreicht Evidence, Envelope oder Exception-Kette.
+- **Ausgangsklassifikation:** Nur ein real gelaufener Kindprozess mit Nicht-Null-
+  Exit ist ein definitiver Fehler; Timeout, Cap-Überlauf, Reader-Fehler, ein nach
+  dem Cleanup-Budget noch lebender Reader (`cleanup_incomplete`) und `exit None`
+  sind **unbekannt**, nie „failed". Ein Bootstrap-/Resolve-Fehler nach bestandenem
+  Preflight ist unbekannter Transport. Alle geteilten Puffer laufen unter einem
+  Lock und werden nach **einem** begrenzten Cleanup-Budget (~5 s) eingefroren;
+  `child_reaped` wird nur bei echtem Reap gesetzt.
+- **Additive Evidence, kein Kind-stdout:** Die strukturierte Diagnose liegt
+  getrennt unter `data/mail-desk/diagnostics/evidence/` (keine Mailfelder,
+  Zugangsdaten oder Pfade). Der kanonische Erfolgs-Envelope bleibt unverändert;
+  der rohe Kind-stdout wird **nicht** durchgereicht. Request/Review werden
+  größenbegrenzt (2 MiB/16 KiB) und strikt (Duplicate-Keys/NaN/UTF-8) gelesen.
+
+Der reguläre `save-draft`-/Batch-/Dossier-/Anhangspfad bleibt davon **unberührt**.
+Dieser Pfad ergänzt **keine** Mailbox-Berechtigung und sendet nie.
+
 Wähle **genau einen** Adapter und lies nur diesen vollständig:
 
 - Gmail: [`references/backends/gmail.md`](references/backends/gmail.md)

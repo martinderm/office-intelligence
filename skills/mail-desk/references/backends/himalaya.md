@@ -131,6 +131,74 @@ journal.
   `old_envelope_id`/`crash_window` on replace). The batch
   `batch-recovery-journal.json` contract stays untouched.
 
+### Bounded diagnostic draft APPEND (`diagnose-draft`, opt-in, default off)
+
+A separate, **diagnosis-only** path lets an operator observe exactly one
+`message save` APPEND without ever exposing raw protocol, credentials or mail
+content. It is explicitly **opt-in and default off** (`--opt-in` plus
+`opt_in: true` in the request); without both it stops before any local write and
+any process.
+
+The bounded run is threaded through the **existing** `run_himalaya` entrypoint:
+an optional, keyword-only ``diagnostic_capture`` object (default ``None``, which
+keeps the original path byte-identical) switches a payload command onto a single,
+bounded child with a concurrent pipe drain (no unbounded ``communicate``).
+
+- **Closed versioned request.** A JSON manifest binds exactly `workspace_id`,
+  `account`, `folder`, `operation: "save_draft"` and the `draft` payload. The key
+  set is closed: unknown keys (for example a `reviewed: true` inside the same
+  manifest) are rejected fail-closed, and exactly one `save_draft` operation is
+  allowed (no replace, delete, account override or multi-operation). `account` is
+  explicit and non-null and must equal the workspace backend configuration;
+  `workspace_id` must equal the resolved workspace root name (link/junction
+  ancestors are refused; a same-name clone is a documented, non-cryptographic
+  residual).
+- **Separate hash-bound review input.** Approval is a **separate** operator file
+  (`--review`), never a value inside the request. It is bound to the exact
+  canonical request hash (workspace, account, folder and operation included); a
+  drifted hash is refused, `approved_at` must be a real instant and `receipt_id` a
+  restricted token. This is a structural/hash binding like the other receipts and
+  makes **no** cryptographic-authentication claim.
+- **Read-only preflight before the marker.** Request, receipt, timeout, workspace
+  and account binding, draft building (with header-injection refusal), strict
+  UTF-8 payload validation and config/executable resolution all run **before** the
+  one-shot marker, so a failed preflight never burns the attempt.
+- **One-shot, one process.** Then the one-shot marker is consumed atomically under
+  `data/mail-desk/diagnostics/attempts/` (a replay is refused). Exactly one
+  `message save -o plain -f <reviewed folder>` runs: no folder discovery, no
+  verification, no retry, no fallback. A crash, timeout, cap crossing, reader
+  error or unknown exit leaves an unknown APPEND outcome.
+- **Fixed restrictive child filter.** Only
+  `off,imap_client::stream=trace,imap_codec::response=warn` is set as the output
+  filter; `tasks`, `resolver` and `wire` stay off. The child gets fixed
+  environment overrides (`RUST_LOG`, `RUST_BACKTRACE=0`, `NO_COLOR=1`, …); the
+  global environment is never changed and no `--trace` is passed.
+- **Bounded fail-closed parser.** stderr is read incrementally (64 KiB / 128 safe
+  events). Spans, ANSI escapes, free-form fields, unknown targets and dynamic
+  remainders are **dropped, never redacted**. Only the three fixed
+  `imap_client::stream` messages and the continuation warning are accepted
+  positively — the latter **only** as the complete, exactly pinned 3-line record
+  with the `WARN imap_codec::response:` prefix (embedded CR/LF, across chunk
+  boundaries); a bare signature inside unknown content never emits an event. A
+  safe event carries only its fixed kind and bounded counts; no auth/header/body
+  canary reaches evidence, an envelope or an exception traceback.
+- **Outcome classification.** Only a child that actually ran with a non-zero exit
+  is a definitive failure; a timeout, a cap crossing, a reader error, a reader
+  still alive after the single bounded cleanup budget (`cleanup_incomplete`) or
+  `exit None` are **unknown**, never a definitive failure. A bootstrap/resolve
+  error after the preflight passed is unknown transport. Shared buffers are
+  frozen under a lock after one cleanup budget, so a background reader can never
+  mutate the finalized evidence.
+- **Additive evidence, no child stdout.** Structured diagnostics live separately
+  under `data/mail-desk/diagnostics/evidence/` (no mail fields, credentials or
+  paths). The normal success envelope stays canonical; the raw child stdout is
+  **not** exposed. Request/review files are read size-capped (2 MiB / 16 KiB) and
+  parsed strictly (duplicate keys, non-finite numbers and invalid UTF-8 are
+  rejected without echoing input).
+
+The regular `save-draft`/batch/dossier/attachment paths stay untouched. This
+path adds no mailbox permission and never sends.
+
 ### Temporary host execution boundary
 
 If the sandbox cannot read the configured Himalaya config but the same bounded,

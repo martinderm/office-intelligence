@@ -1,5 +1,13 @@
 # Office Intelligence — Paket System Map
 
+The diagnosis-only capture additionally rejects non-UTF-8 request text and linked
+diagnostic output directories before its one-shot attempt. The focused guard
+frame passed 72 tests, zero skips; the final full-suite and HEAD/tree review
+bindings are recorded separately in the PR/run evidence, not inferred from
+historical desk counts.
+Diagnostic request/review JSON reads are bounded at the file-read boundary,
+before decoding or parsing; oversized inputs cannot trigger an unbounded read.
+
 > **Typ**: ICM Form 6 (`system-map`), Föderierte Paket-Ebene (L1)  
 > **Ziel**: Kompakte, agentenlesbare Architektur- und Navigationskarte des `office-intelligence`-Skill-Bundles zur Vermeidung von Context-Bloat und Attention Drift bei bereichsübergreifenden Refactorings, Audits und Integrationen.  
 > **Gültig für**: Repository Root (relativ)
@@ -160,6 +168,24 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    (Start oder Kommunikation, Payload- und Nicht-Payload-Pfad) →
    `himalaya_launch_failed` mit unbekanntem Ausgang/nicht wiederholt. Detail:
    L2-Map §33.
+ - **Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus):** ein rein
+   diagnostischer, explizit menschlich autorisierter Pfad
+   ([`../../skills/mail-desk/scripts/core/diagnostics.py`](../../skills/mail-desk/scripts/core/diagnostics.py),
+   Client-Subcommand `diagnose-draft`) über den **bestehenden** `run_himalaya`-Seam
+   (keyword-only `diagnostic_capture`, Default `None` = unverändert). Geschlossener
+   versionierter Request (Workspace/Account/Folder/Operation/`save_draft`, Account
+   **explizit und nicht-null**, `workspace_id`==Rootname) plus **separater**,
+   hashgebundener Operator-Review-Input (kein `reviewed` im Manifest, keine
+   kryptografische Behauptung); read-only Account-Bindung über den echten
+   `readiness`-Loader; alle read-only Preflights **vor** dem Einmal-Marker; shared
+   Lock-Guard mit `allow_legacy=False` (Lease/Conversation aus Argument oder
+   `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID`). Fester Kindfilter
+   (`off,imap_client::stream=trace,imap_codec::response=warn`), begrenzter
+   fail-closed Parser (64 KiB/128 Events, nur feste Kinds plus Zählwerte; exakte
+   Continuation-Byte-Signatur) und additive Evidenz unter
+   `data/mail-desk/diagnostics/` ohne Mailfelder/Zugangsdaten/Pfade und ohne rohen
+   Kind-stdout; keine Verifikation, kein Retry, kein Fallback, kein Cleanup.
+   Detail: L2-Map §35.
  - Himalaya-Adapter, Dossier-Synthese.
 
 ---

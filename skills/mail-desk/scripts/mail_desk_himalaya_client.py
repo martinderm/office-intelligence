@@ -41,6 +41,7 @@ from typing import Any
 
 from core.envelope import build_error, build_success, emit_json
 from core.common import get_iso_week_folder, normalize_message_id, resolve_data_dir
+from core import diagnostics
 from core import drafts
 from core.attachments import (
     AccountDriftError,
@@ -61,6 +62,33 @@ from core.himalaya import (
 
 
 ACTION = "himalaya_client"
+
+#: Bounded read caps for the diagnostic request/review files (ported from the
+#: existing JSON-manifest discipline); a review receipt is tiny and security
+#: critical, a request may carry a draft body.
+MAX_DIAGNOSTIC_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_DIAGNOSTIC_RECEIPT_BYTES = 16 * 1024
+
+
+def _reject_nonfinite_constant(name: str) -> Any:
+    raise ValueError("non-finite JSON constant is not allowed")
+
+
+def _reject_duplicate_keys(pairs: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key is not allowed")
+        result[key] = value
+    return result
+
+
+def _strict_json(text: str) -> Any:
+    return json.loads(
+        text,
+        object_pairs_hook=_reject_duplicate_keys,
+        parse_constant=_reject_nonfinite_constant,
+    )
 
 
 def _bounded_reason(exc: Exception) -> str:
@@ -217,6 +245,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=None,
         help="Drafts folder (default: resolved dynamically from the mailbox).",
+    )
+
+    # diagnose-draft (issue #19: bounded, opt-in, diagnosis-only save_draft)
+    p_diagnose = subparsers.add_parser(
+        "diagnose-draft",
+        parents=[common_parent],
+        help="Bounded, opt-in, diagnosis-only draft APPEND with reviewed trace capture.",
+    )
+    p_diagnose.add_argument(
+        "--request",
+        type=str,
+        required=True,
+        help="Path to the canonical diagnostic request JSON (closed schema).",
+    )
+    p_diagnose.add_argument(
+        "--review",
+        type=str,
+        required=True,
+        help="Path to the separate reviewed operator receipt JSON (hash-bound to the request).",
+    )
+    p_diagnose.add_argument(
+        "--opt-in",
+        action="store_true",
+        help="Explicit opt-in for the bounded diagnostic run (default off).",
+    )
+    p_diagnose.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Workspace-local data/mail-desk directory (optional; default is resolved).",
     )
 
     return parser.parse_args(argv)
@@ -462,6 +520,78 @@ def op_replace_draft(
         cc=cc,
         from_addr=from_addr,
         journal=active_journal,
+    )
+
+
+def _load_diagnostic_json(path_value: str, *, label: str, max_bytes: int) -> Any:
+    """Load a diagnostic request/receipt JSON file with bounded, content-free errors.
+
+    The read is size-capped, must be valid UTF-8, and is parsed strictly with
+    duplicate-key and non-finite rejection.  Every failure is a fixed, input-free
+    message (``from None``), so no raw key/value or dicey JSON can leak.
+    """
+    try:
+        with Path(path_value).open("rb") as stream:
+            raw = stream.read(max_bytes + 1)
+    except OSError:
+        raise diagnostics.DiagnosticRequestError(
+            diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,
+            f"The diagnostic {label} file could not be read; no process was started.",
+        ) from None
+    if len(raw) > max_bytes:
+        raise diagnostics.DiagnosticRequestError(
+            diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,
+            f"The diagnostic {label} file exceeds its size bound; no process was started.",
+        ) from None
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        raise diagnostics.DiagnosticRequestError(
+            diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,
+            f"The diagnostic {label} file is not valid UTF-8; no process was started.",
+        ) from None
+    try:
+        return _strict_json(text)
+    except (ValueError, json.JSONDecodeError):
+        raise diagnostics.DiagnosticRequestError(
+            diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,
+            f"The diagnostic {label} file is not valid strict JSON; no process was started.",
+        ) from None
+
+
+def op_diagnose_draft(
+    request: Any,
+    receipt: Any,
+    *,
+    opt_in: bool = False,
+    account_override: str | None = None,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Bounded, opt-in, diagnosis-only ``save_draft`` (issue #19).
+
+    This is a **diagnosis-only** path: it runs exactly one ``message save`` into
+    the explicitly reviewed folder, captures a bounded slice of the Himalaya
+    trace and writes additive structured evidence under
+    ``data/mail-desk/diagnostics/evidence/``.  It is default off, requires the
+    explicit opt-in and a separate hash-bound operator receipt, and never sends,
+    discovers, verifies, retries or falls back.
+    """
+    if not opt_in:
+        raise diagnostics.DiagnosticError(
+            diagnostics.DIAGNOSTIC_DISABLED_REASON,
+            "Bounded diagnostics are opt-in and default off.",
+        )
+    if account_override is not None:
+        raise diagnostics.DiagnosticRequestError(
+            diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,
+            "Diagnostic runs accept no account override; the request account is bound to the workspace configuration.",
+        )
+    base = Path(data_dir) if data_dir is not None else resolve_data_dir()
+    return diagnostics.run_diagnostic_save_draft(
+        request,
+        receipt=receipt,
+        data_dir=base,
+        opt_in=True,
     )
 
 
@@ -857,6 +987,14 @@ def main() -> int:
                 folder=args.folder,
                 account=args.account,
                 cc=args.cc,
+            )
+        elif sub == "diagnose_draft":
+            result = op_diagnose_draft(
+                _load_diagnostic_json(args.request, label="request", max_bytes=MAX_DIAGNOSTIC_REQUEST_BYTES),
+                _load_diagnostic_json(args.review, label="review", max_bytes=MAX_DIAGNOSTIC_RECEIPT_BYTES),
+                opt_in=bool(args.opt_in),
+                account_override=args.account,
+                data_dir=Path(args.data_dir) if args.data_dir else None,
             )
 
         if machine_mode:
