@@ -83,6 +83,8 @@ vollständige, föderierte System Map nach ICM Form 6:
 ## 📝 Changelog
 
 Ein kompaktes Änderungsprotokoll liegt im [`CHANGELOG.md`](CHANGELOG.md); abgeschlossene
-Feature Requests im Langzeit-Archiv
-[`docs/features/_archive.md`](docs/features/_archive.md), aktive im
-[FR-Katalog](FEATURE-REQUESTS.md).
+Feature Requests im historischen
+[Archiv](docs/features/CONTEXT.md). Einziger aktiver Backlog sind die
+[GitHub Issues](https://github.com/martinderm/office-intelligence/issues);
+Arbeitsstatus und Run-Abnahme stehen im jeweiligen Issue/PR, aktuelle Verträge
+weiterhin in den Fachreferenzen und System Maps.

@@ -580,8 +580,10 @@ Der User-Output bleibt kurz: bearbeitete Mail, Ziel/Entscheidung, Move/Copy-Stat
 Reply/Todo, aktualisierte Referenz-/Evidence-Dateien (oder warum keine), und offenes
 Review; keine langen Mailinhalte ohne Anfrage.
 
-Offene Verbesserungen: FR-Katalog [`../../FEATURE-REQUESTS.md`](../../FEATURE-REQUESTS.md);
-historisches Backlog und Meilensteine im Archiv
-[`../../docs/features/_archive.md`](../../docs/features/_archive.md).
+Offene Verbesserungen: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).
+Workstatus und Run-Abnahme stehen im Issue/PR und dessen Run, nicht in Root-Ledgern.
+Historische FR-Nachweise: [`../../docs/features/CONTEXT.md`](../../docs/features/CONTEXT.md).
+Aktuelle Verträge: Fachreferenzen und System Map L2 (`docs/system-map`);
+historische Paketkarten und Ticket-IDs sind kein aktueller Backlog.
 
-Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; Ticket-IDs sind dort kanonisch.
+Vertragshistorie: System Map L2 (docs/system-map) und docs/features/_archive.md; historische Ticket-IDs sind kein aktueller Backlog.
