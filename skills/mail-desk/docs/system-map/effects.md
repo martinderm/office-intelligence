@@ -136,7 +136,7 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 ### 5.1 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 
 * **Ein Prozess, keine Retries/Fallbacks/Cleanups:** Der diagnostische Pfad
-  ([`scripts/core/diagnostics.py`](../scripts/core/diagnostics.py)) geht durch den
+  ([`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py)) geht durch den
   bestehenden `run_himalaya`-Seam (keyword-only `diagnostic_capture`, Default
   `None` = unverändert) und startet genau **einen** `message save -o plain -f
   <reviewter Ordner>` über `subprocess.Popen` mit begrenztem Nebendrain

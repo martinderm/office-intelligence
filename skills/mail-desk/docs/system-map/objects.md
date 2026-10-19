@@ -289,7 +289,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 
 * **Dateipfade:** `data/mail-desk/diagnostics/attempts/<request_hash>.json` (Einmal-Marker)
   und `data/mail-desk/diagnostics/evidence/<request_hash>.json` (additive Evidenz),
-  beide atomar JSON; Owner [`scripts/core/diagnostics.py`](../scripts/core/diagnostics.py).
+  beide atomar JSON; Owner [`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py).
 * **Request/Receipt (Schema 1, geschlossen):** `DiagnosticRequest` bindet exakt
   `schema_version`, `kind` (`mail_desk_diagnostic_save_draft`), `opt_in`,
   `workspace_id`, `account`, `folder`, `operation` (`save_draft`) und `draft`.

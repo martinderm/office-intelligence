@@ -400,7 +400,7 @@ bleibt unberührt.
 
 ### 6.2 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 
-Implementiert in [`scripts/core/diagnostics.py`](../scripts/core/diagnostics.py)
+Implementiert in [`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py)
 und im JSON-Manifest-Client als Subcommand `diagnose-draft`. Der Lifecycle ist
 strikt sequenziell und fail-closed:
 
