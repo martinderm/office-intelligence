@@ -531,7 +531,8 @@ def _load_diagnostic_json(path_value: str, *, label: str, max_bytes: int) -> Any
     message (``from None``), so no raw key/value or dicey JSON can leak.
     """
     try:
-        raw = Path(path_value).read_bytes()
+        with Path(path_value).open("rb") as stream:
+            raw = stream.read(max_bytes + 1)
     except OSError:
         raise diagnostics.DiagnosticRequestError(
             diagnostics.DIAGNOSTIC_REQUEST_INVALID_REASON,

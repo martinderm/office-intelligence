@@ -2,6 +2,8 @@
 
 **Final diagnostic guard frame:** strict UTF-8 text validation and refusal of
 linked diagnostic/attempt/evidence directories precede the one-shot attempt.
+Request/review file reads stop at their size limit plus one sentinel byte before
+decoding or strict JSON parsing; no unbounded input read precedes the size check.
 The focused suite passed 72 tests, zero skips (2026-10-18); full-suite results
 and independent HEAD/tree review are bound separately in the PR/run evidence.
 
@@ -1540,7 +1542,7 @@ Die GroupWise-Abhängigkeit selbst bleibt offen; der frühere GroupWise-Fehler i
 seit der Draft-Transportarbeit nicht mehr reproduziert. Kein Rust, keine
 Installation, keine Instrumentierung, kein Proxy und kein neuer Transport.
 
-**Pflichttests:** `tests/test_maildesk_diagnostics.py` (**69 Tests**, hermetisch:
+**Pflichttests:** `tests/test_maildesk_diagnostics.py` (hermetisch:
 gefakte Prozess-OS-Grenze `himalaya._POPEN` und gefakte Command-Auflösung; der
 Workspace-Lock ist der **echte** shared Guard mit realer Lease in einem
 temporären Consumer-Workspace). Gepinnt sind Request-/Receipt-Kontrakt

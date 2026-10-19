@@ -5,6 +5,8 @@ diagnostic output directories before its one-shot attempt. The focused guard
 frame passed 72 tests, zero skips; the final full-suite and HEAD/tree review
 bindings are recorded separately in the PR/run evidence, not inferred from
 historical desk counts.
+Diagnostic request/review JSON reads are bounded at the file-read boundary,
+before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 
 > **Typ**: ICM Form 6 (`system-map`), Föderierte Paket-Ebene (L1)  
 > **Ziel**: Kompakte, agentenlesbare Architektur- und Navigationskarte des `office-intelligence`-Skill-Bundles zur Vermeidung von Context-Bloat und Attention Drift bei bereichsübergreifenden Refactorings, Audits und Integrationen.  

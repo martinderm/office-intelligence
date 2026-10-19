@@ -993,6 +993,17 @@ class Round2PreflightTests(unittest.TestCase):
 
 
 class Round2ClientLoaderTests(unittest.TestCase):
+    def test_loader_bounds_the_filesystem_read_itself(self) -> None:
+        from io import BytesIO
+        class BoundedRead(BytesIO):
+            def read(self, size=-1):
+                if size < 0 or size > 17:
+                    raise AssertionError("Unbounded diagnostic input read")
+                return super().read(size)
+        with patch.object(Path, "open", return_value=BoundedRead(b"x" * 100)):
+            with self.assertRaises(diag.DiagnosticRequestError):
+                client._load_diagnostic_json("synthetic.json", label="review", max_bytes=16)
+
     def _load(self, tmp: str, content: bytes, label: str = "request"):
         path = Path(tmp) / f"{label}.json"
         path.write_bytes(content)
