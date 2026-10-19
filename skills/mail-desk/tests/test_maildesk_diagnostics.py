@@ -1052,6 +1052,3 @@ class Round2CleanupRaceTests(_WorkspaceCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-

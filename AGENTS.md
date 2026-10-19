@@ -46,9 +46,13 @@ shared rules win. The shared `workspace-lock` skill holds the only lock machiner
   [`docs/system-map/README.md`](docs/system-map/README.md) and L2 per desk such as
   [`skills/mail-desk/docs/system-map/README.md`](skills/mail-desk/docs/system-map/README.md).
 - Any change to contracts, schemas, state machines, boundaries, workflows, or
-  reported metrics must synchronously update the affected L1 **and** L2 map plus
-  both feature ledgers. A code or documentation change without its map sync is
-  incomplete.
+  reported metrics must synchronously update the affected L1 **and** L2 map and
+  current contracts/specifications. A change without its map sync is incomplete.
+- GitHub Issues are the only active backlog. Work status and run acceptance
+  evidence belong in the issue/PR and its run, not in root feature ledgers.
+  `FEATURE-REQUESTS.md` and `FEATURE-REQUEST-PROGRESS.md` are historical link
+  stubs; do not append entries or create new FR records. Preserve historical
+  evidence without treating old statuses as current decisions.
 
 ## Portability
 

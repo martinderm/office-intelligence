@@ -43,6 +43,10 @@ historical desk counts.
 ```
 
 ### Abgrenzung & Rolle
+* **Backlog und Arbeitsnachweise:** [GitHub Issues](https://github.com/martinderm/office-intelligence/issues)
+  sind der einzige aktive Backlog. Workstatus und Run-Abnahme stehen im Issue/PR
+  und dessen Run; aktuelle Verträge/Specs und betroffene L1/L2-Karten bleiben
+  kanonisch. Root-FR-Ledger sind historische Linkstubs, keine Parallelpflege.
 * **Issue #10, Fixture-Isolation:** MD-A3-Lockverlust-Simulation hält ihren
   Aufrufzustand im jeweiligen temporären Test-Workspace statt in einem globalen
   System-Temp-Marker. Produktions-Lock-, Quarantäne- und Timeout-Verträge bleiben
@@ -200,10 +204,10 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
 - **SSOT je Ebene:** Die L2-Subsystem-Map (`skills/<desk>/docs/system-map/README.md`,
   Kopfzeile) ist die kanonische Stelle für die Sub-Skill-Metrik. Die L1-Komplexitätsmatrix
   (§2) referenziert die L2-Karte oder nennt keine Zerlegung; historische Snapshots in den
-  FR-Ledgern (Record-Files unter `docs/features/`, Katalog `FEATURE-REQUESTS.md`,
-  `FEATURE-REQUEST-PROGRESS.md`) sind **bewusst
-  eingefrorene Abnahmewerte** und werden nicht fortgeschrieben (sie tragen den
-  Zeitstempel ihrer Paketabnahme).
+  [FR-Nachweisen](../features/CONTEXT.md) sind **bewusst eingefrorene
+  Abnahmewerte** und werden nicht fortgeschrieben (sie tragen den Zeitstempel
+  ihrer Paketabnahme). Die Root-Ledger sind nur historische Linkstubs;
+  neue Workstatus-/Abnahmenachweise liegen im Issue/PR und dessen Run.
 - **Frische-Erhebungsregel:** Vor jedem Dokumentations-Commit, der eine Metrik nennt,
   wird der Wert frisch per `git ls-files` bzw. Testlauf erhoben — nie aus einer anderen
   Dokumentstelle kopiert.
@@ -217,8 +221,8 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
    des betroffenen Sub-Skills (Zerlegung nur via Anker auf die L2-Karte).
 4. L1 §1-Systemübersicht-Diagramm (Sub-Skill-Datei-Anzahl in Box-Labels).
 5. `SKILL.md`-Stellen mit Feld-/Schemazählern (z. B. Pflichtfelder des Quarantäneindex).
-6. FR-Ledger **nur für den neuen Paketabschluss** als neuer, mit Datum eingefrorener
-   Snapshot; keine Altzeilen umbiegen.
+6. Aktuelle Verträge/Specs synchron halten; neue Workstatus-/Abnahmenachweise
+   im Issue/PR und dessen Run, keine neuen FR-Records oder Ledger-Einträge.
 7. Verifikation: `git grep` über die neuen Literale muss genau die Stellen der Checkliste
    treffen; historische Snapshots bleiben absichtlich unangetastet.
 

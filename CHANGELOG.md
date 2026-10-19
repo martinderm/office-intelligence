@@ -8,6 +8,15 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-10-18 — Historische FR-Ledger eingefroren
+
+- Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
+  samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
+  Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).
+  Aktuelle Vertrags-/Map-Pflege bleibt erhalten; Workstatus und Run-Abnahme im
+  Issue/PR/Run. Frühere Ledger-/Record-Anweisungen in datierten Einträgen unten
+  beschreiben ausschließlich den damaligen Prozess, keine heutige Pflicht.
+
 ### 2026-09-27
 
 #### Added

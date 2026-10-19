@@ -486,6 +486,10 @@ noch die enthaltenen historischen KI-Instruktionen.
 Dieser Bericht bleibt die Compliance- und Audit-Evidenz. Er führt keine
 Paketkarten, Implementierungsreihenfolgen oder Feature-Abnahmen doppelt.
 
+> Routing-Hinweis 2026-10-18: Der folgende Katalogverweis beschreibt den damaligen
+> Stand; heute historischer Linkstub. Einziger aktiver Backlog:
+> [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).
+
 - Laufende und geplante Arbeit: [`FEATURE-REQUESTS.md`](FEATURE-REQUESTS.md)
 - Vollständig abgeschlossene FRs: [`docs/features/_archive.md`](docs/features/_archive.md)
 
