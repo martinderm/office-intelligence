@@ -56,6 +56,13 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   Part-Metadaten halten das einzelne Item fail-closed in `INBOX` zur Review.
   Ein Abruf, eine Extraktion oder Cloud-Ablage ist dadurch noch nicht autorisiert.
 
+Der `tool_version`-Wert für `ocrmypdf` wird ausschließlich aus den installierten
+Distributionsmetadaten via `importlib.metadata.version("ocrmypdf")` gelesen.
+Fehlende oder nicht lesbare Metadaten ergeben `unknown`; es gibt keinen
+Import-Fallback auf das `ocrmypdf`-Modul. Der Wert belegt die installierte
+Paketversion, nicht die tatsächlich attestierte Laufzeitversion eines isolierten
+Workers. Prozessisolation, Timeouts und Deadline-Verhalten bleiben unverändert.
+
 ### Betriebsarten-Matrix (Runner)
 
 | Gruppe | Modi | Zweck & Verhalten |

@@ -167,8 +167,25 @@ def run_reconcile_mode(
         final_folder = str("Trash" if action_type == "delete" else (approved_target or record.get("final_folder") or source))
         folder_verified: bool | None = None
         final_env: str | None = None
+        candidate_env_id: str | None = None
+        verify_diagnostics: dict[str, Any] = {}
         if check_folders and action_type != "delete" and message_id:
-            verified = verify_folder(final_folder, message_id, subject=str(record.get("subject", "")), from_addr=str(record.get("from", "")), date_str=str(record.get("date", "")), account=account, candidate_env_id=str(record.get("final_envelope_id") or record.get("envelope_id") or ""))
+            # A source envelope id only locates the message in its own folder.
+            # Keep the persisted target hint and legitimate in-place fallback;
+            # do not spend a header read probing a source id in another folder.
+            final_env_hint = str(record.get("final_envelope_id") or "")
+            source_env_id = str(record.get("envelope_id") or "")
+            if final_env_hint:
+                candidate = final_env_hint
+            elif action_type != "copy_as_move" or final_folder == source:
+                candidate = source_env_id
+            else:
+                candidate = ""
+            candidate_env_id = candidate or None
+            verify_diagnostics["candidate_env_id"] = candidate_env_id
+            if not candidate_env_id:
+                verify_diagnostics["reason"] = "no_candidate_env_id"
+            verified = verify_folder(final_folder, message_id, subject=str(record.get("subject", "")), from_addr=str(record.get("from", "")), date_str=str(record.get("date", "")), account=account, candidate_env_id=candidate_env_id, diagnostics=verify_diagnostics)
             folder_verified = verified is not None
             final_env = str(verified) if verified is not None else None
         elif check_folders and action_type == "delete":
@@ -239,7 +256,7 @@ def run_reconcile_mode(
         recovery_state = "complete" if verifiable and complete_local else ("needs_local_repair" if verifiable else "needs_mailbox_review")
         if recovery_state != "complete":
             needs_review = True
-        results.append({"message_id": message_id, "journal_phase": record.get("phase"), "final_folder": final_folder, "folder_verified": folder_verified, "current_envelope_id": final_env, "in_index": in_index, "in_action_log": in_log, "in_evidence": evidence_ok, "recovery_state": recovery_state, "repaired": repaired})
+        results.append({"message_id": message_id, "journal_phase": record.get("phase"), "final_folder": final_folder, "folder_verified": folder_verified, "current_envelope_id": final_env, "candidate_env_id": candidate_env_id, "verify_diagnostics": verify_diagnostics, "in_index": in_index, "in_action_log": in_log, "in_evidence": evidence_ok, "recovery_state": recovery_state, "repaired": repaired})
 
     if apply_local:
         _follow_up_runner_progress(dd, completed=not needs_review, repaired=any(row.get("repaired") for row in results), now=now)

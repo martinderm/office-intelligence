@@ -52,7 +52,15 @@ before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 * **Issue #10, Fixture-Isolation:** MD-A3-Lockverlust-Simulation hält ihren
   Aufrufzustand im jeweiligen temporären Test-Workspace statt in einem globalen
   System-Temp-Marker. Produktions-Lock-, Quarantäne- und Timeout-Verträge bleiben
-  unverändert; READY-/Last-Stabilität ist damit nicht nachgewiesen. Diagnose:
+  unverändert; READY-/Last-Stabilität ist damit nicht nachgewiesen. Die vier
+  picklebaren MDA3-Worker-Fixtures liegen in
+  `skills/mail-desk/tests/attachment_worker_fixtures.py`; das Testmodul aliasiert
+  sie nur, damit ein gespawnter Worker sie ohne Import des ganzen Testmoduls samt
+  Client auflösen kann (reine Fixture-Struktur, kein Runtime-Vertrag). Der
+  `ocrmypdf`-`tool_version` wird aus installierten Distributionsmetadaten gelesen
+  (fehlend/fehlerhaft -> `unknown`, kein Tool-Import-Fallback) und ist keine
+  Worker-Laufzeitattestierung; Prozessisolation und Timeouts bleiben unverändert.
+  Diagnose:
   [`docs/analysis/issue-10-stability.md`](../analysis/issue-10-stability.md).
 * **Kein Agent-Workspace:** Das Bundle verfügt über keine eigene Agent-Control-Plane (kein `.agents/`, keine Session-Lifecycles, keine Dummy-Data-Zones). Es ist eine Funktionsbibliothek und Desk-Föderation für konsumierende Agent-Workspaces (vgl. [`COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md`](../../COMPLIANCE-REPORT-AGENT-ARCHITECTURE.md)).
 * **Single Responsibility pro Sub-Skill:** Jeder Sub-Skill kapselt genau eine fachliche Domäne.
@@ -376,3 +384,19 @@ jedem lokalen Task-Desk-Write und Dispatch; atomar je JSON-Datei (`tempfile` +
 `os.replace`), **keine** Multi-File-/SaaS-Atomarität (L1 [`effects.md`](effects.md)
 §2/§3). Mail-Desk-Seite:
 [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §34.
+
+## 8. Issue #12 (partiell, O2) — Folder-scoped Reconcile-Kandidat
+
+Nach unterbrochenem `copy_as_move` ist die Source-Envelope-ID kein verlässlicher
+Ziel-Hinweis. Eine persistierte `final_envelope_id` hat weiter Vorrang;
+Source-`envelope_id` wird sonst nur bei nicht-`copy_as_move` oder
+`final_folder == source` übergeben, andernfalls `None`. Der read-only Report
+trägt additiv `candidate_env_id` und `verify_diagnostics` (ohne Kandidat
+`reason: "no_candidate_env_id"`). Maßgeblich bleibt die echte Message-ID-/
+Zielordner-Verifikation. Kein Journal-/State-Schema, keine Retry-/Timeout-
+Änderung und keine neuen IDs aus Copy-Ausgaben; #7 unverändert.
+
+**Partiell:** Backend-Headerlatenz bleibt ungelöst; O1/O3/O4 nicht umgesetzt.
+L2: [Mail-Desk §36](../../skills/mail-desk/docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
+Vertrag: [Batch-Runner, Modus reconcile](../../skills/mail-desk/references/batch-runner.md).
+Regression: `skills/mail-desk/tests/test_reconcile_candidate_env.py`.

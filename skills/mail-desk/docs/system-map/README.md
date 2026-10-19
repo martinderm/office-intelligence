@@ -18,6 +18,13 @@ bleiben unverändert historisch. Keine neuen FR-Records oder Rootledger-Einträg
 Workspace-lokalen Marker im privaten `TemporaryDirectory`; verschachtelte
 Testläufe teilen keinen System-Temp-Zustand mehr. Eine deterministische
 Interleaving-Regression und der echte Spawn-/OCR-Promotionspfad sichern dies ab.
+Nachtrag 2026-10-19: Die vier picklebaren MDA3-Worker-Fixtures (`_late_writer_target`,
+`_mock_ocr_slow`, `_noop_lock_verifier`, `_clean_tracked_quarantine_runner`) liegen in
+`tests/attachment_worker_fixtures.py` und werden im Testmodul nur noch aliasiert; damit
+kann ein gespawnter Worker die Fixtures ohne Import des gesamten Testmoduls samt Client
+auflösen. Reine
+Test-Fixture-Struktur; Timeouts, Asserts, Lock-/Preflight-Semantik und Produktionscode
+bleiben unverändert.
 Keine Änderung an Produktions-Timeouts, READY/START, Confinement oder Quarantäne.
 READY-/Last-Stabilität bleibt separat nachzuweisen; historische Flake-Zahlen unten
 sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
@@ -101,6 +108,12 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
   Discard-Apply.
 - **Bounded read-only Tracked-Quarantäne-Preflight** vor jedem
   Quarantäne-/Derivat-Write (FR-15/MD-E1-T02).
+- **`tool_version` für `ocrmypdf`** stammt ausschließlich aus den installierten
+  Distributionsmetadaten (`importlib.metadata.version("ocrmypdf")`); fehlende oder
+  nicht lesbare Metadaten ergeben `unknown`, ohne Import-Fallback auf das
+  Toolmodul. Der Wert attestiert die installierte Paketversion, nicht die
+  Laufzeitversion eines isolierten Workers; Prozessisolation, Timeouts und
+  Deadlines bleiben unverändert.
 - **Kontextgebundene Receipt-Klassen-Grenze** mit interner Maschinen-Autorisierung
   (FR-15/MD-E1-T03).
 - **Policygebundener Anhang-Evaluierungs-Orchestrator `attachment_evaluate`** mit
@@ -1577,3 +1590,26 @@ test-first-RED. Messungen dieser Runde:
   `-W error::ResourceWarning` → **69/69 OK, Exit 0**. Die finale Zahl und die
   Vier-Suiten-Evidenz ergänzt die Parent-Session am HEAD/Tree. Die reale
   Filterwirkung am installierten Himalaya ist damit nicht behauptet.
+
+## 36. Issue #12 (partiell, O2) — Folder-scoped Reconcile-Kandidat
+
+`core/modes/reconcile.py` übergibt eine persistierte `final_envelope_id` weiter
+als bevorzugten Ziel-Hinweis. Ohne diesen Hinweis ist die Source-`envelope_id`
+nur bei nicht-`copy_as_move` oder `final_folder == source` zulässig; bei
+Cross-Folder-`copy_as_move` wird `None` übergeben. Damit entfällt der unpassende
+direkte Source-ID-Probe im Zielordner, nicht die Ziel-Verifikation selbst.
+
+Der read-only Item-Report trägt additiv `candidate_env_id` und
+`verify_diagnostics`; ohne Kandidat `reason: "no_candidate_env_id"`.
+Der echte Verifier kann Listing-Fakten ergänzen und prüft weiterhin Message-ID
+und Zielordner. Injizierte `verify_in_target_folder`-Dependencies müssen wie
+der Standard-Verifier das optionale Keyword `diagnostics` akzeptieren.
+`final_folder == source` ist ein exakter Vergleich ohne Aliasnormalisierung.
+Keine Copy-Output-ID-Inferenz, kein Journal-/State-Schema,
+keine Retry-/Timeout-Änderung (#7 unverändert). Backend-Headerlatenz bleibt
+ungelöst; O1/O3/O4 nicht umgesetzt.
+
+Vertrag: [Batch-Runner](../../references/batch-runner.md).
+Regression: [vier öffentliche Reconcile-Seam-Tests](../../tests/test_reconcile_candidate_env.py)
+(Cross-Folder ohne Hinweis, Copy-in-place, Keep-in-place, persistierter Ziel-Hinweis).
+L1: [§8](../../../../docs/system-map/README.md#8-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).

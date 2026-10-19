@@ -23,15 +23,16 @@ from core import attachment_policy  # noqa: E402
 from core import attachments  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_extract as aextract  # noqa: E402
-from core import quarantine_preflight as qpf  # noqa: E402
 import mail_desk_himalaya_client as client  # noqa: E402
 
-
-def _late_writer_target(write_path_str: str) -> str:
-    """Module-level picklable helper to test process termination and late write prevention."""
-    time.sleep(1.2)
-    Path(write_path_str).write_text("late write succeeded", encoding="utf-8")
-    return "done"
+# Picklable synthetic fixtures live in a leaf module so spawned extraction workers
+# can resolve them without importing this whole test module (and the client).
+from attachment_worker_fixtures import (  # noqa: E402
+    _clean_tracked_quarantine_runner,
+    _late_writer_target,
+    _mock_ocr_slow,
+    _noop_lock_verifier,
+)
 
 
 def _marker_side_effect_target(marker_path_str: str) -> str:
@@ -108,13 +109,6 @@ def _mock_ocr_mixed_p3(source: Path, deriv: Path, max_pages: int = 3, pages: Any
     return data, "OCR Extracted Content for Page 3", 1
 
 
-def _mock_ocr_slow(source: Path, deriv: Path, max_pages: int = 3, pages: Any = None, timeout: float = 30) -> tuple[bytes, str, int]:
-    deriv.parent.mkdir(parents=True, exist_ok=True)
-    deriv.write_bytes(b"Partial incomplete bytes")
-    time.sleep(1.0)
-    return b"", "", 0
-
-
 def _mock_ocr_crashing(source: Path, deriv: Path, max_pages: int = 3, pages: Any = None, timeout: float = 30) -> tuple[bytes, str, int]:
     deriv.parent.mkdir(parents=True, exist_ok=True)
     deriv.write_bytes(b"Partial crash data")
@@ -168,25 +162,6 @@ def _workspace_scoped_lock_loss_verifier(*args: Any, **kwargs: Any) -> None:
         return None
     marker.unlink(missing_ok=True)
     raise afetch.WorkspaceLockError("Lock expired during long OCR execution!")
-
-
-def _noop_lock_verifier(*args: Any, **kwargs: Any) -> None:
-    """Injected, hermetic lock verifier representing an owned harness lease.
-
-    The legacy `allow_legacy` bypass is gone, so derivative-writing OCR tests inject
-    this verified-ownership seam instead of opting out of lock enforcement.
-    """
-    return None
-
-
-def _clean_tracked_quarantine_runner(argv: Any, cwd: str, timeout_seconds: float) -> qpf.GitIndexQueryResult:
-    """Injected, hermetic stand-in for the bounded tracked-quarantine Git preflight.
-
-    MDA3 exercises extraction semantics, not Git-index state. Returning an empty,
-    successful index keeps every extraction test independent of a live Git checkout
-    while the production default runner stays untouched and fail-closed.
-    """
-    return qpf.GitIndexQueryResult(returncode=0, stdout="", stderr="")
 
 
 _REAL_EXTRACT_ATTACHMENT_CONTENT = aextract.extract_attachment_content
