@@ -670,8 +670,8 @@ def _get_tool_version(tool_name: str) -> str:
             import pptx
             return str(getattr(pptx, "__version__", "unknown"))
         elif tool_name == "ocrmypdf":
-            import ocrmypdf
-            return str(getattr(ocrmypdf, "__version__", "unknown"))
+            import importlib.metadata
+            return str(importlib.metadata.version("ocrmypdf"))
         elif tool_name == "markitdown":
             import markitdown
             return str(getattr(markitdown, "__version__", "unknown"))
