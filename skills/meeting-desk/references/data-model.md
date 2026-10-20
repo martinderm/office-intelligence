@@ -7,7 +7,7 @@
 
 ## 1. Top-Level Index: `meetings.json`
 
-Die Datei `memory/evidence/meetings/meetings.json` dient als kanonisches Register aller im Workspace bekannten Meetings.
+Die Datei `memory/evidence/meetings/meetings.json` dient als kanonisches Register aller im Workspace bekannten Meetings. Sie ist SSOT über alle Ablagepfade: `summary_path` und `transcript_path` zeigen auf den kanonischen Ort im Ablagebaum (Routing nach Projekt/Topic/Event, Fallback `meetings/unrouted/` mit Review-Marker) und sind mit dem physischen Dateisystem identisch. Regeln: genau ein physischer Ort pro Meeting, keine Spiegelkopien, kein Kopieren — nur Verschieben; `channel_slug` ist ausschließlich Metadatum (Fireflies-/Tool-Spezifikum), niemals Ordnerstruktur; jede physische Meeting-Datei ist registriert (Orphan-Verbot); die Legacy-Ablage `memory/references/meetings/` existiert nicht mehr.
 
 ### JSON-Schema Beispiel:
 
@@ -25,8 +25,8 @@ Die Datei `memory/evidence/meetings/meetings.json` dient als kanonisches Registe
     "dateString": "2026-08-24 10:00:00",
     "duration_minutes": 45,
     "channel_slug": "lehre-weiterbildung",
-    "summary_path": "memory/evidence/meetings/lehre-weiterbildung/2026-08-24-semesterplanung-ws2026-27.summary.md",
-    "transcript_path": "memory/evidence/meetings/lehre-weiterbildung/2026-08-24-semesterplanung-ws2026-27.transcript.md",
+    "summary_path": "memory/evidence/topics/aixlll/meetings/2026-08-24-semesterplanung-ws2026-27.summary.md",
+    "transcript_path": "memory/evidence/topics/aixlll/meetings/2026-08-24-semesterplanung-ws2026-27.transcript.md",
     "topic_slug": "aixlll",
     "project_slug": null,
     "participants": [
@@ -55,7 +55,7 @@ topic: "aixlll"
 participants:
   - "Martin Mayr"
   - "Kollege"
-summary_path: "memory/evidence/meetings/lehre-weiterbildung/2026-08-24-semesterplanung-ws2026-27.summary.md"
+summary_path: "memory/evidence/topics/aixlll/meetings/2026-08-24-semesterplanung-ws2026-27.summary.md"
 ---
 
 # Meeting: Semesterplanung WS2026/27
