@@ -14,6 +14,7 @@ Ist das Meeting Teil eines Events / einer Konferenz?
   ├── JA  ──► Verschiebe Summary + Transkript nach memory/evidence/{projects|topics}/<id>/events/<event-slug>/meetings/
   │           (Bestehende recordings/-Ordner werden nach meetings/ umbenannt.)
   │           Passe summary_path + transcript_path in meetings.json an. Kein Kopieren.
+  │           Bei Doppel-Tagging (Projekt + Topic) route nach Topic (stabilerer Ort).
   │
   └── NEIN ─► Route nach Zugehörigkeit: memory/evidence/projects/<proj_id>/meetings/ bzw. memory/evidence/topics/<topic_id>/meetings/, unmapped nach memory/evidence/meetings/unrouted/ (mit Review-Marker)
               Ordne Topic oder Projekt zu (topic_slug / project_slug in meetings.json).

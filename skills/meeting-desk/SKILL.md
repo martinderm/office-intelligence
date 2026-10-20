@@ -51,7 +51,7 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
             └── YYYY-MM.md                   # Projektbezogenes Monatsjournal
 ```
 
-**Regeln zum Ablagebaum:** Genau ein physischer Ort pro Meeting, keine Spiegelkopien, kein Kopieren — nur Verschieben. `channel` (Fireflies-/Tool-Spezifikum) ist ausschließlich Metadatum in `meetings.json`, niemals Ordnerstruktur. `meetings.json` ist SSOT über alle Pfade. `recordings/`-Ordner sind abgelöst: Sie enthielten ohnehin nur Summary-/Transkript-Paare (keine Audio-/Videodateien) und heißen ab sofort `meetings/`. Jede physische Meeting-Datei ist registriert — Orphans sind unzulässig. (Der Legacy-Baum `memory/references/meetings/` existiert nicht mehr; alte Referenzen darauf sind zu korrigieren.)
+**Regeln zum Ablagebaum:** Genau ein physischer Ort pro Meeting, keine Spiegelkopien, kein Kopieren — nur Verschieben. Bei Doppel-Tagging (Projekt + Topic) entscheidet das Topic — es ist der stabilere Ort, Projekte wechseln. `channel` (Fireflies-/Tool-Spezifikum) ist ausschließlich Metadatum in `meetings.json`, niemals Ordnerstruktur. `meetings.json` ist SSOT über alle Pfade. `recordings/`-Ordner sind abgelöst: Sie enthielten ohnehin nur Summary-/Transkript-Paare (keine Audio-/Videodateien) und heißen ab sofort `meetings/`. Jede physische Meeting-Datei ist registriert — Orphans sind unzulässig. (Der Legacy-Baum `memory/references/meetings/` existiert nicht mehr; alte Referenzen darauf sind zu korrigieren.)
 
 *(Hinweis: Die Kanal-Unterordner unter `memory/evidence/meetings/<channel>/` aus Altsystemen werden beim Routing aufgelöst, nicht weitergeführt.)*
 
