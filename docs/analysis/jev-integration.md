@@ -2,12 +2,17 @@
 
 **Status:** Konzeptdokument (kein Feature-Record, keine Umsetzung; Vorarbeit für
 ein potenzielles FR-Record-Verfahren). Erstellt 2026-09-27.
-**Vertragshistorie:** Analyse gegen den Shared Skill
-[`jev-integration`](../../../jev-integration/SKILL.md) (Submodule), dessen
-Referenzen per Frische-Checker am 2026-09-27 als 19/19 frisch verifiziert wurden;
-Live-Quellen ([TypeSafe-Doku](https://docs.typesafe.ai/llms.txt),
-[OpenCode-Zen-Doku](https://opencode.ai/docs/zen/)) wurden am selben Tag direkt
-geprüft. Ticket-IDs sind in System Map und `docs/features/_archive.md` kanonisch.
+**Vertragsbasis:** Analyse gegen den Shared Skill
+[`jev-integration`](../../../jev-integration/SKILL.md) (Submodule). Versionssensible
+Fakten (Modelle, Aliase, Kontextgrenzen, Eingabemodi, Preise, Limits, bekannte
+Schwächen, Gateway-Endpunkte und -Condition) werden **nicht hier** gepflegt, sondern
+immer live aus dem Skill bezogen. Der Skill hält die Referenzen mit einem
+automatischen Frische-Check aktuell
+(`jev-integration/scripts/check_reference_freshness.py`, siebentägige Fälligkeit je
+`checked_at`; vor jeder Implementierung oder Evaluierung: Checker laufen lassen,
+fällige Notes gegen ihre Live-Quellen vergleichen, siehe SKILL.md-Abschnitt
+„Reference freshness"). Ticket-IDs sind in System Map und
+`docs/features/_archive.md` kanonisch.
 
 ---
 
@@ -18,31 +23,38 @@ Fragen** und liefert strukturierte Antworten statt generierten Texts: `Choice`
 (eine Option aus Menge + Wahrscheinlichkeitsverteilung + Confidence), `Score`
 (geordnete Rubrik), `Noul` (Ja-Wahrscheinlichkeit). Der Anwendungscode behält
 Workflow, Arithmetik, Policy, Schwellenwerte und Aktionen; Jev liefert nur kleine,
-unabhängig prüfbare Teilurteile über unstrukturierte Inhalte. Modellstand:
-`jev-1.13.0` (Vendor) / `jev-1.13` (Zen), Text-only, 64k-Kontext, Output-Tokens
-kostenfrei. Bekannte Schwächen (Jev 1.13): wörtliche Textlesart, schwache
-Zahl-/Datumsvergleiche — Arithmetik und Datumsordnung bleiben im Code.
+unabhängig prüfbare Teilurteile über unstrukturierte Inhalte. Modell-Stand,
+Ausgabemodi, Kontextgrenzen und bekannte Schwächen bestimmt der Skill
+([models](../../../jev-integration/references/models.md),
+[state](../../../jev-integration/references/state.md),
+[jaggedness](../../../jev-integration/references/jev-1.13-jaggedness.md)); Arithmetik
+und Datumsordnung bleiben in jedem Fall im Code.
 
-## 2. Gateway: OpenCode Zen
+## 2. Gateway: OpenCode Console (ehemals Zen)
 
-Jev ist über zwei Endpunkte erreichbar; für dieses Bundle ist **OpenCode Zen der
-vorgesehene Gateway**:
+Jev ist über zwei Endpunkte erreichbar; für dieses Bundle ist der **OpenCode-Gateway
+der vorgesehene Pfad**. Aktuelle Endpoint-URLs, Model-IDs (Gateway vs. Vendor),
+Kosten und Privacy-Aussagen kommen aus der
+[zen-gateway-Referenz](../../../jev-integration/references/zen-gateway.md) des Skills
+(per Frische-Check aktuell gehalten) und werden dort verifiziert, nicht in diesem
+Dokument kopiert:
 
-| Aspekt | Vendor (`api.typesafe.ai`) | OpenCode Zen (`opencode.ai/zen/v1/systemone`) |
+| Aspekt | Vendor (`api.typesafe.ai`) | OpenCode-Gateway |
 |---|---|---|
 | Auth | `TYPESAFE_API_KEY` (Bearer) | `OPENCODE_API_KEY` (Bearer) |
-| Model-IDs | `jev-1.13.0`, `jev-latest` | `jev-1.13`, `jev-1.13-free` (limitiert kostenlos) |
-| Preis Input/Output | $42/Btok / frei | $0,042/Mtok / frei (identisch, kein Aufschlag) |
-| Rate Limits | 250k tok/s, 1.200 req/min (dokumentiert) | nicht dokumentiert (offener Punkt) |
+| Model-IDs | Versionierte IDs + Aliase ([models](../../../jev-integration/references/models.md)) | Gateway-spezifische IDs ([zen-gateway](../../../jev-integration/references/zen-gateway.md)) |
+| Preis | Direkt per Vendor-Preisschema ([models](../../../jev-integration/references/models.md)) | Kein Gateway-Aufschlag laut [zen-gateway](../../../jev-integration/references/zen-gateway.md) |
+| Rate Limits | Per Organisation, laut Dokumentation | nicht dokumentiert (offener Punkt) |
 | Privacy | Vendor-Policy | Provider-Zero-Retention-Aussage; Jev nicht als Ausnahme gelistet; Gateway-Verarbeitung offen |
 
-Der Zen-Endpoint ist live verifiziert (Modellliste enthält `jev-1.13` und
-`jev-1.13-free`; POST ohne Key → 401 mit Bearer-Anforderung). Ein OpenCode-Zen-Key
-ist auf dieser Maschine in OpenCodes `auth.json` vorhanden (Existenz geprüft,
-Wert nie gelesen). Das belegt **keinen** Key im Host-Env: Vor jedem Live-Request
-muss `OPENCODE_API_KEY` separat bereitgestellt und ohne Ausgabe des Werts geprüft
-werden. Das Free-Modell ist nur zeitlich begrenzt verfügbar; seine Nutzung ist
-keine Freigabe für die Übermittlung von Mailinhalten.
+Der Gateway-Endpunkt ist mit der Skill-Referenz verifiziert; vor dem ersten
+Live-Request aus dem Bundle wird der Frische-Check gegen die Live-Model-Liste
+ausgeführt. Ein OpenCode-Key ist auf dieser Maschine in OpenCodes
+`auth.json` vorhanden (Existenz geprüft, Wert nie gelesen). Das belegt **keinen**
+Key im Host-Env: Vor jedem Live-Request muss `OPENCODE_API_KEY` separat
+bereitgestellt und ohne Ausgabe des Werts geprüft werden. Ein etwaiges Free-Modell
+ist nur zeitlich begrenzt verfügbar; seine Nutzung ist keine Freigabe für die
+Übermittlung von Mailinhalten.
 
 **Credential-Disziplin (verbindlich):** Der Runtime-Adapter liest den Key
 ausschließlich aus der Host-Umgebung (`OPENCODE_API_KEY`). Das Lesen von
@@ -51,7 +63,7 @@ ausschließlich aus der Host-Umgebung (`OPENCODE_API_KEY`). Das Lesen von
 `.agents/mail-desk-backend.json` bleibt credentials-frei; ein Jev-Zugriff ist
 kein Mailbox-Backend und ändert daran nichts.
 
-**Harness-Agnostik:** `OPENCODE_API_KEY` ist ein Zen-API-Key, keine Bindung an
+**Harness-Agnostik:** `OPENCODE_API_KEY` ist ein OpenCode-Gateway-API-Key, keine Bindung an
 die OpenCode-Laufzeit. Der Mail-Desk-Client sendet den Bearer-Key selbst per
 HTTPS; Codex, OpenCode oder ein anderer Harness können denselben stdlib-Client
 starten, sofern **dessen Prozess** die Variable erhält. Die Workspace-Datei
@@ -68,13 +80,15 @@ meldet explizit `unavailable`.
 Informationen enthalten. Das explizite Human-Approval-Gate gilt **vor dem ersten
 externen Request**, auch bei Replay, Kalibrierung und Free-Modell-Tests. Die
 Freigabe muss Datenbestand, betroffene Mailbox/Accounts, Zweck, konkrete
-gesendete Felder, Datenminimierung/Redaktion, US-Verarbeitung und zulässige
+gesendete Felder, Datenminimierung/Redaktion, die Gateway-Verarbeitungsregion
+(laut aktueller Skill-Referenz) und zulässige
 Vertrags-/Datenschutzgrundlage abdecken; sie ist nicht durch einen technischen
 Opt-in-Schalter ersetzbar. Nur freigegebene, begrenzte Betreff-/Preview-/
 Body-Auszüge dürfen den Host verlassen, niemals Anhänge, Indexe oder
-Evidenzdateien im Ganzen. OpenCode sagt Zero-Retention und kein Training für
-seine Modell-Provider zu und nennt Jev nicht als Ausnahme; die öffentliche
-Zen-Seite belegt damit weder ein vollständiges Gateway-Logging-Verhalten noch
+Evidenzdateien im Ganzen. Der Gateway garantiert Zero-Retention und kein
+Training für seine Modell-Provider und nennt Jev nicht als Ausnahme
+([zen-gateway](../../../jev-integration/references/zen-gateway.md)); die öffentliche
+Gateway-Seite belegt damit weder ein vollständiges Gateway-Logging-Verhalten noch
 die rechtliche Eignung für diese Mails. Ohne Freigabe sind nur lokale,
 synthetische oder ausreichend anonymisierte Trockenläufe zulässig.
 
@@ -268,10 +282,13 @@ verstehen und in Schema 2 den Jev-Block vor jedem Mailbox-Zugriff validieren.
 4. **Quota/Timeout:** maximale Jev-Calls je Item und Batch (konfigurierbar,
    Default klein), Frage-/Options-/Token-Limit und hartes Timeout je Request
    samt Gesamtbudget; Budget-Überschreitung → unverändertes Review-Verhalten.
-5. **Modell-Pinning:** Zen-ID `jev-1.13` für eine spätere Produktion festlegen;
-   Upgrade erst nach erneuter Evaluierung (§6). Die Antwort-`model`-Zeichenkette
-   wird vor Nutzung geprüft und im Cache abgelegt. Die genaue Zen-Abbildung auf
-   Vendor-Version/Gewichte bleibt bis zu einer Live-Prüfung offen (§7).
+5. **Modell-Pinning:** die produktionsspezifische Gateway-ID laut aktueller
+   Skill-Referenz ([zen-gateway](../../../jev-integration/references/zen-gateway.md),
+   [models](../../../jev-integration/references/models.md)) für eine spätere
+   Produktion festlegen; Upgrade erst nach erneuter Evaluierung
+   (§6). Die Antwort-`model`-Zeichenkette wird vor Nutzung geprüft und im Cache
+   abgelegt. Die genaue Gateway-Abbildung auf Vendor-Version/Gewichte bleibt bis
+   zu einer Live-Prüfung offen (§7).
 6. **Transport & Antwort:** fester HTTPS-Host/Endpoint, keine Redirects auf
    andere Hosts, feste Request-/Response-Größen und Gesamtlaufzeit begrenzen.
    Antwort nur nach strikter Prüfung von Modell, allen erwarteten Frage-IDs,
@@ -283,19 +300,21 @@ verstehen und in Schema 2 den Jev-Block vor jedem Mailbox-Zugriff validieren.
 
 ## 5. Client-Entscheidung: stdlib `urllib`, nicht das SDK
 
-Der offizielle `typesafe-sdk` (v0.7.2 geprüft) zieht `httpx2` + `pydantic` +
-`tenacity` als Dependencies und kollidiert damit mit der stdlib-only-Philosophie
-des Bundles. Slice 1 benötigt einen festen Endpoint mit `Choice`- und `Noul`-
-Fragen in einem kleinen JSON-Vertrag; `urllib` mit explizitem Schema-Check,
-begrenzter Gesamtzeit und bounded Retry ist dafür tragfähig. 401/422 vs.
-429/529 sind die **Vendor**-Fehlerfälle; Zen-Status und `retry-after` sind noch
-nicht verifiziert. Bekannte Retry-Fälle erhalten ein hartes Gesamtbudget,
-unbekannte Fehler gehen ohne
+Der offizielle `typesafe-sdk` (Release-Stand und Dependency-Kette laut
+Skill-Referenz [python-sdk](../../../jev-integration/references/python-sdk.md)) zieht
+typisierte Drittabhängigkeiten mit und kollidiert damit typischerweise mit der
+stdlib-only-Philosophie des Bundles. Slice 1 benötigt einen festen Endpoint mit
+`Choice`- und `Noul`-Fragen in einem kleinen JSON-Vertrag; `urllib` mit explizitem
+Schema-Check, begrenzter Gesamtzeit und bounded Retry ist dafür tragfähig.
+401/422 vs. 429/529 sind die **Vendor**-Fehlerfälle (Skill-Referenz
+[api](../../../jev-integration/references/api.md)); Gateway-Status und `retry-after`
+sind noch nicht verifiziert. Bekannte Retry-Fälle erhalten ein hartes
+Gesamtbudget, unbekannte Fehler gehen ohne
 Rohtext im Manifest auf `unavailable`. Der Client wird als injizierbare
 Dependency verdrahtet (existierendes Muster: `full_reader`-Injektion im
 Draft-Pfad), damit Tests hermetisch bleiben. Das SDK bleibt eine Option,
 falls spätere Seams die Retry-/Typelogik aufwerten; ein Wechsel des SDK auf
-Zen per `TYPESAFE_BASE_URL` muss zuvor gegen den tatsächlichen Zen-Pfad und
+Gateway per `TYPESAFE_BASE_URL` muss zuvor gegen den tatsächlichen Gateway-Pfad und
 Auth-Vertrag getestet werden.
 
 ## 6. Evaluationsplan (vor jeder Aktivierung)
@@ -309,23 +328,27 @@ Auth-Vertrag getestet werden.
   Abstention-Rate und potenzielle Review-Volumen-Ersparnis. Ein tatsächlich
   sinkendes Review-Volumen wird in Slice 1 nicht behauptet, da der Mensch
   weiterhin entscheidet.
-- **Modell:** `jev-1.13-free` kann nach Freigabe für eine kostengünstige
-  Exploration dienen, solange das zeitlich begrenzte Angebot verfügbar ist.
-  Eine gleiche Antwort-`model`-Zeichenkette belegt keine gleiche
-  Fehlerverteilung/Serving-Konfiguration wie `jev-1.13`. Vor jeder späteren
-  automatischen Aktion braucht der bezahlte Produktionspfad einen eigenen,
-  gelabelten Holdout und eine Schwellenwert-Kalibrierung.
+- **Modell:** Ein ggf. vorhandenes Free-Modell des Gateways kann nach Freigabe
+  für eine kostengünstige Exploration dienen, solange das zeitlich begrenzte
+  Angebot verfügbar ist (Verfügbarkeit: Skill-Referenz
+  [zen-gateway](../../../jev-integration/references/zen-gateway.md)). Eine gleiche
+  Antwort-`model`-Zeichenkette belegt keine gleiche
+  Fehlerverteilung/Serving-Konfiguration wie das bezahlte Produktionsmodell. Vor
+  jeder späteren automatischen Aktion braucht der bezahlte Produktionspfad einen
+  eigenen, gelabelten Holdout und eine Schwellenwert-Kalibrierung.
 - **Sprache:** Mails sind überwiegend deutsch; Vendor dokumentiert Englisch als
   stärkste Sprache. Die Evaluierung läuft daher primär auf deutschsprachigen
   Fällen (Skill-Anforderung: Zielsprache testen).
 - **Adversarial:** Mailtexte sind untrusted; getestet wird mit realistischen
   hostilen Inhalten (Prompt-Injection im Betreff/Body) vor jeder Auto-Aktion.
-- **Kosten:** ~3k Input-Tokens/Mail ≈ $0,00013 pro Mail bei `jev-1.13`
-  (Output frei) ist nur eine Beispielrechnung, kein Budget für den breiteren
-  Fan-out. Zusätzliche Fragen, Katalogoptionen und ggf. ein zweiter
+- **Kosten:** Die Kostenmodell-Rechnung (Input-Tokens pro Mail, Output frei)
+  kommt aus der Skill-Referenz
+  [models](../../../jev-integration/references/models.md) und ist zum
+  Analysezeitpunkt als Beispiel, nicht als Budget für den breiteren Fan-out.
+  Zusätzliche Fragen, Katalogoptionen und ggf. ein zweiter
   Hierarchie-Request erhöhen Input-Tokens. Gemessen werden Kosten pro Mail,
   pro geklärter Dimension und pro vermiedenem Review-Fall; unnötige Fragen
-  werden weggelassen. Das Free-Modell ist nur für begrenzte Zeit kostenlos.
+  werden weggelassen. Etwaige Free-Modelle sind höchstens begrenzt kostenlos.
 - **`needs_reply`-Vorfilter:** Auf einem gelabelten, deutschsprachigen Holdout
   die übersehenen Antwortbitten (False Negatives) und Jev-Calls pro 100 Mails
   gegen „alle elegiblen Mails an Jev“ messen. Fälle mit indirekter Bitte ohne
@@ -350,8 +373,11 @@ Auth-Vertrag getestet werden.
    Validierung, Maximalbudget, Freigabe-Bindung und Konfliktverhalten mit
    per-Run-JSON. Slice 1 erhält keinen CLI-Enable-Override; `inspect` und
    `pipeline` bleiben ohne Jev.
-5. Zen-Rate-Limits, Fehler-/Retry-Vertrag, Antwort-`model`-Zeichenkette und
-   Abbildung von `jev-1.13-free`/`jev-1.13` (live nur nach Freigabe prüfen).
+5. Gateway-Rate-Limits, Fehler-/Retry-Vertrag, Antwort-`model`-Zeichenkette und
+   Abbildung der Gateway-IDs auf Vendor-Versionen (live nur nach Freigabe
+   prüfen; Bezugsquellen: Skill-Referenzen
+   [zen-gateway](../../../jev-integration/references/zen-gateway.md),
+   [models](../../../jev-integration/references/models.md)).
 6. Eigenständiger `pipeline`-Scope mit ausdrücklichem Review- und Auto-Execute-
    Gate, falls später gewünscht; Slice 1 enthält ihn nicht.
 7. Datengrenzen-Gate: dokumentierte Freigabe vor **jedem ersten externen**
@@ -368,13 +394,14 @@ Auth-Vertrag getestet werden.
 
 ## 8. Voraussetzungen
 
-- Ein freigegebener OpenCode-Zen-Key muss für den Prozess im Host-Env
+- Ein freigegebener OpenCode-Gateway-Key muss für den Prozess im Host-Env
   (`OPENCODE_API_KEY`) gesetzt sein; die bloße Existenz in `auth.json` reicht nicht.
 - Nur die ausdrücklich aktivierte Jev-Sektion in Schema 2 der bestehenden
   `.agents/mail-desk-backend.json` ist der Slice-1-Opt-in-Schalter. Schema 1
   und `jev.enabled: false` lassen Jev vollständig aus.
 - Für Live-Evaluierung mit Mailinhalten ist zusätzlich das Human-Approval-Gate
-  aus §2 erfüllt. `jev-1.13-free` ist nur vorübergehend kostenlos;
-  `jev-1.13` ist der vorgesehene Produktionspfad nach eigener Kalibrierung.
+  aus §2 erfüllt. Etwaige Free-Modelle des Gateways sind nur vorübergehend
+  kostenlos; das bezahlte Produktionsmodell laut aktueller Skill-Referenz ist
+  der vorgesehene Produktionspfad nach eigener Kalibrierung.
 - Keine Code-Änderungen in diesem Dokument-Zustand; Mail-Desk bleibt unverändert
   netzfrei bis ein FR-Record das Verfahren eröffnet.
