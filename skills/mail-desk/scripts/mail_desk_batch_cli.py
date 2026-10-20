@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.envelope import build_error, build_success, emit_json
+from core.quarantine.attachment_fetch import verify_workspace_lock
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
@@ -70,11 +71,22 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
         ]
     elif args.mode == "execute":
         argv = [runner, "--data-dir", data_dir, "--keep-input"]
-    else:
+    elif args.mode == "reconcile":
         argv = [runner, "--data-dir", data_dir, "--reconcile"]
+    elif args.mode == "sync-sent":
+        argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
+    else:
+        raise ValueError(f"Unsupported wrapper mode: {args.mode}")
     account = _resolve_account(args)
     if account is not None:
         argv += ["--account", account]
+    # The runner accepts delegation flags only for draft/inspect. Other modes
+    # still need ownership for wrapper persistence, checked separately in main.
+    if args.mode == "draft":
+        for name in ("workspace_lease_id", "workspace_conversation_id"):
+            value = getattr(args, name, None)
+            if value is not None:
+                argv += ["--" + name.replace("_", "-"), value]
     argv.append(f"--keep {args.keep}")
     return argv
 
@@ -103,8 +115,11 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
     }
     try:
         runner_envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         data["envelope_parse_error"] = str(exc)
+        return data
+    if not isinstance(runner_envelope, dict):
+        data["envelope_parse_error"] = "Runner envelope must be a JSON object."
         return data
     data["state"] = runner_envelope.get("state")
     data["success"] = runner_envelope.get("success")
@@ -120,26 +135,47 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
             data["drafted"] = draft.get("total_drafted")
         if runner_data.get("executed_count") is not None:
             data["executed_count"] = runner_data.get("executed_count")
-        if runner_data.get("recovery_required") is not None:
-            data["recovery_required"] = runner_data.get("recovery_required")
+        for key in ("recovery_required", "date_windows_synced", "envelopes_examined",
+                    "total_envelopes_examined", "new_entries_indexed"):
+            if runner_data.get(key) is not None:
+                data[key] = runner_data[key]
     return data
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("mode", choices=("draft", "execute", "reconcile"))
-    parser.add_argument("--count", "-c", type=int, default=10, help="candidate count for --mode draft (default 10)")
+    parser.add_argument("mode", choices=("draft", "execute", "reconcile", "sync-sent"))
+    parser.add_argument("--count", "-c", type=_positive_int, default=None, help="draft candidates (default 10) or recent Sent Items (default 150)")
     parser.add_argument("--account", default=None, help="optional account override; default: workspace backend binding")
     parser.add_argument("--data-dir", default="data/mail-desk", help="mail-desk data dir relative to --workspace")
     parser.add_argument("--workspace", default=".", help="workspace root (default: current directory)")
+    parser.add_argument("--workspace-lease-id", default=None, help="owned workspace lease; delegated to the runner for draft")
+    parser.add_argument("--workspace-conversation-id", default=None, help="owned workspace conversation; delegated to the runner for draft")
     parser.add_argument("--timeout", type=int, default=900, help="runner timeout in seconds")
     parser.add_argument("--keep", type=_positive_int, default=10, help="retain the newest N envelope/progress pairs in tmp/mail-batch (default 10)")
     args = parser.parse_args()
+    if args.count is None:
+        args.count = 150 if args.mode == "sync-sent" else 10
 
     workspace = Path(args.workspace).resolve()
+    try:
+        verify_workspace_lock(
+            workspace, lease_id=args.workspace_lease_id,
+            conversation_id=args.workspace_conversation_id,
+        )
+    except (RuntimeError, OSError, ValueError) as exc:
+        emit_json(build_error("batch_cli", "Workspace lock ownership could not be verified.",
+                              {"mode": args.mode}, error_type="WorkspaceLockError",
+                              error_details={"reason": str(exc)[:1000]}))
+        return 2
     run_dir = workspace / "tmp" / "mail-batch"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    try:
+        run_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        emit_json(build_error("batch_cli", "Output directory could not be created.",
+                              {"error": str(exc)}))
+        return 2
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     envelope_path = run_dir / f"{args.mode}-{stamp}-envelope.json"
     progress_path = run_dir / f"{args.mode}-{stamp}-progress.log"
 
@@ -177,13 +213,12 @@ def main() -> int:
         # Pruning is hygiene only; never mask the runner's outcome.
         summary["prune_error"] = str(exc)
     ok = proc.returncode == 0 and summary.get("success") is True
-    emit_json(build_success(
-        "batch_cli",
-        "Runner finished." if ok else "Runner finished with failures.",
-        summary,
-        state="Completed" if ok else "PartialFailure",
-    ))
-    return proc.returncode
+    if ok:
+        emit_json(build_success("batch_cli", "Runner finished.", summary, state="Completed"))
+    else:
+        emit_json(build_error("batch_cli", "Runner finished with failures.", summary,
+                              state="PartialFailure", error_type="RunnerFailure"))
+    return proc.returncode or (0 if ok else 1)
 
 
 if __name__ == "__main__":

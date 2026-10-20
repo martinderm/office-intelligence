@@ -1,4 +1,4 @@
-"""Failing tests for the batch-CLI wrapper (mail_desk_batch_cli.py).
+"""Regression tests for the batch-CLI wrapper (mail_desk_batch_cli.py).
 
 Pins the harness-friendly wrapper contract: canonical summary envelopes, the
 ``--reconcile`` flag threading, neutral account handling (no workspace-specific
@@ -8,7 +8,11 @@ persistence hygiene.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -31,6 +35,8 @@ def _base_args(**overrides):
         "workspace": ".",
         "timeout": 900,
         "keep": 10,
+        "workspace_lease_id": None,
+        "workspace_conversation_id": None,
     }
     defaults.update(overrides)
     ns = type("Args", (), {})()
@@ -62,6 +68,32 @@ class BuildArgsTests(unittest.TestCase):
         argv = batch_cli._build_args(_base_args(mode="execute"), Path("/ws"))
         self.assertIn("--keep-input", argv)
         self.assertNotIn("--draft", argv)
+
+    def test_sync_sent_uses_only_existing_direct_mode(self):
+        argv = batch_cli._build_args(_base_args(mode="sync-sent", count=42), Path("/ws"))
+        self.assertEqual(argv[argv.index("--sync-sent") + 1], "42")
+        for flag in ("--reconcile", "--input", "--folder", "--skip-known", "--draft"):
+            self.assertNotIn(flag, argv)
+
+    def test_exact_delegation_only_for_draft(self):
+        for mode in ("draft", "execute", "reconcile", "sync-sent"):
+            argv = batch_cli._build_args(_base_args(mode=mode, workspace_lease_id="lease exact",
+                                         workspace_conversation_id="conversation exact"), Path("/ws"))
+            for flag, value in (("--workspace-lease-id", "lease exact"),
+                                ("--workspace-conversation-id", "conversation exact")):
+                if mode == "draft":
+                    self.assertEqual(argv[argv.index(flag) + 1], value)
+                else:
+                    self.assertNotIn(flag, argv)
+
+    def test_no_implicit_delegation(self):
+        argv = batch_cli._build_args(_base_args(), Path("/ws"))
+        self.assertNotIn("--workspace-lease-id", argv)
+        self.assertNotIn("--workspace-conversation-id", argv)
+
+    def test_unknown_mode_is_not_reconcile(self):
+        with self.assertRaises(ValueError):
+            batch_cli._build_args(_base_args(mode="typo"), Path("/ws"))
 
     def test_no_default_account_is_threaded_when_unspecified(self) -> None:
         argv = batch_cli._build_args(_base_args(mode="execute", account=None), Path("/ws"))
@@ -119,6 +151,134 @@ class ErrorEnvelopeTests(unittest.TestCase):
     def test_module_has_no_bare_systemexit(self) -> None:
         source = batch_cli.__doc__ and Path(batch_cli.__file__).read_text(encoding="utf-8")
         self.assertNotIn("raise SystemExit", source, "wrapper errors must emit canonical envelopes")
+
+
+class MainTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.workspace = Path(self.temp.name).resolve()
+
+    def call(self, mode="sync-sent", extra=()):
+        stream = io.StringIO()
+        argv = ["batch-cli", mode, "--workspace", str(self.workspace), *extra]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(stream):
+            code = batch_cli.main()
+        return code, json.loads(stream.getvalue())
+
+    def runner(self, *, success=True, code=0):
+        def run(command, **kwargs):
+            self.command = command
+            self.child_options = kwargs
+            kwargs["stdout"].write(json.dumps({"success": success, "state": "Completed" if success else "Failed",
+                "message": "synthetic", "data": {"new_entries_indexed": 2, "envelopes_examined": 8,
+                                                  "date_windows_synced": 1}}).encode())
+            kwargs["stderr"].write(b"synthetic progress\n")
+            return subprocess.CompletedProcess(command, code)
+        return run
+
+    def test_sync_sent_defaults_summary_and_persistence(self):
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+            code, result = self.call(extra=("--workspace-lease-id", "mine"))
+        guard.assert_called_once_with(self.workspace, lease_id="mine", conversation_id=None)
+        self.assertEqual(code, 0)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["data"]["new_entries_indexed"], 2)
+        self.assertEqual(self.command[self.command.index("--sync-sent") + 1], "150")
+        self.assertNotIn("--workspace-lease-id", self.command)
+        self.assertNotIn("--keep 10", self.command)
+        self.assertEqual(self.child_options["cwd"], str(self.workspace))
+        self.assertTrue(Path(result["data"]["envelope_file"]).is_file())
+        self.assertEqual(Path(result["data"]["progress_file"]).read_text(), "synthetic progress\n")
+
+    def test_draft_default_count_and_delegation_reaches_child(self):
+        with patch.object(batch_cli, "verify_workspace_lock"), \
+                patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+            code, _ = self.call("draft", ("--workspace-lease-id", "mine", "--workspace-conversation-id", "session"))
+        self.assertEqual(code, 0)
+        for flag, value in (("--draft", "10"), ("--workspace-lease-id", "mine"),
+                            ("--workspace-conversation-id", "session")):
+            self.assertEqual(self.command[self.command.index(flag) + 1], value)
+
+    def test_failed_guard_has_no_local_or_child_side_effects(self):
+        with patch.object(batch_cli, "verify_workspace_lock", side_effect=RuntimeError("foreign")), \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code, result = self.call()
+        self.assertEqual(code, 2)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["type"], "WorkspaceLockError")
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        run.assert_not_called()
+
+    def test_runner_failure_is_failed_summary_even_with_zero_exit(self):
+        for child_exit in (0, 1, 2):
+            with self.subTest(child_exit=child_exit), patch.object(batch_cli, "verify_workspace_lock"), \
+                    patch.object(batch_cli.subprocess, "run", side_effect=self.runner(success=False, code=child_exit)):
+                code, result = self.call()
+            self.assertEqual(code, child_exit or 1)
+            self.assertFalse(result["success"])
+
+    def test_child_timeout_and_launch_error_envelopes(self):
+        for error in (subprocess.TimeoutExpired("synthetic", 1), OSError("synthetic")):
+            with self.subTest(error=type(error)), patch.object(batch_cli, "verify_workspace_lock"), \
+                    patch.object(batch_cli.subprocess, "run", side_effect=error):
+                code, result = self.call()
+            self.assertEqual(code, 2)
+            self.assertFalse(result["success"])
+
+    def test_invalid_runner_output_is_failure_not_success(self):
+        for payload in (b"not-json", b"[]", b"null", b"\xff"):
+            def invalid(command, **kwargs):
+                kwargs["stdout"].write(payload)
+                return subprocess.CompletedProcess(command, 0)
+            with self.subTest(payload=payload), patch.object(batch_cli, "verify_workspace_lock"), \
+                    patch.object(batch_cli.subprocess, "run", side_effect=invalid):
+                code, result = self.call()
+            self.assertEqual(code, 1)
+            self.assertFalse(result["success"])
+            self.assertIn("envelope_parse_error", result["data"])
+
+    def test_count_must_be_positive_before_guard_or_persistence(self):
+        for count in ("0", "-1"):
+            with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                self.call(extra=("--count", count))
+            self.assertEqual(error.exception.code, 2)
+            guard.assert_not_called()
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_real_guard_missing_foreign_and_owned(self):
+        cli = MAIL_DESK_ROOT.parents[2] / "workspace-lock/scripts/invoke_workspace_lock.py"
+        base = [sys.executable, str(cli)]
+        with patch.dict(os.environ, {"WORKSPACE_LOCK_LEASE_ID": "", "WORKSPACE_LOCK_CONVERSATION_ID": "",
+                                     "WORKSPACE_LOCK_ALLOW_LEGACY": "1"}), \
+                patch.object(batch_cli.subprocess, "run", wraps=subprocess.run) as run:
+            # No runner can start before ownership, even with a legacy env flag.
+            code, result = self.call()
+            self.assertEqual(code, 2)
+            self.assertFalse(result["success"])
+        self.assertFalse((self.workspace / "tmp").exists())
+        subprocess.run(base + ["acquire", str(self.workspace), "--harness", "unittest", "--lease-id", "owned",
+                              "--conversation-id", "test-session", "--duration-minutes", "5", "--json"],
+                       check=True, capture_output=True)
+        try:
+            code, _ = self.call(extra=("--workspace-lease-id", "foreign"))
+            self.assertEqual(code, 2)
+            self.assertFalse((self.workspace / "tmp").exists())
+            # The real guard runs outside the mocked runner invocation.
+            original_guard = batch_cli.verify_workspace_lock
+            def checked_guard(*args, **kwargs):
+                with patch.object(batch_cli.subprocess, "run", original_run):
+                    return original_guard(*args, **kwargs)
+            original_run = subprocess.run
+            with patch.object(batch_cli, "verify_workspace_lock", side_effect=checked_guard), \
+                    patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+                code, result = self.call(extra=("--workspace-conversation-id", "test-session"))
+            self.assertEqual(code, 0, result)
+        finally:
+            subprocess.run(base + ["release", str(self.workspace), "--lease-id", "owned", "--json"],
+                           check=True, capture_output=True)
 
 
 if __name__ == "__main__":
