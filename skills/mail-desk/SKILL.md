@@ -72,6 +72,14 @@ Workers. Prozessisolation, Timeouts und Deadline-Verhalten bleiben unverändert.
 | **Dossier** | `dossier` → `dossier_apply` → `dossier_synthesis` (→ `dossier_handoff`) | Katalog-gebundene Projekt-/Event-Dossiers mit EVID-Ankern |
 | **Recovery** | `reconcile`, `resolve` | Lesender Wiederanlauf & Archivierung offener Fälle |
 
+Der kompakte [CLI-Wrapper](references/cli-operations.md) unterstützt `draft`,
+`execute`, `reconcile` und `sync-sent`. Vor seiner lokalen Persistenz/Pruning
+prüft er den eigenen Workspace-Lock ohne Legacy-Bypass. Explizite
+`--workspace-lease-id`/`--workspace-conversation-id` werden bei `draft` zusätzlich
+unverändert an den Runner delegiert, nicht bei anderen Modi. `sync-sent` liest
+die Mailbox, schreibt jedoch lokal Sent-Index, Runner-Ergebnis und Wrapper-Logs;
+es ist keine schreibfreie Operation.
+
 ## Mutationen, Identität und Backend
 
 Vor jeder lokalen oder externen Mutation besteht verifizierte `workspace-lock`-

@@ -103,7 +103,7 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Mailkontos vor komplexen Operationen.
 
 7. **Batch-CLI-Wrapper (`mail_desk_batch_cli.py`) — empfohlener Standardweg:**
-   **Empfohlener Standard** für alle `draft`-, `execute`- und `reconcile`-Läufe.
+   **Empfohlener Standard** für `draft`, `execute`, `reconcile` und `sync-sent`.
    Der Wrapper ruft den Batch-Runner auf, persistiert dessen Envelope (stdout) und
    Progress-Log (stderr) unter `<workspace>/tmp/mail-batch/` und emittiert
    stattdessen **nur** einen kompakten kanonischen Summary-Envelope. Damit bleibt
@@ -117,7 +117,20 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    diese Duplikation, weil er Runner-stdout/-stderr in Dateien umleitet und dem
    Caller ausschließlich den Summary-Envelope übergibt.
 
-   Modi und Parameter wie beim Batch-Runner (`draft`/`execute`/`reconcile`).
+   Modi: `draft`/`execute`/`reconcile`/`sync-sent`; kein beliebiger Runner-Passthrough.
+   `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150).
+   `sync-sent` delegiert ausschließlich an den bestehenden `--sync-sent`-Modus:
+   Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
+   `batch-sync-sent.json` und Wrapper-Logs). Es führt keine Send-/APPEND-Aktion aus.
+   Vor jeglicher Wrapper-Persistenz oder Pruning wird der eigene Workspace-Lock
+   mit dem bestehenden shared Guard geprüft, ohne Legacy-Bypass. Dafür dienen
+   `--workspace-lease-id`/`--workspace-conversation-id` oder die bestehenden
+   `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID` der Harness-Control-Plane.
+   Bei `draft` werden explizite IDs unverändert an den Runner weitergereicht;
+   bei anderen Modi schützen sie nur den Wrapper, da der Runner diese Flags dort
+   nicht akzeptiert. Die Runner-/Account-/Review-Gates bleiben unverändert.
+   Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
+   Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen
    `execute`-Laufs und erwartet **kein** `--input`-Manifest. `--account` ist
    optional; ohne Angabe bindet der Runner den Account automatisch aus der
@@ -129,7 +142,11 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    python3 scripts/mail_desk_batch_cli.py draft --count 10
    python3 scripts/mail_desk_batch_cli.py execute
    python3 scripts/mail_desk_batch_cli.py reconcile
+   python3 scripts/mail_desk_batch_cli.py sync-sent --count 150
    ```
+
+   Die Beispiele setzen eine eigene Lease über die genannten Umgebungsvariablen
+   voraus; alternativ die entsprechende ID explizit übergeben.
 
 8. **Katalog-Inspector (`catalog_inspect.py`):**
    Read-seitiges Gegenstück zum `catalog_validator.py`: liest

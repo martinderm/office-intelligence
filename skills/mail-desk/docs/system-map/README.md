@@ -564,6 +564,17 @@ Drift-Klasse, Root-vs-Nested, CLI 0/1/2, boku-user-Form). **Suite 980/980 grün.
 
 ## 19. MD-BC — Harness-Ausgabe-Boundaries: Batch-CLI-Wrapper und Katalog-Inspector (abgeschlossen)
 
+**Issue #5 — Wrapper-Restlücken (2026-10-21):** Zusätzlich `sync-sent` über den
+bestehenden Runner (`--count`, Default 150; `draft` weiter 10). Shared
+Workspace-Lock-Ownership wird vor Wrapper-Dateien/Pruning ohne Legacy-Bypass
+geprüft. Explizite Lease-/Conversation-IDs gehen bei `draft` unverändert an den
+Runner; in anderen Modi dienen sie nur der Wrapper-Ownership (Runner akzeptiert
+die Flags dort nicht). Backend-/Account-/Review-Gates unverändert.
+`sync-sent` ist nur mailbox-lesend: Sent-Index, Runner-Ergebnis und Wrapper-Logs
+werden lokal geschrieben. Summary führt Sent-Zähler und propagiert Fehler
+einschließlich defektem Runner-Envelope mit Nichtnull-Exit. Regressionen in
+`tests/test_batch_cli_wrapper.py`; historische Abnahmezahlen unten sind alte Frames.
+
 **Problem:** Der Batch-Runner emittiert seinen vollständigen Envelope auf stdout;
 bei `draft`-Läufen mit Anhängen sprengt das Harness-Output-Fenster (opencode
 schneidet ab und leitet in eine Datei um). Der Katalog-Feld-Inspekt per rohem
