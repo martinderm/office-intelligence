@@ -71,3 +71,14 @@ summary_path: "memory/evidence/topics/aixlll/meetings/2026-08-24-semesterplanung
 - [ ] **Martin:** Moodle-Kurs duplizieren und freischalten (bis 15.09.2026).
 - [ ] **Kollege:** Gastvortragende anfragen.
 ```
+
+## 3. Reproduzierbare Transkript-Bereinigung
+
+`*.transcript.raw.md` bleibt unverändert. `*.corrections.json` enthält die
+geprüfte Konfiguration `meeting-corrections/1` mit `pairs`, `regex_pairs`,
+`rules` und `unklar`; Pflichtfelder und Fehlerverhalten stehen im
+[Builder-Vertrag](../scripts/README.md). Der bereinigte Output enthält
+`source_raw` (Workspace-relativer Pfad), `corrections_count` (Inline-Paar-Treffer), `unklar_count` sowie
+separate Regelzähler im Kopf. Stille Normalisierungen zählen nicht als Inline-Paare.
+Für einen byte-identischen Rebuild gehören auch die gleichen Metadatenoptionen
+zum dokumentierten Aufruf; der Builder ändert `meetings.json` nicht automatisch.

@@ -95,6 +95,7 @@ Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
      - Mehrtägige Tagung, Konferenz mit Vortragsprogramm → [`event-documentation`](../../skills/event-documentation/SKILL.md)
 2. **Evidenz-Erzeugung:**
    - Bereinigtes Protokoll, Kernaussagen und Teilnehmer werden als Markdown geroutet abgelegt: `memory/evidence/projects/<id>/meetings/`, `memory/evidence/topics/<id>/meetings/` bzw. `memory/evidence/*/events/<slug>/meetings/` (nur `meetings.json`-Register + `unrouted/`-Fallback unter `memory/evidence/meetings/`).
+   - Transkript-Bereinigung mit Provenienz (Issues #30/#32, Skill §2b): [Builder-Vertrag](../../skills/meeting-desk/scripts/README.md) — `*.transcript.raw.md` plus geprüfte Korrekturdatei (`meeting-corrections/1`) und gleiche Metadatenoptionen ergeben reproduzierbar `*.transcript.md`. Operationen treffen ausschließlich Originaltext; Überschneidungen werden abgewiesen. Inline-Paare brauchen Workspace-Belege; stille Regeln sind auf bedeutungsneutrale Schreibweisen beschränkt, sonst `[unklar]`. Build/Template schreiben atomar, nur nach gemeinsamem Workspace-Lock-Guard und Zonengate, niemals auf Eingabedateien; `--force` überschreibt nur Outputs. `--check` ist read-only und vergleicht Bytes (Standard-Envelope, Exit 0/1/2). [Tests](../../skills/meeting-desk/tests/test_build_clean_transcript.py) sichern diese Grenzen mit synthetischen Daten.
 3. **Katalog-Verknüpfung:**
    - Zuordnung des Meetings zu einem Projekt (`projects.json`) oder Thema (`topics.json`).
    - Action Items werden wie bei Mail an den `task-desk` übergeben.

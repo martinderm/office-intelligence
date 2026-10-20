@@ -1,0 +1,37 @@
+{
+  "schema": "meeting-corrections/1",
+  "pairs": [
+    {
+      "orig": "Music in G",
+      "corr": "USAGE-NG",
+      "cat": "Hörfehler",
+      "ref": "memory/references/projects/usage-ng/index.md",
+      "note": "Schreibstilprofil-Quelle."
+    }
+  ],
+  "regex_pairs": [
+    {
+      "pattern": "\\bOok\\b",
+      "corr": "AUCEN",
+      "cat": "Hörfehler",
+      "ref": "memory/references/topics/netzwerke/index.md",
+      "note": "National network, Subtopic AUCEN."
+    }
+  ],
+  "rules": [
+    {
+      "id": "R1",
+      "pattern": "\\b[Kk]i\\b",
+      "repl": "KI",
+      "note": "Abkürzung KI.",
+      "ref": "memory/references/topics/aixlll/index.md"
+    }
+  ],
+  "unklar": [
+    {
+      "token": "Daimler",
+      "guess": "vermutlich „Reminder“ (Kalendereintrag)",
+      "why": "Kein Workspace-Beleg; bewusst unkorrigiert."
+    }
+  ]
+}

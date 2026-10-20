@@ -33,3 +33,4 @@ Wenn automatische Zusammenfassungen unvollständig sind:
 5. **Fristen notieren:** Gibt es konkrete Datumszusagen?
 6. **Action-Items exportieren:** Direkte Übergabe an `skills/task-desk`.
 7. **Transkript-Provenienz sichern:** Roh-Transkript (`<slug>.transcript.raw.md`) unangetastet lassen; Korrekturen nur in der bereinigten Fassung (`<slug>.transcript.md`) als lesbares Prosa-Paar `„Original" → „Korrektur"` mit Beleganker (Kategorie + Workspace-Referenz), nur entity-level (Eigennamen, Abkürzungen, IDs, Fachbegriffe), Bereinigungsliste am Dateikopf.
+   Für den Builder gelten [CLI und Prüfschritte](../scripts/README.md): geprüfte Korrekturdatei, keine Gesprächskontext-Deutung ohne Workspace-Beleg, stille Regeln nur für bedeutungsneutrale Schreibweisen. Vor jedem Write eigener Workspace-Lock; `--check` bleibt read-only. Überlappende Änderungen müssen in der Korrekturdatei aufgelöst werden, nicht durch eine implizite Reihenfolge.
