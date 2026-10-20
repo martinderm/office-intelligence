@@ -1620,6 +1620,19 @@ Keine Copy-Output-ID-Inferenz, kein Journal-/State-Schema,
 keine Retry-/Timeout-Änderung (#7 unverändert). Backend-Headerlatenz bleibt
 ungelöst; O1/O3/O4 nicht umgesetzt.
 
+**Begrenzte Headerdiagnose (2026-10-21):** Der optionale Collector ergänzt
+`header_reads` für genau einen Verify-Aufruf (maximal sechs Einträge, bei erneutem
+Aufruf ersetzt): nur `phase` (`fast_path`/`candidate`/`fallback`), nichtnegative
+`elapsed_ms` und `outcome` (`match`/`mismatch`/`missing_message_id`/`timeout`/`error`).
+Keine Rohheader, Message-/Envelope-IDs oder Exception-Texte in diesen Feldern.
+Reconcile reicht sie im bestehenden Report weiter; Execute persistiert bei
+erschöpftem Copy-Verify nur den letzten Versuch unter `verify_last_header_reads`
+als freie `partial`-Journal-Details. Keine neue Schema-Version, kein neuer
+Writer oder Trustpfad. Header 10 s/ein Versuch, Listing 30 s/zwei Versuche und
+äußere #7-Backoffs bleiben unverändert; Diagnosedauer enthält Aufruf-/Cleanup-
+Kosten und beweist keine reine Netzwerklatenz. [Vertrag](../../references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12),
+[synthetische Tests](../../tests/test_verify_header_diagnostics.py).
+
 Vertrag: [Batch-Runner](../../references/batch-runner.md).
 Regression: [vier öffentliche Reconcile-Seam-Tests](../../tests/test_reconcile_candidate_env.py)
 (Cross-Folder ohne Hinweis, Copy-in-place, Keep-in-place, persistierter Ziel-Hinweis).

@@ -171,6 +171,32 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    oder `--workspace <root>` setzen; bei falschem CWD endet der Aufruf read-only
    mit `Catalog file not found.` (Exit 1).
 
+## Begrenzte Ziel-Verifikationsdiagnose (Issue #12)
+
+`verify_in_target_folder(..., diagnostics=<dict>)` ergänzt `header_reads` für
+genau diesen Aufruf: maximal sechs Einträge (ein optionaler Fast-Path plus fünf
+Kandidaten/Fallbacks). Jeder Eintrag enthält ausschließlich:
+
+- `phase`: `fast_path`, `candidate` (Subject- oder Datumsfilter) oder `fallback`;
+- `elapsed_ms`: nichtnegative gemessene Header-Aufrufdauer einschließlich
+  vorhandener Subprozess-/Cleanup-Kosten, kein reines Netzwerk-Latenzmaß;
+- `outcome`: `match`, `mismatch`, `missing_message_id`, `timeout` oder `error`.
+
+Die Liste wird pro Aufruf ersetzt, nicht über Wiederholungen angehäuft. Keine
+Rohheader, Message-IDs, Envelope-IDs oder Exception-Texte in diesen neuen Feldern.
+`timeout` klassifiziert bekannte Timeoutfehler; andere Ausnahmen bleiben `error`.
+Ein leeres Array kann auch bedeuten, dass die Listung vor dem ersten Header
+scheiterte; es beweist nicht die Abwesenheit der Nachricht.
+
+Reconcile gibt die Liste im bestehenden `verify_diagnostics`-Report zurück.
+Bei erschöpftem Execute-Copy-Verify stehen die Headerdaten **nur des letzten
+Versuchs** in `partial`-Journal-Details als `verify_last_header_reads`; bestehende
+Gesamtdauern pro Versuch bleiben erhalten. Keine zweite Persistenz oder neue CLI.
+Headerbudget (10 s, ein Versuch), Listingbudget (30 s, zwei Versuche), vier äußere
+Copy-Verify-Versuche, Message-ID-/Zielbindung und Erfolgskriterien bleiben
+unverändert. Diagnose ist weder eine neue Trustquelle noch ein Latenzfix und
+autorisiert keine zusätzlichen Live-Lese-/Schreibzugriffe.
+
 ## Harte Regel: kein manueller Final-Index-Write
 
 `data/mail-desk/final-location-index.json` darf **niemals manuell** editiert

@@ -10,12 +10,13 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 from core.modes import reconcile as reconcile_mode  # noqa: E402
 from core.recovery import BatchRecoveryJournal  # noqa: E402
+from core import himalaya  # noqa: E402
 
 MESSAGE_ID = "9593.issue12@example.test"
 SUBJECT = "[mitteilungsblatt] Mitteilungsblatt Nr. 25"
@@ -121,6 +122,25 @@ class ReconcileCandidateEnvelopeTests(unittest.TestCase):
             self.assertNotIn("reason", row["verify_diagnostics"])
             self.assertTrue(row["folder_verified"])
             self.assertEqual("108", row["current_envelope_id"])
+
+    def test_real_verifier_header_diagnostics_reach_report_without_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = self._data_dir(temporary)
+            _seed_journal(data_dir, action_type="copy_as_move", source="INBOX",
+                          target="Newsletter", envelope_id="9593")
+            before = {p.relative_to(data_dir): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()}
+            with patch.object(himalaya, "run_himalaya", side_effect=[
+                    json.dumps([{"id": "108", "subject": SUBJECT}]), TimeoutError("synthetic")]):
+                report = reconcile_mode.run_reconcile_mode(
+                    {"run_id": "issue12-o2", "check_folders": True}, data_dir=data_dir,
+                    dependencies={"verify_in_target_folder": himalaya.verify_in_target_folder})
+            row = report["results"][0]
+            self.assertFalse(row["folder_verified"])
+            reads = row["verify_diagnostics"]["header_reads"]
+            self.assertEqual(len(reads), 1)
+            self.assertEqual(reads[0]["outcome"], "timeout")
+            after = {p.relative_to(data_dir): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()}
+            self.assertEqual(before, after)
 
 
 if __name__ == "__main__":
