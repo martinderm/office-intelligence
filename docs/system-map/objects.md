@@ -17,9 +17,11 @@ Das Skill-Bundle mutiert keine eigenen Daten im Bundle-Verzeichnis, sondern erze
 │   │   ├── projects/        (projects.json, Workpackages, Projekt-Notizen)
 │   │   └── topics/          (topics.json, Subtopics, Themen-Notizen)
 │   ├── evidence/            ◄── Auditsichere, unveränderliche Fach-Nachweise
-│   │   ├── meetings/        (Protokolle, Aufzeichnungsmetadaten)
-│   │   ├── events/          (Konferenzprogramme, Vortragsmitschriften)
-│   │   └── mail/            (Verifizierte Mail-Dossiers & Intake-Logs)
+│   │   ├── meetings/        (nur meetings.json-Register + unrouted/-Fallback)
+│   │   ├── projects/<id>/meetings/   (projektgebundene Protokolle & Transkripte)
+│   │   ├── topics/<id>/meetings/     (topic-gebundene Protokolle & Transkripte)
+│   │   ├── */events/<slug>/meetings/ (event-gebundene Protokolle & Transkripte)
+│   │   ├── mail/            (Verifizierte Mail-Dossiers & Intake-Logs)
 │   └── cloud/               ◄── Lokale Spiegel und Konvertierungs-Derivate
 │       ├── projects/        (Cloud-Atlas Projekt-Mirrors & Derivate)
 │       └── topics/          (Cloud-Atlas Topic-Mirrors & Derivate)

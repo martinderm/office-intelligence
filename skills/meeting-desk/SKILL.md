@@ -36,11 +36,13 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
     │
     └── evidence/                            # Säule 2 (Empirisch / De Facto)
         │
-        ├── meetings/                        # Zentrales Meeting-Memory
-        │   ├── meetings.json                # Kanonischer Registrierungsindex aller Meetings
-        │   └── <channel-slug>/              # Kanal- oder themenbezogener Unterordner
-        │       ├── YYYY-MM-DD-<slug>.summary.md     # Strukturierte Zusammenfassung
-        │       └── YYYY-MM-DD-<slug>.transcript.md  # Vollständiges Text-Transkript
+        ├── meetings/                        # Nur Register + Fallback, keine Ablage
+        │   ├── meetings.json                # Kanonischer Registrierungsindex aller Meetings (SSOT über Pfade)
+        │   └── unrouted/                    # Fallback für ungemappte Meetings, mit Review-Marker
+        │
+        ├── projects/<proj_id>/meetings/     # Projektgebundene Meetings (Summary + Transkript)
+        ├── topics/<topic_id>/meetings/      # Topic-only Meetings (Summary + Transkript)
+        ├── {projects|topics}/<id>/events/<event-slug>/meetings/  # Event-gebundene Meetings
         │
         ├── topics/<topic_slug>/
         │   └── YYYY-MM.md                   # Monatsjournal mit [EVID-...] Belegankern
@@ -49,7 +51,9 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
             └── YYYY-MM.md                   # Projektbezogenes Monatsjournal
 ```
 
-*(Hinweis: Zur Abwärtskompatibilität in Altsystemen unterstützt der Desk auch die Legacy-Ablage unter `memory/references/meetings/`, bevorzugt bei Neuanlage jedoch strikt `memory/evidence/meetings/`.)*
+**Regeln zum Ablagebaum:** Genau ein physischer Ort pro Meeting, keine Spiegelkopien, kein Kopieren — nur Verschieben. Bei Doppel-Tagging (Projekt + Topic) entscheidet das Topic — es ist der stabilere Ort, Projekte wechseln. `channel` (Fireflies-/Tool-Spezifikum) ist ausschließlich Metadatum in `meetings.json`, niemals Ordnerstruktur. `meetings.json` ist SSOT über alle Pfade. `recordings/`-Ordner sind abgelöst: Sie enthielten ohnehin nur Summary-/Transkript-Paare (keine Audio-/Videodateien) und heißen ab sofort `meetings/`. Jede physische Meeting-Datei ist registriert — Orphans sind unzulässig. (Der Legacy-Baum `memory/references/meetings/` existiert nicht mehr; alte Referenzen darauf sind zu korrigieren.)
+
+*(Hinweis: Die Kanal-Unterordner unter `memory/evidence/meetings/<channel>/` aus Altsystemen werden beim Routing aufgelöst, nicht weitergeführt.)*
 
 ---
 
@@ -63,10 +67,19 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
 ### 2. Qualitätsprüfung & Zusammenfassungs-Synthese
 - Prüfe, ob die importierte Zusammenfassung vollständig und aussagekräftig ist.
 - **Korrektur bei Qualitätsmängeln** (z. B. aufgebrauchte Fireflies-Credits oder unzureichende Notizen): Erstelle die Zusammenfassung **aktiv neu anhand des immer vollständigen Transkripts** (Aufbau: Kernthemen, Beschlüsse, Standpunkte der Teilnehmer, nächste Schritte).
+- **Workspace-Kontext-Pflicht:** Beziehe bei Ersterfassung und jeder nachträglichen Korrektur die Workspace-Wissensbasis mindestens oberflächlich ein — relevante `topics.json`- / `projects.json`-Einträge, Topic-/Projekt-Dokumente (Dossier, Annex, Feldinventar, Hands-on-Dateien), Operations-Notizen. Typische Ziele: Speech-to-Text-Fehlzuordnungen bei Eigennamen (Projekte, Personen, Abkürzungen wie USAGE-NG, AUCEN, MESHE, KI), Projektname-Konfusionen, Rollen-/Kontextfehler. **Ohne Beleganker in die Workspace-Wissensbasis bleibt das Original stehen** und wird in der Erfassungs-Notiz als „offen/unklar" markiert — es wird nichts geraten.
+- **Speaker-Attribution:** Jede Aussage in der Summary ist dem konkreten Sprecher zugeordnet. Bei Unsicherheit ist das auszuweisen (z. B. „(Sprecher unklar)"), statt pauschal zuzuordnen.
+
+### 2b. Transkript-Korrekturen mit Provenienz
+- Das Roh-Transkript (`<slug>.transcript.raw.md`) bleibt unantastbar — Beweisebene, so wie es vom Adapter ankam.
+- Die bereinigte Fassung (`<slug>.transcript.md`) enthält Korrekturen **lesbar als Prosa-Paar** `„Original" → „Korrektur"` mit nachgestelltem Beleganker (Kategorie + Workspace-Referenz, z. B. `korr: Hörfehler → USAGE-NG-Projekt`).
+- **Nur entity-level:** Eigennamen, Abkürzungen, IDs, Fachbegriffe — kein stilistisches Umschreiben von Inhalten.
+- **Bereinigungsliste am Dateikopf:** alle Korrekturen des Transkripts zusätzlich als zentrale Liste; optional `corrections_count` in `meetings.json`.
+- Die bereinigte Fassung ist aus Rohtranskript plus Korrekturliste deterministisch ableitbar.
 
 ### 3. Thematische Klassifikation & Verortung
 - Ordne das Meeting einem bestehenden Topic (aus `memory/references/topics/`) oder Projekt (aus `memory/references/projects/`) zu.
-- **Event-Sonderfall**: Handelt es sich um den Vortrag einer Konferenz, verschiebe oder kopiere die Summary in den Event-Ordner `memory/evidence/topics/<topic>/events/<event-slug>/recordings/` und passe den Pfad in `meetings.json` an.
+- **Event-Sonderfall**: Handelt es sich um den Vortrag einer Konferenz, verschiebe Summary und Transkript in den Event-Ordner `memory/evidence/{projects|topics}/<id>/events/<event-slug>/meetings/` und passe die Pfade in `meetings.json` an. Es wird verschoben, nicht kopiert — keine Doppelhaltung.
 
 ### 4. Evidenzsicherung & Beleganker im Monats-Log
 - Trage eine Zusammenfassung des Meetings in das zentrale Monats-Journal (`memory/evidence/topics/<topic>/YYYY-MM.md`) ein.
@@ -75,7 +88,7 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
   ### [EVID-YYYY-MM-DD-XX] Besprechung "<Titel>"
   * **Datum:** YYYY-MM-DDTHH:MM:SS+02:00
   * **Teilnehmer:** <Name 1>, <Name 2>
-  * **Quelle:** Meeting (`meeting_id: <id>`, `summary: memory/evidence/meetings/...summary.md`)
+  * **Quelle:** Meeting (`meeting_id: <id>`, `summary: memory/evidence/.../meetings/<slug>.summary.md` — kanonischer Pfad aus `meetings.json`)
   * **Wesentliche Beschlüsse:**
     - Beschluss 1
     - Beschluss 2

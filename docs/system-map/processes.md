@@ -94,7 +94,7 @@ Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
      - Einzel-Meeting, Call oder Vortrag → [`meeting-desk`](../../skills/meeting-desk/SKILL.md)
      - Mehrtägige Tagung, Konferenz mit Vortragsprogramm → [`event-documentation`](../../skills/event-documentation/SKILL.md)
 2. **Evidenz-Erzeugung:**
-   - Bereinigtes Protokoll, Kernaussagen und Teilnehmer werden als Markdown in `memory/evidence/meetings/` bzw. `memory/evidence/events/` abgelegt.
+   - Bereinigtes Protokoll, Kernaussagen und Teilnehmer werden als Markdown geroutet abgelegt: `memory/evidence/projects/<id>/meetings/`, `memory/evidence/topics/<id>/meetings/` bzw. `memory/evidence/*/events/<slug>/meetings/` (nur `meetings.json`-Register + `unrouted/`-Fallback unter `memory/evidence/meetings/`).
 3. **Katalog-Verknüpfung:**
    - Zuordnung des Meetings zu einem Projekt (`projects.json`) oder Thema (`topics.json`).
    - Action Items werden wie bei Mail an den `task-desk` übergeben.
