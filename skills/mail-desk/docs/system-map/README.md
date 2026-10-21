@@ -57,7 +57,12 @@ Vertragsverletzung gewertet wird. Produktionsbudgets (READY-Budget,
 `process_timeout_seconds`, `ocr_timeout_seconds`), READY/START, Confinement und
 Quarantäne bleiben unverändert.
 Keine Änderung an Produktions-Timeouts, READY/START, Confinement oder Quarantäne.
-READY-/Last-Stabilität bleibt separat nachzuweisen; historische Flake-Zahlen unten
+READY-/Last-Stabilität wurde am 2026-10-21 mit einem vorab registrierten Messplan
+geprüft: unter Normal- und Lastbedingungen ohne READY-Handshake-Befund, die
+Timing-Assertion des MD-A3 war dagegen reproduzierbar, ihre Ursache (Windows-
+Spawn-Latenz im Gesamtaufruf, nicht die Timeout-Durchsetzung) wurde gemessen und
+die Assertions sind in PR #46 an den Produktvertrag gebunden. Unter CPU-Sättigung
+trat die READY-Familie erneut auf (Issue #47). Historische Flake-Zahlen unten
 sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
 **Aktueller Reconcile-Frame #11 × #14, 2026-10-18:** 178 Dateien,
