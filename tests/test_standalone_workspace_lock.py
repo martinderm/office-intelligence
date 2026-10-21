@@ -124,7 +124,10 @@ class StandaloneLockTests(unittest.TestCase):
                    MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT=str(self.root / "invalid-legacy"))
         for kind in LOADERS:
             with self.subTest(loader=kind, lease="missing"):
-                self.assertFalse(self.run_loader(kind, env=env)["success"])
+                result = self.run_loader(kind, env=env)
+                self.assertFalse(result["success"])
+                if kind == "mail":
+                    self.assertEqual("workspace lock is not active ('Free')", result["message"])
         self.acquire()
         for kind in LOADERS:
             with self.subTest(loader=kind, lease="owned"):
@@ -136,7 +139,10 @@ class StandaloneLockTests(unittest.TestCase):
         lock.write_text(json.dumps(foreign), encoding="utf-8")
         for kind in LOADERS:
             with self.subTest(loader=kind, lease="foreign"):
-                self.assertFalse(self.run_loader(kind, env=env)["success"])
+                result = self.run_loader(kind, env=env)
+                self.assertFalse(result["success"])
+                if kind == "mail":
+                    self.assertEqual("workspace lock is not owned by this invocation", result["message"])
 
     def test_invalid_explicit_environment_never_falls_back_to_cwd_guard(self):
         self.acquire()

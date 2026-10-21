@@ -13,6 +13,8 @@ Wird eine Installation erst nach dem Modulimport konfiguriert oder gewechselt,
 `WorkspaceLockError`; die strukturierte `lock_unavailable`-Zuordnung bleibt stabil.
 Dieser öffentliche Fehlertyp ist lokal definiert und für Spawn-/Worker-Transport
 importierbar; dynamische Guard-Exceptionklassen werden nicht über Pipes versendet.
+Die bisherigen kanonischen Guard-Fehlermeldungen bleiben bei der Übersetzung
+erhalten (fehlende Lease vs. fremder Owner); keine pauschale Ersatzmeldung.
 
 **Final diagnostic guard frame:** strict UTF-8 text validation and refusal of
 linked diagnostic/attempt/evidence directories precede the one-shot attempt.

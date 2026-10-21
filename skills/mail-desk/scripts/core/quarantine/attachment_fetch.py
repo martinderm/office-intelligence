@@ -170,7 +170,9 @@ def verify_workspace_lock(
         # evaluation, including late installation and configured-root switches.
         if isinstance(exc, WorkspaceLockError):
             raise
-        raise WorkspaceLockError("An owned active workspace-lock lease is required.") from None
+        # Preserve the trusted canonical guard's existing denial text as well
+        # as its error category; downstream structured outcomes rely on both.
+        raise WorkspaceLockError(str(exc)) from None
 
 
 # ==============================================================================
