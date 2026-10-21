@@ -81,6 +81,14 @@ class _Reject(Exception):
     """Fail-closed validation rejection; carries no external content."""
 
 
+class _LockInstallationUnavailable(_Reject):
+    """Operator setup error, distinct from untrusted payload rejection."""
+
+    def __init__(self):
+        super().__init__("Install workspace-lock and set WORKSPACE_LOCK_ROOT or --workspace-lock-root "
+                         "to its trusted installation; see README.md. No event was written.")
+
+
 class _WriteFailure(Exception):
     """Publication failed after it began; ``recovery_required`` marks partial state."""
 
@@ -600,7 +608,7 @@ class _Guard:
 def _trusted_lock_root(explicit):
     if explicit is not None:
         return Path(explicit)
-    env = os.environ.get(ENV_LOCK_ROOT, "").strip()
+    env = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip() or os.environ.get(ENV_LOCK_ROOT, "").strip()
     if env:
         return Path(env)
     return Path(__file__).resolve().parents[3].parent / "workspace-lock"
@@ -609,7 +617,7 @@ def _trusted_lock_root(explicit):
 def _load_guard(trusted_root):
     guard_path = Path(trusted_root) / "scripts" / "workspace_lock_guard.py"
     if not guard_path.is_file():
-        raise _Reject()
+        raise _LockInstallationUnavailable()
     spec = importlib.util.spec_from_file_location("_event_documentation_workspace_lock_guard", str(guard_path))
     if spec is None or spec.loader is None:
         raise _Reject()
@@ -1164,6 +1172,8 @@ def apply_event(payload, *, workspace_root, lease_id, conversation_id=None, trus
                 "work_order_sha256": work_order_sha256,
                 "source_snapshot_sha256": order["source_snapshot_sha256"],
                 "idempotent": mode == "idempotent"}
+    except _LockInstallationUnavailable as exc:
+        return _failure("event_write_rejected", str(exc))
     except Exception:
         return _failure("event_write_rejected", _REJECTED_MESSAGE)
 

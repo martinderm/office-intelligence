@@ -43,8 +43,51 @@ Workspace-Regeln bleiben maßgeblich.
 > [!WARNING]
 > Vor einer Mutation im konsumierenden Workspace ist dessen `workspace-lock` mit einer
 > **Lease des ausführenden Harnesses** erforderlich. Lesende Auswertungen sind lockfrei.
-> Ein lockfreier Schreiblauf ist nur als ausdrücklich gewählter, dokumentierter
-> Single-Session-Legacy-Modus zulässig; die Details stehen in den jeweiligen Sub-Skills.
+> Die automatischen Writer erlauben keinen lockfreien Legacy-Bypass.
+
+### workspace-lock Voraussetzung
+
+Python 3 und die separate, vertrauenswürdige
+[`workspace-lock`](https://github.com/martinderm/workspace-lock)-Installation sind
+für schreibende Tools erforderlich. Guard und CLI werden dort **in place** benutzt,
+nicht ins Bundle kopiert. Das private Skills-Superprojekt wird nicht benötigt.
+
+```text
+git clone https://github.com/martinderm/office-intelligence.git
+git clone https://github.com/martinderm/workspace-lock.git
+```
+
+Mit diesen beiden parallelen Ordnern funktioniert der Sibling-Fallback. Bei einer
+anderen Anordnung setze im **aufrufenden Harness** `WORKSPACE_LOCK_ROOT` auf den
+Installationsordner, der `scripts/workspace_lock_guard.py` enthält (nicht auf das
+Skript selbst):
+
+```sh
+export WORKSPACE_LOCK_ROOT="$(pwd)/workspace-lock"
+```
+
+```powershell
+$env:WORKSPACE_LOCK_ROOT = (Resolve-Path ./workspace-lock).Path
+```
+
+Reihenfolge: expliziter API-/CLI-Installationspfad, `WORKSPACE_LOCK_ROOT`, vorhandene
+Desk-Aliase (`EVENT_DOCUMENTATION_WORKSPACE_LOCK_ROOT`,
+`MEETING_DESK_WORKSPACE_LOCK_ROOT`, `MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT`),
+zuletzt ausschließlich `../workspace-lock` relativ zum installierten Bundle.
+Event-/Meeting-CLI: `--workspace-lock-root`; Cloud-Refresh-API:
+`workspace_lock_root`. Ein gesetzter ungültiger Pfad wird **nicht** durch einen
+Fallback ersetzt. Keine Suche nach ausführbarem Guard-Code im aktuellen
+Arbeitsverzeichnis, keine Pfade aus Mails, Records oder Handoffs.
+
+Fehlt die Installation, verweigert der Schreibpfad die Mutation mit Hinweis auf
+`WORKSPACE_LOCK_ROOT` und diese Anleitung. Cloud-Refresh behält
+`reason: lock_unavailable` und liefert in diesem Setup-Fall zusätzlich das
+hashgebundene Feld `installation_guidance`. Ein ausgewählter Guard ersetzt keine
+Lease: Der Harness muss im **Consumer**, nicht im Bundle, vorab seine eigene
+aktive Lease über `scripts/invoke_workspace_lock.py` erwerben und nach dem Lauf
+freigeben. Es gibt keine Ersatz-Locks und keine automatische Lease-Übernahme.
+
+Regeln für Beiträge und Tests stehen in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🔌 Adapter und Nachbar-Skills
 

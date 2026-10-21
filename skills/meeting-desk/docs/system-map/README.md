@@ -1,4 +1,11 @@
-# Meeting-Desk — L2 System Map (ICM Form 6)
+# Meeting-Desk - L2 System Map (ICM Form 6)
+
+**Standalone-Guard (#38):** Der explizite Writer-/CLI-Installationspfad geht dem
+gemeinsamen Operator-Environment `WORKSPACE_LOCK_ROOT` vor; danach folgt der
+kompatible Alias `MEETING_DESK_WORKSPACE_LOCK_ROOT`, zuletzt der Installations-
+Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
+`WORKSPACE_LOCK_ROOT` / `--workspace-lock-root` und die Bundle-README. Kein
+CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
 > 2026-10-21) · 99 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,

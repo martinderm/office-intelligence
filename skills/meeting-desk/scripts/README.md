@@ -125,7 +125,7 @@ Details: [`../references/data-model.md`](../references/data-model.md). Kurz:
 * Workspace-Lock: kanonischer Shared-Guard in place mit `allow_legacy=False`.
   Auflösung des vertrauenswürdigen Root in dieser Reihenfolge:
   `--workspace-lock-root`, Operator-Environment
-  `MEETING_DESK_WORKSPACE_LOCK_ROOT`, Geschwister-Skill `../workspace-lock`
+  `WORKSPACE_LOCK_ROOT`, kompatibler Alias `MEETING_DESK_WORKSPACE_LOCK_ROOT`, Geschwister-Skill `../workspace-lock`
   relativ zum Bundle. Kein CWD-/Payload-gesteuerter Import, keine Guard-Kopie,
   kein Ersatz-Lock. Die eigene Lease wird vor jedem mkdir/stage/write/rename/
   delete erneut geprüft; Verlust stoppt vor der nächsten Mutation.

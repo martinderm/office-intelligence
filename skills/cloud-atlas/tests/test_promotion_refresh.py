@@ -26,6 +26,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
@@ -793,6 +795,35 @@ class RefreshTests(RefreshTestCase):
 # ==============================================================================
 
 class EndToEndTests(RefreshTestCase):
+    def test_standalone_setup_guidance_precedes_writes(self) -> None:
+        handoff, _mail, _journal = self._build_real_chain()
+        before = {p.relative_to(self.ws): p.read_bytes() for p in self.ws.rglob("*") if p.is_file()}
+        with mock.patch.dict(os.environ, {"WORKSPACE_LOCK_ROOT": str(self.ws / "missing-install")}), \
+                mock.patch.object(MODULE, "verify_workspace_lock", REAL_VERIFY_WORKSPACE_LOCK):
+            result = self.consume(handoff)
+        self.assertEqual("refresh_denied", result["status"])
+        self.assertEqual("lock_unavailable", result["reason"])
+        self.assertIn("WORKSPACE_LOCK_ROOT", result["installation_guidance"])
+        self.assertNotIn(str(self.ws), result["installation_guidance"])
+        self.assertEqual(MODULE._canonical_json_sha256({k: v for k, v in result.items() if k != "result_hash"}),
+                         result["result_hash"])
+        self.assertEqual(before, {p.relative_to(self.ws): p.read_bytes() for p in self.ws.rglob("*") if p.is_file()})
+
+    def test_real_owned_guard_with_explicit_root_completes_refresh(self) -> None:
+        handoff, _mail, _journal = self._build_real_chain()
+        lock_root = Path(os.environ.get("OI_TEST_WORKSPACE_LOCK_ROOT") or
+                         RECEIVER_ROOT.parents[2] / "workspace-lock")
+        completed = subprocess.run(
+            [sys.executable, "-B", str(lock_root / "scripts/invoke_workspace_lock.py"),
+             "acquire", str(self.ws), "--harness", "synthetic-test", "--lease-id", "standalone-test",
+             "--duration-minutes", "10", "--json"], capture_output=True, text=True, encoding="utf-8")
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        # Explicit caller configuration wins even when the common env is invalid.
+        with mock.patch.dict(os.environ, {"WORKSPACE_LOCK_ROOT": str(self.ws / "invalid")}), \
+                mock.patch.object(MODULE, "verify_workspace_lock", REAL_VERIFY_WORKSPACE_LOCK):
+            result = self.consume(handoff, lease_id="standalone-test", workspace_lock_root=lock_root)
+        self.assertEqual("refresh_completed", result["status"])
+
     SUB_TOPIC_ID = "topic-a"
     SUB_SUBTOPIC_ID = "sub-1"
     SUB_SCAN_DIR = "data/cloud/TOPIC-A/sub"

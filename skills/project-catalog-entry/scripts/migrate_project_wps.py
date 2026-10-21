@@ -45,13 +45,25 @@ def load_validator() -> Any:
 
 
 def load_guard() -> Any:
-    path = Path(__file__).resolve().parents[4] / "workspace-lock" / "scripts" / "workspace_lock_guard.py"
-    spec = importlib.util.spec_from_file_location("workspace_lock_guard", path)
+    root = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
+    root = Path(root) if root else Path(__file__).resolve().parents[4] / "workspace-lock"
+    path = root / "scripts" / "workspace_lock_guard.py"
+    if not path.is_file():
+        raise RuntimeError("Install workspace-lock and set WORKSPACE_LOCK_ROOT "
+                           "to its trusted installation; see README.md")
+    spec = importlib.util.spec_from_file_location("_project_catalog_workspace_lock_guard", path)
     if spec is None or spec.loader is None:
         raise RuntimeError("canonical workspace-lock guard is unavailable")
     module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
     sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
     return module
 
 
