@@ -54,9 +54,19 @@ _HANG_GUARD_CLEANUP_MARGIN_SECONDS = 2.0
 # spawns a `taskkill` process and therefore grows under CPU saturation.
 # Measured: 0.28 s idle, 0.32 s under load, 1.14 s at full saturation
 # (8 burner processes on 8 logical cores) - the budget is 2.0 s, i.e. about
-# 1.8x the worst observed value, and still far below the old 1 s total
-# wallclock, which it replaces.
+# 1.8x the worst observed value.  It replaces the previous fixed 1 s total
+# wallclock, which the measured worst case (1.14 s) exceeded although every
+# product budget was met.
 _TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS = 2.0
+# Noise allowance for the differential lower bound: two consecutive spawns
+# differ by the spawn-latency spread (measured 0.13 s idle to 0.29 s under
+# load), so the difference between a baseline call and a timeout call carries
+# that spread.  For timeout windows below the spawn latency (0.1 s, 0.05 s,
+# 0.0001 s) the differential lower bound can therefore only detect gross
+# deviations - a strict improvement over the previous state, which had no
+# lower bound at all.  For windows above the spawn latency (0.8 s) it is
+# effective on its own.
+_TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS = 0.5
 
 
 def _marker_side_effect_target(marker_path_str: str) -> str:
@@ -293,6 +303,13 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 f"{label}: timeout path was not enforced promptly "
                 f"(delta {elapsed - baseline_elapsed:.3f}s > "
                 f"{_TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS:.3f}s)",
+            )
+            self.assertGreaterEqual(
+                elapsed - baseline_elapsed,
+                timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS,
+                f"{label}: timeout fired before the configured window "
+                f"(delta {elapsed - baseline_elapsed:.3f}s < "
+                f"{timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS:.3f}s)",
             )
 
     def _create_sample_pdf(self, page_texts: list[str]) -> bytes:

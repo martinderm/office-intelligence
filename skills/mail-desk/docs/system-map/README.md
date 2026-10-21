@@ -41,7 +41,9 @@ kann ein gespawnter Worker die Fixtures ohne Import des gesamten Testmoduls samt
 auflösen. Reine
 Test-Fixture-Struktur; Timeouts, Asserts, Lock-/Preflight-Semantik und Produktionscode
 bleiben unverändert.
-Nachtrag 2026-10-21 (Issue #44): Die vier MD-A3-Wallclock-Guards
+Nachtrag 2026-10-21 (Issue #44): Das Fixture-Modul umfasst nunmehr fünf picklable
+Fixtures; neu ist `_instant_target` (Baseline-Aufruf ohne Timeout-Fenster für den
+differentiellen Promptness-Vergleich). Die vier MD-A3-Wallclock-Guards
 (`test_process_worker_terminates_and_prevents_late_write`,
 `test_process_timeout_enforced_and_aborts_cleanly`,
 `test_ocr_timeout_enforced_and_cleans_temporary_artifacts`,
