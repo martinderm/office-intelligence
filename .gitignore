@@ -10,3 +10,7 @@ docs/INSTALL_PATHS.local.md
 memory/references/projects/inbox/*.json
 __pycache__/
 *.pyc
+# Local harness evidence/configuration must never enter a normal staging sweep.
+/runs/
+/opencode.json
+.pytest_cache/
