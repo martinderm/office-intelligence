@@ -1,4 +1,14 @@
-# Cloud-Atlas — Subsystem System Map
+# Cloud-Atlas - Subsystem System Map
+
+**Standalone-Guard (#38):** `promotion_refresh.py` wählt den externen Guard über
+`workspace_lock_root` (vertrauenswürdiger API-Aufrufer), `WORKSPACE_LOCK_ROOT` oder
+den Installations-Sibling `../workspace-lock` relativ zum Bundle. Ungültige Auswahl
+stoppt ohne CWD-/Parent-Scan oder Rückfall auf einen fremden Modulcache. Der lokale
+Guard-Cache ist pfadgebunden; `allow_legacy=False` und Lease-Prüfung bleiben gleich.
+Ein fehlender Guard ergibt vor dem Refresh `refresh_denied` / `lock_unavailable`
+mit optionalem `installation_guidance`, das in `result_hash` eingeht; fremde Leases
+erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
+[Bundle-README](../../../../README.md#workspace-lock-voraussetzung).
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)  
 > **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  

@@ -44,6 +44,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import sys
@@ -337,20 +338,44 @@ def _load_mail_desk_promotion() -> Any:
     raise RuntimeError("mail-desk attachment_promotion is unavailable")
 
 
-def _load_workspace_lock_guard() -> Any:
-    cached = sys.modules.get("workspace_lock_guard")
-    if cached is not None:
-        return cached
-    for base in list(Path(__file__).resolve().parents) + [Path.cwd().resolve(), *Path.cwd().resolve().parents]:
-        candidate = base / "workspace-lock" / "scripts" / "workspace_lock_guard.py"
-        if candidate.is_file():
-            spec = importlib.util.spec_from_file_location("workspace_lock_guard", candidate)
-            if spec is not None and spec.loader is not None:
-                module = importlib.util.module_from_spec(spec)
-                sys.modules["workspace_lock_guard"] = module
-                spec.loader.exec_module(module)
-                return module
-    raise RuntimeError("Canonical workspace-lock guard is unavailable")
+class _LockInstallationUnavailable(RuntimeError):
+    def __init__(self):
+        super().__init__("Install workspace-lock and set WORKSPACE_LOCK_ROOT to its trusted "
+                         "installation (or pass workspace_lock_root); see README.md")
+
+
+_WORKSPACE_LOCK_GUARDS: dict[str, Any] = {}
+
+
+def _load_workspace_lock_guard(explicit_root: Path | str | None = None) -> Any:
+    # Only operator configuration or the established installation sibling is
+    # trusted. Never derive executable code locations from cwd or handoff data.
+    configured = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
+    root = (Path(explicit_root) if explicit_root is not None else
+            Path(configured) if configured else Path(__file__).resolve().parents[4] / "workspace-lock")
+    candidate = root / "scripts" / "workspace_lock_guard.py"
+    if not candidate.is_file():
+        raise _LockInstallationUnavailable()
+    key = str(candidate.resolve())
+    if key in _WORKSPACE_LOCK_GUARDS:
+        return _WORKSPACE_LOCK_GUARDS[key]
+    spec = importlib.util.spec_from_file_location("_cloud_atlas_workspace_lock_guard", candidate)
+    if spec is None or spec.loader is None:
+        raise _LockInstallationUnavailable()
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+    if not callable(getattr(module, "require_workspace_lock", None)):
+        raise _LockInstallationUnavailable()
+    _WORKSPACE_LOCK_GUARDS[key] = module
+    return module
 
 
 def verify_workspace_lock(
@@ -358,9 +383,10 @@ def verify_workspace_lock(
     *,
     lease_id: str | None = None,
     conversation_id: str | None = None,
+    workspace_lock_root: Path | str | None = None,
 ) -> Any:
     """Require an invocation-owned Cloud-Atlas workspace lock (never legacy)."""
-    guard = _load_workspace_lock_guard()
+    guard = _load_workspace_lock_guard(workspace_lock_root)
     return guard.require_workspace_lock(
         Path(workspace_root),
         lease_id=lease_id,
@@ -541,6 +567,7 @@ def consume_promotion_refresh_handoff(
     *,
     lease_id: str | None = None,
     conversation_id: str | None = None,
+    workspace_lock_root: Path | str | None = None,
     current_time: datetime.datetime | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
@@ -568,7 +595,13 @@ def consume_promotion_refresh_handoff(
 
     # 1. Own lock: the mail-desk handoff can never authorize Cloud-Atlas.
     try:
-        verify_workspace_lock(root, lease_id=lease_id, conversation_id=conversation_id)
+        lock_options = {} if workspace_lock_root is None else {"workspace_lock_root": workspace_lock_root}
+        verify_workspace_lock(root, lease_id=lease_id, conversation_id=conversation_id, **lock_options)
+    except _LockInstallationUnavailable as exc:
+        result = _refresh_result(REFRESH_STATUS_DENIED, "lock_unavailable", validated)
+        result["installation_guidance"] = str(exc)
+        result["result_hash"] = _canonical_json_sha256({k: v for k, v in result.items() if k != "result_hash"})
+        return result
     except Exception:
         return _refresh_result(REFRESH_STATUS_DENIED, "lock_unavailable", validated)
 

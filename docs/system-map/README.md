@@ -16,6 +16,20 @@ before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 
 ## 1. Systemübersicht
 
+**Standalone-Installation (#38):** Die sechs Guard-Einstiege in Event-, Meeting-,
+Cloud-, Mail-/Diagnose- und Projekt-Migrationscode akzeptieren das gemeinsame
+Operator-Environment `WORKSPACE_LOCK_ROOT`. Explizite Aufrufparameter gehen vor,
+bestehende Desk-Aliase bleiben nachrangig kompatibel; letzter Fallback ist nur der
+Installations-Sibling `../workspace-lock`. Kein CWD-/Payload-Import, kein stiller
+Fallback bei ungültiger Konfiguration, keine Guard-Kopie oder Legacy-Lease.
+Cloud-/Mail-Caches sind an den ausgewählten Guard-Pfad gebunden; ein fremder
+`sys.modules`-Eintrag ist kein Trust Anchor. Fehlende Installation liefert
+begrenzt Installationshilfe; Cloud behält `lock_unavailable` mit optionalem,
+hashgebundenem `installation_guidance`. Guard-/Ownership-Semantik unverändert.
+Setup und eigenständige Beitragsregeln: [README](../../README.md#workspace-lock-voraussetzung),
+[CONTRIBUTING](../../CONTRIBUTING.md). Regression: isolierte Bundle-Kopie und echter
+Shared-Guard; kein konsumierender Live-Workspace wird verwendet.
+
 `office-intelligence` ist ein **Shared Skill Bundle** für nachvollziehbare Office-, Wissens- und Verwaltungsarbeit nach dem Dual-Evidence-Ansatz.
 
 ```text
