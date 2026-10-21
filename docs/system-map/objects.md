@@ -130,13 +130,16 @@ Reply-Heuristik- und Identitäts-Konfiguration des konsumierenden Workspaces.
 * **Legacy-Records:** `docs/features/FR-<n>.md` — unverändertes historisches
   Frontmatter und Paketkarten; offene Altstatus werden nicht als erledigt umgedeutet.
 * **Archiv:** `docs/features/_archive.md` bleibt historisch erhalten;
-  `FEATURE-REQUEST-ARCHIVE.md`, `FEATURE-REQUESTS.md` und
-  `FEATURE-REQUEST-PROGRESS.md` sind nur Linkstubs.
+  die Root-Stubs `FEATURE-REQUEST-ARCHIVE.md`, `FEATURE-REQUESTS.md` und
+  `FEATURE-REQUEST-PROGRESS.md` sind zum 2026-10-21 entfernt und lösen sich
+  über die Git-Historie bzw. die Snapshots unter `docs/archive/feature-ledgers/`
+  auf.
 * **Snapshot/Provenienz:** [`docs/archive/feature-ledgers/README.md`](../archive/feature-ledgers/README.md),
   bytegetreue Textkopien der Root-Ledger, keine neue Fortschrittstabelle.
 * **Routing:** [`docs/features/CONTEXT.md`](../features/CONTEXT.md).
   Alte `catalog`/`progress`- und externe `spec_reference`-Verweise bleiben über
-  Stubs historisch lesbar; sie erteilen keine Kernel-Bindung oder neue Ledgerpflicht.
+  Snapshots bzw. die Git-Historie historisch lesbar; sie erteilen keine
+  Kernel-Bindung oder neue Ledgerpflicht.
 
 ### 3.5 Task-Desk-Register (Issue #16, Zielverträge)
 

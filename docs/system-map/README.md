@@ -61,7 +61,10 @@ Shared-Guard; kein konsumierender Live-Workspace wird verwendet.
 * **Backlog und Arbeitsnachweise:** [GitHub Issues](https://github.com/martinderm/office-intelligence/issues)
   sind der einzige aktive Backlog. Workstatus und Run-Abnahme stehen im Issue/PR
   und dessen Run; aktuelle Verträge/Specs und betroffene L1/L2-Karten bleiben
-  kanonisch. Root-FR-Ledger sind historische Linkstubs, keine Parallelpflege.
+  kanonisch. Die Root-FR-Ledger wurden zum 2026-10-21 entfernt; ihre Inhalte
+  liegen in der Git-Historie und unter
+  [docs/archive/feature-ledgers/](../archive/feature-ledgers/README.md) —
+  keine Parallelpflege.
 * **Issue #10, Fixture-Isolation:** MD-A3-Lockverlust-Simulation hält ihren
   Aufrufzustand im jeweiligen temporären Test-Workspace statt in einem globalen
   System-Temp-Marker. Produktions-Lock-, Quarantäne- und Timeout-Verträge bleiben
@@ -229,7 +232,9 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
   (§2) referenziert die L2-Karte oder nennt keine Zerlegung; historische Snapshots in den
   [FR-Nachweisen](../features/CONTEXT.md) sind **bewusst eingefrorene
   Abnahmewerte** und werden nicht fortgeschrieben (sie tragen den Zeitstempel
-  ihrer Paketabnahme). Die Root-Ledger sind nur historische Linkstubs;
+  ihrer Paketabnahme). Die Root-Ledger sind entfernt (2026-10-21); ihre
+  Inhalte liegen in der Git-Historie und unter
+  [docs/archive/feature-ledgers/](../archive/feature-ledgers/README.md);
   neue Workstatus-/Abnahmenachweise liegen im Issue/PR und dessen Run.
 - **Frische-Erhebungsregel:** Vor jedem Dokumentations-Commit, der eine Metrik nennt,
   wird der Wert frisch per `git ls-files` bzw. Testlauf erhoben — nie aus einer anderen
