@@ -52,9 +52,11 @@ installed shared `workspace-lock` skill holds the only lock machinery; see the
   current contracts/specifications. A change without its map sync is incomplete.
 - GitHub Issues are the only active backlog. Work status and run acceptance
   evidence belong in the issue/PR and its run, not in root feature ledgers.
-  `FEATURE-REQUESTS.md` and `FEATURE-REQUEST-PROGRESS.md` are historical link
-  stubs; do not append entries or create new FR records. Preserve historical
-  evidence without treating old statuses as current decisions.
+  The former root ledgers were removed on 2026-10-21; their content lives in
+  the Git history and in `docs/archive/feature-ledgers/` (byte-exact snapshots
+  and provenance). Do not append entries or create new FR records, and do not
+  recreate root ledgers. Preserve historical evidence without treating old
+  statuses as current decisions.
 
 ## Portability
 

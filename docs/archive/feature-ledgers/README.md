@@ -24,14 +24,26 @@ als aktiver Router ausgegeben. Ursprüngliche Basis aller enthaltenen relativen
 Links war der **Repository-Root**, nicht dieses Archivverzeichnis. Die folgende
 Linkauflösung ersetzt die Navigation, ohne historische Bytes umzuschreiben.
 
+## Loader-Notiz 2026-10-21 — Root-Stubs entfernt
+
+Die drei Root-Stubs `FEATURE-REQUESTS.md`, `FEATURE-REQUEST-PROGRESS.md` und
+`FEATURE-REQUEST-ARCHIVE.md` wurden am 2026-10-21 aus dem Repository entfernt
+(Issue #37). Ihr vollständiger Inhalt bleibt verlustfrei in der Git-Historie
+(`git log --follow -- <datei>`) und in den beiden bytegetreuen Snapshots
+unten. Alte Linkketten — insbesondere die `catalog`/`progress`-Frontmatter der
+vier Legacy-Records und die Verweise in den eingefrorenen Belegdokumenten —
+lösen sich deshalb über die Snapshots bzw. über die Git-Historie auf; die
+historischen Dokumente bleiben unverändert. Es wird kein Root-Ledger neu
+angelegt. Nachweise und Arbeitsstatus liegen in Issue/PR und Run.
+
 ## Auflösung der damaligen relativen Markdown-Links
 
 Alle unterschiedlichen relativen Markdown-Ziele der beiden Snapshots:
 
 | Ursprüngliches Ziel (Basis: Root) | Heute auflösbares Ziel |
 | --- | --- |
-| `FEATURE-REQUESTS.md` | [unveränderter damaliger Katalog](2026-10-18/FEATURE-REQUESTS.md.txt); [Root-Stub](../../../FEATURE-REQUESTS.md) |
-| `FEATURE-REQUEST-PROGRESS.md` | [unveränderter damaliger Progress](2026-10-18/FEATURE-REQUEST-PROGRESS.md.txt); [Root-Stub](../../../FEATURE-REQUEST-PROGRESS.md) |
+| `FEATURE-REQUESTS.md` | [unveränderter damaliger Katalog](2026-10-18/FEATURE-REQUESTS.md.txt); Root-Stub entfernt 2026-10-21 (Historie) |
+| `FEATURE-REQUEST-PROGRESS.md` | [unveränderter damaliger Progress](2026-10-18/FEATURE-REQUEST-PROGRESS.md.txt); Root-Stub entfernt 2026-10-21 (Historie) |
 | `docs/features/` | [historische Record-Library](../../features/CONTEXT.md) |
 | `docs/features/FR-10.md` | [FR-10](../../features/FR-10.md) |
 | `docs/features/FR-12.md` | [FR-12](../../features/FR-12.md) |
@@ -43,7 +55,8 @@ Alle unterschiedlichen relativen Markdown-Ziele der beiden Snapshots:
 
 Absolute GitHub-URLs bleiben als Quelltext vollständig erhalten; ihnen wird keine
 neue lokale Basis zugewiesen. Inbound-Links und `catalog`/`progress`-Frontmatter
-der vier Legacy-Records bleiben über die kurzen Rootstubs auflösbar. Im erfassten
+der vier Legacy-Records bleiben über die Snapshots bzw. die Git-Historie
+auflösbar (Root-Stubs entfernt 2026-10-21, siehe Loader-Notiz oben). Im erfassten
 Repo-Bestand gibt es keine URL-Fragmente auf die beiden Root-Ledger.
 Die alten Textverweise „§ FR-17“/„§ FR-22“ im Progress hatten schon im Quellstand
 keine entsprechende Katalog-Sektion; sie werden nicht als funktionierende Anker
@@ -75,8 +88,9 @@ Archivstatus-Tabelle bleibt ebenfalls erhalten.
 Die übrigen Issue-Nachweise im Snapshot (#2/#8/#9/#10/#11/#14/#16/#20) sind
 ausdrücklich **keine neuen FR-Records** und keine aktuelle Statusliste.
 Die unveränderten Abnahmen stehen in [docs/features/_archive.md](../../features/_archive.md);
-der bestehende [FEATURE-REQUEST-ARCHIVE.md-Stub](../../../FEATURE-REQUEST-ARCHIVE.md)
-bleibt bestehen. Historische Aussagen zu #18/#19 entscheiden deren heutigen
+der Root-Stub `FEATURE-REQUEST-ARCHIVE.md` ist zum 2026-10-21 entfernt
+(Inhalt in der Git-Historie; das Archiv liegt unter `docs/features/_archive.md`).
+Historische Aussagen zu #18/#19 entscheiden deren heutigen
 Status nicht neu.
 
 ## Spätere Lane-Reconciles

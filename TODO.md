@@ -5,7 +5,8 @@
 > insbesondere [#10](https://github.com/martinderm/office-intelligence/issues/10)
 > für die offene READY-/Timing-Restursache. Die datierten Vorschläge unten sind
 > keine neue Umsetzungserlaubnis. Damalige Progress-Nachweise sind über den
-> [Archiv-Stub](FEATURE-REQUEST-PROGRESS.md) erreichbar, aktuelle im Issue/PR/Run.
+> [Archiv-Snapshot](docs/archive/feature-ledgers/README.md) erreichbar, aktuelle
+> im Issue/PR/Run.
 
 ## 2026-10-18 — Issue #14: Writer-Implementierung zur User-Abnahme
 
@@ -14,7 +15,8 @@ Projekt- und katalogisierte Topic/Subtopic-Events bearbeitet. Echte lokale
 Fassaden-Integration ergänzt die bisherigen synthetischen Boundary-Pins; keine
 Live-Mailbox-Abnahme. Normative Entwurfs-/Bootstrap-Änderung ist High Risk,
 unabhängiges finales Review und User-Merge bleiben verpflichtend. Aktueller
-Nachweis: `FEATURE-REQUEST-PROGRESS.md`; historische Angaben bleiben erhalten.
+Nachweis: Issue #14 mit PR und Run; historische Angaben bleiben im
+[Archiv-Snapshot](docs/archive/feature-ledgers/README.md) erhalten.
 
 ## 2026-10-16 — GELÖST → Issue #8: `test_event_dossier` referenziert fehlendes Skript
 
