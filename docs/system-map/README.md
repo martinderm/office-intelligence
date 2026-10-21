@@ -18,7 +18,7 @@ before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 
 `office-intelligence` ist ein **Shared Skill Bundle** für nachvollziehbare Office-, Wissens- und Verwaltungsarbeit nach dem Dual-Evidence-Ansatz.
 
-```
+```text
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   Konsumierender Agent-Workspace                       │
 │  (Data Zones: memory/references/, memory/evidence/, memory/cloud/, data/)│
@@ -32,16 +32,15 @@ before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 │  ├─ docs/analysis/ (Konzeptanalysen, z. B. Jev-Integration)            │
 │  └─ skills/ (7 modulare Sub-Skills)                                    │
 └──────┬──────────────────────┬──────────────────────┬───────────────────┘
-       │                      │                      │
-       ▼                      ▼                      ▼
-┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
-│  mail-desk   │       │ cloud-atlas  │       │ Schlanke / Katalog-Desks │
-│ (L2-Metrik)  │       │ (L2-Metrik)  │       │ - project-catalog-entry  │
-│ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
-│              │       │              │       │ - task-desk              │
-│              │       │              │       │ - meeting-desk           │
-│              │       │              │       │ - event-documentation    │
-└──────────────┘       └──────────────┘       └──────────────────────────┘
+       │                      │                      │                      │
+       ▼                      ▼                      ▼                      ▼
+┌──────────────┐       ┌──────────────┐       ┌──────────────┐       ┌──────────────────────────┐
+│  mail-desk   │       │ cloud-atlas  │       │ meeting-desk │       │ Schlanke / Katalog-Desks │
+│ (L2-Metrik)  │       │ (L2-Metrik)  │       │ (L2-Metrik)  │       │ - project-catalog-entry  │
+│ Deep Map L2  │       │ Deep Map L2  │       │ Deep Map L2  │       │ - topic-catalog-entry    │
+│              │       │              │       │ Record-Writer│       │ - task-desk              │
+│              │       │              │       │ Journal/Lock │       │ - event-documentation    │
+└──────────────┘       └──────────────┘       └──────────────┘       └──────────────────────────┘
 ```
 
 ### Abgrenzung & Rolle
@@ -82,7 +81,7 @@ Vier-Suiten-Abnahme wird im zugehörigen Run und Feature-Ledger referenziert.
 | [`project-catalog-entry`](../../skills/project-catalog-entry/SKILL.md) | Kompakt (Paket-Map) | 24 Dateien | [`objects.md#project-catalog-entry`](objects.md#31-projektkatalog-project-catalog-entry) | Validierung und Migration von `memory/references/projects/projects.json` und Workpackages. |
 | [`topic-catalog-entry`](../../skills/topic-catalog-entry/SKILL.md) | Schlank (Paket-Map) | 3 Dateien | [`objects.md#topic-catalog-entry`](objects.md#32-themenkatalog-topic-catalog-entry) | Pflege von `memory/references/topics/topics.json` und Subtopic-Strukturen. |
 | [`task-desk`](../../skills/task-desk/SKILL.md) | Schlank (Paket-Map) | 3 Dateien (`git ls-files --cached --others --exclude-standard`, 2026-10-18) | [`processes.md#task-desk`](processes.md#2-handoff-workflow-mail-desk--task-desk) | Action-Item-Extraktion, Priorisierung und Todoist-Vorbereitung; zweiter Batch-Eingang `synthesis_handoff` mit Release-Gate, persistierte `action_id`/`action_ref` und Register-Zielverträge (Issue #16). |
-| [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | Schlank (Paket-Map) | 7 Dateien (`git ls-files --cached --others --exclude-standard`, Issue #32) | [`processes.md#meeting-desk`](processes.md#3-meeting--event-intake-workflow) | Evidenz-Überführung einzelner Meetings (Fireflies, Zoom); Routing nach Projekt/Topic/Event (Issue #30). [`Builder`](../../skills/meeting-desk/scripts/build_clean_transcript.py): Schema `meeting-corrections/1`, Standard-Envelope, Exit 0/1/2, Originaltext-Spans ohne Kaskaden, Workspace-Lock-/Zonengate und Raw-Schutz; [CLI/Vertrag](../../skills/meeting-desk/scripts/README.md), [Regressionstests](../../skills/meeting-desk/tests/test_build_clean_transcript.py). |
+| [`meeting-desk`](../../skills/meeting-desk/SKILL.md) | **Kompakt** (L2 System Map) | 15 Dateien (`git ls-files --cached --others --exclude-standard`, 2026-10-21); Metrik-SSOT: L2-Kopfzeile | [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting-desk/docs/system-map/README.md) | Kanonischer Meeting-Writer (Issue #35): Record-v1-Validierung, vertrauenswürdiges Katalog-Routing, Objektregister `{"meetings": [...]}`, Journal/Ownership/Recovery unter `data/meeting-desk/`; Adapter schreiben nur Records, der Clean-Transcript-Builder delegiert seine Publikation ([CLI/Vertrag](../../skills/meeting-desk/scripts/README.md), [Datenmodell](../../skills/meeting-desk/references/data-model.md), [L2](../../skills/meeting-desk/docs/system-map/README.md)). |
 | [`event-documentation`](../../skills/event-documentation/SKILL.md) | Kompakt (Paket-Map) | 8 Dateien (Issue #14, 2026-10-18, `git ls-files --cached --others --exclude-standard`) | [`processes.md`](processes.md#3-meeting--event-intake-workflow) | Source-bound ungeprüfte Event-Entwürfe für Projekte und katalogisierte Topic/Subtopic-Events; Writer-Vertrag in `references/event-writer.md`. |
 
 

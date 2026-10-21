@@ -64,6 +64,33 @@ Markdown/HTML wird inert gerendert. Keine Race-Freiheit gegen einen gleichzeitig
 umhängenden bösartigen Dateisystemakteur; keine fachliche Freigabe aus Hashes.
 Normative Entwurfs-/Bootstrap-Zulassung ist High Risk und erfordert User-Merge.
 
+### 3.4 Meeting-Writer: Journal statt Gesamttransaktion (Issue #35)
+
+Der kanonische Meeting-Writer (`skills/meeting-desk/scripts/ingest_meeting.py`)
+erstellt neue Artefakte no-clobber und ersetzt generierte Dateien nur gegen den
+im Ownership-Record (`data/meeting-desk/ownership.json`) gebundenen SHA-256;
+Raw-Transkripte sind unveränderlich, nicht Writer-eigene Dateien werden nicht
+überschrieben. Vor der ersten Mutation wird ein integritätsgesichertes Journal
+unter `data/meeting-desk/journal/` mit Stage-Hashes, Vor-/Nachzuständen und
+Register-/Ownership-Prestate geschrieben; das Register ist der letzte
+Erstell-/Update-Schritt, alte Pfade eines Reroutings werden erst danach gelöscht.
+`null` in Record-Artefakten ist „nicht geliefert“, nie Löschen: bestehende
+registrierte Pfade/Bytes (auch Raw und menschlich abgeleitete Clean-Fassung)
+bleiben bei partiellen Updates erhalten; ein Rerouting mit unvollständigem
+Snapshot wird vor Mutation abgewiesen. Ein offenes Journal blockiert jede
+mutierende Operation (`recovery_required`,
+Exit 3); `--inspect` ist read-only, `--recover` explizit, lease-gebunden,
+forward-only und stoppt bei fremden Bytes/fehlenden Zielen. Unbekannte
+Journal-Verzeichnis-Einträge und Stage-Orphans werden nie durchsucht oder
+gelöscht, sondern blockieren bytegenau erhaltend. Nur journalgebundene,
+hash-/pfadgeprüfte eigene Stage-Dateien werden entfernt. Die Lease wird vor
+jedem mutierenden Schritt erneut geprüft; CLI-stdout ist UTF-8-bytesicher. Der
+lokale Datei-Eingang (`--local`) nutzt denselben Writer und verschiebt Quellen
+erst nach der Register-Publikation. Es wird **keine**
+Multi-File-ACID-/Power-Loss-Garantie, keine Race-Freiheit gegen bösartige
+gleichzeitige Dateisystemakteure und keine globale Snapshot-Isolation für nicht
+journalbewusste Leser behauptet.
+
 ---
 
 ## 4. Externe Subprozesse & Adapter-Grenzen

@@ -88,14 +88,37 @@ Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
 [Writer](../../skills/event-documentation/references/event-writer.md) und
 [`event-dossier.md`](../../skills/mail-desk/references/event-dossier.md).
 
-1. **Intake (`meeting-desk` bzw. `event-documentation`):**
-   - Rohdaten (Transkripte von Fireflies, Zoom, Audio-Uploads) werden aufgenommen.
+1. **Intake (`meeting-desk`):**
+   - Adapter (Fireflies, TicNote, Zoom, Vimeo/VTT) transformieren API-Daten offline
+     in genau einen `meeting-record/1`-Record; sie schreiben keine Meeting-Dateien
+     und kein Register. Manuelle/lokale Dateien nutzen `--local --summary/--transcript
+     [--raw]` mit demselben Record/Writer (Plan/Dry-run als Default, Apply nur mit
+     Plan-Hash; Quellen werden erst nach Register-Publikation hashgebunden verschoben).
    - Trennung nach Granularität:
      - Einzel-Meeting, Call oder Vortrag → [`meeting-desk`](../../skills/meeting-desk/SKILL.md)
      - Mehrtägige Tagung, Konferenz mit Vortragsprogramm → [`event-documentation`](../../skills/event-documentation/SKILL.md)
 2. **Evidenz-Erzeugung:**
-   - Bereinigtes Protokoll, Kernaussagen und Teilnehmer werden als Markdown geroutet abgelegt: `memory/evidence/projects/<id>/meetings/`, `memory/evidence/topics/<id>/meetings/` bzw. `memory/evidence/*/events/<slug>/meetings/` (nur `meetings.json`-Register + `unrouted/`-Fallback unter `memory/evidence/meetings/`).
-   - Transkript-Bereinigung mit Provenienz (Issues #30/#32, Skill §2b): [Builder-Vertrag](../../skills/meeting-desk/scripts/README.md) — `*.transcript.raw.md` plus geprüfte Korrekturdatei (`meeting-corrections/1`) und gleiche Metadatenoptionen ergeben reproduzierbar `*.transcript.md`. Operationen treffen ausschließlich Originaltext; Überschneidungen werden abgewiesen. Inline-Paare brauchen Workspace-Belege; stille Regeln sind auf bedeutungsneutrale Schreibweisen beschränkt, sonst `[unklar]`. Build/Template schreiben atomar, nur nach gemeinsamem Workspace-Lock-Guard und Zonengate, niemals auf Eingabedateien; `--force` überschreibt nur Outputs. `--check` ist read-only und vergleicht Bytes (Standard-Envelope, Exit 0/1/2). [Tests](../../skills/meeting-desk/tests/test_build_clean_transcript.py) sichern diese Grenzen mit synthetischen Daten.
+   - Der kanonische Writer validiert Record-Version/-typen/-grenzen, löst die
+     vertrauenswürdige Katalogauswahl (`--topic`/`--project`/`--event`) auf und
+     publiziert Summary/Transkript/Raw unter
+     `memory/evidence/{projects|topics}/<id>/meetings/` bzw.
+     `*/events/<slug>/meetings/`; ohne Auswahl neu `unmapped` unter
+     `memory/evidence/meetings/unrouted/`.
+   - Register ist ein Objekt `{"meetings": [...]}`; Root-Extras und nicht
+     betroffene/legacy Einträge bleiben erhalten. Nackte Arrays, defektes JSON
+     und mehrdeutige Identitäten stoppen vor Writes; keine stille Migration.
+   - Journal/Ownership unter `data/meeting-desk/`; neue Dateien no-clobber,
+     generierte Updates hash-gebunden, Raw unveränderlich, Register zuletzt.
+     `null` in Record-Artefakten bedeutet nicht geliefert, nie Löschen: nicht
+     gelieferte registrierte Pfade/Bytes (inkl. Raw/Clean) bleiben erhalten; ein
+     explizites Rerouting ohne vollständigen Snapshot wird vor Mutation
+     abgewiesen.
+     Unbekannte Journal-Verzeichnis-Einträge/Stage-Orphans blockieren mit Exit 3
+     und bleiben bytegenau erhalten. Ein offenes Journal blockiert Mutationen
+     mit Exit 3 (`recovery_required`); `--inspect` ist read-only, `--recover`
+     explizit/lease-gebunden/forward-only. Die Lease wird vor jedem mutierenden
+     Schritt erneut geprüft; stdout ist UTF-8-bytesicher.
+   - Transkript-Bereinigung mit Provenienz (Issues #30/#32, Skill §2b): [Builder-Vertrag](../../skills/meeting-desk/scripts/README.md) — `*.transcript.raw.md` plus geprüfte Korrekturdatei (`meeting-corrections/1`) und gleiche Metadatenoptionen ergeben reproduzierbar `*.transcript.md`. Operationen treffen ausschließlich Originaltext; Überschneidungen werden abgewiesen. Inline-Paare brauchen Workspace-Belege; stille Regeln sind auf bedeutungsneutrale Schreibweisen beschränkt, sonst `[unklar]`. Der Builder publiziert nur über den Writer auf den registrierten `transcript_path` des eindeutig identifizierten Meetings; `--check` ist read-only. [Tests](../../skills/meeting-desk/tests/test_ingest_meeting.py) sichern diese Grenzen mit synthetischen Daten; die [L2-Karte](../../skills/meeting-desk/docs/system-map/README.md) hält Zustände/Journal/Metriken.
 3. **Katalog-Verknüpfung:**
    - Zuordnung des Meetings zu einem Projekt (`projects.json`) oder Thema (`topics.json`).
    - Action Items werden wie bei Mail an den `task-desk` übergeben.
