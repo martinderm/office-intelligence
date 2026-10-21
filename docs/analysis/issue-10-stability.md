@@ -97,3 +97,62 @@ Nächster sicherer Writer: nach Lease-Freigabe aktuellen Main-/PR-Stand erneut
 prüfen, bei natürlichem Fehler die Phasen Spawn → READY → Confinement → START →
 Result → Cleanup einzeln messen und erst bei verstandener Ursache ändern.
 Es gibt keine uneingeschränkte Integrations- oder Merge-Freigabe für #10.
+
+## Restvalidierung 2026-10-21 (Issue #10)
+
+Der Abschlussvermerk oben („Die READY-/Timing-Familie ist **nicht** als behoben oder
+laststabil freigegeben") wurde am 2026-10-21 mit einem vorab registrierten
+Messplan überprüft. Plan, Amendment A1, Umgebung, Lastprofil und alle Logs liegen
+im Run-Verzeichnis des Vorgangs (außerhalb des Bundles). Messgegenstand war
+`main` = `fcbbb4f` im Primärclone (Host-Layout mit den Nachbarn `workspace-lock`
+und `Shared-Memory/agent-architecture`); keine Änderung an Repository, Produkt-
+oder Testcode, kein Liveimport, kein Mailboxzugriff.
+
+### Ablauf
+
+| Schritt | Tests | Ergebnis |
+| --- | ---: | --- |
+| R1 `mda3` isoliert ×3 | 38 | 3× OK |
+| R2 `mda4`+`mda5` isoliert ×2 | 100 | 2× OK |
+| R3 mail-desk-Vollframe ×2 | 1.479 | 1× OK, 1× 1 Failure |
+| R4 Bundle-Vollframe | 12 + 243 + 73 + 99 + 28 | OK (3 Plattformskips) |
+
+### Fehlerbild
+
+F1 (Timing-Assertion): `test_process_worker_terminates_and_prevents_late_write`,
+`AssertionError: 1.117… not less than 1.0`. F2 (READY-Handshake): 0 Fälle in
+diesen Läufen. F3 (Marker/Cross-Run): 0 Fälle — der Workspace-lokale Marker
+greift. F4: 0 Fälle.
+
+### Ursache (gemessen, Amendment A1)
+
+| Phase | idle (Median) | unter Last (Median) | Max |
+| --- | ---: | ---: | ---: |
+| Spawn-Baseline (Interpreter-Start) | 0,130 s | 0,267 s | 0,286 s |
+| Spawn → READY → Confinement → START → Result → Cleanup | 0,239 s | 0,598 s | 0,692 s |
+| Testaufruf gesamt (Timeout-Fenster + Terminate + Join) | 0,514 s | 0,921 s | 1,049 s |
+
+Die 1,0-s-Wallclock-Assertion prüfte nicht die Vertragsaussage, sondern die
+Windows-Spawn-Latenz des Gesamtaufrufs. Produktseitig war kein Defekt belegt:
+READY-Handshake 0 Fehler, Timeout-Fenster 20/20 eingehalten.
+
+### Konsequenz
+
+Die Assertions sind in PR #46 an den Produktvertrag gebunden: Hängungsschutz aus
+READY-Handshake-Budget (`core.quarantine.attachment_extract.READY_HANDSHAKE_TIMEOUT_SECONDS`)
+plus konfiguriertem Timeout-Fenster plus Aufräum-Marge, untere Schranke und
+differentielle Promptness-Prüfung gegen einen Baseline-Aufruf ohne Timeout.
+Produktionsbudgets, READY/START, Confinement und Quarantäne bleiben unverändert;
+der Negativnachweis (gebrochene Timeout-Durchsetzung → alle vier Tests rot) ist
+im PR dokumentiert.
+
+### Zweiter, getrennter Befund (CPU-Sättigung)
+
+Bei voller CPU-Sättigung (8 Burner-Prozesse auf 8 logischen Kernen) trat in
+anderen MD-A3-Tests die historische F2-Familie auf: `RuntimeError: Worker process
+failed to send READY handshake signal.` Der Worker braucht unter Sättigung
+länger als das 5-s-READY-Budget, um seine Importkette zu laden und READY zu
+senden; das Verhalten ist fail-closed, aber die Familienzugehörigkeit ist damit
+belegt. Der Befund ist vom Timing-Thema getrennt und wird in Issue #47 geführt;
+dort ist auch der nachzuholende Lastvergleich gegen den unveränderten
+Basisstand als offener Schritt notiert.
