@@ -24,13 +24,15 @@ LOADERS = {
     "project": "skills/project-catalog-entry/scripts/migrate_project_wps.py",
 }
 WORKER = r'''
-import importlib, importlib.util, json, os, sys, types
+import importlib, importlib.util, json, os, pickle, sys, types
 from pathlib import Path
 bundle, kind, relative, workspace = sys.argv[1:5]
 late_root = os.environ.pop("WORKSPACE_LOCK_ROOT", None) if sys.argv[5] == "late_installation" else None
 sys.path.insert(0, str(Path(bundle)/"skills/mail-desk/scripts"))
 if kind == "diagnostics":
     module = importlib.import_module("core.diagnostics")
+elif kind == "mail":
+    module = importlib.import_module("core.quarantine.attachment_fetch")
 else:
     spec = importlib.util.spec_from_file_location("standalone_subject", Path(bundle)/relative)
     module = importlib.util.module_from_spec(spec)
@@ -56,8 +58,15 @@ try:
         os.environ["WORKSPACE_LOCK_ROOT"] = str(Path(workspace)/"invalid-after-cache")
     check()
 except Exception as exc:
+    transportable = None
+    if sys.argv[5] == "pickle_error":
+        try:
+            transportable = isinstance(pickle.loads(pickle.dumps(exc)), module.WorkspaceLockError)
+        except Exception:
+            transportable = False
     print(json.dumps({"success": False, "message": str(exc),
-                      "structured_lock_error": kind == "mail" and isinstance(exc, module.WorkspaceLockError)}))
+                      "structured_lock_error": kind == "mail" and isinstance(exc, module.WorkspaceLockError),
+                      "transportable_lock_error": transportable}))
 else:
     print(json.dumps({"success": True}))
 '''
@@ -169,6 +178,12 @@ class StandaloneLockTests(unittest.TestCase):
                                  mode="late_installation")
         self.assertFalse(result["success"])
         self.assertTrue(result["structured_lock_error"])
+
+    def test_mail_denial_exception_can_cross_worker_transport(self):
+        result = self.run_loader("mail", env=dict(self.env, WORKSPACE_LOCK_ROOT=str(self.lock_root)),
+                                 mode="pickle_error")
+        self.assertFalse(result["success"])
+        self.assertTrue(result["transportable_lock_error"])
 
     def test_parallel_installation_works_without_environment(self):
         sibling = self.root / "workspace-lock"

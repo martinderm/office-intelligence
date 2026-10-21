@@ -11,6 +11,8 @@ Aktive eigene Lease und `allow_legacy=False` bleiben obligatorisch.
 Wird eine Installation erst nach dem Modulimport konfiguriert oder gewechselt,
 übersetzt Quarantäne deren kanonischen Lease-Fehler in den bereits exportierten
 `WorkspaceLockError`; die strukturierte `lock_unavailable`-Zuordnung bleibt stabil.
+Dieser öffentliche Fehlertyp ist lokal definiert und für Spawn-/Worker-Transport
+importierbar; dynamische Guard-Exceptionklassen werden nicht über Pipes versendet.
 
 **Final diagnostic guard frame:** strict UTF-8 text validation and refusal of
 linked diagnostic/attempt/evidence directories precede the one-shot attempt.

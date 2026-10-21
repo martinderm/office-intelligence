@@ -134,12 +134,8 @@ def _load_workspace_lock_guard() -> Any:
     return mod
 
 
-try:
-    _guard = _load_workspace_lock_guard()
-    WorkspaceLockError = _guard.WorkspaceLockError
-except Exception:
-    class WorkspaceLockError(RuntimeError):
-        """Raised when local mutation is not authorized by an owned lock."""
+class WorkspaceLockError(RuntimeError):
+    """Stable public denial type, also importable by spawned worker processes."""
 
 
 def verify_workspace_lock(
@@ -169,9 +165,9 @@ def verify_workspace_lock(
             allow_legacy=False,
         )
     except guard.WorkspaceLockError as exc:
-        # The public exception is bound at import time. A later configured
-        # installation (or a different selected root) has its own class object;
-        # preserve the public type used by evaluation's structured denial path.
+        # Dynamic guard classes are installation-specific and not importable
+        # across worker pipes. Preserve the stable public denial type used by
+        # evaluation, including late installation and configured-root switches.
         if isinstance(exc, WorkspaceLockError):
             raise
         raise WorkspaceLockError("An owned active workspace-lock lease is required.") from None
