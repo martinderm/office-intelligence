@@ -397,6 +397,12 @@ Zielordner-Verifikation. Kein Journal-/State-Schema, keine Retry-/Timeout-
 Änderung und keine neuen IDs aus Copy-Ausgaben; #7 unverändert.
 
 **Partiell:** Backend-Headerlatenz bleibt ungelöst; O1/O3/O4 nicht umgesetzt.
+Additive Diagnose (Issue #12): `verify_diagnostics.header_reads` enthält pro
+Aufruf maximal sechs `phase`/`elapsed_ms`/`outcome`-Einträge ohne Rohheader,
+IDs oder Exception-Texte. Execute hält bei Copy-Verify-Erschöpfung nur den
+letzten Versuch als `verify_last_header_reads` in bestehenden Journal-Details.
+Keine Budget-/Retry-/Truständerung oder zusätzliche Mailboxoperation.
+Vertrag: [begrenzte Headerdiagnose](../../skills/mail-desk/references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12).
 L2: [Mail-Desk §36](../../skills/mail-desk/docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
 Vertrag: [Batch-Runner, Modus reconcile](../../skills/mail-desk/references/batch-runner.md).
 Regression: `skills/mail-desk/tests/test_reconcile_candidate_env.py`.

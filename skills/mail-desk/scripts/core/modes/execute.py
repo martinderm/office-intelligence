@@ -515,6 +515,7 @@ def _execute_with_journal(
                                 "verify_candidates": verify_listing_facts.get("candidate_count"),
                                 "verify_elapsed_ms": sum(attempt_elapsed_ms),
                                 "verify_attempt_elapsed_ms": attempt_elapsed_ms,
+                                "verify_last_header_reads": verify_listing_facts.get("header_reads", []),
                             }
                         )
                         verify_diagnostic_suffix = (

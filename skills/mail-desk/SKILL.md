@@ -136,6 +136,9 @@ Index, Log, Evidence und – wenn gebunden – das reale Ziel. Lokale Nachträge
 benötigen ausdrücklich `apply_local_repairs: true` sowie eine freigegebene
 Recovery-Receipt; er kopiert oder löscht niemals Mailboxdaten. Details stehen in
 [`references/batch-runner.md`](references/batch-runner.md).
+Die optionale [Headerdiagnose](references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12)
+liefert begrenzte Zeit-/Outcome-Fakten ohne Rohheader/IDs/Exception-Texte;
+sie verändert weder Verifikationsentscheidungen noch Budgets oder Trustquellen.
 
 ### Ungesendete Draft-API (`save-draft`, `delete-draft`, `replace-draft`)
 

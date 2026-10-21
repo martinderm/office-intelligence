@@ -867,11 +867,46 @@ def verify_in_target_folder(
     """Verify presence of a message in target folder and return its new envelope_id.
 
     ``diagnostics`` is an optional caller-owned collector. When supplied, the
-    cheap listing facts (``envelopes_seen`` and ``candidate_count`` of the last
-    envelope listing) are written into it. It never changes the ``str | None``
-    return contract and is invisible to callers that omit it.
+    listing facts and at most six ``header_reads`` of this invocation are written
+    into it. Header entries contain only phase, elapsed_ms and a fixed outcome;
+    no raw headers, message IDs or exception text. It never changes the
+    ``str | None`` return contract or the timeout/retry policy.
     """
     norm_target = normalize_message_id(target_msg_id)
+    if diagnostics is not None:
+        diagnostics["header_reads"] = []
+
+    def _header_matches(cid: str, phase: str) -> bool:
+        started = time.monotonic() if diagnostics is not None else None
+        outcome = "error"
+        try:
+            h_out = run_himalaya(
+                ["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid],
+                account=account, timeout=10, max_retries=1,
+            )
+            outcome = "missing_message_id"
+            for line in h_out.splitlines():
+                if line.lower().startswith("message-id:"):
+                    outcome = "mismatch"
+                    if normalize_message_id(line.split(":", 1)[1]) == norm_target:
+                        outcome = "match"
+                        return True
+        except Exception as exc:
+            # The same failures were previously swallowed at each call site.
+            # Classify only known timeouts; never serialize untrusted messages.
+            if (isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
+                    or isinstance(exc, HimalayaInvocationError) and exc.reason_code == "himalaya_timeout"):
+                outcome = "timeout"
+            else:
+                outcome = "error"
+        finally:
+            if diagnostics is not None:
+                diagnostics["header_reads"].append({
+                    "phase": phase,
+                    "elapsed_ms": max(0, int((time.monotonic() - started) * 1000)),
+                    "outcome": outcome,
+                })
+        return False
 
     def _record_listing(envelopes_seen: int, candidate_count: int) -> None:
         if diagnostics is not None:
@@ -880,15 +915,8 @@ def verify_in_target_folder(
 
     # Fast-path: if a specific candidate envelope is known (e.g. retained in-place), test it directly
     if candidate_env_id:
-        try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, str(candidate_env_id)], account=account, timeout=10, max_retries=1)
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    m_id = normalize_message_id(line.split(":", 1)[1])
-                    if m_id == norm_target:
-                        return str(candidate_env_id)
-        except Exception:
-            pass
+        if _header_matches(str(candidate_env_id), "fast_path"):
+            return str(candidate_env_id)
 
     try:
         out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "150"], account=account, timeout=30, max_retries=2)
@@ -922,29 +950,15 @@ def verify_in_target_folder(
 
     # 2. Check candidate headers (newest first, limit to top 5)
     for cid in list(reversed(candidates))[:5]:
-        try:
-            h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    m_id = normalize_message_id(line.split(":", 1)[1])
-                    if m_id == norm_target:
-                        return cid
-        except Exception:
-            pass
+        if _header_matches(cid, "candidate"):
+            return cid
 
     # 3. Quick fallback: check top 5 newest envelopes if no candidates were found
     if not candidates:
         for env in list(reversed(envelopes))[:5]:
             cid = str(env["id"])
-            try:
-                h_out = run_himalaya(["message", "read", "--preview", "-H", "Message-Id", "-f", target_folder, cid], account=account, timeout=10, max_retries=1)
-                for line in h_out.splitlines():
-                    if line.lower().startswith("message-id:"):
-                        m_id = normalize_message_id(line.split(":", 1)[1])
-                        if m_id == norm_target:
-                            return cid
-            except Exception:
-                pass
+            if _header_matches(cid, "fallback"):
+                return cid
 
     return None
 

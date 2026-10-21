@@ -1137,7 +1137,7 @@ Korrektur nicht blockiert.
 **O2-Kandidat:** `final_envelope_id` gewinnt; Source-ID nur bei
 nicht-`copy_as_move`/In-place, sonst `null`. Report: `candidate_env_id`/`verify_diagnostics`.
 Ohne Kandidat: `no_candidate_env_id`. Verifikation/Journal/#7 unverändert;
-Headerlatenz offen. [Details](../docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
+Headerlatenz offen; begrenzte [Headerdiagnose](cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12). [Details](../docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
 
 **Tracker-Nachführung:** Nur im `apply_local`-Pfad wird nach der Item-Schleife eine
 **bereits vorhandene** `runner-progress.json` deterministisch auf ihr End-Statum

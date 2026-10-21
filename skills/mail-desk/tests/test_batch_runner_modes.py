@@ -382,6 +382,7 @@ class ExecuteModeTests(unittest.TestCase):
             facts = kwargs.get("diagnostics")
             if isinstance(facts, dict):
                 facts.update(seen)
+                facts["header_reads"] = [{"phase": "candidate", "elapsed_ms": 10000, "outcome": "timeout"}]
             return None
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -429,6 +430,8 @@ class ExecuteModeTests(unittest.TestCase):
         self.assertEqual(150, details["verify_envelopes_seen"])
         self.assertEqual(3, details["verify_candidates"])
         self.assertIn("verify_elapsed_ms", details)
+        self.assertEqual(details["verify_last_header_reads"], [
+            {"phase": "candidate", "elapsed_ms": 10000, "outcome": "timeout"}])
 
     def test_execute_reuses_matching_index_entry_without_mailbox_calls(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
