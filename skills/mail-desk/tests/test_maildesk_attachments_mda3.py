@@ -59,13 +59,15 @@ _HANG_GUARD_CLEANUP_MARGIN_SECONDS = 2.0
 # product budget was met.
 _TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS = 2.0
 # Noise allowance for the differential lower bound: two consecutive spawns
-# differ by the spawn-latency spread (measured 0.13 s idle to 0.29 s under
-# load), so the difference between a baseline call and a timeout call carries
-# that spread.  For timeout windows below the spawn latency (0.1 s, 0.05 s,
-# 0.0001 s) the differential lower bound can therefore only detect gross
-# deviations - a strict improvement over the previous state, which had no
-# lower bound at all.  For windows above the spawn latency (0.8 s) it is
-# effective on its own.
+# differ by the spawn-latency spread (0.13 s idle, 0.27 s under load, max
+# 0.29 s), so the difference between a baseline call and a timeout call
+# carries that spread.  The threshold is clamped at zero: a timeout call may
+# never be measurably faster than the baseline call, and for windows above
+# the spawn latency the configured window is additionally enforced with the
+# noise allowance.  The differential bound is only evaluated where a baseline
+# call is actually made (window 0.1 s); for the other windows only the
+# absolute lower bound applies, and it is effective on its own where the
+# window exceeds the spawn latency (0.8 s).
 _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS = 0.5
 
 
@@ -304,12 +306,15 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                 f"(delta {elapsed - baseline_elapsed:.3f}s > "
                 f"{_TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS:.3f}s)",
             )
+            differential_floor = max(
+                timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS,
+                0.0,
+            )
             self.assertGreaterEqual(
                 elapsed - baseline_elapsed,
-                timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS,
+                differential_floor,
                 f"{label}: timeout fired before the configured window "
-                f"(delta {elapsed - baseline_elapsed:.3f}s < "
-                f"{timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS:.3f}s)",
+                f"(delta {elapsed - baseline_elapsed:.3f}s < {differential_floor:.3f}s)",
             )
 
     def _create_sample_pdf(self, page_texts: list[str]) -> bytes:
