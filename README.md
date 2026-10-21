@@ -51,6 +51,10 @@ Python 3 und die separate, vertrauenswürdige
 [`workspace-lock`](https://github.com/martinderm/workspace-lock)-Installation sind
 für schreibende Tools erforderlich. Guard und CLI werden dort **in place** benutzt,
 nicht ins Bundle kopiert. Das private Skills-Superprojekt wird nicht benötigt.
+Die Clone-Anleitung setzt Leserechte für beide Repositories voraus; insbesondere
+ist die separate `workspace-lock`-Quelle derzeit zugangsbeschränkt. Nutzer ohne
+Zugriff benötigen eine vom Betreiber freigegebene Bezugsquelle, bevor sie Writer
+nutzen können. Das Bundle veröffentlicht oder ersetzt den Guard nicht selbst.
 
 ```text
 git clone https://github.com/martinderm/office-intelligence.git
