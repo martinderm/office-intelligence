@@ -605,7 +605,7 @@ _GUARD_CACHE: dict[str, object] = {}
 def _trusted_lock_root(explicit: str | Path | None) -> Path:
     if explicit is not None:
         return Path(explicit)
-    env = os.environ.get(ENV_LOCK_ROOT, "").strip()
+    env = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip() or os.environ.get(ENV_LOCK_ROOT, "").strip()
     if env:
         return Path(env)
     return Path(__file__).resolve().parents[3].parent / "workspace-lock"
@@ -616,7 +616,8 @@ def _load_guard(trusted_root: str | Path) -> object:
     guard_path = root / "scripts" / "workspace_lock_guard.py"
     cli_path = root / "scripts" / "invoke_workspace_lock.py"
     if not guard_path.is_file() or not cli_path.is_file():
-        raise _Reject("the trusted workspace-lock installation is unavailable")
+        raise _Reject("Install workspace-lock and set WORKSPACE_LOCK_ROOT or --workspace-lock-root "
+                      "to its trusted installation; see README.md")
     key = os.path.realpath(guard_path)
     cached = _GUARD_CACHE.get(key)
     if cached is not None:

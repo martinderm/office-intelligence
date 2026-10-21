@@ -865,24 +865,26 @@ def bind_diagnostic_workspace(data_dir: str | Path, *, workspace_id: str) -> Pat
 def _trusted_lock_root(explicit: str | Path | None = None) -> Path:
     if explicit is not None:
         return Path(explicit)
-    env = os.environ.get(DIAGNOSTIC_WORKSPACE_LOCK_ROOT_ENV, "").strip()
+    env = (os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
+           or os.environ.get(DIAGNOSTIC_WORKSPACE_LOCK_ROOT_ENV, "").strip())
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3].parent / "workspace-lock"
+    return Path(__file__).resolve().parents[5] / "workspace-lock"
 
 
 def _load_workspace_lock_guard(explicit_root: str | Path | None = None) -> Any:
     """Load the canonical shared guard from a bounded, trusted root.
 
     Mirrors the documented per-skill override pattern: an explicit root wins,
-    then ``MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT``, then the bundle-relative
+    then ``WORKSPACE_LOCK_ROOT``, ``MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT``, then the bundle-relative
     default.  A freshly executed module is used; a pre-existing ``sys.modules``
     entry is never trusted (only saved and restored for ``@dataclass``).
     """
     guard_path = _trusted_lock_root(explicit_root) / "scripts" / "workspace_lock_guard.py"
     if not guard_path.is_file():
         raise DiagnosticLockError(
-            DIAGNOSTIC_LOCK_REASON, "The canonical shared workspace-lock guard is unavailable; refusing."
+             DIAGNOSTIC_LOCK_REASON, "Install workspace-lock and set WORKSPACE_LOCK_ROOT "
+             "to its trusted installation; see README.md. Refusing mutation."
         )
     name = "_mail_desk_diagnostic_workspace_lock_guard"
     spec = importlib.util.spec_from_file_location(name, str(guard_path))

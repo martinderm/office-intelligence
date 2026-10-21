@@ -100,40 +100,42 @@ class ExtensionMimeDriftError(MimeDriftError):
     """Raised when effective MIME type is incompatible with file extension."""
 
 
+_WORKSPACE_LOCK_GUARDS: dict[str, Any] = {}
+
+
 def _load_workspace_lock_guard() -> Any:
-    """Dynamically load canonical workspace_lock_guard.py via Path.resolve().parents."""
-    if "workspace_lock_guard" in sys.modules and sys.modules["workspace_lock_guard"] is not None:
-        return sys.modules["workspace_lock_guard"]
+    """Load only the operator-selected root or the installation sibling."""
+    configured = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
+    root = Path(configured) if configured else Path(__file__).resolve().parents[6] / "workspace-lock"
+    cand = root / "scripts" / "workspace_lock_guard.py"
+    guidance = ("Install workspace-lock and set WORKSPACE_LOCK_ROOT to its trusted "
+                "installation; see README.md")
+    if not cand.is_file():
+        raise RuntimeError(guidance)
+    key = str(cand.resolve())
+    if key in _WORKSPACE_LOCK_GUARDS:
+        return _WORKSPACE_LOCK_GUARDS[key]
+    spec = importlib.util.spec_from_file_location("_mail_desk_workspace_lock_guard", cand)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(guidance)
+    mod = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = mod
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+    if not callable(getattr(mod, "require_workspace_lock", None)):
+        raise RuntimeError(guidance)
+    _WORKSPACE_LOCK_GUARDS[key] = mod
+    return mod
 
-    for parent in Path(__file__).resolve().parents:
-        cand = parent / "workspace-lock" / "scripts" / "workspace_lock_guard.py"
-        if cand.is_file():
-            spec = importlib.util.spec_from_file_location("workspace_lock_guard", cand)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules[spec.name] = mod
-                spec.loader.exec_module(mod)
-                return mod
 
-    for parent in [Path.cwd().resolve(), *Path.cwd().resolve().parents]:
-        cand = parent / "workspace-lock" / "scripts" / "workspace_lock_guard.py"
-        if cand.is_file():
-            spec = importlib.util.spec_from_file_location("workspace_lock_guard", cand)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules[spec.name] = mod
-                spec.loader.exec_module(mod)
-                return mod
-
-    raise RuntimeError("Canonical workspace-lock guard is unavailable")
-
-
-try:
-    _guard = _load_workspace_lock_guard()
-    WorkspaceLockError = _guard.WorkspaceLockError
-except Exception:
-    class WorkspaceLockError(RuntimeError):
-        """Raised when local mutation is not authorized by an owned lock."""
+class WorkspaceLockError(RuntimeError):
+    """Stable public denial type, also importable by spawned worker processes."""
 
 
 def verify_workspace_lock(
@@ -155,12 +157,22 @@ def verify_workspace_lock(
     eff_conv_id = conversation_id if conversation_id is not None else os.environ.get("WORKSPACE_LOCK_CONVERSATION_ID") or None
 
     guard = _load_workspace_lock_guard()
-    return guard.require_workspace_lock(
-        ws,
-        lease_id=eff_lease_id,
-        conversation_id=eff_conv_id,
-        allow_legacy=False,
-    )
+    try:
+        return guard.require_workspace_lock(
+            ws,
+            lease_id=eff_lease_id,
+            conversation_id=eff_conv_id,
+            allow_legacy=False,
+        )
+    except guard.WorkspaceLockError as exc:
+        # Dynamic guard classes are installation-specific and not importable
+        # across worker pipes. Preserve the stable public denial type used by
+        # evaluation, including late installation and configured-root switches.
+        if isinstance(exc, WorkspaceLockError):
+            raise
+        # Preserve the trusted canonical guard's existing denial text as well
+        # as its error category; downstream structured outcomes rely on both.
+        raise WorkspaceLockError(str(exc)) from None
 
 
 # ==============================================================================

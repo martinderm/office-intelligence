@@ -1,5 +1,21 @@
 # Mail-Desk — Subsystem System Map
 
+**Standalone-Guard (#38):** Quarantäne und Diagnose akzeptieren den
+Operator-Pfad `WORKSPACE_LOCK_ROOT`. Diagnose behält den expliziten API-Pfad als
+höchste Priorität und den bisherigen Desk-Env-Alias nachrangig. Letzter Fallback
+ist der Installations-Sibling des Bundles, niemals CWD oder Payload. Quarantäne
+verwendet nur ihren pfadgebundenen Guard-Cache, nicht beliebige vorab geladene
+`sys.modules`-Einträge. Fehlende Installation liefert einen begrenzten Hinweis
+auf `WORKSPACE_LOCK_ROOT` und die [Bundle-README](../../../../README.md#workspace-lock-voraussetzung).
+Aktive eigene Lease und `allow_legacy=False` bleiben obligatorisch.
+Wird eine Installation erst nach dem Modulimport konfiguriert oder gewechselt,
+übersetzt Quarantäne deren kanonischen Lease-Fehler in den bereits exportierten
+`WorkspaceLockError`; die strukturierte `lock_unavailable`-Zuordnung bleibt stabil.
+Dieser öffentliche Fehlertyp ist lokal definiert und für Spawn-/Worker-Transport
+importierbar; dynamische Guard-Exceptionklassen werden nicht über Pipes versendet.
+Die bisherigen kanonischen Guard-Fehlermeldungen bleiben bei der Übersetzung
+erhalten (fehlende Lease vs. fremder Owner); keine pauschale Ersatzmeldung.
+
 **Final diagnostic guard frame:** strict UTF-8 text validation and refusal of
 linked diagnostic/attempt/evidence directories precede the one-shot attempt.
 Request/review file reads stop at their size limit plus one sentinel byte before
@@ -1486,7 +1502,7 @@ ohne Rohprotokoll, Zugangsdaten oder Mailinhalte offenzulegen.
   Conversation kommt aus dem Argument oder den bestehenden
   `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID`, und der geteilte
   Guard wird über einen begrenzten, vertrauenswürdigen Root geladen (explizites
-  `lock_root` > `MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT` > bundle-relativer
+  `lock_root` > `WORKSPACE_LOCK_ROOT` > `MAIL_DESK_DIAGNOSTIC_WORKSPACE_LOCK_ROOT` > bundle-relativer
   Default; kein Vertrauen in einen vorhandenen `sys.modules`-Eintrag). Danach
   wird der Einmal-Marker atomar (`O_CREAT|O_EXCL`) unter
   `data/mail-desk/diagnostics/attempts/<request_hash>.json` **vor** dem ersten

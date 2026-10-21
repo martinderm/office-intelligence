@@ -40,12 +40,16 @@ der Writer persistiert sie nicht zusätzlich.
 
 Die vertrauenswürdige Installation von `workspace-lock` wird in dieser Reihenfolge
 aufgelöst: API-Parameter `trusted_workspace_lock_root` / CLI `--workspace-lock-root`,
-Operator-Environment `EVENT_DOCUMENTATION_WORKSPACE_LOCK_ROOT`, dann der
+Operator-Environment `WORKSPACE_LOCK_ROOT`, kompatibler Alias
+`EVENT_DOCUMENTATION_WORKSPACE_LOCK_ROOT`, dann der
 Geschwister-Skill `../workspace-lock` relativ zum Bundle. Kein CWD-Scan und keine
 Übernahme von Dependency-Pfaden oder Lock-IDs aus Mail-/Payload-Inhalten.
 Die explizite Installation ist ausführbarer **vertrauenswürdiger Operator-Code**,
 keine Eingabequelle für ingestrierte Inhalte. Guard und CLI müssen dort wirklich
 vorhanden sein; keine Kopien, Ersatz-Locks oder stillen Provider-/Legacy-Fallbacks.
+Ein ungültiger expliziter Pfad wird nicht übersprungen. Fehlender Guard bleibt
+`event_write_rejected`, nun mit begrenztem Installationshinweis auf
+`WORKSPACE_LOCK_ROOT` / `--workspace-lock-root` und die Bundle-README, ohne Hostpfad.
 
 Der Shared Guard läuft in place mit `allow_legacy=False`. Der Harness hält eine
 aktive eigene Lease; der Writer erwirbt, erneuert oder released sie nicht.

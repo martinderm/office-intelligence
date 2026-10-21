@@ -8,9 +8,11 @@ transient, gitignored `.agents/session.lock` lease owned by the shared
 `workspace-lock` skill; that ephemeral coordination file is not a control plane.
 Runtime state belongs to the consuming workspace, never to this repository.
 
-This file **inherits** the shared repository rules in [`../AGENTS.md`](../AGENTS.md)
-and [`../SKILLS-CONTRIBUTING.md`](../SKILLS-CONTRIBUTING.md); on conflict those
-shared rules win. The shared `workspace-lock` skill holds the only lock machinery.
+This repository is independently consumable. Its contribution rules are in
+[`CONTRIBUTING.md`](CONTRIBUTING.md); no private superproject is required.
+Additional host-workspace rules still apply when installed there. The separately
+installed shared `workspace-lock` skill holds the only lock machinery; see the
+[installation instructions](README.md#workspace-lock-voraussetzung).
 
 ## Git Operating Mode
 
