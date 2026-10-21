@@ -22,6 +22,13 @@ import time
 from typing import Any, Callable
 import uuid
 
+# Contract budget of the two-phase worker handshake: the parent waits at most
+# this many seconds for the worker's READY signal before it fails closed and
+# terminates the worker.  Single source of truth: bounded-call tests derive
+# their hang guards from this value instead of repeating a literal.
+READY_HANDSHAKE_TIMEOUT_SECONDS = 5.0
+
+
 def _init_win32_signatures(kernel32: Any) -> None:
     """Explicitly declare 64-bit safe argtypes and restypes for Win32 Job and Process APIs.
 
@@ -523,7 +530,7 @@ def run_with_timeout(
         child_conn.close()
 
         # Step 1: Wait for READY signal from worker
-        if not parent_conn.poll(5.0):
+        if not parent_conn.poll(READY_HANDSHAKE_TIMEOUT_SECONDS):
             _terminate_single_process(proc)
             parent_conn.close()
             raise RuntimeError("Worker process failed to send READY handshake signal.")
