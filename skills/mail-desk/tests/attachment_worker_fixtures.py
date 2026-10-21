@@ -35,6 +35,17 @@ def _late_writer_target(write_path_str: str) -> str:
     return "done"
 
 
+def _instant_target() -> str:
+    """Module-level picklable helper returning immediately.
+
+    Used as baseline for the differential timing measurement of bounded worker
+    calls: the call path (spawn, handshake, confinement, result, cleanup) is
+    identical to a call that is expected to time out, so the difference between
+    both calls isolates the timeout enforcement from the spawn latency.
+    """
+    return "done"
+
+
 def _mock_ocr_slow(source: Path, deriv: Path, max_pages: int = 3, pages: Any = None, timeout: float = 30) -> tuple[bytes, str, int]:
     deriv.parent.mkdir(parents=True, exist_ok=True)
     deriv.write_bytes(b"Partial incomplete bytes")

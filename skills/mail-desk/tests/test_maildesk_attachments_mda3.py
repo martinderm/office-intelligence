@@ -29,10 +29,46 @@ import mail_desk_himalaya_client as client  # noqa: E402
 # can resolve them without importing this whole test module (and the client).
 from attachment_worker_fixtures import (  # noqa: E402
     _clean_tracked_quarantine_runner,
+    _instant_target,
     _late_writer_target,
     _mock_ocr_slow,
     _noop_lock_verifier,
 )
+
+
+# Wallclock assertions in this module are hang guards, not the contract under
+# test: every bounded call starts a fresh interpreter (Windows spawn), and that
+# latency is not part of the asserted behaviour.  Measured 2026-10-21
+# (docs/analysis/issue-10-stability.md): spawn baseline 0.13 s idle / 0.27 s
+# under load, complete call 0.51 s / 0.92 s, max 1.05 s - a fixed 1 s
+# wallclock therefore failed under load although every product budget was met
+# (READY handshake 0 failures, timeout window respected 20/20).  The guards
+# are derived from the product contract instead (READY handshake budget +
+# configured timeout window + cleanup margin); promptness of the timeout path
+# is proven separately and without spawn noise, by a differential comparison
+# against an identical call that is not supposed to time out.
+_HANG_GUARD_CLEANUP_MARGIN_SECONDS = 2.0
+# Differential budget for the timeout path: the difference between a call that
+# times out and a baseline call that does not.  It contains the configured
+# timeout window plus the tree-kill/join cost of the worker, which on Windows
+# spawns a `taskkill` process and therefore grows under CPU saturation.
+# Measured: 0.28 s idle, 0.32 s under load, 1.14 s at full saturation
+# (8 burner processes on 8 logical cores) - the budget is 2.0 s, i.e. about
+# 1.8x the worst observed value.  It replaces the previous fixed 1 s total
+# wallclock, which the measured worst case (1.14 s) exceeded although every
+# product budget was met.
+_TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS = 2.0
+# Noise allowance for the differential lower bound: two consecutive spawns
+# differ by the spawn-latency spread (0.13 s idle, 0.27 s under load, max
+# 0.29 s), so the difference between a baseline call and a timeout call
+# carries that spread.  The threshold is clamped at zero: a timeout call may
+# never be measurably faster than the baseline call, and for windows above
+# the spawn latency the configured window is additionally enforced with the
+# noise allowance.  The differential bound is only evaluated where a baseline
+# call is actually made (window 0.1 s); for the other windows only the
+# absolute lower bound applies, and it is effective on its own where the
+# window exceeds the spawn latency (0.8 s).
+_TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS = 0.5
 
 
 def _marker_side_effect_target(marker_path_str: str) -> str:
@@ -228,6 +264,58 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
     def tearDown(self) -> None:
         self._preflight_injector.stop()
         self._himalaya_blocker.stop()
+
+    def _assert_timeout_contract(
+        self,
+        *,
+        elapsed: float,
+        timeout_seconds: float,
+        label: str,
+        baseline_elapsed: float | None = None,
+    ) -> None:
+        """Assert the timeout contract of a bounded worker call.
+
+        `elapsed` covers the complete call (spawn, handshake, confinement,
+        payload, timeout window, termination, join).  Only the timeout part is
+        under test, so the hang guard is derived from the product contract and
+        the promptness of the timeout path is measured differentially, without
+        the spawn latency.
+        """
+        hang_guard = (
+            aextract.READY_HANDSHAKE_TIMEOUT_SECONDS
+            + timeout_seconds
+            + _HANG_GUARD_CLEANUP_MARGIN_SECONDS
+        )
+        self.assertLess(
+            elapsed,
+            hang_guard,
+            f"{label}: bounded call exceeded the contract hang guard "
+            f"({elapsed:.3f}s >= {hang_guard:.3f}s)",
+        )
+        self.assertGreaterEqual(
+            elapsed,
+            timeout_seconds,
+            f"{label}: timeout fired before the configured window "
+            f"({elapsed:.3f}s < {timeout_seconds:.3f}s)",
+        )
+        if baseline_elapsed is not None:
+            self.assertLessEqual(
+                elapsed - baseline_elapsed,
+                _TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS,
+                f"{label}: timeout path was not enforced promptly "
+                f"(delta {elapsed - baseline_elapsed:.3f}s > "
+                f"{_TIMEOUT_PATH_PROMPTNESS_BUDGET_SECONDS:.3f}s)",
+            )
+            differential_floor = max(
+                timeout_seconds - _TIMEOUT_PATH_NOISE_TOLERANCE_SECONDS,
+                0.0,
+            )
+            self.assertGreaterEqual(
+                elapsed - baseline_elapsed,
+                differential_floor,
+                f"{label}: timeout fired before the configured window "
+                f"(delta {elapsed - baseline_elapsed:.3f}s < {differential_floor:.3f}s)",
+            )
 
     def _create_sample_pdf(self, page_texts: list[str]) -> bytes:
         import pymupdf
@@ -947,6 +1035,18 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
     def test_process_worker_terminates_and_prevents_late_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             late_file = Path(tmp_dir) / "late_write.txt"
+
+            # Baseline: identical call path without a timeout window. The
+            # difference between both calls is the timeout enforcement itself;
+            # the spawn latency cancels out.
+            baseline_start = time.time()
+            aextract.run_with_timeout(
+                _instant_target,
+                args=(),
+                timeout_seconds=10.0,
+            )
+            baseline_elapsed = time.time() - baseline_start
+
             t0 = time.time()
             with self.assertRaises(TimeoutError):
                 aextract.run_with_timeout(
@@ -955,7 +1055,13 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                     timeout_seconds=0.1,
                 )
             elapsed = time.time() - t0
-            self.assertLess(elapsed, 1.0)
+
+            self._assert_timeout_contract(
+                elapsed=elapsed,
+                timeout_seconds=0.1,
+                label="worker terminate",
+                baseline_elapsed=baseline_elapsed,
+            )
 
             # Wait beyond the 1.2s child sleep duration to prove worker process was terminated
             time.sleep(1.3)
@@ -997,7 +1103,11 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
             )
             elapsed = time.time() - t0
 
-            self.assertLess(elapsed, 1.0)
+            self._assert_timeout_contract(
+                elapsed=elapsed,
+                timeout_seconds=0.0001,
+                label="extraction timeout",
+            )
             self.assertEqual("extraction_failed", res["status"])
             self.assertEqual("timeout_exceeded", res["truncation_reason"])
             self.assertIn("timed out after 0.0001s", res["error"])
@@ -1041,7 +1151,11 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
             )
             elapsed = time.time() - t0
 
-            self.assertLess(elapsed, 2.5)
+            self._assert_timeout_contract(
+                elapsed=elapsed,
+                timeout_seconds=0.05,
+                label="ocr timeout",
+            )
             self.assertEqual("attachment_conversion_unavailable", res["status"])
             self.assertIsNone(res["derivative_sha256"])
             self.assertIsNone(res["derivative_relative_path"])
@@ -1560,7 +1674,11 @@ class MailDeskAttachmentsMDA3Tests(unittest.TestCase):
                     allow_thread_fallback=False,
                 )
             elapsed = time.time() - t0
-            self.assertLess(elapsed, 2.0)
+            self._assert_timeout_contract(
+                elapsed=elapsed,
+                timeout_seconds=0.8,
+                label="worker tree kill",
+            )
 
             self.assertTrue(pid_file.exists(), "Grandchild process did not write PID file")
             grandchild_pid = int(pid_file.read_text().strip())

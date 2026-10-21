@@ -41,6 +41,21 @@ kann ein gespawnter Worker die Fixtures ohne Import des gesamten Testmoduls samt
 auflösen. Reine
 Test-Fixture-Struktur; Timeouts, Asserts, Lock-/Preflight-Semantik und Produktionscode
 bleiben unverändert.
+Nachtrag 2026-10-21 (Issue #44): Das Fixture-Modul umfasst nunmehr fünf picklebare
+Fixtures; neu ist `_instant_target` (Baseline-Aufruf ohne Timeout-Fenster für den
+differentiellen Promptness-Vergleich). Die vier MD-A3-Wallclock-Guards
+(`test_process_worker_terminates_and_prevents_late_write`,
+`test_process_timeout_enforced_and_aborts_cleanly`,
+`test_ocr_timeout_enforced_and_cleans_temporary_artifacts`,
+`test_process_worker_tree_kill_terminates_grandchild_process_and_prevents_late_write`)
+sind an den geprüften Produktvertrag gebunden: Hängungsschutz aus
+READY-Handshake-Budget (`core.quarantine.attachment_extract.READY_HANDSHAKE_TIMEOUT_SECONDS`)
+plus konfiguriertem Timeout-Fenster plus Aufräum-Marge; die Promptness des
+Timeout-Pfads wird zusätzlich über einen Differenzvergleich gegen einen
+Baseline-Aufruf ohne Timeout geprüft, damit die Windows-Spawn-Latenz nicht als
+Vertragsverletzung gewertet wird. Produktionsbudgets (READY-Budget,
+`process_timeout_seconds`, `ocr_timeout_seconds`), READY/START, Confinement und
+Quarantäne bleiben unverändert.
 Keine Änderung an Produktions-Timeouts, READY/START, Confinement oder Quarantäne.
 READY-/Last-Stabilität bleibt separat nachzuweisen; historische Flake-Zahlen unten
 sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).

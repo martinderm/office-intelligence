@@ -68,8 +68,9 @@ Shared-Guard; kein konsumierender Live-Workspace wird verwendet.
 * **Issue #10, Fixture-Isolation:** MD-A3-Lockverlust-Simulation hält ihren
   Aufrufzustand im jeweiligen temporären Test-Workspace statt in einem globalen
   System-Temp-Marker. Produktions-Lock-, Quarantäne- und Timeout-Verträge bleiben
-  unverändert; READY-/Last-Stabilität ist damit nicht nachgewiesen. Die vier
-  picklebaren MDA3-Worker-Fixtures liegen in
+  unverändert; READY-/Last-Stabilität ist damit nicht nachgewiesen. Die fünf
+  picklebaren MDA3-Worker-Fixtures (seit 2026-10-21 um `_instant_target` als
+  Baseline-Aufruf ergänzt) liegen in
   `skills/mail-desk/tests/attachment_worker_fixtures.py`; das Testmodul aliasiert
   sie nur, damit ein gespawnter Worker sie ohne Import des ganzen Testmoduls samt
   Client auflösen kann (reine Fixture-Struktur, kein Runtime-Vertrag). Der
