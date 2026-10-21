@@ -1,0 +1,1227 @@
+{
+  "schema": "meeting-record-fixtures/1",
+  "record_schema": "meeting-record/1",
+  "writer_version": "meeting-desk/1",
+  "provenance": {
+    "source": "office-intelligence skills/meeting-desk (OI #35)",
+    "synthetic": true,
+    "created": "2026-10-21",
+    "basis": [
+      "approved Record-v1 design (canonical meeting writer)",
+      "documented adapter source-code forms: fireflies, ticnote, zoom, manual, vimeo-webvtt"
+    ],
+    "expected_values": "fixed independently of the production code from the approved contract",
+    "notes": [
+      "All identifiers, accounts, people and bodies are synthetic.",
+      "Hints are untrusted and must never decide routing on their own.",
+      "Adapter copies must stay byte-identical and reference the OI source digest.",
+      "Non-UTF-8 raw input is not representable in JSON; the writer test suite covers it separately."
+    ]
+  },
+  "valid_records": [
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "fireflies",
+        "account_ref": "acct-synthetic-a",
+        "external_id": "ff-900001"
+      },
+      "meeting_id": "fireflies_ff-900001",
+      "title": "Synthetic semester planning",
+      "start": {
+        "utc": "2026-08-24T08:15:30Z",
+        "calendar_date": "2026-08-24",
+        "estimated": false,
+        "basis": []
+      },
+      "duration_minutes": 45.5,
+      "participants": [
+        "alex@example.invalid",
+        "sam@example.invalid"
+      ],
+      "artifacts": {
+        "summary_md": "# Synthetic summary\r\n\r\nDecisions were synthetic only.\r\n",
+        "transcript_md": "Alex: synthetic opening\r\nSam: synthetic reply\r\n",
+        "transcript_raw_md": "Alex: synthetic opening\r\nSam: synthetic reply\r\n"
+      },
+      "classification_hint": {
+        "topic_slug": "catalogue-topic",
+        "project_slug": null,
+        "event_slug": null,
+        "basis": [
+          "provider-suggestion"
+        ]
+      },
+      "review": {
+        "recommended": true,
+        "reason": "asr-name-and-number-check"
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "channel": "synthetic-channel",
+        "speakers": [
+          {
+            "name": "Alex",
+            "id": "s1"
+          }
+        ]
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "ticnote",
+        "account_ref": null,
+        "external_id": "synthetic-123"
+      },
+      "meeting_id": "ticnote-synthetic-123",
+      "title": "Synthetic meeting",
+      "start": {
+        "utc": null,
+        "calendar_date": "2026-10-21",
+        "estimated": true,
+        "basis": [
+          "date-only"
+        ]
+      },
+      "duration_minutes": null,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Synthetic summary\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": true,
+        "reason": "asr-name-and-number-check"
+      },
+      "source_metadata": {}
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "zoom",
+        "account_ref": null,
+        "external_id": "zoom-00000000-0000-4000-8000-000000000004"
+      },
+      "meeting_id": "zoom-00000000-0000-4000-8000-000000000004",
+      "title": "Synthetic zero-duration call",
+      "start": {
+        "utc": "2026-10-20T12:00:00Z",
+        "calendar_date": "2026-10-20",
+        "estimated": false,
+        "basis": []
+      },
+      "duration_minutes": 0,
+      "participants": [
+        "casey@example.invalid"
+      ],
+      "artifacts": {
+        "summary_md": null,
+        "transcript_md": "Casey: synthetic transcript only\n",
+        "transcript_raw_md": "Casey: synthetic transcript only\n"
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": false,
+        "reason": null
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "recording_topic": "synthetic-recording"
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "manual",
+        "account_ref": null,
+        "external_id": "manual-2026-10-21-planning"
+      },
+      "meeting_id": "manual-2026-10-21-planning",
+      "title": "Synthetic manual planning",
+      "start": {
+        "utc": null,
+        "calendar_date": "2026-10-21",
+        "estimated": true,
+        "basis": [
+          "date-only",
+          "manual-entry"
+        ]
+      },
+      "duration_minutes": null,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Manual synthetic body stays byte-exact.\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": true,
+        "reason": null
+      },
+      "source_metadata": {}
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "fireflies",
+        "account_ref": null,
+        "external_id": "ff-900005"
+      },
+      "meeting_id": "fireflies_ff-900005",
+      "title": "Synthetic unknown start",
+      "start": {
+        "utc": null,
+        "calendar_date": null,
+        "estimated": true,
+        "basis": [
+          "unknown"
+        ]
+      },
+      "duration_minutes": 12,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Synthetic summary without a known date.\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": true,
+        "reason": "unknown-start"
+      },
+      "source_metadata": {
+        "provider": "synthetic"
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "vimeo-webvtt",
+        "account_ref": null,
+        "external_id": "vimeo-900006"
+      },
+      "meeting_id": "vimeo-900006",
+      "title": "Synthetic unicode Überblick — Vortrag",
+      "start": {
+        "utc": "2026-10-19T06:30:00+02:00",
+        "calendar_date": "2026-10-19",
+        "estimated": false,
+        "basis": []
+      },
+      "duration_minutes": 0.5,
+      "participants": [],
+      "artifacts": {
+        "summary_md": null,
+        "transcript_md": "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nSynthetic unicode Äußerung.\n",
+        "transcript_raw_md": "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nSynthetic unicode Äußerung.\n"
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": false,
+        "reason": null
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "format": "webvtt"
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "ticnote",
+        "account_ref": "acct-synthetic-b",
+        "external_id": "tn-900007"
+      },
+      "meeting_id": "ticnote-tn-900007",
+      "title": "Synthetic fractional duration",
+      "start": {
+        "utc": "2026-10-18T17:45:10.250Z",
+        "calendar_date": "2026-10-18",
+        "estimated": false,
+        "basis": []
+      },
+      "duration_minutes": 0.25,
+      "participants": [
+        "robin@example.invalid"
+      ],
+      "artifacts": {
+        "summary_md": "Synthetic summary.\n",
+        "transcript_md": "Robin: synthetic.\n",
+        "transcript_raw_md": "Robin: synthetic.\n"
+      },
+      "classification_hint": {
+        "topic_slug": "catalogue-topic",
+        "project_slug": "catalogue-project",
+        "event_slug": null,
+        "basis": [
+          "provider-suggestion"
+        ]
+      },
+      "review": {
+        "recommended": false,
+        "reason": null
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "untracked_extension": {
+          "nested": [
+            1,
+            2.5,
+            true,
+            null
+          ]
+        }
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "ticnote",
+        "account_ref": "acct-synthetic-c",
+        "external_id": "tn-900008"
+      },
+      "meeting_id": "ticnote-tn-900008",
+      "title": "Synthetic observed provider basis",
+      "start": {
+        "utc": "2026-10-21T10:00:00Z",
+        "calendar_date": "2026-10-21",
+        "estimated": false,
+        "basis": [
+          "provider-datestring-zone"
+        ]
+      },
+      "duration_minutes": 30,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Synthetic observed-basis summary.\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": false,
+        "reason": null
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "date_source": "provider-datestring-zone"
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "ticnote",
+        "account_ref": null,
+        "external_id": "synthetic-123"
+      },
+      "meeting_id": "../escape",
+      "title": "Synthetic meeting",
+      "start": {
+        "utc": null,
+        "calendar_date": "2026-10-21",
+        "estimated": true,
+        "basis": [
+          "date-only"
+        ]
+      },
+      "duration_minutes": null,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Synthetic summary\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": true,
+        "reason": "asr-name-and-number-check"
+      },
+      "source_metadata": {}
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "zoom",
+        "account_ref": null,
+        "external_id": "AbC/def+ghi=="
+      },
+      "meeting_id": "zoom-AbC/def+ghi==",
+      "title": "Synthetic opaque Zoom identity",
+      "start": {
+        "utc": "2026-10-22T09:00:00Z",
+        "calendar_date": "2026-10-22",
+        "estimated": false,
+        "basis": [
+          "provider-datestring-zone"
+        ]
+      },
+      "duration_minutes": 30,
+      "participants": [
+        "alex@example.invalid"
+      ],
+      "artifacts": {
+        "summary_md": "Synthetic opaque summary.\n",
+        "transcript_md": "Alex: synthetic opaque transcript.\n",
+        "transcript_raw_md": "Alex: synthetic opaque transcript.\n"
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": false,
+        "reason": null
+      },
+      "source_metadata": {
+        "provider": "synthetic",
+        "identity_form": "base64uuid"
+      }
+    },
+    {
+      "schema": "meeting-record/1",
+      "source": {
+        "system": "manual",
+        "account_ref": null,
+        "external_id": "external id with space"
+      },
+      "meeting_id": "meeting id with internal space",
+      "title": "Synthetic internal-space identity",
+      "start": {
+        "utc": null,
+        "calendar_date": "2026-10-22",
+        "estimated": true,
+        "basis": [
+          "date-only"
+        ]
+      },
+      "duration_minutes": null,
+      "participants": [],
+      "artifacts": {
+        "summary_md": "Synthetic space identity summary.\n",
+        "transcript_md": null,
+        "transcript_raw_md": null
+      },
+      "classification_hint": {
+        "topic_slug": null,
+        "project_slug": null,
+        "event_slug": null,
+        "basis": []
+      },
+      "review": {
+        "recommended": true,
+        "reason": null
+      },
+      "source_metadata": {
+        "identity_form": "internal-space"
+      }
+    }
+  ],
+  "invalid_records": [
+    {
+      "record": {
+        "schema": "meeting-record/2",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "unsupported record schema"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {},
+        "extra_field": true
+      },
+      "reason": "unknown root field"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "missing root field"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "unknown-system",
+          "account_ref": null,
+          "external_id": "x-1"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "unknown source system"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": ""
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "empty external id"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": "2026-10-21T08:00:00",
+          "calendar_date": "2026-10-21",
+          "estimated": false,
+          "basis": []
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "utc without explicit timezone"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": []
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "estimated start without basis"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": null,
+          "transcript_md": "Synthetic transcript\n",
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "transcript without raw artifact"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "no non-empty artifact"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": -1,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "negative duration"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": true,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "boolean duration"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [
+          1
+        ],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "non-string participant"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": "yes",
+          "reason": null
+        },
+        "source_metadata": {}
+      },
+      "reason": "non-boolean review recommendation"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": []
+      },
+      "reason": "source metadata is not an object"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ],
+          "zone": "UTC"
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "unknown start field"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": "none"
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "hint basis is not a list"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic\u0001meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "title contains a control character"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "21.10.2026",
+          "estimated": true,
+          "basis": [
+            "date-only"
+          ]
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "calendar date is not an ISO day"
+    },
+    {
+      "record": {
+        "schema": "meeting-record/1",
+        "source": {
+          "system": "ticnote",
+          "account_ref": null,
+          "external_id": "synthetic-123"
+        },
+        "meeting_id": "ticnote-synthetic-123",
+        "title": "Synthetic meeting",
+        "start": {
+          "utc": null,
+          "calendar_date": "2026-10-21",
+          "estimated": false,
+          "basis": []
+        },
+        "duration_minutes": null,
+        "participants": [],
+        "artifacts": {
+          "summary_md": "Synthetic summary\n",
+          "transcript_md": null,
+          "transcript_raw_md": null
+        },
+        "classification_hint": {
+          "topic_slug": null,
+          "project_slug": null,
+          "event_slug": null,
+          "basis": []
+        },
+        "review": {
+          "recommended": true,
+          "reason": "asr-name-and-number-check"
+        },
+        "source_metadata": {}
+      },
+      "reason": "date-only start without an explicit estimate"
+    }
+  ],
+  "raw_invalid_json": [
+    {
+      "reason": "duplicate JSON keys",
+      "raw": "{\"schema\": \"meeting-record/1\", \"schema\": \"meeting-record/1\"}"
+    },
+    {
+      "reason": "non-finite number",
+      "raw": "{\"duration_minutes\": NaN}"
+    },
+    {
+      "reason": "integer overflow",
+      "raw": "{\"duration_minutes\": 18446744073709551616}"
+    },
+    {
+      "reason": "unpaired surrogate",
+      "raw": "{\"title\": \"\\ud800\"}"
+    },
+    {
+      "reason": "over-deep document",
+      "raw": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    }
+  ],
+  "manifest": {
+    "algorithm": "sha256",
+    "digest": "6f54ab761d451289ba90f98e0a7b50859f30d209239a6f893201d373f62c955d",
+    "covers": "canonical JSON of valid_records+invalid_records+raw_invalid_json"
+  }
+}

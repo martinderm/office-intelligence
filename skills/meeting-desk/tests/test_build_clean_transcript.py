@@ -1,8 +1,15 @@
-"""Offline regression tests; only synthetic transcripts in temporary workspaces."""
+"""Offline regression tests; only synthetic transcripts in temporary workspaces.
+
+The pure correction engine is tested directly. Publication is isolated behind
+``_delegate`` (the canonical writer boundary): these tests never write a second
+register. Real builder→writer→file integration is covered by
+``test_ingest_meeting.py``.
+"""
 import contextlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -43,7 +50,8 @@ class BuilderTests(unittest.TestCase):
 
     def args(self):
         return ["--workspace", str(self.workspace), "--raw", str(self.raw),
-                "--corrections", str(self.corr), "--out", str(self.out), "--json"]
+                "--corrections", str(self.corr), "--out", str(self.out),
+                "--meeting-id", "manual-synthetic", "--lease-id", "test-owner", "--json"]
 
     def call(self, args=None):
         stream = io.StringIO()
@@ -53,12 +61,21 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(set(result), {"action", "success", "state", "message", "data", "error"})
         return code, result
 
-    def build(self, extra=()):
-        # Unit tests isolate the external guard; its real CLI is covered below.
-        with patch.object(builder, "_require_lock") as guard:
+    def write_through(self, envelope=None):
+        """Fake the canonical writer: persist the deterministic bytes, report success."""
+        def delegate(workspace, cleaned, out_path, meeting_id, lease_id,
+                     conversation_id, lock_root):
+            if envelope is None or envelope.get("success"):
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_bytes(cleaned.encode("utf-8"))
+            return envelope or {"success": True, "state": "Applied", "message": "published",
+                                "data": {"changed": True}, "error": None}
+        return delegate
+
+    def build(self, extra=(), envelope=None):
+        with patch.object(builder, "_delegate", side_effect=self.write_through(envelope)):
             code, result = self.call(self.args() + list(extra))
         self.assertEqual(code, 0, result)
-        guard.assert_called_once()
         return result
 
     def test_build_rebuild_and_check_preserve_sources(self):
@@ -66,18 +83,41 @@ class BuilderTests(unittest.TestCase):
         result = self.build()
         first = self.out.read_bytes()
         self.assertEqual(result["data"]["corrections_count"], 1)
-        self.build(["--force"])
+        self.assertEqual(result["action"], "build_clean_transcript")
+        self.build()
         self.assertEqual(first, self.out.read_bytes())
-        with patch.object(builder, "_require_lock") as guard:
-            self.assertEqual(self.call(self.args() + ["--check"])[0], 0)
-            guard.assert_not_called()
+        self.assertEqual(self.call(self.args() + ["--check"])[0], 0)
         self.assertEqual(before, (self.raw.read_bytes(), self.corr.read_bytes()))
 
-    def test_no_clobber(self):
-        self.build()
-        before = self.out.read_bytes()
-        self.assertEqual(self.call()[0], 2)
-        self.assertEqual(before, self.out.read_bytes())
+    def test_orphan_publication_is_refused(self):
+        rejected = {"success": False, "state": "Rejected", "message": "orphan refused",
+                    "data": {}, "error": {"type": "Rejected", "message": "orphan refused"}}
+        with patch.object(builder, "_delegate", side_effect=self.write_through(rejected)):
+            code, result = self.call(self.args())
+        self.assertEqual(code, 2, result)
+        self.assertEqual(result["state"], "Rejected")
+        self.assertFalse(self.out.exists())
+
+    def test_missing_meeting_id_and_lease_fail_before_delegation(self):
+        args = self.args()
+        args[args.index("--meeting-id") + 1] = ""
+        code, result = self.call(args)
+        self.assertEqual(code, 2)
+        self.assertIn("--meeting-id", result["message"])
+        args = self.args()
+        args[args.index("--lease-id") + 1] = ""
+        code, result = self.call(args)
+        self.assertEqual(code, 2)
+        self.assertIn("lease", result["message"])
+
+    def test_recovery_required_maps_to_exit_three(self):
+        recovery = {"success": False, "state": "RecoveryRequired",
+                    "message": "open journal", "data": {},
+                    "error": {"type": "RecoveryRequired", "message": "open journal"}}
+        with patch.object(builder, "_delegate", side_effect=self.write_through(recovery)):
+            code, result = self.call(self.args())
+        self.assertEqual(code, 3)
+        self.assertEqual(result["state"], "RecoveryRequired")
 
     def test_input_aliases_rejected_even_with_force(self):
         for source in (self.raw, self.corr):
@@ -94,21 +134,6 @@ class BuilderTests(unittest.TestCase):
         except OSError:
             self.skipTest("hardlinks unavailable")
         self.assertEqual(self.call(self.args() + ["--force"])[0], 2)
-
-    def test_missing_foreign_and_owned_real_lock(self):
-        self.assertEqual(self.call()[0], 2)
-        lock_cli = SCRIPT.parents[4] / "workspace-lock/scripts/invoke_workspace_lock.py"
-        command = [sys.executable, str(lock_cli)]
-        acquired = subprocess.run(command + ["acquire", str(self.workspace), "--harness", "unittest",
-                                  "--lease-id", "test-owner", "--duration-minutes", "5", "--json"],
-                                  capture_output=True, text=True, check=True)
-        self.assertTrue(json.loads(acquired.stdout)["success"])
-        try:
-            self.assertEqual(self.call(self.args() + ["--lease-id", "foreign"])[0], 2)
-            self.assertEqual(self.call(self.args() + ["--lease-id", "test-owner"])[0], 0)
-        finally:
-            subprocess.run(command + ["release", str(self.workspace), "--lease-id", "test-owner", "--json"],
-                           capture_output=True, check=True)
 
     def test_outside_zone_and_bundle_rejected(self):
         bundle = SCRIPT.parents[3]
@@ -137,7 +162,28 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(result["state"], "Drift")
 
-    def test_missing_ref_and_bad_types_fail_structurally(self):
+    def test_check_is_read_only_and_does_not_delegate(self):
+        self.build()
+        with patch.object(builder, "_delegate") as delegate:
+            self.assertEqual(self.call(self.args() + ["--check"])[0], 0)
+        delegate.assert_not_called()
+
+    def test_unicode_error_message_is_utf8_under_cp1252(self):
+        unicode_dir = self.workspace / "\u4f1a\u8bae\U0001f680"
+        unicode_dir.mkdir()
+        out = unicode_dir / "missing.transcript.md"
+        completed = subprocess.run(
+            [sys.executable, str(SCRIPT), "--workspace", str(self.workspace),
+             "--raw", str(self.raw), "--corrections", str(self.corr),
+             "--out", str(out), "--meeting-id", "x", "--check", "--json"],
+            capture_output=True, env={**os.environ, "PYTHONIOENCODING": "cp1252",
+                                      "PYTHONUTF8": "0"}, check=False)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
+        envelope = json.loads(completed.stdout.decode("utf-8"))
+        self.assertFalse(envelope["success"])
+        self.assertNotIn(b"Traceback", completed.stderr)
+
+
         for field, value in (("ref", ""), ("orig", 123), ("cat", None)):
             with self.subTest(field=field):
                 self.data["pairs"] = [self.pair()]
@@ -212,8 +258,10 @@ class BuilderTests(unittest.TestCase):
         self.corr.unlink()
         self.assertEqual(self.call()[0], 2)
 
-    def test_template_needs_lock_and_valid_zone(self):
-        target = self.zone / "template.json"
+    def test_template_needs_lock_data_zone_and_no_open_journal(self):
+        data_dir = self.workspace / "data"
+        data_dir.mkdir()
+        target = data_dir / "template.json"
         args = ["--workspace", str(self.workspace), "--init-template", str(target)]
         self.assertEqual(self.call(args)[0], 2)
         with patch.object(builder, "_require_lock"):
@@ -221,13 +269,22 @@ class BuilderTests(unittest.TestCase):
             self.assertEqual(self.call(args)[0], 2)
         self.assertEqual(json.loads(target.read_text(encoding="utf-8")), builder._template())
 
-    def test_atomic_write_failure_leaves_output_intact(self):
-        self.build()
-        before = self.out.read_bytes()
-        with patch.object(builder, "_require_lock"), patch.object(builder.os, "replace", side_effect=OSError("test")):
-            self.assertEqual(self.call(self.args() + ["--force"])[0], 2)
-        self.assertEqual(before, self.out.read_bytes())
-        self.assertEqual(list(self.zone.glob("*.tmp")), [])
+        other = self.workspace / "memory/evidence/meetings/not-data-template.json"
+        code, _ = self.call(["--workspace", str(self.workspace), "--init-template",
+                             str(other)])
+        self.assertEqual(code, 2)
+        self.assertFalse(other.exists())
+
+        journal = self.workspace / "data/meeting-desk/journal/blocker.journal.json"
+        journal.parent.mkdir(parents=True)
+        journal.write_text("{}", encoding="utf-8")
+        blocked = data_dir / "blocked.json"
+        code, envelope = self.call(["--workspace", str(self.workspace), "--init-template",
+                                    str(blocked)])
+        self.assertEqual(code, 3)
+        self.assertEqual(envelope["state"], "RecoveryRequired")
+        self.assertFalse(blocked.exists())
+        self.assertEqual(journal.read_text(encoding="utf-8"), "{}")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,8 @@ Das Skill-Bundle mutiert keine eigenen Daten im Bundle-Verzeichnis, sondern erze
 │       ├── projects/        (Cloud-Atlas Projekt-Mirrors & Derivate)
 │       └── topics/          (Cloud-Atlas Topic-Mirrors & Derivate)
 └── data/                    ◄── Flüchtige / maschinengenerierte Laufzeit- & Betriebsdaten
-    └── mail-desk/           (Quarantäne-Dateien, Quarantäne-Indizes)
+    ├── mail-desk/           (Quarantäne-Dateien, Quarantäne-Indizes)
+    └── meeting-desk/        (Ingest-Journal, Staging-Bytes, Ownership-Record)
 ```
 
 ---
@@ -199,6 +200,44 @@ ungeprüfte Meldungen in `action-items.md`, ergänzt durch `source-log.json`,
 [`event-writer.md`](../../skills/event-documentation/references/event-writer.md).
 
 Für die detaillierten Schemas der beiden Code-Schwergewichte existieren spezialisierte L2-Objektkarten:
+
+### Meeting-Desk-Objekte (Issue #35)
+
+Vollständig in [`../../skills/meeting-desk/references/data-model.md`](../../skills/meeting-desk/references/data-model.md)
+und [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting-desk/docs/system-map/README.md) §2/§3.
+
+* **`meeting-record/1` (Transport):** exakt `schema`, `source`, `meeting_id`,
+  `title`, `start`, `duration_minutes`, `participants`, `artifacts`,
+  `classification_hint`, `review`, `source_metadata`; Erweiterungen nur inert in
+  `source_metadata`. Hints sind untrusted und routen nie. Bekannte Zeitpunkte
+  dürfen eine beobachtete Basis tragen; nur Schätzungen brauchen eine Basis.
+* **`meetings.json` (Objektregister):** Root-Objekt mit `meetings`-Liste; Root-
+  Extras und nicht betroffene/legacy Einträge bleiben erhalten. Neue Einträge
+  tragen 25 kanonische Felder, `record_schema: "meeting-record/1"` und
+  `content_status: "provisional"`. Nackte Legacy-Arrays werden abgewiesen, nie
+  konvertiert; Identität ausschließlich über `meeting_id`/`id`/Quellpaar.
+  `meeting_id`/`external_id` sind opake, exakt erhaltene Unicode-IDs (≤512,
+  keine Steuerzeichen/Surrogate); `/`, `\`, `+`, `=`, Leerzeichen und `..` sind
+  darin gültig, Dateinamen nutzen nur einen Hash. Treffer behalten ihre
+  ursprüngliche stabile ID und Pfade; unsourced Legacy wird
+  nur über einen belegten Quell-Präfix adoptiert, sonst abgewiesen.
+* **Meeting-Artefakte:** `*.summary.md` und `*.transcript.md` mit generierter
+  Frontmatter (`document_type`, `evidence_level: observed`,
+  `status: provisional`), byte-exaktem Body; `*.transcript.raw.md` byte-exakt
+  ohne Frontmatter und unveränderlich. `null` im Record bedeutet nicht
+  geliefert, nie Löschen; bestehende registrierte Pfade/Bytes bleiben bei
+  partiellen Updates erhalten, inklusive Raw und menschlich abgeleiteter
+  Clean-Fassung. Kein Record-Deletionsfeld.
+* **Ownership (`data/meeting-desk/ownership.json`, Schema
+  `meeting-desk-ownership/1`):** Pfad → Meeting-ID, SHA-256, Größe, Art,
+  Writer-Version, Zeit. Generierte Updates nur gegen diesen Hash; nicht
+  Writer-eigene Dateien werden nicht überschrieben.
+* **Ingest-Journal (`data/meeting-desk/journal/`, Schema
+  `meeting-desk-journal/1`):** Integritätsdigest über den Body, per Step
+  Vor-/Nachzustand-Hashes, Stage-Payload-Hashes, Register-/Ownership-Prestate und
+  Workspace-Fingerprint. Offen = jede Mutation blockiert (`recovery_required`,
+  Exit 3); `--inspect` read-only, `--recover` explizit, lease-gebunden,
+  forward-only, fremde Bytes stoppen. Keine Multi-File-ACID-/Power-Loss-Garantie.
 
 ### 4.1 Mail-Desk Objekte → [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md)
 * **`attachment-quarantine-index.json`**: Schema 1 (17 Basisfelder + bis zu 6 optionale additive Coverage-Felder: `analysis_completeness`, `truncation_reason`, `truncation_stage`, `handoff_character_count`, `analysis_character_budget`, `source_character_count`), deterministische 64-Hex-`attachment_id`, Drift-Erkennung (`AttachmentIndexDriftError`).

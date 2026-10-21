@@ -30,12 +30,17 @@ Corrections file schema (``meeting-corrections/1``, see
 All operations match the original body; overlapping edits are rejected.
 Generated markup is never matched again. The header (frontmatter, Bereinigungsliste, rule table,
 open-questions table) is generated from the same data, so counts are
-exact. Writes are atomic (tempfile + ``os.replace``); existing outputs are
-refused unless ``--force`` is given.
+exact.
 
-CLI emits one canonical JSON envelope on stdout and exits ``0`` (built or
-check clean), ``1`` (``--check`` drift: output differs), ``2``
-(input/runtime/schema error).
+Publication is delegated to the canonical meeting writer
+(``scripts/ingest_meeting.py``): only the registered ``transcript_path`` of the
+uniquely identified meeting may be updated, and only while it is provably
+writer-owned. ``--check`` remains purely read-only. There is no second
+file/register publisher in this builder.
+
+CLI emits one canonical JSON envelope on stdout and exits ``0`` (built,
+unchanged or check clean), ``1`` (``--check`` drift), ``2``
+(input/runtime/schema error), ``3`` (``recovery_required``).
 """
 
 from __future__ import annotations
@@ -70,9 +75,30 @@ def _envelope(payload: dict[str, Any]) -> str:
                       ensure_ascii=False, sort_keys=True)
 
 
+def _emit_text(text: str) -> None:
+    """Write exactly one UTF-8 line independent of the console codepage."""
+    payload = text if text.endswith("\n") else text + "\n"
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is not None:
+        buffer.write(payload.encode("utf-8"))
+        buffer.flush()
+    else:
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+
+
 def _fail(reason: str, **extra: Any) -> int:
-    print(_envelope({"ok": False, "action": ACTION, "error": reason, **extra}))
+    _emit_text(_envelope({"ok": False, "action": ACTION, "error": reason, **extra}))
     return 2
+
+
+def _fail_recovery(reason: str, **extra: Any) -> int:
+    envelope = {"action": ACTION, "success": False, "state": "RecoveryRequired",
+                "message": reason[:1000],
+                "data": {k: v for k, v in extra.items() if k != "action"},
+                "error": {"type": "RecoveryRequired", "message": reason[:1000]}}
+    _emit_text(json.dumps(envelope, ensure_ascii=False, sort_keys=True))
+    return 3
 
 
 def _load_corrections(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -253,18 +279,33 @@ def _workspace_path(workspace: Path, path: Path) -> Path:
     return target
 
 
-def _require_lock(workspace: Path, lease_id: str | None, conversation_id: str | None) -> None:
-    # Load the canonical shared guard in place; never copy lock machinery.
-    for parent in Path(__file__).resolve().parents:
-        guard = parent / "workspace-lock/scripts/workspace_lock_guard.py"
-        if guard.is_file():
-            spec = importlib.util.spec_from_file_location("_meeting_workspace_lock_guard", guard)
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[spec.name] = module
-            spec.loader.exec_module(module)
-            module.require_workspace_lock(workspace, lease_id=lease_id, conversation_id=conversation_id)
-            return
-    raise RuntimeError("canonical workspace-lock guard not found beside the skills bundle")
+_WRITER: Any = None
+
+
+def _writer() -> Any:
+    """Load the canonical writer module (single publication owner)."""
+    global _WRITER
+    if _WRITER is None:
+        path = Path(__file__).with_name("ingest_meeting.py")
+        spec = importlib.util.spec_from_file_location("_meeting_desk_writer", path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("canonical meeting writer is unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _WRITER = module
+    return _WRITER
+
+
+def _require_lock(workspace: Path, lease_id: str | None, conversation_id: str | None,
+                  lock_root: str | None = None) -> None:
+    # The guard is loaded in place from the trusted installation; no copy and no
+    # legacy bypass. Resolution order: flag, operator environment, sibling skill.
+    writer = _writer()
+    try:
+        module = writer._load_guard(writer._trusted_lock_root(lock_root))
+        writer._require_lease(writer._Guard(module, workspace, lease_id, conversation_id))
+    except Exception:
+        raise RuntimeError("an owned active workspace-lock lease is required") from None
 
 
 def _validate_refs(data: dict[str, Any], workspace: Path) -> None:
@@ -316,10 +357,12 @@ def _run(argv: list[str] | None = None) -> int:
     ap.add_argument("--init-template", metavar="PATH",
                     help="write a template corrections file and exit")
     ap.add_argument("--force", action="store_true",
-                     help="overwrite an existing --out file")
+                     help="accepted for compatibility; never bypasses writer ownership")
     ap.add_argument("--workspace", required=True, help="consuming workspace root")
     ap.add_argument("--lease-id", help="owned workspace-lock lease ID (writes only)")
     ap.add_argument("--conversation-id", help="owned workspace-lock conversation ID (writes only)")
+    ap.add_argument("--workspace-lock-root",
+                    help="trusted workspace-lock skill installation (isolated installs)")
     ap.add_argument("--json", action="store_true", help="canonical JSON envelope (also the default)")
     args = ap.parse_args(argv)
     workspace = Path(args.workspace).resolve()
@@ -330,12 +373,22 @@ def _run(argv: list[str] | None = None) -> int:
         target = _workspace_path(workspace, Path(args.init_template))
         if target.suffix != ".json":
             raise ValueError("template output must be a .json file")
+        if not target.is_relative_to((workspace / "data").resolve()):
+            raise ValueError("template output must be inside the workspace data/ zone")
         if target.exists() and not args.force:
             return _fail(f"refusing to overwrite existing file: {target}")
-        _require_lock(workspace, args.lease_id, args.conversation_id)
+        writer = _writer()
+        try:
+            writer._require_quiet_journals(workspace)
+        except writer._RecoveryRequired as exc:
+            return _fail_recovery(str(exc))
+        _require_lock(workspace, args.lease_id, args.conversation_id, args.workspace_lock_root)
+        try:
+            writer._require_quiet_journals(workspace)
+        except writer._RecoveryRequired as exc:
+            return _fail_recovery(str(exc))
         _atomic_write(target, json.dumps(_template(), ensure_ascii=False, indent=2) + "\n")
-        print(_envelope({"ok": True, "action": ACTION, "mode": "init-template",
-                         "path": target.as_posix()}))
+        _emit_text(_envelope({"ok": True, "action": ACTION, "mode": "init-template", "path": target.as_posix()}))
         return 0
 
     if not args.raw or not args.corrections or not args.out:
@@ -375,23 +428,60 @@ def _run(argv: list[str] | None = None) -> int:
         except OSError as exc:
             return _fail(f"cannot read check target: {exc}")
         if current == cleaned.encode("utf-8"):
-            print(_envelope({"ok": True, "action": ACTION, "mode": "check",
-                             "drift": False, **stats}))
+            _emit_text(_envelope({"ok": True, "action": ACTION, "mode": "check", "drift": False, **stats}))
             return 0
-        print(_envelope({"ok": False, "action": ACTION, "mode": "check",
-                         "drift": True, **stats}))
+        _emit_text(_envelope({"ok": False, "action": ACTION, "mode": "check", "drift": True, **stats}))
         return 1
 
-    if out_path.exists() and not args.force:
-        return _fail(f"refusing to overwrite existing file (use --force): {out_path}")
-    _require_lock(workspace, args.lease_id, args.conversation_id)
-    try:
-        _atomic_write(out_path, cleaned)
-    except OSError as exc:
-        return _fail(f"cannot write output: {exc}")
-    print(_envelope({"ok": True, "action": ACTION, "mode": "build",
-                     "out": out_path.as_posix(), **stats}))
-    return 0
+    if not args.meeting_id:
+        return _fail("--meeting-id is required: only a registered meeting transcript "
+                     "may be published (register the meeting via ingest first)")
+    if not args.lease_id and not args.conversation_id:
+        return _fail("an owned workspace-lock lease is required for publication")
+    result = _delegate(workspace, cleaned, out_path, args.meeting_id, args.lease_id,
+                       args.conversation_id, args.workspace_lock_root)
+    return _report(result, out_path, stats)
+
+
+def _delegate(workspace: Path, cleaned: str, out_path: Path, meeting_id: str,
+              lease_id: str | None, conversation_id: str | None,
+              lock_root: str | None) -> dict[str, Any]:
+    """Publish through the canonical writer; never write a second register."""
+    writer = _writer()
+    options = {"workspace_root": workspace, "meeting_id": meeting_id,
+               "lease_id": lease_id, "conversation_id": conversation_id,
+               "trusted_workspace_lock_root": lock_root}
+    plan = writer.publish_registered_transcript(cleaned, dry_run=True, **options)
+    if not plan.get("success"):
+        return plan
+    registered = (plan.get("data", {}).get("plan", {}).get("paths", {})
+                  .get("transcript_path"))
+    expected = out_path.relative_to(workspace).as_posix()
+    if registered != expected:
+        return {"action": ACTION, "success": False, "state": "Rejected",
+                "message": ("--out is not the registered transcript_path of this meeting; "
+                            "orphan publication is refused"),
+                "data": {"registered": registered, "out": expected},
+                "error": {"type": "Rejected",
+                          "message": "output is not the registered transcript_path"}}
+    return writer.publish_registered_transcript(cleaned, dry_run=False, **options)
+
+
+def _report(result: dict[str, Any], out_path: Path, stats: dict[str, Any]) -> int:
+    data = dict(result.get("data") or {})
+    data.update({"out": out_path.as_posix(), **stats})
+    if result.get("success"):
+        envelope = {"action": ACTION, "success": True, "state": "Built",
+                    "message": result.get("message", "Built"),
+                    "data": data, "error": None}
+        _emit_text(json.dumps(envelope, ensure_ascii=False, sort_keys=True))
+        return 0
+    state = result.get("state", "Rejected")
+    envelope = {"action": ACTION, "success": False, "state": state,
+                "message": result.get("message", "publication rejected")[:1000],
+                "data": data, "error": result.get("error")}
+    _emit_text(json.dumps(envelope, ensure_ascii=False, sort_keys=True))
+    return 3 if state == "RecoveryRequired" else 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -399,6 +489,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run(argv)
     except (OSError, UnicodeError, ValueError, RuntimeError, re.error, IndexError) as exc:
         return _fail(str(exc))
+    except Exception:
+        return _fail("builder failure")
 
 
 if __name__ == "__main__":
