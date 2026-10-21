@@ -100,7 +100,7 @@ Es gibt keine uneingeschränkte Integrations- oder Merge-Freigabe für #10.
 
 ## Restvalidierung 2026-10-21 (Issue #10)
 
-Der Abschlussvermerk oben („READY-/Last-Stabilität ist **nicht** als behoben oder
+Der Abschlussvermerk oben („Die READY-/Timing-Familie ist **nicht** als behoben oder
 laststabil freigegeben") wurde am 2026-10-21 mit einem vorab registrierten
 Messplan überprüft. Plan, Amendment A1, Umgebung, Lastprofil und alle Logs liegen
 im Run-Verzeichnis des Vorgangs (außerhalb des Bundles). Messgegenstand war

@@ -71,8 +71,9 @@ Shared-Guard; kein konsumierender Live-Workspace wird verwendet.
   unverändert. Die READY-/Last-Stabilität wurde am 2026-10-21 separat geprüft
   (vorab registrierter Messplan; Diagnose in `docs/analysis/issue-10-stability.md`):
   unter Normal- und Lastbedingungen ohne READY-Handshake-Befund, die Timing-
-  Assertion des MD-A3 war reproduzierbar und ist in PR #46 an den Produktvertrag
-  gebunden; unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47).
+  Assertion des MD-A3 trat auf (in einem von zwei Vollframes reproduziert) und ist
+  in PR #46 an den Produktvertrag gebunden; unter CPU-Sättigung trat die
+  READY-Familie erneut auf (Issue #47).
   Die fünf
   picklebaren MDA3-Worker-Fixtures (seit 2026-10-21 um `_instant_target` als
   Baseline-Aufruf ergänzt) liegen in
