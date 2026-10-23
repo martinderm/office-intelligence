@@ -56,6 +56,22 @@ class MirrorPlanningTests(unittest.TestCase):
             planned,
         )
 
+    def test_cross_group_disambiguation_uses_full_original_name(self):
+        sources = [
+            "data/cloud/SOURCE/contract.doc",
+            "data/cloud/SOURCE/contract.docx",
+            "data/cloud/SOURCE/contract.docx.pdf",
+        ]
+        planned = plan_markdown_mirrors(sources, self.scan_dir, self.output_dir)
+        self.assertEqual(
+            {
+                "data/cloud/SOURCE/contract.doc": "memory/cloud/projects/example/contract.doc.md",
+                "data/cloud/SOURCE/contract.docx": "memory/cloud/projects/example/contract.docx.md",
+                "data/cloud/SOURCE/contract.docx.pdf": "memory/cloud/projects/example/contract.docx.pdf.md",
+            },
+            planned,
+        )
+
     def test_custom_extension_same_stem_disambiguates_every_member(self):
         custom = "data/cloud/SOURCE/invoice.custom"
         pdf = "data/cloud/SOURCE/invoice.pdf"
