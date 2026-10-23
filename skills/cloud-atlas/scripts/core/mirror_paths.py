@@ -123,12 +123,7 @@ def plan_markdown_mirrors(
             planned[source_rel] = legacy
             continue
         for source_rel, _legacy in group:
-            relative_source = PurePosixPath(source_rel).relative_to(PurePosixPath(scan_rel))
-            planned[source_rel] = (
-                PurePosixPath(output_rel)
-                / relative_source.parent
-                / f"{relative_source.name}.md"
-            ).as_posix()
+            planned[source_rel] = original_name_mirror_path(source_rel, scan_rel, output_rel)
             ambiguous_sources.add(source_rel)
 
     # A custom path is deliberately never an escape hatch for a detected
