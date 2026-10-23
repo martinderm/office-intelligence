@@ -40,8 +40,9 @@ Implementiert in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs
 3. Vergleicht den aktuellen SHA-256 der Quelldatei mit dem im Frontmatter gespeicherten `source_sha256`.
 4. Ist der Hash identisch und nicht `--force` gesetzt, wird die Datei übersprungen (Idempotenz).
 5. Bei aktiven Ausschlüssen reserviert `retained_artifact_paths()` vorhandene
-   Artefakte ohne In-Scope-Ownership. Mirror-/Derivat-Kollisionen stoppen vor dem
-   ersten Write; auch der Generator darf reservierte Pfade nicht neu zuordnen.
+   Artefakte ohne In-Scope-Ownership. Nicht auflösbare Mirror-/Derivat-Kollisionen stoppen vor dem
+   ersten Write; auflösbare Kreuzgruppen-Kollisionen werden vorher auf `original.ext.md`
+   disambiguiert. Auch der Generator darf reservierte Pfade nicht neu zuordnen.
 
 ### Phase 2: Formatspezifische Transformation
 * **DOCX / DOC:** Konvertierung via Pandoc nach GitHub Flavored Markdown (GFM). Bei alten Binär-DOCs Fallback über LibreOffice.

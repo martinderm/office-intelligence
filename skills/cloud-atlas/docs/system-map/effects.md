@@ -70,8 +70,8 @@ inventarisierte Artefakte von Quellen im verbleibenden Scan-Scope entfernen;
 unbekannte Artefakte und leere Verzeichnisse bleiben bestehen. Das schützt auch
 Custom-Derivate über wiederholte Läufe, nachdem ihr Filemap-Eintrag entfernt ist.
 Die Zielplanung reserviert vorhandene Artefakte ohne positive In-Scope-Ownership
-bei jedem Lauf erneut; Kollisionen stoppen fail-closed vor Überschreiben oder
-Inventarübernahme (`mirror-plan`). Cleanup-Schutz allein wäre nicht ausreichend.
+bei jedem Lauf erneut; nicht auflösbare Kollisionen stoppen fail-closed vor Überschreiben oder
+Inventarübernahme (`mirror-plan`); auflösbare Kreuzgruppen-Kollisionen werden auf `original.ext.md` disambiguiert. Cleanup-Schutz allein wäre nicht ausreichend.
 Ohne Ausschlüsse gilt das bisherige Cleanup. Überlappende Quellwurzeln erfordern
 getrennte Output-Wurzeln und Filemaps je Storage. Keine automatische Übernahme
 von Ownership oder Entfernung zurückbehaltener Artefakte.

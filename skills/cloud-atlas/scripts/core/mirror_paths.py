@@ -64,6 +64,16 @@ def legacy_canonical_mirror_path(source_path, scan_dir, output_dir, supported_ex
     return (PurePosixPath(output_rel) / relative_source.with_suffix(".md")).as_posix()
 
 
+def original_name_mirror_path(source_rel, scan_rel, output_rel):
+    """Return the disambiguated ``original-name.ext.md`` target for a source."""
+    relative_source = PurePosixPath(source_rel).relative_to(PurePosixPath(scan_rel))
+    return (
+        PurePosixPath(output_rel)
+        / relative_source.parent
+        / f"{relative_source.name}.md"
+    ).as_posix()
+
+
 def explicit_custom_mirror_path(source_path, scan_dir, output_dir, mirror_path):
     """Return an existing custom path, never a historical canonical path."""
     mirror_rel = normalize_workspace_relative_path(mirror_path)
@@ -113,12 +123,7 @@ def plan_markdown_mirrors(
             planned[source_rel] = legacy
             continue
         for source_rel, _legacy in group:
-            relative_source = PurePosixPath(source_rel).relative_to(PurePosixPath(scan_rel))
-            planned[source_rel] = (
-                PurePosixPath(output_rel)
-                / relative_source.parent
-                / f"{relative_source.name}.md"
-            ).as_posix()
+            planned[source_rel] = original_name_mirror_path(source_rel, scan_rel, output_rel)
             ambiguous_sources.add(source_rel)
 
     # A custom path is deliberately never an escape hatch for a detected
@@ -136,6 +141,39 @@ def plan_markdown_mirrors(
         }
         if existing.casefold() not in occupied:
             planned[source_rel] = existing
+
+    # A disambiguated target can collide with another source's legacy or custom
+    # target (e.g. contract.doc/.docx -> contract.docx.md versus contract.docx.pdf).
+    # Resolve every remaining collision by moving the involved sources to their
+    # full original-name target.  A case-only collision cannot be resolved this
+    # way and therefore still fails closed.
+    for _ in range(len(planned) + 1):
+        by_target = {}
+        for source_rel, target in planned.items():
+            by_target.setdefault(target.casefold(), []).append(source_rel)
+        colliding = [
+            source_rel
+            for group in by_target.values() if len(group) > 1
+            for source_rel in group
+        ]
+        if not colliding:
+            break
+        changed = False
+        for source_rel in sorted(colliding):
+            candidate = original_name_mirror_path(source_rel, scan_rel, output_rel)
+            if candidate != planned[source_rel]:
+                planned[source_rel] = candidate
+                changed = True
+        if not changed:
+            targets = ", ".join(
+                f"{source_rel} -> {planned[source_rel]}" for source_rel in sorted(colliding)
+            )
+            raise ValueError(
+                "planned markdown mirrors are not unique under case-insensitive comparison: "
+                + targets
+            )
+    else:
+        raise ValueError("planned markdown mirrors could not be made unique")
 
     seen_targets = {}
     for source_rel, target in planned.items():
