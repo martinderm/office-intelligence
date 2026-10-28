@@ -13,4 +13,8 @@ __pycache__/
 # Local harness evidence/configuration must never enter a normal staging sweep.
 /runs/
 /opencode.json
+/.opencode/
+/.agents/skills.yaml
+/.agents/upstream.lock.json
+/.agents/skills/
 .pytest_cache/
