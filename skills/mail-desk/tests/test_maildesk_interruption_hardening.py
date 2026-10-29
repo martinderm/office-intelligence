@@ -11,6 +11,7 @@ import mail_desk_batch_runner as runner  # noqa: E402
 import mail_desk_himalaya_client as client  # noqa: E402
 from core import himalaya  # noqa: E402
 from core.modes import draft, execute, pipeline  # noqa: E402
+from review_fixtures import approved_execute
 
 
 class SkipKnownTests(unittest.TestCase):
@@ -47,9 +48,10 @@ class SkipKnownTests(unittest.TestCase):
 
 
 class FailClosedTests(unittest.TestCase):
-    def test_sent_sync_failure_stops_before_classify_and_execute(self):
-        classify = Mock()
+    def test_pipeline_never_syncs_sent_or_executes_even_when_requested(self):
+        classify = Mock(return_value={"items": []})
         mutate = Mock()
+        sync = Mock(side_effect=RuntimeError("sent unavailable"))
         with tempfile.TemporaryDirectory() as tmp:
             data = Path(tmp) / "data" / "mail-desk"
             data.mkdir(parents=True)
@@ -57,14 +59,15 @@ class FailClosedTests(unittest.TestCase):
                 {}, data_dir=data,
                 dependencies={
                     "get_unprocessed_emails": Mock(return_value=([{"envelope_id": "1"}], 0)),
-                    "sync_sent_items": Mock(side_effect=RuntimeError("sent unavailable")),
+                    "sync_sent_items": sync,
                     "draft_manifest": classify,
                     "run_execute_mode": mutate,
                 },
             )
-        self.assertFalse(result["ok"])
-        self.assertEqual("sync_sent", result["error"]["phase"])
-        classify.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertEqual("review_required", result["status"])
+        sync.assert_not_called()
+        classify.assert_called_once()
         mutate.assert_not_called()
 
     def test_delete_failure_fails_result_and_progress(self):
@@ -74,8 +77,8 @@ class FailClosedTests(unittest.TestCase):
             data = Path(tmp) / "data" / "mail-desk"
             data.mkdir(parents=True)
             result = execute.run_execute_mode(
-                {"items": [{"envelope_id": "7", "message_id": "delete@example.test",
-                            "action": {"type": "delete"}, "decision": {}}]},
+                approved_execute({"items": [{"envelope_id": "7", "message_id": "delete@example.test",
+                            "action": {"type": "delete"}, "decision": {}}]}),
                 data_dir=data,
                 dependencies={
                     "BatchProgressTracker": Mock(return_value=tracker),

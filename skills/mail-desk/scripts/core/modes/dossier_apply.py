@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ..classifier import load_catalogs
+from ..batch_contract import validate_execute_contract
 from ..common import normalize_message_id, resolve_data_dir
 from ..completion import completion_report, release_synthesis_handoff
 from ..synthesis_handoff import empty_synthesis_handoff
@@ -215,6 +216,15 @@ def run_dossier_apply_mode(
         mailbox_folder=mailbox_folder,
         normalize_id=normalize_id,
     )
+
+    contract = validate_execute_contract(execute_request, effective_account=reviewed_account)
+    if not contract["ok"]:
+        result = _failed_result(
+            project_id=project_id, receipt=receipt, execute_result=None, stage="execute",
+        )
+        result["contract_gate"] = contract
+        result["synthesis_handoff"] = empty_synthesis_handoff()
+        return result
 
     try:
         execute_result = execute(

@@ -128,7 +128,11 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `WORKSPACE_LOCK_LEASE_ID`/`WORKSPACE_LOCK_CONVERSATION_ID` der Harness-Control-Plane.
    Bei `draft` werden explizite IDs unverändert an den Runner weitergereicht;
    bei anderen Modi schützen sie nur den Wrapper, da der Runner diese Flags dort
-   nicht akzeptiert. Die Runner-/Account-/Review-Gates bleiben unverändert.
+   nicht akzeptiert. Bei `execute` prüft der Wrapper zusätzlich Backend-/Account-
+   Bindung und den bestehenden H2-Vertrag vor Log-Erstellung/Pruning. Ungültige
+   Aufträge stoppen ohne lokale Writes; der geprüfte Snapshot wird per stdin an
+   den Runner übergeben, der dieselben Gates erneut prüft. Das Eingabemanifest
+   bleibt erhalten; keine automatische Freigabe.
    Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
    Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen

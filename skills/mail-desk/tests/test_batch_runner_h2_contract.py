@@ -1,10 +1,13 @@
 """MD-H2 regression tests for the reviewed candidate-count gate."""
 
 from pathlib import Path
+from copy import deepcopy
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -130,13 +133,88 @@ class ReviewedCandidateContractTests(unittest.TestCase):
         config["candidate_count"] = True
         self.assert_gate_stops_all_mutations(config, "invalid_candidate_count")
 
-    def test_unbound_reviewed_path_with_account_remains_legacy_compatible(self) -> None:
-        result, dependencies = self.execute({
-            "mode": "execute", "account": "primary", "items": [self.item("legacy")],
-        }, account="primary")
-        self.assertTrue(result["ok"])
-        self.assertEqual("legacy_unbound", result["contract_gate"]["state"])
-        dependencies["append_action_log_entry"].assert_called_once()
+    def test_unbound_requests_stop_before_all_side_effects(self) -> None:
+        for extra, account in (({}, None), ({"account": "primary"}, "primary")):
+            with self.subTest(account=account):
+                self.assert_gate_stops_all_mutations({
+                    "mode": "execute", "items": [self.item("unbound")], **extra,
+                }, "incomplete_contract", account=account)
+
+    def test_each_missing_contract_field_stops_before_all_side_effects(self) -> None:
+        for key in ("expected_count", "candidate_count", "allow_fewer", "source_folder", "account", "skip_known", "review"):
+            with self.subTest(key=key):
+                config = self.manifest(expected=1, actual=1)
+                del config[key]
+                self.assert_gate_stops_all_mutations(config, "incomplete_contract")
+
+    def test_missing_and_invalid_receipts_stop_before_all_side_effects(self) -> None:
+        for receipt in (None, {}, {"reviewed_by": "someone"}, {
+            "reviewed_by": "", "reviewed_at": "now", "execute_request_sha256": "0" * 64,
+        }):
+            with self.subTest(receipt=receipt):
+                config = self.manifest(expected=1, actual=1)
+                config["review"]["approval_receipt"] = receipt
+                self.assert_gate_stops_all_mutations(config, "invalid_review_receipt")
+
+    def test_unbound_request_does_not_create_or_cleanup_local_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            sentinel = data_dir / "batch-recovery-journal.json"
+            sentinel.write_bytes(b"preserve existing evidence")
+            before = {p.relative_to(data_dir): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()}
+            result = execute.run_execute_mode({"items": [self.item("unbound")]}, data_dir=data_dir)
+            self.assertFalse(result["ok"])
+            self.assertEqual(before, {p.relative_to(data_dir): p.read_bytes() for p in data_dir.rglob("*") if p.is_file()})
+
+    def test_facade_rejects_unbound_before_readiness_or_handler(self) -> None:
+        with patch.object(runner, "_bind_mailbox_mode", return_value=(Path("unused"), {"account": None}, None)), patch.object(
+            runner, "mailbox_readiness_preflight", side_effect=AssertionError("mailbox access before approval"),
+        ), patch.object(runner, "_run_execute_mode", side_effect=AssertionError("handler before approval")):
+            result = runner.run_execute_mode({"items": [self.item("unbound")]})
+        self.assertFalse(result["ok"])
+        self.assertEqual("incomplete_contract", result["contract_gate"]["reason_code"])
+
+    def test_missing_fields_have_contract_error_even_without_backend_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(runner, "run_himalaya") as mail:
+            data_dir = Path(temporary) / "data" / "mail-desk"
+            result = runner.run_execute_mode({"items": []}, data_dir=data_dir)
+            self.assertEqual("incomplete_contract", result["contract_gate"]["reason_code"])
+            self.assertFalse(data_dir.exists())
+            mail.assert_not_called()
+
+    def test_real_cli_rejects_invalid_manifests_without_changing_any_local_file(self):
+        approved = self.manifest(expected=1, actual=1)
+        cases = [({"mode": "execute", "items": [self.item("unbound")]}, "incomplete_contract")]
+        for field in ("expected_count", "candidate_count", "allow_fewer", "source_folder", "account", "skip_known", "review"):
+            incomplete = deepcopy(approved)
+            del incomplete[field]
+            cases.append((incomplete, "incomplete_contract"))
+        for receipt, reason in ((None, "invalid_review_receipt"), ({}, "invalid_review_receipt"), ({
+            "reviewed_at": "now", "reviewed_by": "human", "execute_request_sha256": "0" * 64,
+        }, "review_hash_mismatch")):
+            invalid = deepcopy(approved)
+            invalid["review"]["approval_receipt"] = receipt
+            cases.append((invalid, reason))
+        for config, reason in cases:
+            with self.subTest(reason=reason, keys=sorted(config)), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                data_dir = root / "data" / "mail-desk"
+                data_dir.mkdir(parents=True)
+                manifest = data_dir / "batch-manifest.json"
+                manifest.write_text(json.dumps(config), encoding="utf-8")
+                (data_dir / "batch-recovery-journal.json").write_bytes(b"must not be opened")
+                before = {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+                result = subprocess.run(
+                    [sys.executable, "-B", str(SCRIPTS / "mail_desk_batch_runner.py"),
+                     "--input", str(manifest), "--data-dir", str(data_dir)],
+                    cwd=root, capture_output=True, text=True, encoding="utf-8", timeout=15,
+                )
+                self.assertEqual(1, result.returncode, result.stderr)
+                envelope = json.loads(result.stdout)
+                self.assertFalse(envelope["success"])
+                self.assertEqual(reason, envelope["data"]["contract_gate"]["reason_code"])
+                self.assertEqual(before, {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()})
 
     def test_draft_cli_exposes_exact_contract_and_rejects_orphan_flags(self) -> None:
         parser = runner._build_parser()

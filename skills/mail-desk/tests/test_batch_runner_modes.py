@@ -22,6 +22,7 @@ from core.modes import resolve as resolve_mode  # noqa: E402
 from core.modes import search as search_mode  # noqa: E402
 from core.modes import sync_sent as sync_sent_mode  # noqa: E402
 from core.modes import verify as verify_mode  # noqa: E402
+from review_fixtures import approved_execute
 
 
 class SearchModeTests(unittest.TestCase):
@@ -305,13 +306,13 @@ class ExecuteModeTests(unittest.TestCase):
             reply = Mock(side_effect=lambda *_args, **_kwargs: events.append("reply"))
             resolve = Mock(side_effect=lambda *_args, **_kwargs: events.append("resolve"))
             result = execute_mode.run_execute_mode(
-                {"items": [{
+                approved_execute({"items": [{
                     "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
                     "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
                     "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
                     "decision": {"needs_reply": True, "reply_candidate": "draft"}, "notes": "route",
                     "evidence": {"file": "memory/evidence.md", "entry": "- pilot"},
-                }]},
+                }]}, account="primary"),
                 account="primary", data_dir=data_dir, index_path=data_dir / "index.json",
                 dependencies={
                     "BatchProgressTracker": Tracker, "append_action_log_entry": action,
@@ -345,12 +346,12 @@ class ExecuteModeTests(unittest.TestCase):
             verify = Mock(side_effect=[None, None, None, "late-copy-42"])
             sleep = Mock()
             result = execute_mode.run_execute_mode(
-                {"items": [{
+                approved_execute({"items": [{
                     "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
                     "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
                     "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
                     "decision": {},
-                }]},
+                }]}),
                 data_dir=data_dir,
                 dependencies={
                     "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
@@ -391,12 +392,12 @@ class ExecuteModeTests(unittest.TestCase):
             verify = Mock(side_effect=failing_verify)
             sleep = Mock()
             result = execute_mode.run_execute_mode(
-                {"items": [{
+                approved_execute({"items": [{
                     "envelope_id": "7", "message_id": "<Case@Example.test>", "subject": "Pilot",
                     "from": "Pilot <pilot@example.test>", "date": "2026-09-07",
                     "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"},
                     "decision": {},
-                }]},
+                }]}),
                 data_dir=data_dir,
                 dependencies={
                     "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
@@ -450,7 +451,7 @@ class ExecuteModeTests(unittest.TestCase):
             append_action = Mock()
             save_index = Mock()
             result = execute_mode.run_execute_mode(
-                {
+                approved_execute({
                     "items": [
                         {
                             "envelope_id": "source-7",
@@ -463,7 +464,7 @@ class ExecuteModeTests(unittest.TestCase):
                             "decision": {},
                         }
                     ]
-                },
+                }),
                 data_dir=data_dir,
                 dependencies={
                     "BatchProgressTracker": Mock(),
@@ -494,10 +495,10 @@ class ExecuteModeTests(unittest.TestCase):
             data_dir.mkdir(parents=True)
             save = Mock()
             result = execute_mode.run_execute_mode(
-                {"items": [
+                approved_execute({"items": [
                     {"envelope_id": "good", "message_id": "good@example.test", "action": {"type": "keep_in_folder"}, "decision": {}},
                     {"envelope_id": "bad", "message_id": "bad@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"}, "decision": {}},
-                ]},
+                ]}),
                 data_dir=data_dir,
                 dependencies={
                     "BatchProgressTracker": Mock(), "auto_resolve_replies_from_sent": Mock(),
@@ -516,14 +517,14 @@ class ExecuteModeTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             result = execute_mode.run_execute_mode(
-                {"items": [
+                approved_execute({"items": [
                     {"envelope_id": "project-1", "message_id": "project-1@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "project", "id": " meshe "}},
                     {"envelope_id": "topic-1", "message_id": "topic-1@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "topic", "id": "dienstreisen"}},
                     {"envelope_id": "project-duplicate", "message_id": "project-duplicate@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "project", "id": "meshe"}},
                     {"envelope_id": "invalid-id", "message_id": "invalid-id@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "topic", "id": "   "}},
                     {"envelope_id": "invalid-kind", "message_id": "invalid-kind@example.test", "action": {"type": "keep_in_folder"}, "decision": {"kind": "archive", "id": "archive"}},
                     {"envelope_id": "failed", "message_id": "failed@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Failed"}, "decision": {"kind": "project", "id": "must-not-count"}},
-                ]},
+                ]}),
                 data_dir=data_dir,
                 dependencies={
                     "BatchProgressTracker": Mock(), "append_action_log_entry": Mock(),
@@ -547,7 +548,7 @@ class ExecuteModeTests(unittest.TestCase):
 
 
 class PipelineModeTests(unittest.TestCase):
-    def test_pipeline_orchestrates_sync_classification_execute_and_verify(self) -> None:
+    def test_pipeline_prepares_all_confidence_levels_without_sync_execute_or_verify(self) -> None:
         email = {"envelope_id": "1", "message_id": "case@example.test"}
         executable = {"envelope_id": "1", "decision": {"confidence": "high"}, "action": {"target_folder": "Projects/Pilot"}}
         review = {"envelope_id": "2", "decision": {"confidence": "low"}, "action": {"target_folder": "Projects/Pilot"}}
@@ -567,14 +568,16 @@ class PipelineModeTests(unittest.TestCase):
                 },
             )
 
-        self.assertFalse(result["ok"])
-        self.assertEqual(1, result["executed_count"])
-        self.assertEqual(1, result["review_needed_count"])
+        self.assertTrue(result["ok"])
+        self.assertEqual("review_required", result["status"])
+        self.assertEqual(0, result["executed_count"])
+        self.assertEqual(2, result["review_needed_count"])
         self.assertEqual("subject pilot", fetch.call_args.kwargs["query"])
-        execute.assert_called_once()
-        self.assertTrue(verify.call_args.args[0]["check_folders"])
+        sync.assert_not_called()
+        execute.assert_not_called()
+        verify.assert_not_called()
 
-    def test_pipeline_propagates_execute_telemetry_without_review_items(self) -> None:
+    def test_pipeline_never_claims_execute_telemetry(self) -> None:
         executable = {"envelope_id": "1", "decision": {"confidence": "high"}, "action": {"target_folder": "Projects/Pilot"}}
         review = {"envelope_id": "2", "decision": {"confidence": "low", "kind": "topic", "id": "review-only"}, "action": {"target_folder": "Projects/Pilot"}}
         telemetry = {"affected_projects": ["meshe"], "affected_topics": ["dienstreisen"], "synthesis_required": True}
@@ -592,8 +595,8 @@ class PipelineModeTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(telemetry, result["telemetry"])
-        self.assertEqual(1, result["review_needed_count"])
+        self.assertEqual({"affected_projects": [], "affected_topics": [], "synthesis_required": False}, result["telemetry"])
+        self.assertEqual(2, result["review_needed_count"])
 
     def test_pipeline_uses_empty_telemetry_without_execute_or_from_legacy_execute(self) -> None:
         empty = {"affected_projects": [], "affected_topics": [], "synthesis_required": False}
@@ -784,7 +787,7 @@ class DispatcherCompatibilityTests(unittest.TestCase):
                 runner, "verify_in_target_folder", return_value="22"
             ) as verify:
                 execute_result = runner.run_execute_mode(
-                    {"items": [{"envelope_id": "2", "message_id": "case@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"}, "decision": {}}]},
+                    approved_execute({"items": [{"envelope_id": "2", "message_id": "case@example.test", "action": {"type": "copy_as_move", "target_folder": "Projects/Pilot"}, "decision": {}}]}),
                     data_dir=data_dir,
                 )
             with patch.object(runner, "get_unprocessed_emails", return_value=([{"envelope_id": "3"}], 0)) as fetch, patch.object(

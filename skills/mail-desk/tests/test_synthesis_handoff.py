@@ -24,6 +24,7 @@ from core.synthesis_handoff import (  # noqa: E402
     empty_synthesis_handoff,
 )
 from core.telemetry import collect_telemetry  # noqa: E402
+from review_fixtures import approved_execute
 
 
 def target(path: str) -> dict[str, str]:
@@ -122,7 +123,7 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             result = execute_mode.run_execute_mode(
-                {"items": [good, failed]},
+                approved_execute({"items": [good, failed]}),
                 data_dir=data_dir,
                 index_path=data_dir / "index.json",
                 dependencies=self.execute_dependencies(run_himalaya=Mock(side_effect=RuntimeError("copy failed"))),
@@ -146,7 +147,7 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             "run_verify_mode": Mock(return_value=verify_result or {"ok": True, "results": []}),
         }
 
-    def test_pipeline_verify_failure_requires_recovery_and_releases_nothing(self) -> None:
+    def test_pipeline_never_reaches_verify_failure_or_releases_handoff(self) -> None:
         handoff = collect_synthesis_handoff(
             [item("pipeline", targets=[])],
             [{"success": True, "message_id": "pipeline@example.test", "subject": "Pipeline", "synthesis_targets": []}],
@@ -163,12 +164,12 @@ class SynthesisHandoffModeTests(unittest.TestCase):
                 ),
             )
 
-        self.assertFalse(result["ok"])
-        self.assertTrue(result["recovery_required"])
+        self.assertTrue(result["ok"])
+        self.assertEqual("review_required", result["status"])
         self.assertEqual(empty_synthesis_handoff(), result["synthesis_handoff"])
-        self.assertEqual("recovery_required", result["completion_report"]["status"])
+        self.assertIsNone(result["verify_summary"])
 
-    def test_pipeline_releases_one_source_bound_handoff_only_after_full_verify(self) -> None:
+    def test_pipeline_does_not_release_injected_successful_execute_handoff(self) -> None:
         handoff = collect_synthesis_handoff(
             [item("pipeline", targets=[])],
             [{"success": True, "message_id": "pipeline@example.test", "subject": "Pipeline", "synthesis_targets": []}],
@@ -186,8 +187,8 @@ class SynthesisHandoffModeTests(unittest.TestCase):
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(handoff, result["synthesis_handoff"])
-        self.assertEqual("completed", result["completion_report"]["status"])
+        self.assertEqual(empty_synthesis_handoff(), result["synthesis_handoff"])
+        self.assertEqual("review_required", result["status"])
 
     def test_pipeline_uses_empty_handoff_for_no_mail_no_execute_legacy_and_malformed_execute(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -16,6 +16,7 @@ from core.modes.dossier_apply import (  # noqa: E402
     canonical_execute_request_sha256,
     run_dossier_apply_mode,
 )
+from review_fixtures import approved_execute
 
 
 PROJECT = {
@@ -27,6 +28,7 @@ PROJECT = {
 
 
 def reviewed_config(execute_request: dict) -> dict:
+    execute_request = approved_execute(execute_request, account=execute_request.get("account"))
     return {
         "mode": "dossier_apply",
         "project": "meshe",
@@ -109,6 +111,7 @@ class DossierApplyModeTests(unittest.TestCase):
     def test_delegates_exact_reviewed_request_to_existing_execute_then_verify(self) -> None:
         request = execute_request(item("First@Example.test"), item("second@example.test", envelope_id="43"))
         request["account"] = "primary"
+        request = approved_execute(request, account="primary")
         result, execute, verify, data_dir = self.run_mode(reviewed_config(request), account="primary")
 
         self.assertTrue(result["ok"])
@@ -148,7 +151,7 @@ class DossierApplyModeTests(unittest.TestCase):
     def test_rejects_tampered_execute_request_before_any_side_effect(self) -> None:
         request = execute_request(item())
         config = reviewed_config(request)
-        request["items"][0]["subject"] = "tampered after review"
+        config["execute_request"]["items"][0]["subject"] = "tampered after review"
 
         with self.assertRaisesRegex(ValueError, "does not bind"):
             self.run_mode(config)

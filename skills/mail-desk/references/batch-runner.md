@@ -16,9 +16,9 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem Py
    Phasenhistorie und beginnt exakt mit dem ersten noch fehlenden Schritt.
 4. **Kontrollierter Einstieg:** Ein Auftrag über N Mails erzeugt zuerst einen
    regelbasierten, hash-gebundenen Manifest-Entwurf (`draft`); erst nach
-   sichtbarer Review führen `execute` und `verify` aus. Die autonome
-   End-to-End-`pipeline` bleibt ausdrücklich benannten Aufträgen vorbehalten und
-   ist kein stiller Default.
+   sichtbarer Review führen `execute` und `verify` aus. `pipeline` ist ebenfalls
+   nur Vorbereitung: Sie liefert einen Pending-Draft, führt aber weder
+   Sent-Synchronisation noch Execute oder Verify aus.
 
 ### Implementierungsstruktur
 
@@ -40,7 +40,7 @@ Manifest oder `--account` dürfen keine abweichende Auswahl treffen. Ein gleichl
 stoppt. Ein im Draft-/Dossier-Manifest enthaltener Account bleibt Teil der Reviewbindung
 und muss exakt übereinstimmen.
 
-Vor `execute` und vor einer ausdrücklich autonomen `pipeline` führt der Runner mit
+Nach gültigem H2-Vertrag vor `execute` und vor der lesenden `pipeline` führt der Runner mit
 exakt diesem Account und Quellordner ein einzelnes read-only
 `himalaya -o json envelope list -f <folder> -s 1` (zehn Sekunden Timeout, ohne
 Retry) aus. Nur eine parsebare JSON-Liste (auch leer) ist gültig. Der Preflight
@@ -61,7 +61,7 @@ Unter `data/mail-desk/` gelten folgende Standard-Dateinamen:
 | **Inspektions-Ergebnis (Output)** | `data/mail-desk/batch-inspected.json` | `inspect` | Standard-Ausgabe mit extrahierten Headern, Previews und Bekanntheitsstatus. |
 | **Entwurf-Anforderung (Input)** | `data/mail-desk/batch-draft.json` | `draft` | Erzeugt einen vollständigen `batch-manifest.json`-Entwurf aus Katalogen. |
 | **Ausführungs-Manifest (Input)** | `data/mail-desk/batch-manifest.json` | `execute` | Temporäres Arbeitsmanifest (Routing, Logging, Evidenz); wird bei Erfolg gelöscht. |
-| **Pipeline-Anforderung (Input)** | `data/mail-desk/batch-pipeline.json` | `pipeline` | Führt den gesamten Ablauf (Inspect -> Classify -> Execute -> Verify) autonom aus. |
+| **Pipeline-Anforderung (Input)** | `data/mail-desk/batch-pipeline.json` | `pipeline` | Liest/klassifiziert; liefert nur einen Pending-Draft im Ergebnis, keine Batch-Mutation. |
 | **Ausführungs-Ergebnis (Output)** | `data/mail-desk/batch-result.json` | `execute` | Optionales Protokoll des Batch-Laufs. |
 | **Verifikations-Anforderung (Input)** | `data/mail-desk/batch-verify.json` | `verify` | Message-IDs/Batch-Files zur Konsistenzprüfung (Index, Log, Evidenz, Ordner). |
 | **Such-Anforderung (Input)** | `data/mail-desk/batch-search.json` | `search` | Suchauftrag nach Text oder Message-IDs über mehrere Ordner. |
@@ -101,7 +101,7 @@ python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-manifest.
 # Standard 3: Anschließend gezielt verifizieren
 python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-verify.json
 
-# Nur bei ausdrücklich beauftragtem autonomen Pipeline-Lauf (optional gefiltert)
+# Pipeline-Vorbereitung (optional gefiltert), danach Draft separat reviewen/ausführen
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --order oldest
 python3 scripts/mail_desk_batch_runner.py --pipeline 50 --query 'from partner@example.org'
 
@@ -120,7 +120,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | Argument | Kurzform | Beschreibung |
 |---|---|---|
 | `--input <PFAD>` | `-i` | Pfad zur temporären JSON-Eingabedatei (Standard je Modus, z. B. `batch-manifest.json`). |
-| `--pipeline [N]` | `-p` | End-to-End-Pipeline für N Mails (Inspect, Classify, Execute, Verify). |
+| `--pipeline [N]` | `-p` | Nur Inspect/Classify für N Mails; Pending-Draft in `data.draft`, keine Ausführung. |
 | `--draft [N]` | `-d` | Inspiziert N unverarbeitete Mails, schreibt `batch-manifest.json`-Entwurf. |
 | `--expected-count <N>` | | Bindet für `--draft` die erwartete Kandidatenzahl (muss dem Draft-N entsprechen). |
 | `--allow-fewer` | | Erlaubt für `--draft` nach Review weniger als `expected_count`, nie mehr. |
@@ -132,7 +132,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--skip-known` / `--no-skip-known` | | Überspringt bereits verarbeitete E-Mails aus `final-location-index.json` (Standard: `True`). |
 | `--query <AUSDRUCK>` | `-q` | Himalaya-Suchausdruck für `inspect`/`draft`/`pipeline`, bis zum Envelope-Abruf weitergereicht; nicht mit `--date` kombinieren. |
 | `--date <YYYY-MM-DD>` | | Exakter Himalaya-Datumsfilter für `inspect`/`draft`/`pipeline`; nicht mit `--query` kombinieren. |
-| `--min-confidence <high\|medium\|low>` | | Minimale Konfidenz für automatische Pipeline-Ausführung (Standard: `high`). |
+| `--min-confidence <high\|medium\|low>` | | Historische Pipeline-Option; erteilt keine Ausführung und filtert keine Review-Kandidaten. |
 | `--stdin` | | Liest das JSON-Manifest aus der Standardeingabe. |
 | `--account <NAME>` | `-a` | Wählt/übersteuert den Account nicht; muss, falls gesetzt, exakt `.agents/mail-desk-backend.json` entsprechen. |
 | `--data-dir <PFAD>` | | Pfad zum Datenverzeichnis (Standard: `data/mail-desk/`). |
@@ -156,9 +156,9 @@ abschließenden Abruf in Zielgröße statt stiller Begrenzung. Prozessfehler ode
 Envelope-JSON sind Fehlerzustände, nie ein leeres Ergebnis.
 
 `skip_known` gilt identisch für `inspect`/`draft`/`pipeline`; `--no-skip-known` wird
-nicht durch einen internen Default überschrieben. Eine aktivierte Sent-Synchronisation
-ist ein Fail-Closed-Preflight: schlägt sie fehl, erfolgen weder Klassifikation noch
-Mailbox-Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht
+nicht durch einen internen Default überschrieben. `pipeline` liest nur den vorhandenen
+Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
+autorisieren dort keine Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht
 `completed`; eine fehlgeschlagene Delete-Operation wird nie als Routing-Erfolg
 protokolliert/indiziert. Himalaya-Reads ohne geparste Header sind Fehler; nullable
 Absendernamen/Betreffe bleiben gültige leere Suchfelder.
@@ -185,12 +185,19 @@ Vor `execute` ersetzt der Reviewer den Pending-Block durch:
 }
 ```
 
-`execute` prüft Receipt, Hash, effektiven Account, jeden `source_folder` und die
-Kandidatenzahl **vor** jeder Mutation: gleich viele Kandidaten sind zulässig, weniger nur
-mit `allow_fewer: true`, mehr als `expected_count` stoppt immer. Jede nachträgliche
-Änderung an Item, Ziel, Syntheseziel, Account oder einer gehashten Angabe erfordert eine
-neue Draft-Hash-Review. Ungebundene Altmanifeste bleiben nur zur Kompatibilität mit den
-getrennten, autorisierten Dossier-/Pipeline-Pfaden akzeptiert; sie sind kein Standardweg.
+`execute` prüft Receipt/Hash, Account, Quellordner und Kandidatenzahl **vor** Mutationen:
+weniger nur mit `allow_fewer: true`, mehr niemals. Änderungen gehashter Angaben
+erfordern erneute Review. Alle sieben H2-Felder sind Pflicht: Fehlende Felder ergeben
+`incomplete_contract`, auch bei vollständig ungebundenen Altmanifesten. Keine
+`legacy_unbound`-Ausnahme; ungültige/fehlende Receipts stoppen fail-closed.
+
+Issue #58: `pipeline` liefert nur `draft` (pending), `status: review_required`,
+`executed_count: 0`, leere Telemetrie/Handoff; keine Datei-/Sent-Index-Mutation.
+Den Draft separat sichern, freigeben, ausführen und verifizieren. Bestehender
+CLI-Input-Cleanup bleibt. `dossier_apply`: inneren vollständigen H2-Auftrag
+freigeben, danach äußere Dossier-Receipt darüber binden; beide Gates vor Delegation.
+Event-Dossier behält diese Reihenfolge. Altaufträge benötigen erneute Human-Review,
+kein automatisches Upgrade.
 
 Temporäre Manifest-Lese-/Löschoperationen behandeln Windows-Dateisperren mit maximal
 drei Versuchen und Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten und der
@@ -217,13 +224,10 @@ python -B scripts/mail_desk_sign_manifest.py data/mail-desk/batch-manifest.json 
     --reviewed-by <name> [--reviewed-at <ISO 8601>] [--workspace <root>]
 ```
 
-Es lädt das Manifest, aktualisiert `candidate_count = len(items)`, verwirft einen
-alten `execute_request_sha256` aus `review`, berechnet den kanonischen Hash neu,
-setzt `review` auf `approved` samt Receipt, prüft sich selbst via
-`validate_execute_contract` (sonst Fehlerabbruch ohne Write) und schreibt atomar
-zurück. Die Uhr ist über `--reviewed-at` injizierbar; das Skript kontaktiert
-niemals die Mailbox und berührt keine andere Workspace-Datei. Es emittiert genau
-ein maschinenlesbares JSON-Envelope (`ok`, `execute_request_sha256`, `path`,
+Der Helper aktualisiert `candidate_count = len(items)`, ersetzt die alte Review
+durch approved/Receipt, validiert via `validate_execute_contract` und schreibt atomar;
+bei Fehler ohne Write. `--reviewed-at` injiziert die Uhr. Keine Mailbox-/anderen
+Workspace-Mutationen. Ergebnis-Envelope: (`ok`, `execute_request_sha256`, `path`,
 `reviewed_at`/`reviewed_by`, `candidate_count`).
 
 ---
@@ -282,11 +286,8 @@ NaN); nur ein exakt passender Hash berechtigt zur Ausführung, jede nachträglic
 Item-, Evidence- oder Target-Änderung macht sie ungültig. `delete_input_on_success:
 false` erhält das Manifest als Review-/Approval-Receipt.
 
-Ein optionaler `execute_request.account` ist Teil des gehashten Inhalts und damit der
-einzige zulässige Account für Execute und Verify. Ein äußerer `--account`-/Manifest-
-Account wird nur bei exakter Übereinstimmung akzeptiert; fehlt
-`execute_request.account`, ist jeder äußere Account fail-closed. Der Runner übergibt
-ausschließlich den reviewten Account an beide Handler.
+`execute_request.account` (Name oder `null`) ist H2-Pflichtfeld und bindet Execute
+und Verify. Ein äußerer Account muss exakt übereinstimmen.
 
 Nach erfolgreichem Preflight delegiert der Handler an `execute` und bei dessen Erfolg
 die normalisierten Message-IDs an `verify`; eine zweite Routing-, Index-, Evidence- oder
@@ -302,6 +303,20 @@ Review-Status zurück; der freigegebene `synthesis_handoff` bleibt kanonisch lee
   "execute_request": {
     "mode": "execute",
     "account": "primary",
+    "expected_count": 1,
+    "candidate_count": 1,
+    "allow_fewer": false,
+    "source_folder": "INBOX",
+    "skip_known": true,
+    "review": {
+      "required": true,
+      "state": "approved",
+      "approval_receipt": {
+        "reviewed_at": "2026-09-09T11:59:00Z",
+        "reviewed_by": "human-reviewer",
+        "execute_request_sha256": "<innerer-H2-hash-ohne-review>"
+      }
+    },
     "items": [
       {
         "envelope_id": "101",
@@ -781,8 +796,7 @@ bleibt, Duplikate entfallen; fehlgeschlagene Items und Pipeline-`review_needed_i
 zählen nicht. `synthesis_required` ist true, wenn mindestens eine Projekt-/Topic-ID
 betroffen ist.
 
-`pipeline` übernimmt die Telemetrie ihres Execute-Schritts; ohne Execute-Schritt oder
-bei einem Legacy-Handler ohne Telemetrie ist sie immer:
+`pipeline` führt nichts aus; ihre Telemetrie ist immer:
 
 ```json
 {
@@ -817,7 +831,7 @@ Synthese und verändern keine Wissensdateien.
 `execute` liefert zusätzlich einen strikt quellengebundenen, aber unreleased
 `synthesis_candidate`; sein `data.synthesis_handoff` ist bis zur vollständigen
 Verifikation kanonisch leer. Nur ein erfolgreicher, quellengebundener `verify`
-(direkt oder in `pipeline`) oder ein abgeschlossener `reconcile` liefert genau
+(direkt oder in `dossier_apply`) oder ein abgeschlossener `reconcile` liefert genau
 einen freigegebenen Top-Level-
 `synthesis_handoff` unter `data.synthesis_handoff` und einen `completion_report`.
 Der Handoff-Shape ist strikt versioniert:
@@ -848,9 +862,9 @@ in Input-Reihenfolge ohne Deduplizierung; Review-, fehlgeschlagene und sonstige 
 sind ausgeschlossen. Es transportiert die validierte Target-Liste des Resultats, und
 `target_selection_required` entspricht exakt `not bool(synthesis_targets)`.
 
-`pipeline` gibt den Candidate erst nach vollständig erfolgreichem Verify frei; ein
-separater, review-gebundener `verify` nur mit dem unveränderten `synthesis_candidate`
-aus seinem Execute-Ergebnis. Reine Message-ID-Listen oder neu eingegebene Items ohne
+`pipeline` gibt niemals einen Candidate frei. Ein separater, review-gebundener
+`verify` benötigt den unveränderten `synthesis_candidate` aus seinem Execute-Ergebnis.
+Reine Message-ID-Listen oder neu eingegebene Items ohne
 Quellenkontext geben keinen pending Handoff und keinen `completion_report` frei.
 Übernommen wird nur ein strukturell vollständiger Execute-Result-Container
 (`mode: execute`, `ok: true`, `status: completed`, `recovery_required: false`), dessen
@@ -865,7 +879,7 @@ gibt einen neuen Handoff frei. Der Runner behauptet keinen Wissensdatei-Abschlus
 
 `completion_report` ist das einzige technische Abschluss-Signal: `schema_version: 1`,
 `status` (`completed`, `verification_required` oder `recovery_required`), Quelle
-(`pipeline`, `dossier_apply` oder `reconcile`), normalisierte verifizierte
+(`verify`, `dossier_apply` oder `reconcile`), normalisierte verifizierte
 Message-IDs und ob ein Handoff freigegeben wurde. `completed` entsteht nur nach
 vollständig erfolgreichem Verify/Reconcile; bei Partial oder Abort ist
 ausschließlich `recovery_required` zulässig.
@@ -1198,7 +1212,7 @@ vorhandene `runner-progress.json` deterministisch auf `completed` bzw.
 
 ## Live-Fortschritts-Monitoring & Zeitschätzung (`core/progress.py`)
 
-- Bei allen Batch-Läufen (`--draft`/`--execute`/`--pipeline`/`--inspect`) führt der Runner eine atomare Statusdatei `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) mit Zählern, Prozentwert, Arbeitsschritten und deterministischer ETA.
+- Bei mutierenden Batch-Läufen (`--draft`/`execute`/`--inspect`) führt der Runner eine atomare Statusdatei `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) mit Zählern, Prozentwert, Arbeitsschritten und deterministischer ETA. `pipeline` schreibt keine Statusdatei.
 - Ungepuffertes Live-Streaming in stdout/`task.log`: jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
 - **Übersprungene bekannte Mails sind aggregiert:** Statt einer Progress-Zeile je bekannter Envelope emittiert der Scan genau eine zusammengefasste Zeile `skipped N known envelopes` pro Scan-Phase (OUT-P1, Issue #5). `known_count` und `runner-progress.json` bleiben unverändert; ein großer Bekannt-Backlog verdrängt die echte Progress-Ausgabe nicht mehr.
 - **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent`: eigener shared Lock ohne Legacy-Bypass vor Persistenz/Pruning; explizite Lease-/Conversation-Flags nur bei `draft` unverändert delegiert. Sent-Sync liest die Mailbox, schreibt lokale Ergebnisse. Runner-stdout/-stderr landen unter `<workspace>/tmp/mail-batch/`; nur der kompakte Summary erscheint im Caller-Kontext, bei Fehlern/unlesbarem Runner-Envelope mit Nichtnull-Exit. Der Runner emittiert genau einen Envelope; Doppelungen stammen aus Harness/Shell. Details und unveränderte Account-/Review-Gates: CLI-Vertrag.
