@@ -211,6 +211,43 @@ class MainTests(unittest.TestCase):
         self.assertEqual(list(self.workspace.iterdir()), [])
         run.assert_not_called()
 
+    def test_execute_rejects_unbound_manifest_before_wrapper_logs_or_pruning(self):
+        data = self.workspace / "data" / "mail-desk"
+        data.mkdir(parents=True)
+        (self.workspace / ".agents").mkdir()
+        (self.workspace / ".agents" / "mail-desk-backend.json").write_text(
+            '{"schema_version": 1, "backend": "himalaya", "account": null}', encoding="utf-8")
+        manifest = data / "batch-manifest.json"
+        manifest.write_text('{"mode":"execute","items":[]}', encoding="utf-8")
+        before = {p.relative_to(self.workspace): p.read_bytes() for p in self.workspace.rglob("*") if p.is_file()}
+        with patch.object(batch_cli, "verify_workspace_lock"), patch.object(batch_cli.subprocess, "run", side_effect=self.runner()) as child:
+            code, result = self.call("execute")
+        self.assertNotEqual(0, code)
+        self.assertFalse(result["success"])
+        self.assertEqual("incomplete_contract", result["data"]["contract_gate"]["reason_code"])
+        child.assert_not_called()
+        self.assertEqual(before, {p.relative_to(self.workspace): p.read_bytes() for p in self.workspace.rglob("*") if p.is_file()})
+
+    def test_valid_execute_sends_exact_preflighted_snapshot_and_keeps_input(self):
+        from review_fixtures import approved_execute
+        data = self.workspace / "data" / "mail-desk"
+        data.mkdir(parents=True)
+        (self.workspace / ".agents").mkdir()
+        (self.workspace / ".agents" / "mail-desk-backend.json").write_text(
+            '{"schema_version": 1, "backend": "himalaya", "account": null}', encoding="utf-8")
+        config = approved_execute({"mode": "execute", "items": []})
+        manifest = data / "batch-manifest.json"
+        manifest.write_text(json.dumps(config), encoding="utf-8")
+        with patch.object(batch_cli, "verify_workspace_lock"), patch.object(
+            batch_cli.subprocess, "run", side_effect=self.runner(),
+        ):
+            code, result = self.call("execute")
+        self.assertEqual(0, code)
+        self.assertTrue(result["success"])
+        self.assertIn("--stdin", self.command)
+        self.assertEqual(config, json.loads(self.child_options["input"]))
+        self.assertEqual(config, json.loads(manifest.read_text(encoding="utf-8")))
+
     def test_runner_failure_is_failed_summary_even_with_zero_exit(self):
         for child_exit in (0, 1, 2):
             with self.subTest(child_exit=child_exit), patch.object(batch_cli, "verify_workspace_lock"), \

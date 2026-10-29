@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 from core.modes import execute, pipeline, reconcile  # noqa: E402
 from core.recovery import BatchRecoveryJournal  # noqa: E402
 import mail_desk_batch_runner as runner  # noqa: E402
+from review_fixtures import approved_execute
 
 
 def item(*, evidence: bool = False, needs_reply: bool = False) -> dict:
@@ -103,7 +104,7 @@ class RecoveryJournalTests(unittest.TestCase):
             data = Path(tmp) / "data" / "mail-desk"
             data.mkdir(parents=True)
             mail = Mock()
-            first = execute.run_execute_mode({"items": [item()]}, data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
+            first = execute.run_execute_mode(approved_execute({"items": [item()]}), data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
             self.assertEqual("aborted", first["status"])
             self.assertTrue(first["recovery_required"])
             self.assertEqual(1, sum(1 for call in mail.call_args_list if "copy" in call.args[0]))
@@ -112,7 +113,7 @@ class RecoveryJournalTests(unittest.TestCase):
             self.assertTrue(report["read_only"])
             self.assertEqual("needs_local_repair", report["results"][0]["recovery_state"])
 
-            second = execute.run_execute_mode({"items": [item()]}, data_dir=data, dependencies=self._deps(mail, Mock(return_value="99")))
+            second = execute.run_execute_mode(approved_execute({"items": [item()]}), data_dir=data, dependencies=self._deps(mail, Mock(return_value="99")))
             self.assertTrue(second["ok"])
             self.assertEqual(1, sum(1 for call in mail.call_args_list if "copy" in call.args[0]))
             self.assertEqual(1, sum(1 for call in mail.call_args_list if "delete" in call.args[0]))
@@ -126,7 +127,7 @@ class RecoveryJournalTests(unittest.TestCase):
             data = Path(tmp) / "data" / "mail-desk"
             data.mkdir(parents=True)
             mail = Mock()
-            execute.run_execute_mode({"items": [item(evidence=True)]}, data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
+            execute.run_execute_mode(approved_execute({"items": [item(evidence=True)]}), data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
             verify = Mock(return_value="99")
             config = {"check_folders": True, "apply_local_repairs": True, "approval": {"state": "approved"}}
             first = reconcile.run_reconcile_mode(config, data_dir=data, dependencies={"verify_in_target_folder": verify})
@@ -153,7 +154,7 @@ class RecoveryJournalTests(unittest.TestCase):
                     if actual == phase:
                         raise TimeoutError(phase)
 
-                result = execute.run_execute_mode({"items": [item()]}, data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
+                result = execute.run_execute_mode(approved_execute({"items": [item()]}), data_dir=data, dependencies=self._deps(mail, Mock(return_value="99"), fault))
                 self.assertEqual("aborted", result["status"])
                 report = reconcile.run_reconcile_mode({"check_folders": True}, data_dir=data, dependencies={"verify_in_target_folder": Mock(return_value="99")})
                 self.assertIn(report["results"][0]["recovery_state"], {"complete", "needs_local_repair"})
@@ -182,7 +183,7 @@ class RecoveryJournalTests(unittest.TestCase):
                         result["fault_inject"] = inject
                     return result
 
-                payload = {"items": [item(evidence=True, needs_reply=True)]}
+                payload = approved_execute({"items": [item(evidence=True, needs_reply=True)]})
                 first = execute.run_execute_mode(
                     payload,
                     data_dir=data,
@@ -213,7 +214,7 @@ class RecoveryJournalTests(unittest.TestCase):
                 for milestone in ("copied", "verified", "source_deleted", "indexed", "logged", "evidenced", "complete"):
                     self.assertIn(milestone, phases)
 
-    def test_pipeline_does_not_verify_or_claim_synthesis_after_abort(self):
+    def test_pipeline_never_starts_execute_or_verify(self):
         verify = Mock()
         executable = item()
         executable["decision"] = {"confidence": "high"}
@@ -227,8 +228,9 @@ class RecoveryJournalTests(unittest.TestCase):
                 "run_verify_mode": verify,
             },
         )
-        self.assertEqual("aborted", result["status"])
-        self.assertTrue(result["recovery_required"])
+        self.assertEqual("review_required", result["status"])
+        self.assertEqual(0, result["executed_count"])
+        self.assertIsNone(result["execute_summary"])
         verify.assert_not_called()
 
     def test_cli_exposes_read_only_reconcile_without_competing_mode(self):

@@ -18,15 +18,22 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   vollständigen Flow. Details zu Batch-Modi und Manifesten stehen in
   [`references/batch-runner.md`](references/batch-runner.md).
 - Ein Auftrag wie „verarbeite N Mails“ bedeutet verbindlich `draft` → sichtbare
-  Manifest-Review → `execute` → `verify`. Nur ein ausdrücklich als autonomer
-  Pipeline-Lauf bezeichneter Auftrag darf `pipeline` verwenden. Der Draft bindet
+  Manifest-Review → `execute` → `verify`. `pipeline` bereitet ausschließlich einen
+  Pending-Draft vor (keine Sent-Synchronisation, Ausführung oder Verifikation);
+  auch ein ausdrücklich autonomer Auftrag ersetzt die Review nicht. Der Draft bindet
   `expected_count`, `allow_fewer`, Quellordner, Account und `skip_known` in einen
   Review-Hash; ohne passende explizite Review-Receipt führt `execute` keine
-  Mailbox- oder lokalen Batch-Mutationen aus. `allow_fewer` ist nie eine Erlaubnis
+  Mailbox- oder lokalen Batch-Mutationen aus. Fehlende Vertragsfelder, auch bei
+  vollständig ungebundenen Altmanifesten, stoppen mit `incomplete_contract`;
+  es gibt keine Dossier-/Pipeline-Ausnahme. `allow_fewer` ist nie eine Erlaubnis
   für mehr Kandidaten als `expected_count`.
 - Ein `dossier_apply` ist kein autonomer Batch: Er benötigt eine separat
   erteilte Human Review als hash-gebundenen Receipt für den exakten kanonischen
-  Execute-Request einschließlich eines optionalen `execute_request.account`.
+   Execute-Request einschließlich `execute_request.account` (Name oder `null`).
+  Der innere Execute-Request benötigt zuerst den vollständigen H2-Vertrag samt
+  eigener gültiger Approval-Receipt; erst danach wird die bestehende äußere
+  Dossier-Receipt über den gesamten inneren Request einschließlich Review gebunden.
+  Kein Gate wird automatisch signiert oder aus dem anderen Gate abgeleitet.
   Ein äußerer Account darf nur exakt diesem reviewten Wert entsprechen. Nach vollständigem Preflight der Projekt-, INBOX- und
   katalogisierten Zielordner-Grenzen delegiert er ausschließlich an den bestehenden
   `execute`→`verify`-Pfad; Fehl- oder Teilfehler bleiben Review und löschen den
@@ -68,14 +75,17 @@ Workers. Prozessisolation, Timeouts und Deadline-Verhalten bleiben unverändert.
 | Gruppe | Modi | Zweck & Verhalten |
 |---|---|---|
 | **Batch** | `draft` → `execute` → `verify` | Reguläre Abarbeitung aus `INBOX` mit Review-Hash |
+| **Vorbereitung** | `pipeline` | Nur lesende Inspektion/Klassifikation; Pending-Draft im Ergebnis, separat reviewen und ausführen |
 | **Recherche** | `inspect`, `search`, `sync_sent` | Lesende Mailbox-Sichtung & Suche |
 | **Dossier** | `dossier` → `dossier_apply` → `dossier_synthesis` (→ `dossier_handoff`) | Katalog-gebundene Projekt-/Event-Dossiers mit EVID-Ankern |
 | **Recovery** | `reconcile`, `resolve` | Lesender Wiederanlauf & Archivierung offener Fälle |
 
 Der kompakte [CLI-Wrapper](references/cli-operations.md) unterstützt `draft`,
 `execute`, `reconcile` und `sync-sent`. Vor seiner lokalen Persistenz/Pruning
-prüft er den eigenen Workspace-Lock ohne Legacy-Bypass. Explizite
-`--workspace-lease-id`/`--workspace-conversation-id` werden bei `draft` zusätzlich
+prüft er den eigenen Workspace-Lock ohne Legacy-Bypass.
+Execute-Aufträge prüft er zusätzlich vor Wrapper-Logs/Pruning gegen den bestehenden
+H2-Vertrag und übergibt nur den geprüften Snapshot per stdin an den Runner.
+Explizite `--workspace-lease-id`/`--workspace-conversation-id` werden bei `draft` zusätzlich
 unverändert an den Runner delegiert, nicht bei anderen Modi. `sync-sent` liest
 die Mailbox, schreibt jedoch lokal Sent-Index, Runner-Ergebnis und Wrapper-Logs;
 es ist keine schreibfreie Operation.
@@ -121,7 +131,7 @@ ausschließlich aus der credentials-freien Workspace-Control-Plane
 `schema_version`, `backend: "himalaya"` und `account`: Name oder `null` für den
 lokalen Standardaccount). Verfügbare Apps, Connectoren, Umgebungslisten und
 `--account` sind kein Backend-Signal und dürfen diese Bindung nicht übersteuern.
-Vor `execute` und jeder ausdrücklich autonomen `pipeline` läuft zusätzlich ein einzelner,
+Nach gültigem Execute-Vertrag und vor dessen Handler sowie vor der lesenden `pipeline` läuft ein einzelner,
 maximal zehn Sekunden langer, read-only Envelope-List-Preflight (`-s 1`) für den
 gebundenen Account und Quellordner. Fehlende oder ungültige Workspace-Konfiguration,
 falscher Account, fehlender Adapter, Timeout und unparsebare Minimalantwort stoppen

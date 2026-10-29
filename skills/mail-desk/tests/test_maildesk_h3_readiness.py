@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPTS))
 import mail_desk_batch_runner as runner  # noqa: E402
 from core.readiness import mailbox_readiness_preflight  # noqa: E402
 from core import himalaya  # noqa: E402
+from review_fixtures import approved_execute
 
 
 class MailDeskReadinessTests(unittest.TestCase):
@@ -48,7 +49,7 @@ class MailDeskReadinessTests(unittest.TestCase):
         with temporary, patch.object(runner, "run_himalaya", return_value="[]") as mail, patch.object(
             runner, "_run_execute_mode", return_value={"ok": True, "mode": "execute", "results": []},
         ) as execute:
-            result = runner.run_execute_mode({"items": [self.item()]}, account="primary", data_dir=data_dir)
+            result = runner.run_execute_mode(approved_execute({"items": [self.item()]}, account="primary"), account="primary", data_dir=data_dir)
 
         self.assertTrue(result["ok"])
         execute.assert_called_once()
@@ -64,7 +65,7 @@ class MailDeskReadinessTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             with patch.object(runner, "run_himalaya") as mail, patch.object(runner, "_run_execute_mode") as execute:
-                result = runner.run_execute_mode({"items": [self.item()]}, data_dir=data_dir)
+                result = runner.run_execute_mode(approved_execute({"items": [self.item()]}), data_dir=data_dir)
 
         self.assertFalse(result["ok"])
         self.assertEqual("WorkspaceConfiguration", result["readiness_preflight"]["error"]["type"])
@@ -74,7 +75,7 @@ class MailDeskReadinessTests(unittest.TestCase):
     def test_wrong_account_stops_before_adapter_or_execute(self) -> None:
         temporary, data_dir = self.make_workspace("configured")
         with temporary, patch.object(runner, "run_himalaya") as mail, patch.object(runner, "_run_execute_mode") as execute:
-            result = runner.run_execute_mode({"items": [self.item()]}, account="other", data_dir=data_dir)
+            result = runner.run_execute_mode(approved_execute({"items": [self.item()]}, account="configured"), account="other", data_dir=data_dir)
 
         self.assertFalse(result["ok"])
         self.assertEqual("account_mismatch", result["readiness_preflight"]["error"]["details"]["reason_code"])
@@ -93,7 +94,7 @@ class MailDeskReadinessTests(unittest.TestCase):
                 with temporary, patch.object(
                     runner, "run_himalaya", side_effect=side_effect, return_value=None if side_effect else failure,
                 ), patch.object(runner, "_run_execute_mode") as execute:
-                    result = runner.run_execute_mode({"items": [self.item()]}, account="primary", data_dir=data_dir)
+                    result = runner.run_execute_mode(approved_execute({"items": [self.item()]}, account="primary"), account="primary", data_dir=data_dir)
                 self.assertFalse(result["ok"])
                 self.assertEqual(error_type, result["readiness_preflight"]["error"]["type"])
                 execute.assert_not_called()

@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.envelope import build_error, build_success, emit_json
+from core.batch_contract import validate_execute_contract
+from core.readiness import bind_workspace_account
 from core.quarantine.attachment_fetch import verify_workspace_lock
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -168,6 +170,39 @@ def main() -> int:
                               {"mode": args.mode}, error_type="WorkspaceLockError",
                               error_details={"reason": str(exc)[:1000]}))
         return 2
+    execute_input = None
+    if args.mode == "execute":
+        # Use the runner's existing discovery/parser, but validate before opening
+        # wrapper logs or pruning. Send the validated snapshot to avoid re-reading
+        # a potentially changed file in the child; its execute gate still rechecks.
+        from mail_desk_batch_runner import _build_parser, _load_configuration, MODE_ALIASES
+
+        try:
+            dd = Path(_absolute(args.data_dir, workspace))
+            runner_args = _build_parser().parse_args(_build_args(args, workspace)[1:-1])
+            config, _ = _load_configuration(runner_args, dd)
+            if not isinstance(config, dict) or MODE_ALIASES.get(str(config.get("mode", "execute")).lower()) != "execute":
+                raise ValueError("execute wrapper requires an execute manifest")
+            contract = validate_execute_contract(config, effective_account=config.get("account"))
+            if not contract["ok"]:
+                emit_json(build_error("batch_cli", contract["message"],
+                                      {"mode": "execute", "contract_gate": contract},
+                                      error_type="ExecuteContractError"))
+                return 1
+            binding = bind_workspace_account(dd, requested_account=args.account or config.get("account"))
+            if not binding["ok"]:
+                raise ValueError("Workspace backend/account binding failed")
+            contract = validate_execute_contract(config, effective_account=binding["account"])
+            if not contract["ok"]:
+                emit_json(build_error("batch_cli", contract["message"],
+                                      {"mode": "execute", "contract_gate": contract},
+                                      error_type="ExecuteContractError"))
+                return 1
+            execute_input = json.dumps(config, ensure_ascii=False).encode("utf-8")
+        except (OSError, ValueError) as exc:
+            emit_json(build_error("batch_cli", "Execute preflight failed.",
+                                  {"mode": "execute"}, error_type=type(exc).__name__))
+            return 1
     run_dir = workspace / "tmp" / "mail-batch"
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -185,6 +220,10 @@ def main() -> int:
         runner_argv = runner_argv[:-1]
     # Anchor the bare runner name returned by _build_args to the scripts dir.
     command = [sys.executable, str(SCRIPTS_DIR / runner_argv[0]), *runner_argv[1:]]
+    child_input = {}
+    if execute_input is not None:
+        command.append("--stdin")
+        child_input["input"] = execute_input
 
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -193,7 +232,7 @@ def main() -> int:
             proc = subprocess.run(
                 command,
                 stdout=out, stderr=err, cwd=str(workspace), env=env,
-                timeout=args.timeout,
+                timeout=args.timeout, **child_input,
             )
     except subprocess.TimeoutExpired:
         emit_json(build_error(

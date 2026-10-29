@@ -1,19 +1,17 @@
-"""End-to-end orchestration handler for mail-desk batches."""
+"""Read-only pipeline preparation; execution requires a separate H2 approval."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from ..batch_contract import add_draft_contract
 from ..classifier import draft_manifest
 from ..common import resolve_data_dir
 from ..himalaya import get_single_email_details
-from ..sent_indexer import load_sent_index, sync_sent_items
-from ..completion import completion_report, release_synthesis_handoff
-from ..synthesis_handoff import canonicalize_synthesis_handoff, empty_synthesis_handoff
-from ..telemetry import canonicalize_telemetry, empty_telemetry
-from .execute import run_execute_mode
-from .verify import run_verify_mode
+from ..sent_indexer import load_sent_index
+from ..synthesis_handoff import empty_synthesis_handoff
+from ..telemetry import empty_telemetry
 
 
 def _dependency(
@@ -26,15 +24,6 @@ def _dependency(
     return default
 
 
-def _required_dependency(
-    dependencies: Mapping[str, Callable[..., Any]] | None,
-    name: str,
-) -> Callable[..., Any]:
-    if dependencies and name in dependencies:
-        return dependencies[name]
-    raise RuntimeError(f"{name} must be supplied by the batch-runner compatibility adapter")
-
-
 def run_pipeline_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -43,168 +32,49 @@ def run_pipeline_mode(
     *,
     dependencies: Mapping[str, Callable[..., Any]] | None = None,
 ) -> dict[str, Any]:
-    """Inspect, classify, execute eligible items, and optionally verify them."""
+    """Inspect/classify only, returning a pending manifest without batch writes.
+
+    No confidence level, manifest field or caller option grants execution here.
+    Sent synchronization, execute and verify are deliberately not dependencies.
+    """
+    if not dependencies or "get_unprocessed_emails" not in dependencies:
+        raise RuntimeError("get_unprocessed_emails must be supplied by the batch-runner compatibility adapter")
     resolve_data = _dependency(dependencies, "resolve_data_dir", resolve_data_dir)
-    get_unprocessed = _required_dependency(dependencies, "get_unprocessed_emails")
-    sync_sent = _dependency(dependencies, "sync_sent_items", sync_sent_items)
+    dd = data_dir or resolve_data()
+    folder = config.get("folder", "INBOX")
+    count = int(config.get("count", 20))
+    expected_count = config.get("expected_count", count)
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 1:
+        raise ValueError("expected_count must be a positive integer")
+    allow_fewer = config.get("allow_fewer", False)
+    skip_known = config.get("skip_known", True)
+    if not isinstance(allow_fewer, bool) or not isinstance(skip_known, bool):
+        raise ValueError("allow_fewer and skip_known must be booleans")
+    emails, _known_count = dependencies["get_unprocessed_emails"](
+        folder=folder, target_count=count, order=str(config.get("order", "oldest")).lower(),
+        date=config.get("date"), query=config.get("query"), account=account,
+        data_dir=dd, skip_known=skip_known, preview_lines=int(config.get("preview_lines", 30)),
+    )
     load_sent = _dependency(dependencies, "load_sent_index", load_sent_index)
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
     full_reader = _dependency(dependencies, "get_single_email_details", get_single_email_details)
-    execute = _dependency(dependencies, "run_execute_mode", run_execute_mode)
-    verify = _dependency(dependencies, "run_verify_mode", run_verify_mode)
-
-    dd = data_dir or resolve_data()
-    workspace_root = dd.parent.parent
-    folder = config.get("folder", "INBOX")
-    count = int(config.get("count", 20))
-    order = str(config.get("order", "oldest")).lower()
-    date = config.get("date")
-    query = config.get("query")
-    min_confidence = str(config.get("min_confidence", "high")).lower()
-    do_verify = bool(config.get("verify", True))
-    check_folders = bool(config.get("check_folders", False))
-    preview_lines = int(config.get("preview_lines", 30))
-    skip_known = bool(config.get("skip_known", True))
-
-    emails, _known_count = get_unprocessed(
-        folder=folder,
-        target_count=count,
-        order=order,
-        date=date,
-        query=query,
-        account=account,
-        data_dir=dd,
-        skip_known=skip_known,
-        preview_lines=preview_lines,
+    manifest = draft(
+        emails, workspace_root=dd.parent.parent, sent_lookup=load_sent(dd),
+        full_reader=full_reader, account=account, sync_sent=False,
     )
-    if not emails:
-        return {
-            "ok": True,
-            "mode": "pipeline",
-            "message": "No unprocessed emails found in folder.",
-            "total_inspected": 0,
-            "executed_count": 0,
-            "review_needed_count": 0,
-            "telemetry": empty_telemetry(),
-            "synthesis_handoff": empty_synthesis_handoff(),
-        }
-
-    if config.get("sync_sent", True):
-        try:
-            sync_sent(
-                count=int(config.get("sent_count", 150)), account=account,
-                data_dir=dd, workspace_root=workspace_root,
-            )
-        except Exception as exc:
-            return {
-                "ok": False, "mode": "pipeline", "folder": folder, "order": order,
-                "total_inspected": len(emails), "executed_count": 0,
-                "verified_count": 0, "review_needed_count": 0,
-                "review_needed_items": [], "all_succeeded": False,
-                "execute_summary": None, "verify_summary": None,
-                "telemetry": empty_telemetry(),
-                "synthesis_handoff": empty_synthesis_handoff(),
-                "error": {
-                    "type": type(exc).__name__,
-                    "message": f"Sent-items synchronization failed: {exc}",
-                    "phase": "sync_sent",
-                },
-            }
-
-    sent_lookup = load_sent(dd)
-    draft_result = draft(
-        emails,
-        workspace_root=workspace_root,
-        sent_lookup=sent_lookup,
-        full_reader=full_reader,
-        account=account,
+    manifest["mode"] = "execute"
+    add_draft_contract(
+        manifest, expected_count=expected_count, allow_fewer=allow_fewer,
+        source_folder=folder, account=account, skip_known=skip_known,
     )
-    all_drafted_items = draft_result.get("items", [])
-    confidence_rank = {"high": 3, "medium": 2, "low": 1}
-    min_rank = confidence_rank.get(min_confidence, 3)
-
-    executable_items: list[dict[str, Any]] = []
-    review_items: list[dict[str, Any]] = []
-    for item in all_drafted_items:
-        confidence = item.get("decision", {}).get("confidence", "low").lower()
-        rank = confidence_rank.get(confidence, 1)
-        target_folder = item.get("action", {}).get("target_folder", "INBOX")
-
-        if rank >= min_rank and target_folder != "INBOX":
-            executable_items.append(item)
-        else:
-            review_items.append(item)
-
-    exec_result: dict[str, Any] = {"ok": True, "results": []}
-    if executable_items:
-        exec_result = execute(
-            {"items": executable_items},
-            account=account,
-            data_dir=dd,
-            index_path=index_path,
-        )
-
-    # Any incomplete execute is explicitly a recovery boundary.  Do not run a
-    # follow-up verify or release a synthesis handoff for it.
-    if exec_result.get("status") == "aborted" or exec_result.get("recovery_required") or not exec_result.get("ok", False):
-        return {
-            "ok": False,
-            "mode": "pipeline",
-            "status": "aborted" if exec_result.get("status") == "aborted" else "recovery_required",
-            "recovery_required": True,
-            "folder": folder,
-            "order": order,
-            "total_inspected": len(emails),
-            "executed_count": len(executable_items),
-            "verified_count": 0,
-            "review_needed_count": len(review_items),
-            "review_needed_items": review_items,
-            "all_succeeded": False,
-            "execute_summary": exec_result,
-            "verify_summary": None,
-            "telemetry": empty_telemetry(),
-            "synthesis_handoff": empty_synthesis_handoff(),
-            "completion_report": completion_report(source="pipeline", status="recovery_required", recovery_required=True),
-        }
-
-    telemetry = canonicalize_telemetry(exec_result.get("telemetry"))
-    # New execute handlers provide an unreleased candidate.  The legacy fallback
-    # preserves compatibility with older adapters, but is still gated below.
-    synthesis_candidate = canonicalize_synthesis_handoff(
-        exec_result.get("synthesis_candidate", exec_result.get("synthesis_handoff"))
-    )
-
-    verify_result: dict[str, Any] | None = None
-    if do_verify and executable_items:
-        verify_result = verify(
-            {"items": executable_items, "check_folders": check_folders},
-            account=account,
-            data_dir=dd,
-            index_path=index_path,
-        )
-
-    pipeline_ok = bool(exec_result.get("ok", True)) and do_verify and bool(verify_result and verify_result.get("ok") is True)
-    synthesis_handoff = release_synthesis_handoff(synthesis_candidate, verify_result)
-    verified_ids = [row.get("message_id", "") for row in verify_result.get("results", [])] if isinstance(verify_result, dict) else []
-    recovery_required = do_verify and not pipeline_ok
-    completion_status = "completed" if pipeline_ok else ("recovery_required" if recovery_required else "verification_required")
-
     return {
-        "ok": pipeline_ok,
-        "mode": "pipeline",
-        "folder": folder,
-        "order": order,
-        "total_inspected": len(emails),
-        "executed_count": len(executable_items),
-        "verified_count": len(verify_result.get("results", [])) if verify_result else 0,
-        "review_needed_count": len(review_items),
-        "review_needed_items": review_items,
-        "all_succeeded": pipeline_ok,
-        "status": completion_status,
-        "recovery_required": recovery_required,
-        "execute_summary": exec_result,
-        "verify_summary": verify_result,
-        "telemetry": telemetry,
-        "synthesis_handoff": synthesis_handoff,
-        "completion_report": completion_report(source="pipeline", status=completion_status, verified_message_ids=verified_ids, recovery_required=recovery_required, handoff=synthesis_handoff),
+        "ok": True, "mode": "pipeline", "status": "review_required",
+        "message": "Pipeline prepares a pending draft only; review and execute it separately.",
+        "folder": folder, "order": str(config.get("order", "oldest")).lower(),
+        "total_inspected": len(emails), "executed_count": 0, "verified_count": 0,
+        "review_needed_count": len(manifest.get("items", [])),
+        "review_needed_items": manifest.get("items", []),
+        "execute_summary": None, "verify_summary": None,
+        "draft": manifest, "review": manifest["review"],
+        "telemetry": empty_telemetry(), "synthesis_handoff": empty_synthesis_handoff(),
     }

@@ -81,6 +81,15 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 
 ### Phase 2: Review-Gate
 * Ohne einen gültigen, kryptographisch bindenden Receipt mit identischem `review_hash` weigert sich die Folgestufe strikt zu starten.
+* Jeder Execute-Auftrag benötigt alle H2-Felder; auch vollständig ungebundene
+  Altmanifeste stoppen mit `incomplete_contract`. Die Fassade prüft vor Readiness,
+  der Execute-Owner vor Journal/Temp-Cleanup/Progress/Index/Log/Evidence/Mailbox.
+  Der CLI-Wrapper prüft vor eigenen Logs/Pruning und übergibt den geprüften
+  Snapshot per stdin; der Runner revalidiert.
+* `pipeline` ist ausschließlich lesende Vorbereitung: Pending-Draft im Ergebnis,
+  kein Sent-Sync, Execute, Verify oder Handoff. Konfidenz/Optionen umgehen kein Gate.
+* FR-04/`dossier_apply`: innere H2-Receipt zuerst, bestehende äußere Dossier-Receipt
+  danach über den vollständigen inneren Request; beide vor Delegation prüfen.
 
 ### Phase 3: `execute` ([`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py))
 1. Validiert den Workspace-Lock (`require_workspace_lock()`).
@@ -99,7 +108,7 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 `execute` ist bewusst **keine** Completion-Grenze: es hält nur einen
 quellengebundenen `synthesis_candidate`, während `data.synthesis_handoff` kanonisch
 leer bleibt. Erst ein erfolgreicher, quellengebundener `verify` (direkt oder in
-`pipeline`) oder ein abgeschlossener `reconcile` liefert genau einen freigegebenen
+`dossier_apply`) oder ein abgeschlossener `reconcile` liefert genau einen freigegebenen
 `synthesis_handoff` plus `completion_report`. Konsumierbar für `task-desk` ist der
 Handoff nur bei `completion_report.status: "completed"` **und**
 `handoff_released: true` mit gedeckten `verified_message_ids`. Die alte

@@ -7,7 +7,7 @@ Supports 13 modes:
 3. sync_sent: Index recent Sent Items for reply-status reconciliation
 4. execute:  Coupled routing, target verification, index upsert, logging, evidence
 5. verify:   Consistency check across final index, action log, evidence, and folders
-6. pipeline: End-to-end autonomous cycle (inspect -> classify -> execute -> verify)
+6. pipeline: Read-only inspection/classification producing a pending review draft
 7. search:   Global mailbox search by query or message_ids
 8. resolve:  Batch resolution and archival of replies-needed and review cases
 9. dossier:  Mailbox-read-only, non-executing project dossier inspection handoff
@@ -63,6 +63,9 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.batch_contract import validate_execute_contract
+from core.telemetry import empty_telemetry
+from core.synthesis_handoff import empty_synthesis_handoff
 from core.readiness import (
     bind_workspace_account,
     binding_failure_envelope,
@@ -610,9 +613,26 @@ def run_execute_mode(
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted coupled execute-mode handler."""
+    contract = validate_execute_contract(config, effective_account=config.get("account"))
+    if not contract["ok"]:
+        return {
+            "ok": False, "mode": "execute", "message": contract["message"],
+            "total_processed": 0, "all_succeeded": False, "results": [],
+            "telemetry": empty_telemetry(), "synthesis_handoff": empty_synthesis_handoff(),
+            "contract_gate": contract,
+        }
     dd, binding, failure = _bind_mailbox_mode("execute", account, data_dir)
     if failure is not None:
         return _readiness_stop("execute", failure["backend_binding"])
+    # Reject absent/invalid approval before transport readiness or handler side effects.
+    contract = validate_execute_contract(config, effective_account=binding["account"])
+    if not contract["ok"]:
+        return {
+            "ok": False, "mode": "execute", "message": contract["message"],
+            "total_processed": 0, "all_succeeded": False, "results": [],
+            "telemetry": empty_telemetry(), "synthesis_handoff": empty_synthesis_handoff(),
+            "contract_gate": contract,
+        }
     source_folder = _execute_source_folder(config)
     if source_folder is None:
         return _readiness_stop(
@@ -687,7 +707,7 @@ def run_verify_mode(
 
 
 # ==============================================================================
-# Pipeline Mode (Autonomous End-to-End Cycle)
+# Pipeline Mode (Review-required preparation)
 # ==============================================================================
 
 def run_pipeline_mode(
@@ -696,7 +716,7 @@ def run_pipeline_mode(
     data_dir: Path | None = None,
     index_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Compatibility facade for the extracted autonomous pipeline handler."""
+    """Workspace-bound facade for read-only pipeline preparation."""
     dd, binding, failure = _bind_mailbox_mode("pipeline", account, data_dir)
     if failure is not None:
         return _readiness_stop("pipeline", failure["backend_binding"])
@@ -715,9 +735,6 @@ def run_pipeline_mode(
             "get_single_email_details": get_single_email_details,
             "load_sent_index": load_sent_index,
             "resolve_data_dir": resolve_data_dir,
-            "run_execute_mode": run_execute_mode,
-            "run_verify_mode": run_verify_mode,
-            "sync_sent_items": sync_sent_items,
         },
     )
     result["readiness_preflight"] = readiness
@@ -1023,7 +1040,7 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--keep-input", action="store_true", help="Do not delete input file on success")
 
     # CLI Direct Modes
-    parser.add_argument("--pipeline", "-p", type=int, nargs="?", const=20, help="Run autonomous pipeline for N items")
+    parser.add_argument("--pipeline", "-p", type=int, nargs="?", const=20, help="Prepare pending review draft for N items; never execute")
     parser.add_argument("--draft", "-d", type=int, nargs="?", const=20, help="Inspect N items and draft batch-manifest.json")
     parser.add_argument("--inspect", nargs="?", const=20, type=int, help="Inspect N emails")
     parser.add_argument("--dossier", metavar="PROJECT_ID", help="Prepare a mailbox-read-only project dossier inspection handoff")
@@ -1038,7 +1055,7 @@ def _build_parser() -> EnvelopeArgumentParser:
     filters = parser.add_mutually_exclusive_group()
     filters.add_argument("--query", "-q", help="Search query filter for envelopes (e.g. 'after 2026-05-01')")
     filters.add_argument("--date", help="Exact date filter for envelopes (YYYY-MM-DD)")
-    parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Minimum confidence threshold for pipeline auto-execution")
+    parser.add_argument("--min-confidence", choices=["high", "medium", "low"], default="high", help="Legacy pipeline option; all candidates require review")
     parser.add_argument("--expected-count", type=int, help="Required selected count for --draft review manifest (defaults to N)")
     parser.add_argument("--allow-fewer", action="store_true", help="Permit fewer reviewed candidates than --expected-count for --draft")
     evaluation = parser.add_mutually_exclusive_group()

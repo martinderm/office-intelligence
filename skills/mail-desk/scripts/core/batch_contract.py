@@ -1,9 +1,4 @@
-"""Review-bound candidate-count contract for standard mail-desk batches.
-
-The contract is deliberately attached only to manifests produced by ``draft``.
-Existing explicit autonomous pipelines and the separately reviewed FR-04 dossier
-path keep their established authorization contracts.
-"""
+"""Mandatory review-bound candidate-count contract for every execute request."""
 
 from __future__ import annotations
 
@@ -19,7 +14,6 @@ _CONTRACT_KEYS = {
     "expected_count", "allow_fewer", "candidate_count", "source_folder",
     "account", "skip_known", "review",
 }
-_CONTRACT_TRIGGER_KEYS = {"expected_count", "candidate_count", "allow_fewer", "review"}
 
 
 def canonical_execute_request_sha256(config: object) -> str:
@@ -70,15 +64,7 @@ def _failure(reason_code: str, message: str, **details: Any) -> dict[str, Any]:
 def validate_execute_contract(
     config: dict[str, Any], *, effective_account: str | None,
 ) -> dict[str, Any]:
-    """Fail closed for a draft-generated manifest before any execute-side effect.
-
-    A completely unbound legacy request is intentionally accepted so FR-04 and
-    explicit pipeline callers retain their already-existing review boundaries.
-    A request that declares any H2 field must satisfy the entire contract.
-    """
-    present = _CONTRACT_TRIGGER_KEYS.intersection(config)
-    if not present:
-        return {"ok": True, "state": "legacy_unbound", "candidate_count": None}
+    """Fail closed for every request before any execute-side effect."""
     missing = sorted(_CONTRACT_KEYS - set(config))
     if missing:
         return _failure(

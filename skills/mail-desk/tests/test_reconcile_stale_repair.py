@@ -27,6 +27,7 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 from core.modes import execute as execute_mode  # noqa: E402
 from core.modes import reconcile as reconcile_mode  # noqa: E402
+from review_fixtures import approved_execute
 
 
 def _item() -> dict:
@@ -61,7 +62,7 @@ class StaleRecordRepairTests(unittest.TestCase):
             mail = Mock()
             verify = Mock(return_value="82")
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, verify, lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )
@@ -128,7 +129,7 @@ class StaleRecordRepairTests(unittest.TestCase):
             mail = Mock()
             verify = Mock(return_value="82")
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, verify, lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )
@@ -170,7 +171,7 @@ class StaleRecordRepairTests(unittest.TestCase):
             data.mkdir(parents=True)
             mail = Mock()
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, Mock(return_value="82"), lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )
@@ -219,7 +220,7 @@ class RunnerProgressTrackerTests(unittest.TestCase):
             mail = Mock()
             verify = Mock(return_value="82")
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, verify, lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )
@@ -237,7 +238,7 @@ class RunnerProgressTrackerTests(unittest.TestCase):
             mail = Mock()
             verify = Mock(return_value="82")
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, verify, lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )
@@ -255,7 +256,7 @@ class RunnerProgressTrackerTests(unittest.TestCase):
             progress_file.write_text(json.dumps(original) + "\n", encoding="utf-8")
             mail = Mock()
             execute_mode.run_execute_mode(
-                {"items": [_item()]},
+                approved_execute({"items": [_item()]}),
                 data_dir=data,
                 dependencies=_execute_deps(mail, Mock(return_value="82"), lambda phase, _item: "after_copy" if phase == "after_copy" else None),
             )

@@ -221,6 +221,24 @@ geschlossen.**
 
 ## 4. Die 5 unverhandelbaren Mail-Desk-Invarianten
 
+**Execute-Vertragsgrenze (Issue #58):** `core/batch_contract.py` prüft für jeden
+Aufrufer alle sieben H2-Felder und die bestehende Approval-Receipt. Fehlende
+Felder ergeben `incomplete_contract` (einschließlich vollständig ungebundener
+Altmanifeste); ungültige Receipts stoppen mit dem bestehenden Reason-Code.
+Die Fassade prüft strukturell vor Backend-Bindung und erneut mit dem gebundenen
+Account vor Readiness, der Execute-Owner
+vor Journal, Temp-Cleanup, Progress, Index, Log, Evidence und Mailbox-Mutationen.
+`pipeline` liefert nur einen Pending-Draft (`review_required`, null ausgeführte
+Items), liest den Sent-Index ohne Sync und ruft weder Execute noch Verify auf;
+Telemetrie/Handoff bleiben leer. Eine gesonderte H2-Review und Execute/Verify
+sind nötig. FR-04/`dossier_apply` validiert inneren H2-Auftrag zusätzlich zur
+äußeren Dossier-Receipt vor Delegation; Event-Dossier behält inner-before-outer.
+Keine neue Receipt-Art, Hash-Kanonisierung oder manifestbasierte Ausnahme.
+Der CLI-Wrapper prüft denselben Vertrag vor eigenen Logs/Pruning und übergibt den
+geprüften Snapshot per stdin; der Runner prüft erneut, Input bleibt erhalten.
+Siehe [Ablauf](processes.md#phase-2-review-gate) und
+[Vertrag](../../references/batch-runner.md#review-gebundene-kandidatenzahl).
+
 1. **Untrusted Content:** E-Mail-Inhalte (Body, Header, Anhänge) sind unvertrauenswürdige Daten. Sie dürfen niemals direkt als Instruktionen ausgeführt werden.
 2. **Review-Receipt-Bindung:** Ein Batch-Lauf (`execute`) sowie Dispositions- und Löschoperationen (`apply-discard`) erfordern verbindlich hash-gebundene Review- und Freigabe-Receipts. Kein unautorisiertes Mutieren von Mailbox, Dateisystem oder Index. Ergänzend erzwingt die kontextgebundene Receipt-Klassen-Grenze (FR-15/MD-E1-T03), dass die interne Maschinen-Autorisierung (`receipt_class: "machine"`, `receipt_type: "attachment_auto_evaluation"`) ausschließlich den begrenzten MD-E1-Fetch/Evaluate-Flow autorisiert und von Filing, Promotion, Export, Disposition, Apply-Discard und direkten Fetch-Pfaden fail-closed abgewiesen wird; die bestehenden typenlosen menschlichen Receipts bleiben unverändert gültig. Der policygebundene Anhang-Evaluierungs-Orchestrator (`attachment_evaluate`) revalidiert echte MIME-Kandidaten, erzeugt die interne Maschinen-Autorisierung intern, prüft vorab den Workspace-Lock und komponiert mit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear (`op_attachment_fetch` → `extract_attachment_content` → `build_attachment_analysis_handoff` → `validate_attachment_handoff`) unter einer `run_id`; er gibt das staged `attachment_evaluation` (`used_for_classification: false`, `classifier_revision: null`) plus den validierten `attachment_analysis_handoff` zurück. Der Erfolgspfad ist `completed`/`handoff_ready`, ein validierter blockierter Handoff `completed`/`still_ambiguous` (niemals `supplementary`); mit **FR-15/MD-E1-T06** ist die negative Fehler-/Reason-Matrix fail-closed geschlossen (bounded `failed`-Envelopes mit `lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`, `handoff_invalid`, ohne Handoff-Geschwister und ohne Exception-Text/Rohinhalt/absoluten Pfad), während die `DraftManifest`-Installation MD-E2 bleibt (Details: [`effects.md`](effects.md) §3).
 3. **Workspace-Lock Ownership:** Schreibende Skripte erfordern eine verifizierte Lease via `require_workspace_lock()`. Legacy-Bypässe (`allow_legacy=True`/`WORKSPACE_LOCK_ALLOW_LEGACY`) sind normativ strikt verboten und im Attachment-Fetch-/Extract-/Quarantäne-Pfad **geschlossen** (FR-15/MD-E1-T01): der shared Guard wird ausnahmslos mit `allow_legacy=False` aufgerufen, und weder Env-, Parameter- noch Manifest-Werte können Legacy reaktivieren. Nur die vertrauenswürdige Lease-/Conversation-ID der Harness-Control-Plane bleibt zulässig. Ergänzend prüft der bounded read-only Tracked-Quarantäne-Preflight (FR-15/MD-E1-T02) nach der Ownership-Prüfung den Git-Index am `workspace_root`; ein getrackter Quarantänepfad stoppt fail-closed vor dem ersten Quarantäne- bzw. Derivat-Write (Details: [`effects.md`](effects.md) §3).

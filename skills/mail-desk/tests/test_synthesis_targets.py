@@ -16,6 +16,7 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 from core import classifier  # noqa: E402
 from core.modes import execute as execute_mode  # noqa: E402
 from core.modes import pipeline as pipeline_mode  # noqa: E402
+from review_fixtures import approved_execute
 
 
 class SynthesisTargetsTests(unittest.TestCase):
@@ -114,7 +115,7 @@ class SynthesisTargetsTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             result = execute_mode.run_execute_mode(
-                {
+                approved_execute({
                     "items": [
                         self.item("project", targets=[project_target]),
                         self.item(
@@ -124,7 +125,7 @@ class SynthesisTargetsTests(unittest.TestCase):
                             targets=[topic_target],
                         ),
                     ]
-                },
+                }),
                 data_dir=data_dir,
                 index_path=data_dir / "index.json",
                 dependencies=self.dependencies(),
@@ -154,7 +155,7 @@ class SynthesisTargetsTests(unittest.TestCase):
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             result = execute_mode.run_execute_mode(
-                {
+                approved_execute({
                     "items": [
                         self.item("good", targets=[good_target]),
                         self.item(
@@ -165,7 +166,7 @@ class SynthesisTargetsTests(unittest.TestCase):
                             action={"type": "copy_as_move", "target_folder": "Topics/Travel"},
                         ),
                     ]
-                },
+                }),
                 data_dir=data_dir,
                 index_path=data_dir / "index.json",
                 dependencies=self.dependencies(run_himalaya=Mock(side_effect=RuntimeError("copy failed"))),
@@ -216,7 +217,7 @@ class SynthesisTargetsTests(unittest.TestCase):
                 dependencies = self.dependencies()
                 with self.assertRaisesRegex(ValueError, r"Execute item 1"):
                     execute_mode.run_execute_mode(
-                        {"items": [deepcopy(valid), invalid]},
+                        approved_execute({"items": [deepcopy(valid), invalid]}),
                         data_dir=data_dir,
                         index_path=data_dir / "index.json",
                         dependencies=dependencies,
@@ -225,7 +226,7 @@ class SynthesisTargetsTests(unittest.TestCase):
                 for dependency in dependencies.values():
                     dependency.assert_not_called()
 
-    def test_pipeline_keeps_targets_inside_execute_summary(self) -> None:
+    def test_pipeline_keeps_targets_inside_pending_draft(self) -> None:
         target = self.target("memory/references/projects/meshe/statusampel.md")
         executable = self.item("pipeline", targets=[target])
         executable["decision"]["confidence"] = "high"
@@ -253,7 +254,8 @@ class SynthesisTargetsTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(execute_result, result["execute_summary"])
+        self.assertIsNone(result["execute_summary"])
+        self.assertEqual([target], result["draft"]["items"][0]["synthesis_targets"])
         self.assertNotIn("synthesis_targets", result)
 
 
