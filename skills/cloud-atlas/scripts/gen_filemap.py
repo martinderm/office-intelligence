@@ -966,13 +966,24 @@ def run_generation(args):
                 existing_info,
                 planned_mirrors.get(rel_to_workspace_forward),
             )
+            mirror_is_current = True
             if markdown_mirror:
                 file_entry["markdown_mirror"] = markdown_mirror
                 artifact_metadata = _read_mirror_artifact_metadata(
                     workspace_root, markdown_mirror
                 )
                 if artifact_metadata is not None:
-                    file_entry["artifact_metadata"] = artifact_metadata
+                    stored_source_sha256 = artifact_metadata.get("source_sha256")
+                    if (
+                        isinstance(stored_source_sha256, str)
+                        and stored_source_sha256.strip().lower() == sha256.lower()
+                    ):
+                        file_entry["artifact_metadata"] = artifact_metadata
+                    else:
+                        # A retained mirror from an older source revision must
+                        # not become the current artifact, and its stale
+                        # metadata must not fail validate_filemap().
+                        mirror_is_current = False
 
             derivative = select_derivative(
                 workspace_root,
@@ -1005,7 +1016,20 @@ def run_generation(args):
                         "No converter available or conversion not yet run"
                     )
             elif markdown_mirror:
-                file_entry["conversion_status"] = "converted"
+                if mirror_is_current:
+                    file_entry["conversion_status"] = "converted"
+                else:
+                    previous_status = existing_info.get("conversion_status")
+                    file_entry["conversion_status"] = (
+                        previous_status
+                        if isinstance(previous_status, str) and previous_status != "converted"
+                        else "conversion_required"
+                    )
+                    file_entry["conversion_error"] = existing_info.get(
+                        "conversion_error",
+                        "Retained Markdown mirror does not match the current source.",
+                    )
+                    file_entry["mirror_stale"] = True
             elif existing_info.get("conversion_status"):
                 file_entry["conversion_status"] = existing_info["conversion_status"]
                 if existing_info.get("conversion_error"):
@@ -1015,8 +1039,21 @@ def run_generation(args):
                 overlay_entry = curation_overlay.match(rel_to_workspace_forward, sha256) if curation_overlay else None
             except ValueError as exc:
                 raise GenerationError("curation", sid, exc, storage_results) from exc
+            existing_for_merge = existing_info
+            if (
+                mirror_is_current
+                and isinstance(existing_info, dict)
+                and "mirror_stale" in existing_info
+            ):
+                # Derived state from an earlier run must not leak into a now
+                # current mirror (the flag is not a reserved generated field).
+                existing_for_merge = {
+                    key: value
+                    for key, value in existing_info.items()
+                    if key != "mirror_stale"
+                }
             files_data[rel_to_workspace_forward] = merge_curated_metadata(
-                existing_info,
+                existing_for_merge,
                 file_entry,
                 overlay_entry,
                 overlay_active=curation_overlay is not None,

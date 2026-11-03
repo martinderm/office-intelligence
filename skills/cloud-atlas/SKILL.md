@@ -27,11 +27,11 @@ Der Skill kapselt folgende Aufgaben:
      - *`local_derivative` (Standard & sichere Voreinstellung)*: Bei bildbasierten PDFs wird das OCR-Ergebnis als durchsuchbares PDF unter `_derivatives/` abgelegt; das Original im Cloud-Speicher bleibt 100% unberührt.
      - *`enrich_source`*: Kontrollierte In-place-Anreicherung des Cloud-Originals nur bei beschreibbarem Speicher und nicht signierten PDFs.
      - *`disabled` / `--no-ocr`*: Deaktiviert jegliche OCR-Verarbeitung.
-     - *Präzise Scan-Erkennung & Signaturschutz*: Kurze 1-Zeiler-Digital-PDFs mit echten Schriften werden geschützt und nicht fehlerhaft als Scan behandelt. Digital signierte PDFs werden vor In-place-Mutationen strikt geschützt.
+     - *Präzise Scan-Erkennung & Signaturschutz*: Kurze 1-Zeiler-Digital-PDFs mit echten Schriften werden geschützt und nicht fehlerhaft als Scan behandelt. Bereits OCR-te, **getaggte** PDFs mit Textebene (auch mit sehr kurzem Text) gelten als digital: Die Tagged-Erkennung läuft PyMuPDF-first über `/StructTreeRoot` und `/MarkInfo` am Katalog, mit einem Rohbyte-Fallback nur wenn PyMuPDF fehlt oder scheitert. Digital signierte PDFs werden vor In-place-Mutationen strikt geschützt.
    - Konvertierungen laufen prozessual isoliert auf mehreren CPU-Kernen (Standard: 2 Kerne, `--jobs 2`) mit individuellem Datei-Timeout (`--file-timeout 60`).
 2. **Filemap- & Manifest-Generierung**: Erstellt eine strukturierte JSON-Datenbank (`filemap.json`) und eine lesbare Markdown-Tabelle (`filemap.md`) mit Metadaten (SHA-256, Größe, Version, Änderungsdatum, Beschreibung, Mirror-Link, Derivat-Link und Konvertierungsstatus).
 3. **Fallback & Katalogisierung (`conversion_required`)**: Fehlt ein Konverter für `.doc`-Dateien, scheitert die OCR-Verarbeitung oder ist ein PDF digital signiert bei `enrich_source`, bricht der Scan nicht ab; die Datei wird vollständig katalogisiert und als `conversion_required` markiert.
-4. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen und Derivate unter `_derivatives/` (wenn das Original in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse.
+4. **Orphaned Cleanups**: Bereinigt automatisch verwaiste Markdown-Spiegelungen und Derivate unter `_derivatives/` (wenn das Original in der Cloud gelöscht wurde) sowie leere Zwischenverzeichnisse. Schlägt die Konvertierung einer weiterhin inventarisierten Quelle fehl (`conversion_required` oder `failed`), bleiben ihr Mirror und ihr Derivat erhalten; ein nicht mehr zum aktuellen Quellhash passender Mirror wird im Filemap-Eintrag mit `mirror_stale: true` markiert statt als aktuell ausgegeben.
 
 ### Mirror-Zielkollisionen
 
@@ -363,8 +363,8 @@ python .agents/skills/cloud-atlas/scripts/convert_cloud_docs.py --project-id mes
 * **`--ocr-policy local_derivative` (Standard):** Durchsuchbares PDF-Derivat wird isoliert unter `_derivatives/` abgelegt; Originaldatei in der Cloud bleibt unverändert.
 * **`--ocr-policy enrich_source`:** In-place-Anreicherung des Originals im Cloud-Verzeichnis. Nur zulässig bei beschreibbarem Speicher, sicher als unsigniert geprüften PDFs und verfügbarer Rückholung/Versionierung; die Promotion erfolgt über eine temporäre Geschwisterdatei und `os.replace()`.
 * **`--ocr-policy disabled` bzw. `--no-ocr`:** Deaktiviert OCR vollständig (Standard-Textparsing ohne OCRmyPDF-Aufruf).
-* **`--redo-ocr`:** Erzwingt die Neuerstellung bestehender OCR-Textebenen (entspricht `ocrmypdf --redo-ocr`).
-* **Sichere Parameter:** OCRmyPDF läuft standardmäßig mit `--output-type pdf --optimize 0` (verlustfreie Textebenen-Ergänzung).
+* **`--redo-ocr`:** Erzwingt die Neuerstellung bestehender OCR-Textebenen (`ocrmypdf --redo-ocr --tagged-pdf-mode ignore`). `--tagged-pdf-mode ignore` wird **nur** in diesem expliziten Redo-Zweig verwendet und verwirft die Struktur bewusst; `--skip-text` wird dort nicht zusätzlich gesetzt, weil sich beide Optionen in OCRmyPDF ausschließen.
+* **Sichere Parameter:** OCRmyPDF läuft standardmäßig mit `--output-type pdf --optimize 0 --skip-text`. Seiten mit vorhandener Textebene werden also nicht neu OCRt und ihre Tags bleiben erhalten; nur bild-only Seiten werden ergänzt.
 
 #### 7. Konverter-Voraussetzungen für `.doc`
 Für die Konvertierung alter Word 97–2003 `.doc`-Dateien:
@@ -422,7 +422,7 @@ ocr_notice: "Hinweis: Text wurde mittels OCR aus einem Bild-PDF erfasst. Bei kri
 ```
 
 ### B. Schutz digitaler und digital signierter PDFs
-1. **Präzise Scan-Erkennung**: `convert_cloud_docs.py` analysiert die PDF-Struktur auf Vorhandensein digitaler Schriften (`/Type /Font`, `/FontDescriptor`, `/TrueType`) und Textoperatoren (`BT ... ET`). Kurze digitale Dokumente (z. B. 1-Zeiler wie Bescheide oder Buchungsbestätigungen mit < 30 Zeichen) werden als echte Digital-PDFs erkannt und niemals fälschlich OCR-mutiert.
+1. **Präzise Scan-Erkennung**: `convert_cloud_docs.py` analysiert die PDF-Struktur auf Vorhandensein digitaler Schriften (`/Type /Font`, `/FontDescriptor`, `/TrueType`) und Textoperatoren (`BT ... ET`). Kurze digitale Dokumente (z. B. 1-Zeiler wie Bescheide oder Buchungsbestätigungen mit < 30 Zeichen) werden als echte Digital-PDFs erkannt und niemals fälschlich OCR-mutiert. Zusätzlich erkennt `analyze_pdf_structure()` getaggte PDFs (`is_tagged`): PyMuPDF prüft `StructTreeRoot` und `MarkInfo/Marked` am Dokumentkatalog, Rohbytes (`/StructTreeRoot` bzw. `/MarkInfo` + `/Marked true`) sind nur der Fallback. Ein getaggtes PDF mit eigener Textebene bleibt damit digital, auch wenn die übergebene Extraktion leer oder kürzer als 30 Zeichen ist.
 2. **Schutz digital signierter PDFs**: Vor jeder Mutation wird das PDF auf Signatur-Dictionaries und ByteRanges (`/Type /Sig`, `/DocTimeStamp`, `/ByteRange`) geprüft. Digital signierte PDFs dürfen **niemals in-place mutiert** werden, da dies die Signaturgültigkeit zerstören würde. Bei `enrich_source` wird eine Warnung ausgegeben und die Datei als `conversion_required` katalogisiert.
 3. **Atomare In-place-Operationen**: Bei `enrich_source` wird das OCR-Ergebnis als temporäre Geschwisterdatei erzeugt, als PDF validiert und geflusht. Erst dann ersetzt `os.replace()` das Original auf demselben Dateisystem. Scheitert ein Schritt, wird die temporäre Datei entfernt und das Original bleibt unberührt.
 
