@@ -169,11 +169,17 @@ Absendernamen/Betreffe bleiben gültige leere Suchfelder.
 
 ### Review-gebundene Kandidatenzahl
 
-Jeder `draft`-Standard-Manifest trägt sichtbar `expected_count`, `candidate_count`,
-`allow_fewer`, `source_folder`, `account` und `skip_known`; `review` trägt im
-Pending-Zustand den SHA-256 `execute_request_sha256` des kanonischen Manifests ohne
-`review`-Block. So ist die fachliche Auswahl, nicht nur eine Mail-Liste, reviewbar
-gebunden.
+Jeder `draft`-Manifest trägt `expected_count`, `candidate_count`, `allow_fewer`,
+`source_folder`, `account`, `skip_known`; der Pending-`review` bindet den SHA-256
+`execute_request_sha256` des kanonischen Manifests ohne `review`-Block. So ist die
+Auswahl, nicht nur eine Mail-Liste, reviewbar gebunden.
+
+Das `draft`-Resultat meldet `total_drafted`, `is_empty` (`0` Items) und
+`inbox_zero` (leer und Zielordner `INBOX`, case-insensitiv). `inbox_zero` ist ein
+abgeschlossener No-op (`status: completed`, `processed: 0`): Review, Signieren und
+Execute entfallen, der Lock wird freigegeben. Für
+`0 < total_drafted < expected_count` ist `allow_fewer: true` beim Draft/Signieren
+der vorgesehene Weg, nie eine stille Erhöhung.
 
 Vor `execute` ersetzt der Reviewer den Pending-Block durch:
 
@@ -223,13 +229,18 @@ Ohne Quellcodestudium signiert das stdlib-Helferskript neu:
 
 ```bash
 python -B scripts/mail_desk_sign_manifest.py data/mail-desk/batch-manifest.json \
-    --reviewed-by <name> [--reviewed-at <ISO 8601>] [--workspace <root>]
+    --reviewed-by <name> [--reviewed-at <ISO 8601>] [--allow-fewer] [--workspace <root>]
 ```
 
-Der Helper aktualisiert `candidate_count = len(items)`, ersetzt die alte Review
-durch approved/Receipt, validiert via `validate_execute_contract` und schreibt atomar;
-bei Fehler ohne Write. `--reviewed-at` injiziert die Uhr. Keine Mailbox-/anderen
-Workspace-Mutationen. Ergebnis-Envelope: (`ok`, `execute_request_sha256`, `path`,
+`--allow-fewer` setzt vor Hash und Self-Check `allow_fewer = true` (nur die
+Rumpf-Batch-Freigabe; `more_than_expected` und fehlende Review-Felder bleiben
+Fehler). `items == []` ist ein No-op (Exit 0, `noop`/`is_empty`/`signed: false`,
+keine Dateiänderung); fehlende oder nicht-Listen-`items` bleiben Fehler.
+
+Der Helper aktualisiert `candidate_count = len(items)`, ersetzt die Review durch
+approved/Receipt, validiert via `validate_execute_contract` und schreibt atomar;
+bei Fehler ohne Write, ohne Mailbox-/andere Workspace-Mutationen; `--reviewed-at`
+injiziert die Uhr. Ergebnis-Envelope: (`ok`, `execute_request_sha256`, `path`,
 `reviewed_at`/`reviewed_by`, `candidate_count`).
 
 ---

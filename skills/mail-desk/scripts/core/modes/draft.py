@@ -161,13 +161,18 @@ def run_draft_mode(
     output_path = Path(output_file).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_path, manifest)
-    tracker.complete(f"Drafted {len(manifest.get('items', []))} items to {output_path.name}")
+    total_drafted = len(manifest.get("items", []))
+    is_empty = total_drafted == 0
+    tracker.complete(f"Drafted {total_drafted} items to {output_path.name}")
     return {
         "ok": True,
         "mode": "draft",
         "folder": folder,
         "order": order,
-        "total_drafted": len(manifest.get("items", [])),
+        "total_drafted": total_drafted,
+        "is_empty": is_empty,
+        # An empty INBOX batch is the terminal inbox-zero signal for the SOP.
+        "inbox_zero": is_empty and str(folder).strip().upper() == "INBOX",
         "expected_count": expected_count,
         "allow_fewer": manifest["allow_fewer"],
         "candidate_count": manifest["candidate_count"],
