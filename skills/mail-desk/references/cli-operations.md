@@ -141,11 +141,20 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Workspace-Backend-Datei. `--keep N` (Default 10, Minimum 1) steuert die
    Persistenz-Hygiene: pro Dateimuster bleiben nur die neuesten N
    Envelope-/Progress-Dateien in `tmp/mail-batch/` erhalten.
+   `reconcile` ist ohne Zusatzflag **read-only**. `--apply` ist nur mit
+   `reconcile` zulässig, setzt `apply_local_repairs: true` und erzeugt eine
+   explizite CLI-Approval-Receipt (`state: "approved"`, `reviewed_at`,
+   `reviewed_by`); `--approved-by <NAME>` überschreibt den Reviewer (Default
+   `cli-operator`). `--apply` repariert ausschließlich lokale
+   Index-/Log-/Evidence-Records nach frischer Ziel-Verifikation und mutiert
+   niemals die Mailbox. `--apply` in anderen Modi sowie `--approved-by` ohne
+   `--apply` sind Argumentfehler.
 
    ```bash
    python3 scripts/mail_desk_batch_cli.py draft --count 10
    python3 scripts/mail_desk_batch_cli.py execute
    python3 scripts/mail_desk_batch_cli.py reconcile
+   python3 scripts/mail_desk_batch_cli.py reconcile --apply --approved-by operator
    python3 scripts/mail_desk_batch_cli.py sync-sent --count 150
    ```
 

@@ -1687,7 +1687,98 @@ Writer oder Trustpfad. Header 10 s/ein Versuch, Listing 30 s/zwei Versuche und
 Kosten und beweist keine reine Netzwerklatenz. [Vertrag](../../references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12),
 [synthetische Tests](../../tests/test_verify_header_diagnostics.py).
 
+**Kandidatenpriorität und Reihenfolge (2026-11-03):**
+`verify_in_target_folder` prüft exakte Subject-Treffer vor Prefix-Treffern und
+behält innerhalb jeder Gruppe die Listing-Reihenfolge des Zielordners (neueste
+zuerst) bei; das frühere `reversed(candidates)` entfällt. Ohne Kandidaten prüft
+der Fallback die **ersten fünf** Envelopes der Listing-Reihenfolge, nicht die
+letzten fünf. Der Prefix-Vergleich bleibt auf `subject[:30]` beschränkt; die
+Priorisierung verhindert, dass ein generischer 30-Zeichen-Prefix einen exakten
+Treffer verdrängt. Kandidaten-/Envelope-Zählung, Header-Budget (maximal fünf
+Kandidaten plus optionaler Fast-Path), Message-ID-Match und die 10s/30s-Budgets
+bleiben unverändert.
+Regression: [synthetische Header-Tests](../../tests/test_verify_header_diagnostics.py)
+(exakte Priorität, Prefix-Listing-Reihenfolge, Fallback-Reihenfolge).
+
 Vertrag: [Batch-Runner](../../references/batch-runner.md).
 Regression: [vier öffentliche Reconcile-Seam-Tests](../../tests/test_reconcile_candidate_env.py)
 (Cross-Folder ohne Hinweis, Copy-in-place, Keep-in-place, persistierter Ziel-Hinweis).
 L1: [§8](../../../../docs/system-map/README.md#8-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
+
+## 37. Issues #65 und #66: Reconcile-Evidence-Casefold, CLI-Apply, Skip-Known-Identität
+
+**#66 Skip-Known:** `_scan_unprocessed_emails` überspringt eine physisch
+vorhandene Mail ausschließlich dann, wenn ihre **eigene** normalisierte
+Message-ID als Key in `final-location-index.json`/`items` steht. Beide
+Scan-Pfade (Query-/Datums-Pfad und gepatchter Oldest/Newest-Pfad) folgen dieser
+Regel; `known_location` stammt nur aus `known_items[mid]`. Der
+Subject/Absender-Signaturindex ist nicht-autoritativ: Er löst weder
+`known_count` noch `known_location` noch ein vorzeitiges `continue` aus.
+Thread-Folgemails mit gleichem normalisiertem Betreff, neuer Message-ID und ggf.
+anderem Absender werden vollständig gelesen (`get_single_email_details`) und an
+`collected` übergeben; sie können ein `signature_hint`
+(`final_folder`/`message_id`) tragen. Dieser Hinweis ist **nicht autoritativ**,
+kann im Inspect-Output (`batch-inspected.json`) erscheinen, löst keinen Skip und
+keine Routingentscheidung aus und wird nicht als Index-/Journal-/Evidence-
+Entscheidung übernommen. `build_signature_index` vergibt den
+`(subject, "")`-Fallback nur noch an eindeutige Subjekte (gleiche Message-ID und
+gleiches Ziel); mehrdeutige Subjekte und leere Message-IDs erhalten keinen
+Eintrag.
+Regression: [Skip-Known-Identität](../../tests/test_batch_runner_skip_known_identity.py)
+(Query- und Paged-Pfad, Thread-Reply, Fremdabsender-Fallback, Signatur-Ambiguität).
+
+**#65 Reconcile-Evidence:** Der Reconcile-Report vergleicht die normalisierte
+Message-ID case-insensitiv gegen den lowercased Evidenztext; eine leere ID
+matcht nie. Read-only-, Approval- und `check_folders`-Gates bleiben unverändert.
+Die Runner-CLI bietet `--apply` nur zusammen mit `--reconcile`; es setzt
+`apply_local_repairs: true` und erzeugt eine explizite CLI-Approval-Receipt
+(`state: "approved"`, `reviewed_at`, `reviewed_by`), wobei `--approved-by <NAME>`
+den Reviewer setzt (Default `cli-operator`). `--apply` ohne `--reconcile` und
+`--approved-by` ohne `--apply` sind Argumentfehler; `--reconcile` allein bleibt
+read-only ohne Approval. Der Wrapper `mail_desk_batch_cli.py` reicht
+`reconcile --apply [--approved-by NAME]` durch und lehnt `--apply` in anderen
+Modi ab; Lock- und Persistenzlogik bleiben unverändert.
+Regression: [Reconcile-Evidence-Casefold](../../tests/test_reconcile_evidence_casefold.py),
+[Runner-CLI-`--apply`](../../tests/test_batch_runner_reconcile_apply_cli.py),
+[Wrapper-Threading](../../tests/test_batch_cli_wrapper.py).
+
+Vertrag: [Batch-Runner](../../references/batch-runner.md),
+[CLI-Betrieb](../../references/cli-operations.md).
+L1: [§9](../../../../docs/system-map/README.md#9-issues-65-und-66-reconcile-casefold-cli-apply-und-skip-known-identität).
+
+## 38. Issue #67: Dynamische Inbox-Füllstände (Rumpf-Batches und Inbox-Zero)
+
+**Rumpf-Batch (< `expected_count`):** `mail_desk_sign_manifest.py` bietet
+`--allow-fewer`. Das Flag setzt `allow_fewer = true` **vor** der Berechnung des
+kanonischen Hashes und dem Self-Check; ohne Flag bleibt der Manifestwert
+unverändert (ein vorhandenes `true` wird nie zurückgesetzt). Der Self-Check
+bleibt fail-closed: `more_than_expected` und fehlende Review-Felder sind weiter
+Fehler. Die pure Funktion `build_signed_manifest` lehnt leere `items` weiterhin
+ab; der CLI-Pfad fängt den Leerfall davor ab.
+
+**Inbox-Zero:** `items == []` ist im Signer ein strukturierter No-op mit
+Exit-Code 0 und kanonischem Erfolgs-Envelope (`ok: true`, `noop: true`,
+`is_empty: true`, `candidate_count: 0`, `signed: false`), ohne Manifest-Änderung
+und ohne Signieren. Fehlende oder nicht-Listen-`items` bleiben Fehler.
+
+**Draft-Result:** `core/modes/draft.py` ergänzt `is_empty`
+(`total_drafted == 0`) und `inbox_zero` (leer und Zielordner `INBOX`,
+case-insensitiv); `ok: true`/`total_drafted: 0` bleiben, kein neuer Status und
+keine Mailbox-Mutation. Die Runner-Fassade reicht beide Felder unverändert durch.
+
+**SOP-Guard-Clause:** In [SKILL.md](../../SKILL.md) und im
+[Batch-Runner](../../references/batch-runner.md) dokumentiert: `inbox_zero` /
+`total_drafted == 0` gilt als abgeschlossener No-op (`status: completed`,
+`processed: 0`); Review, Signieren und Execute entfallen, der Lock wird
+freigegeben. Für `0 < total_drafted < expected_count` ist `allow_fewer` beim
+Draft bzw. `--allow-fewer` beim Signieren der vorgesehene Weg, nie eine stille
+Erhöhung. Die Consumer-Datei `pipelines/mail-desk-batch.md` (Consumer-Repo
+`boku-user`) übernimmt die Guard-Clause als separaten Consumer-Schritt; sie ist
+nicht Teil dieses Repos.
+
+Regression: [Empty-Inbox-Draft](../../tests/test_batch_runner_empty_inbox.py),
+[Signer-Rumpf/No-op](../../tests/test_maildesk_sign_manifest.py),
+[Draft-Resultfelder](../../tests/test_batch_runner_modes.py).
+
+Vertrag: [Batch-Runner](../../references/batch-runner.md).
+L1: [§10](../../../../docs/system-map/README.md#10-issue-67-rumpf-batches-und-inbox-zero).

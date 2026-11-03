@@ -155,6 +155,40 @@ class BuildSignedManifestTests(unittest.TestCase):
         with self.assertRaises(signer.SignManifestError):
             signer.build_signed_manifest(manifest, reviewed_by="reviewer", reviewed_at="2026-10-16T12:00:00Z")
 
+    def test_allow_fewer_grants_a_short_batch(self) -> None:
+        manifest = _draft_manifest(count=4, expected_count=10, allow_fewer=False)
+
+        signed, receipt_hash, check = signer.build_signed_manifest(
+            manifest,
+            reviewed_by="reviewer",
+            reviewed_at="2026-10-16T12:00:00Z",
+            allow_fewer=True,
+        )
+
+        self.assertIs(True, signed["allow_fewer"])
+        self.assertEqual(4, signed["candidate_count"])
+        self.assertIs(True, check["ok"])
+        self.assertEqual(canonical_execute_request_sha256(signed), receipt_hash)
+
+    def test_allow_fewer_default_keeps_the_manifest_flag(self) -> None:
+        manifest = _draft_manifest(count=4, expected_count=10, allow_fewer=True)
+        signed, _hash, check = signer.build_signed_manifest(
+            manifest, reviewed_by="reviewer", reviewed_at="2026-10-16T12:00:00Z"
+        )
+        self.assertIs(True, signed["allow_fewer"])
+        self.assertIs(True, check["ok"])
+
+    def test_allow_fewer_never_permits_more_than_expected(self) -> None:
+        manifest = _draft_manifest(count=11, expected_count=10, allow_fewer=False)
+        with self.assertRaises(signer.SignManifestError) as caught:
+            signer.build_signed_manifest(
+                manifest,
+                reviewed_by="reviewer",
+                reviewed_at="2026-10-16T12:00:00Z",
+                allow_fewer=True,
+            )
+        self.assertEqual("more_than_expected", caught.exception.details["reason_code"])
+
 
 class CliTests(unittest.TestCase):
     """The CLI writes the signed manifest atomically and prints one envelope."""
@@ -217,6 +251,91 @@ class CliTests(unittest.TestCase):
         envelope = _stdout_envelope(completed)
         self.assertIs(False, envelope["success"])
         self.assertEqual(before, self.manifest_path.read_bytes())
+
+    def test_cli_short_batch_without_allow_fewer_is_rejected_without_write(self) -> None:
+        self._write_manifest(_draft_manifest(count=4, expected_count=10, allow_fewer=False))
+        before = self.manifest_path.read_bytes()
+        completed = _run_cli(
+            str(self.manifest_path), "--reviewed-by", "reviewer",
+            "--reviewed-at", "2026-10-16T12:00:00Z",
+        )
+        self.assertNotEqual(0, completed.returncode)
+        envelope = _stdout_envelope(completed)
+        self.assertIs(False, envelope["success"])
+        self.assertEqual("fewer_than_expected", envelope["data"]["reason_code"])
+        self.assertEqual(before, self.manifest_path.read_bytes())
+
+    def test_cli_allow_fewer_signs_a_short_batch_and_touches_only_the_manifest(self) -> None:
+        sentinel = self.workspace / "data" / "mail-desk" / "action-log.jsonl"
+        sentinel.write_bytes(b"")
+        self._write_manifest(_draft_manifest(count=4, expected_count=10, allow_fewer=False))
+        before = self.manifest_path.read_bytes()
+        completed = _run_cli(
+            str(self.manifest_path), "--reviewed-by", "reviewer",
+            "--reviewed-at", "2026-10-16T12:00:00Z", "--allow-fewer",
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        envelope = _stdout_envelope(completed)
+        self.assertIs(True, envelope["success"])
+        data = envelope["data"]
+        self.assertIs(True, data["ok"])
+        self.assertEqual(4, data["candidate_count"])
+        self.assertNotEqual(before, self.manifest_path.read_bytes())
+        self.assertEqual(b"", sentinel.read_bytes())
+
+        on_disk = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        self.assertIs(True, on_disk["allow_fewer"])
+        self.assertEqual(4, on_disk["candidate_count"])
+        self.assertEqual(canonical_execute_request_sha256(on_disk), data["execute_request_sha256"])
+        self.assertIs(True, validate_execute_contract(on_disk, effective_account=on_disk.get("account"))["ok"])
+
+    def test_cli_empty_items_is_a_structured_noop_without_write(self) -> None:
+        self._write_manifest(_draft_manifest(count=0, expected_count=10, allow_fewer=False))
+        before = self.manifest_path.read_bytes()
+        completed = _run_cli(
+            str(self.manifest_path), "--reviewed-by", "reviewer",
+            "--reviewed-at", "2026-10-16T12:00:00Z",
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        envelope = _stdout_envelope(completed)
+        _validate_envelope(envelope)
+        self.assertEqual(ENVELOPE_KEYS, tuple(envelope))
+        self.assertIs(True, envelope["success"])
+        data = envelope["data"]
+        self.assertIs(True, data["ok"])
+        self.assertIs(True, data["noop"])
+        self.assertIs(True, data["is_empty"])
+        self.assertIs(False, data["signed"])
+        self.assertEqual(0, data["candidate_count"])
+        self.assertEqual(before, self.manifest_path.read_bytes())
+
+    def test_cli_malformed_empty_items_is_rejected_without_write(self) -> None:
+        # The empty-items no-op must never mask a manifest that lacks the
+        # review-bound contract keys.
+        self._write_manifest({"mode": "execute", "items": []})
+        before = self.manifest_path.read_bytes()
+        completed = _run_cli(
+            str(self.manifest_path), "--reviewed-by", "reviewer",
+            "--reviewed-at", "2026-10-16T12:00:00Z",
+        )
+        self.assertNotEqual(0, completed.returncode)
+        envelope = _stdout_envelope(completed)
+        self.assertIs(False, envelope["success"])
+        self.assertIn("review", envelope["data"]["missing"])
+        self.assertEqual(before, self.manifest_path.read_bytes())
+
+    def test_cli_items_missing_or_not_a_list_stays_an_error(self) -> None:
+        for payload in ({"mode": "execute"}, {"mode": "execute", "items": "not-a-list"}):
+            with self.subTest(payload=payload):
+                self._write_manifest(payload)
+                before = self.manifest_path.read_bytes()
+                completed = _run_cli(
+                    str(self.manifest_path), "--reviewed-by", "reviewer",
+                    "--reviewed-at", "2026-10-16T12:00:00Z",
+                )
+                self.assertNotEqual(0, completed.returncode)
+                self.assertIs(False, _stdout_envelope(completed)["success"])
+                self.assertEqual(before, self.manifest_path.read_bytes())
 
     def test_cli_malformed_json_writes_nothing(self) -> None:
         self.manifest_path.write_text("{ this is not json", encoding="utf-8")

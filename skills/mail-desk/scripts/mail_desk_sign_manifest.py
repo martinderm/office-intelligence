@@ -6,7 +6,7 @@ After a reviewer edits the selected items of a draft manifest, the pending
 applies the canonical review-correction step without reading any source:
 
     python -B scripts/mail_desk_sign_manifest.py <manifest.json> \\
-        --reviewed-by <name> [--reviewed-at <ISO 8601>] [--workspace <root>]
+        --reviewed-by <name> [--reviewed-at <ISO 8601>] [--allow-fewer] [--workspace <root>]
 
 It recomputes ``candidate_count`` from ``len(items)``, rebuilds the canonical
 execute-request hash through ``core.batch_contract``, replaces the pending
@@ -16,6 +16,13 @@ execute-request hash through ``core.batch_contract``, replaces the pending
 one machine-readable JSON envelope and never contacts a mailbox or mutates any
 other workspace file. The manifest path resolves like any CLI argument, with an
 optional ``--workspace`` fallback for a workspace-relative path.
+
+``--allow-fewer`` sets the manifest's ``allow_fewer`` flag before the hash and
+self-check run; it never permits more items than ``expected_count`` and never
+bypasses the review fields. An empty ``items`` list on a manifest that carries
+the review-bound contract keys is a structured no-op (exit 0, ``noop: true``,
+unchanged file) instead of an error; a manifest that lacks those keys stays a
+structured error.
 """
 
 from __future__ import annotations
@@ -58,16 +65,28 @@ class SignManifestError(Exception):
         self.details = details or {}
 
 
+def _missing_trigger_keys(manifest: object) -> list[str]:
+    """Return the review-bound contract keys missing from ``manifest``."""
+    if not isinstance(manifest, dict):
+        return list(_TRIGGER_KEYS)
+    return [key for key in _TRIGGER_KEYS if key not in manifest]
+
+
 def build_signed_manifest(
     manifest: object,
     *,
     reviewed_by: str,
     reviewed_at: str,
+    allow_fewer: bool = False,
 ) -> tuple[dict[str, Any], str, dict[str, Any]]:
     """Return ``(signed manifest, execute_request_sha256, self-check result)``.
 
     Pure: performs no I/O. Raises ``SignManifestError`` when the input does not
     carry the review-bound contract or the self-check fails closed.
+
+    ``allow_fewer`` grants the contractual review waiver before hashing; it is
+    additive only (an existing ``allow_fewer: true`` is never reset) and cannot
+    bypass the self-check for more items than ``expected_count``.
     """
     if not isinstance(manifest, dict):
         raise SignManifestError(
@@ -84,7 +103,7 @@ def build_signed_manifest(
     if not timestamp:
         raise SignManifestError("--reviewed-at must be a non-empty ISO-8601 timestamp.")
 
-    missing = [key for key in _TRIGGER_KEYS if key not in manifest]
+    missing = _missing_trigger_keys(manifest)
     if missing:
         raise SignManifestError(
             "Manifest does not carry the review-bound execute contract.",
@@ -97,6 +116,8 @@ def build_signed_manifest(
 
     signed = dict(manifest)
     signed["candidate_count"] = len(items)
+    if allow_fewer:
+        signed["allow_fewer"] = True
     # The canonical helper deliberately excludes the review block, so the hash
     # is computed before the approved receipt is attached and after the count
     # is corrected; any prior pending hash is discarded with the old review.
@@ -136,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("manifest", help="Path to the reviewed batch-manifest.json to sign.")
     parser.add_argument("--reviewed-by", required=True, help="Non-empty reviewer name bound into the receipt.")
     parser.add_argument("--reviewed-at", default=None, help="ISO-8601 review timestamp (default: current UTC).")
+    parser.add_argument(
+        "--allow-fewer",
+        action="store_true",
+        help="Set allow_fewer=true before hashing (review waiver for a short batch; never more than expected_count).",
+    )
     parser.add_argument("--workspace", default=".", help="workspace root used to resolve a relative manifest (default: current directory)")
     args = parser.parse_args(argv)
 
@@ -160,10 +186,41 @@ def main(argv: list[str] | None = None) -> int:
         ))
         return 2
 
+    if isinstance(data, dict):
+        missing = _missing_trigger_keys(data)
+        if missing:
+            # The no-op never masks a malformed manifest: the review-bound
+            # contract keys are validated before the empty-items early exit.
+            emit_json(build_error(
+                ACTION,
+                "Manifest does not carry the review-bound execute contract.",
+                {"path": str(path), "missing": missing},
+                error_type="SignManifestError",
+            ))
+            return 1
+        if isinstance(data.get("items"), list) and not data["items"]:
+            # Empty inbox: a draft with zero candidates is a completed no-op.  No
+            # manifest write, no signing, no review receipt.
+            emit_json(build_success(
+                ACTION, "Empty inbox: no candidates to sign; no-op.",
+                {
+                    "ok": True,
+                    "noop": True,
+                    "is_empty": True,
+                    "candidate_count": 0,
+                    "signed": False,
+                    "path": str(path),
+                },
+            ))
+            return 0
+
     reviewed_at = (args.reviewed_at or "").strip() or utc_now_iso()
     try:
         signed, execute_request_sha256, self_check = build_signed_manifest(
-            data, reviewed_by=args.reviewed_by, reviewed_at=reviewed_at
+            data,
+            reviewed_by=args.reviewed_by,
+            reviewed_at=reviewed_at,
+            allow_fewer=bool(args.allow_fewer),
         )
     except SignManifestError as exc:
         emit_json(build_error(

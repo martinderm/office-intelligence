@@ -444,3 +444,60 @@ Vertrag: [begrenzte Headerdiagnose](../../skills/mail-desk/references/cli-operat
 L2: [Mail-Desk §36](../../skills/mail-desk/docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
 Vertrag: [Batch-Runner, Modus reconcile](../../skills/mail-desk/references/batch-runner.md).
 Regression: `skills/mail-desk/tests/test_reconcile_candidate_env.py`.
+
+**Reihenfolgefix (2026-11-03):** Die Ziel-Verifikation prüft exakte
+Subject-Treffer vor Prefix-Treffern und behält innerhalb jeder Gruppe die
+Listing-Reihenfolge (neueste zuerst) bei; das frühere `reversed()` entfällt.
+Ohne Kandidaten prüft der Fallback die ersten fünf Envelopes der
+Listing-Reihenfolge. Kein neues Budget, keine neue Mailboxoperation; die
+bestehenden maximal fünf Kandidaten plus optionaler Fast-Path bleiben.
+Regression: `skills/mail-desk/tests/test_verify_header_diagnostics.py`.
+
+## 9. Issues #65 und #66: Reconcile-Casefold, CLI-Apply und Skip-Known-Identität
+
+**#66:** `skip_known` überspringt eine physisch vorhandene Mail nur noch dann,
+wenn ihre eigene normalisierte Message-ID in `final-location-index.json`/`items`
+steht. Der Subject/Absender-Signaturindex ist nicht-autoritativ und löst weder
+`known_count`/`known_location` noch einen vorzeitigen Skip aus; Thread-Replies
+mit gleichem normalisiertem Betreff, neuer Message-ID und ggf. anderem Absender
+werden gelesen und gesammelt. Ein `signature_hint` am gesammelten Item ist
+**nicht autoritativ**, kann im Inspect-Output erscheinen und ist keine
+Skip-/Routing- oder Index-/Journal-/Evidence-Entscheidung. Der
+`(subject, "")`-Fallback des Signaturindex gilt nur für eindeutige Subjekte.
+
+**#65:** Der Reconcile-Report vergleicht die normalisierte Message-ID
+case-insensitiv gegen den lowercased Evidenztext (leere ID matcht nie). Die
+Runner-CLI erlaubt `--apply` nur mit `--reconcile`, setzt
+`apply_local_repairs: true` und erzeugt eine explizite CLI-Approval-Receipt;
+`--approved-by <NAME>` setzt den Reviewer (Default `cli-operator`). Read-only-,
+Approval- und `check_folders`-Gates bleiben unverändert; die Mailbox wird nie
+mutiert.
+
+Keine Schema-, State-Machine- oder Retry-Änderung. L2:
+[Mail-Desk §37](../../skills/mail-desk/docs/system-map/README.md#37-issues-65-und-66-reconcile-evidence-casefold-cli-apply-skip-known-identität).
+Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md),
+[CLI-Betrieb](../../skills/mail-desk/references/cli-operations.md).
+Regression: `skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`,
+`skills/mail-desk/tests/test_reconcile_evidence_casefold.py`,
+`skills/mail-desk/tests/test_batch_runner_reconcile_apply_cli.py`,
+`skills/mail-desk/tests/test_batch_cli_wrapper.py`.
+
+## 10. Issue #67: Rumpf-Batches und Inbox-Zero
+
+Der Signer `mail_desk_sign_manifest.py` akzeptiert `--allow-fewer` und setzt
+`allow_fewer = true` vor Hash und Self-Check; ohne Flag bleibt der Manifestwert
+unverändert, `more_than_expected` und fehlende Review-Felder bleiben Fehler.
+`items == []` ist ein strukturierter No-op (Exit 0, `noop`/`is_empty`/`signed:
+false`, keine Manifest-Änderung); fehlende oder nicht-Listen-`items` bleiben
+Fehler. Das Draft-Resultat trägt `is_empty` und `inbox_zero`; bei `inbox_zero`
+ist der Lauf ein abgeschlossener No-op (`status: completed`, `processed: 0`) ohne
+Review/Signieren/Execute. Die Guard-Clause ist als Skill-Vorlage in SKILL.md und
+im Batch-Runner dokumentiert; die Consumer-Pipeline `pipelines/mail-desk-batch.md`
+(Consumer-Repo `boku-user`) bleibt ein separater Consumer-Schritt.
+
+Keine Schema-/State-Machine-/Retry-Änderung; keine Mailbox-Mutation.
+L2: [Mail-Desk §38](../../skills/mail-desk/docs/system-map/README.md#38-issue-67-dynamische-inbox-füllstände-rumpf-batches-und-inbox-zero).
+Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md).
+Regression: `skills/mail-desk/tests/test_batch_runner_empty_inbox.py`,
+`skills/mail-desk/tests/test_maildesk_sign_manifest.py`,
+`skills/mail-desk/tests/test_batch_runner_modes.py`.
