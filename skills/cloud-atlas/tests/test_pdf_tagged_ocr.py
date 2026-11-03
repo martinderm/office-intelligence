@@ -22,6 +22,13 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 import convert_cloud_docs
 import gen_filemap
+from core.curation import (
+    CURATION_SCHEMA_URI,
+    GENERATED_FILEMAP_FIELDS,
+    CurationOverlayError,
+    load_curation_overlay,
+    merge_curated_metadata,
+)
 
 FIXTURE = TESTS_DIR / "fixtures" / "tagged_ocrmypdf_small_text.pdf"
 FIXTURE_SHA256 = "477c9ca5aa71b67e4a8699634828cad23f8650f013426473d521cf965d1f2d8b"
@@ -74,6 +81,75 @@ class FixtureDetectionTests(unittest.TestCase):
             missing = Path(temp_dir) / "missing.pdf"
             structure = convert_cloud_docs.analyze_pdf_structure(str(missing))
             self.assertIs(structure["is_tagged"], False)
+
+
+class CurationReservationTests(unittest.TestCase):
+    """mirror_stale is derived generated state, never curation input."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        (self.root / "data" / "cloud" / "CURATED").mkdir(parents=True)
+        self.overlay_path = self.root / "curation" / "filemap-curation.json"
+        self.overlay_path.parent.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def write_overlay(self, custom):
+        document = {
+            "$schema": CURATION_SCHEMA_URI,
+            "schema_version": 1,
+            "kind": "cloud-filemap-curation",
+            "scope": "project",
+            "target": {"id": "curated"},
+            "storage_id": "default",
+            "source_receipt": {"sha256": "a" * 64, "file_count": 1},
+            "entries": {
+                "data/cloud/CURATED/tagged.pdf": {"custom": custom},
+            },
+        }
+        self.overlay_path.write_text(json.dumps(document), encoding="utf-8")
+
+    def load_overlay(self):
+        return load_curation_overlay(
+            self.root,
+            "curation/filemap-curation.json",
+            scope="project",
+            target_id="curated",
+            storage_id="default",
+            scan_dir="data/cloud/CURATED",
+        )
+
+    def test_mirror_stale_is_reserved_and_rejected_by_the_loader(self):
+        self.assertIn("mirror_stale", GENERATED_FILEMAP_FIELDS)
+        for forged in ({"mirror_stale": True}, {"mirror_stale": False}):
+            with self.subTest(forged=forged):
+                self.write_overlay(forged)
+                with self.assertRaises(CurationOverlayError):
+                    self.load_overlay()
+
+    def test_overlay_cannot_forge_or_erase_generated_mirror_stale(self):
+        generated_stale = {
+            "conversion_status": "conversion_required",
+            "mirror_stale": True,
+        }
+        erased = merge_curated_metadata(
+            {},
+            generated_stale,
+            {"custom": {"mirror_stale": False}},
+            overlay_active=True,
+        )
+        self.assertIs(erased["mirror_stale"], True)
+        self.assertEqual(erased["conversion_status"], "conversion_required")
+
+        forged = merge_curated_metadata(
+            {},
+            {"conversion_status": "converted"},
+            {"custom": {"mirror_stale": True}},
+            overlay_active=True,
+        )
+        self.assertNotIn("mirror_stale", forged)
 
 
 class OcrInvocationTests(unittest.TestCase):
@@ -223,6 +299,56 @@ class MirrorRetentionTests(TaggedWorkspaceTestCase):
         self.assertEqual(entry["conversion_status"], "conversion_required")
         self.assertEqual(entry["markdown_mirror"], "memory/cloud/projects/test_proj/tagged.md")
         self.assertNotIn("mirror_stale", entry)
+
+    def test_conversion_required_retains_derivative_reference(self):
+        derivative_rel = "memory/cloud/projects/test_proj/_derivatives/tagged.pdf"
+        derivative_abs = self.root / derivative_rel
+        derivative_abs.parent.mkdir(parents=True, exist_ok=True)
+        derivative_abs.write_bytes(b"%PDF-1.7\n%local OCR derivative\n")
+
+        success = {
+            "data/cloud/TEST_PROJ/tagged.pdf": {
+                "success": True,
+                "markdown_body": "# BAUFELD 1 / BAUFELD 2\n",
+                "ocr_applied": True,
+                "ocr_policy": "local_derivative",
+                "derivative_path": derivative_rel,
+                "derivative_sha256": "a" * 64,
+                "conversion_method": "ocrmypdf-derivative",
+                "potential_quality_loss": "OCR text layer in searchable PDF derivative.",
+                "new_src_sha256": None,
+                "new_src_size": None,
+                "new_src_mtime": None,
+                "error": None,
+            }
+        }
+        with mock.patch.object(
+            convert_cloud_docs, "run_conversion_tasks", return_value=success
+        ):
+            self.assertEqual(self.run_conversion(), 0)
+        self.assertEqual(self.entry()["derivative"]["path"], derivative_rel)
+
+        required = {
+            "data/cloud/TEST_PROJ/tagged.pdf": {
+                "success": False,
+                "conversion_required": True,
+                "error": "synthetic conversion requirement",
+            }
+        }
+        with mock.patch.object(
+            convert_cloud_docs, "run_conversion_tasks", return_value=required
+        ):
+            self.run_conversion_state("--force")
+
+        self.assertTrue(self.mirror.is_file(), "retained mirror must survive conversion_required")
+        self.assertTrue(derivative_abs.is_file(), "retained derivative must stay on disk")
+        entry = self.entry()
+        self.assertEqual(entry["conversion_status"], "conversion_required")
+        self.assertEqual(entry["markdown_mirror"], "memory/cloud/projects/test_proj/tagged.md")
+        self.assertEqual(entry["derivative"]["path"], derivative_rel)
+        self.assertEqual(entry["derivative"]["sha256"], "a" * 64)
+        self.assertEqual(entry["derivative"]["format"], "pdf")
+        self.assertEqual(entry["derivative"]["conversion_method"], "ocrmypdf-derivative")
 
     def test_failed_conversion_retains_mirror(self):
         self._convert_successfully()

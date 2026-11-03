@@ -21,7 +21,7 @@ CURATION_SCHEMA_URI = (
 GENERATED_FILEMAP_FIELDS = frozenset({
     "version", "mtime", "size", "sha256", "markdown_mirror", "derivative",
     "conversion_status", "conversion_error", "ocr_applied", "ocr_policy",
-    "artifact_metadata", "form_fields",
+    "artifact_metadata", "form_fields", "mirror_stale",
 })
 _ENTRY_FIELDS = frozenset({"source_sha256", "description", "custom"})
 _SHA256 = re.compile(r"^[a-fA-F0-9]{64}$")

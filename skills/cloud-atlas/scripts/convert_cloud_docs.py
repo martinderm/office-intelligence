@@ -2552,6 +2552,26 @@ def run_conversion(args, run_state):
                         )
                         if mirror_source_sha256(mirror_meta) != t["src_sha256"]:
                             file_entry["mirror_stale"] = True
+                    # `derivative` is a generated field, so a merge would drop
+                    # the existing reference while retention keeps the file on
+                    # disk.  Restore it exactly when it still exists.
+                    previous_derivative = (
+                        base_existing.get("derivative")
+                        if isinstance(base_existing, dict) else None
+                    )
+                    if (
+                        isinstance(previous_derivative, dict)
+                        and all(
+                            isinstance(previous_derivative.get(key), str)
+                            and previous_derivative.get(key)
+                            for key in ("path", "sha256", "format")
+                        )
+                    ):
+                        derivative_abs = os.path.join(
+                            workspace_root, previous_derivative["path"]
+                        )
+                        if os.path.exists(get_safe_path(derivative_abs)):
+                            file_entry["derivative"] = dict(previous_derivative)
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(
                         _without_stale_mirror_flag(base_existing), file_entry, overlay_entry,
                         overlay_active=curation_overlay is not None,
