@@ -136,6 +136,8 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--index <PFAD>` | | Pfad zur `final-location-index.json`. |
 | `--keep-input` | | Verhindert das automatische Löschen des Eingabefiles bei Erfolg. |
 | `--reconcile` | | Read-only Recovery-Report für den neuesten Journal-Lauf. |
+| `--apply` | | Nur mit `--reconcile`: `apply_local_repairs: true` plus explizite CLI-Approval-Receipt; nie eine Mailbox-Mutation. |
+| `--approved-by <NAME>` | | Nur mit `--apply`: Reviewer im Receipt (Default `cli-operator`). |
 | `--workspace-lease-id <ID>` | | Delegiert die Consumer-Workspace-Lease an die Anhang-Bewertung; nur mit `--draft`/`--inspect`. |
 | `--workspace-conversation-id <ID>` | | Optionaler Conversation-Kontext der delegierten Lease; nur mit `--draft`/`--inspect`. |
 
@@ -1137,12 +1139,21 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl`/`pending-re
 ## Modus: `reconcile` (Recovery-Bericht & lokale Reparatur)
 
 `reconcile` liest das `batch-recovery-journal.json` des neuesten unterbrochenen
-Laufs und ist standardmäßig strikt **read-only**. `apply_local_repairs` schreibt
-ausschließlich lokale Index-/Log-/Evidence-Records nach und mutiert niemals die
-Mailbox. Eine lokale Reparatur setzt zwei Gates voraus: Approval-Receipt
-(`approval.state: approved`) und frische Ziel-Verifikation (`check_folders: true`);
-fehlt eines, endet der Lauf mit `approval_required` bzw. `verification_required`
-ohne jeden Write.
+Laufs und ist strikt **read-only**. `apply_local_repairs` schreibt nur lokale
+Index-/Log-/Evidence-Records und mutiert nie die Mailbox; es verlangt
+Approval-Receipt (`approval.state: approved`) und frische Ziel-Verifikation
+(`check_folders: true`), sonst `approval_required`/`verification_required` ohne Write.
+
+**CLI-Opt-in:** `--reconcile` allein bleibt read-only ohne Approval. `--apply` gilt
+nur mit `--reconcile`, setzt `apply_local_repairs: true` und erzeugt die explizite
+CLI-Approval-Receipt (`state: "approved"`, `reviewed_at`, `reviewed_by`, Default
+`cli-operator`); `--apply` ohne `--reconcile` und `--approved-by` ohne `--apply`
+sind Argumentfehler.
+
+```bash
+python3 scripts/mail_desk_batch_runner.py --reconcile
+python3 scripts/mail_desk_batch_runner.py --reconcile --apply --approved-by operator
+```
 
 Nach frischer Ziel-Verifikation repariert `apply_local_repairs` fehlende und
 **stale** Records:
@@ -1166,15 +1177,12 @@ nicht-`copy_as_move`/In-place, sonst `null`. Report: `candidate_env_id`/`verify_
 Ohne Kandidat: `no_candidate_env_id`. Verifikation/Journal/#7 unverändert;
 Headerlatenz offen; begrenzte [Headerdiagnose](cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12). [Details](../docs/system-map/README.md#36-issue-12-partiell-o2--folder-scoped-reconcile-kandidat).
 
-**Tracker-Nachführung:** Nur im `apply_local`-Pfad wird nach der Item-Schleife eine
-**bereits vorhandene** `runner-progress.json` deterministisch auf ihr End-Statum
-gesetzt: `status: completed` bei vollständigem Lauf, sonst `status: repaired`, wenn
-Index-/Log-Records repariert wurden (auch bei offener Evidence und nötigem Review);
-sonst unverändert. Ein vorhandener `error`-Eintrag wird gelöscht (`error: null`). Die
-Idempotenz-Regel bezieht sich auf die Index-/Log-Records; `schema_version`, `run_id`
-und `mode` bleiben wert-identisch, `updated_at` wird erneuert, der Schreibvorgang ist
-atomar (Tempdatei + `os.replace`). Die Datei wird nie erfunden; read-only `reconcile`
-berührt sie nicht.
+**Tracker-Nachführung:** Nur im `apply_local`-Pfad wird eine **bereits vorhandene**
+`runner-progress.json` nach der Item-Schleife deterministisch auf `status: completed`
+(vollständiger Lauf) bzw. `status: repaired` (Index-/Log-Reparatur, auch bei offener
+Evidence/Review) gesetzt; sonst unverändert, `error: null`. `schema_version`/`run_id`/
+`mode` bleiben wert-identisch, `updated_at` wird erneuert; die Datei wird nie
+erfunden, der Write ist atomar, read-only `reconcile` berührt sie nicht.
 
 ### Recovery-Fall: „Target verification failed after copy"
 
@@ -1195,13 +1203,6 @@ Reparaturmanifest `data/mail-desk/batch-reconcile.json`:
   "approval": {"state": "approved", "reviewed_at": "…", "reviewed_by": "…"}
 }
 ```
-
-Fehlende Gates brechen ohne jeden Write ab: `approval.state != "approved"` →
-read-only `approval_required`, `check_folders: false` → `verification_required`.
-`apply_local_repairs` ist rein **lokal** (nur Index/Log/Evidence), idempotent
-(`repaired_count: 0` ohne Drift) und mutiert niemals die Mailbox; es führt eine
-vorhandene `runner-progress.json` deterministisch auf `completed` bzw.
-`repaired`.
 
 ---
 
@@ -1225,16 +1226,16 @@ vorhandene `runner-progress.json` deterministisch auf `completed` bzw.
 
 ## Live-Fortschritts-Monitoring & Zeitschätzung (`core/progress.py`)
 
-- Bei mutierenden Batch-Läufen (`--draft`/`execute`/`--inspect`) führt der Runner eine atomare Statusdatei `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) mit Zählern, Prozentwert, Arbeitsschritten und deterministischer ETA. `pipeline` schreibt keine Statusdatei.
+- Mutierende Läufe (`--draft`/`execute`/`--inspect`) führen `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) atomar mit Zählern, Prozentwert, Schritten und deterministischer ETA; `pipeline` schreibt keine Statusdatei.
 - Ungepuffertes Live-Streaming in stdout/`task.log`: jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
-- **Übersprungene bekannte Mails sind aggregiert:** Statt einer Progress-Zeile je bekannter Envelope emittiert der Scan genau eine zusammengefasste Zeile `skipped N known envelopes` pro Scan-Phase (OUT-P1, Issue #5). `known_count` und `runner-progress.json` bleiben unverändert; ein großer Bekannt-Backlog verdrängt die echte Progress-Ausgabe nicht mehr.
-- **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent`: eigener shared Lock ohne Legacy-Bypass vor Persistenz/Pruning; explizite Lease-/Conversation-Flags nur bei `draft` unverändert delegiert. Sent-Sync liest die Mailbox, schreibt lokale Ergebnisse. Runner-stdout/-stderr landen unter `<workspace>/tmp/mail-batch/`; nur der kompakte Summary erscheint im Caller-Kontext, bei Fehlern/unlesbarem Runner-Envelope mit Nichtnull-Exit. Der Runner emittiert genau einen Envelope; Doppelungen stammen aus Harness/Shell. Details und unveränderte Account-/Review-Gates: CLI-Vertrag.
-- **Kompakter Fehler-Envelope (PARTIAL-FAILURE):** Bei `PartialFailure` enthält `data.results` nur die fehlgeschlagenen Items, die erfolgreichen nur als `succeeded_count` + `succeeded_envelope_ids` (IDs genügen; das Recovery-Journal führt die vollständige Liste). `execute_summary` und der Success-Envelope bleiben unverändert (OUT-P1, Issue #6).
+- **Bekannte Mails sind aggregiert:** genau eine Zeile `skipped N known envelopes` pro Scan-Phase statt einer Zeile je Envelope (OUT-P1, Issue #5); `known_count` und Progressdatei bleiben unverändert.
+- **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent` mit eigenem shared Lock ohne Legacy-Bypass vor Persistenz/Pruning; Lease-/Conversation-Flags nur bei `draft` delegiert. Sent-Sync liest die Mailbox und schreibt nur lokal. Runner-stdout/-stderr liegen unter `<workspace>/tmp/mail-batch/`; nur der kompakte Summary erreicht den Caller-Kontext, Fehler/unlesbare Envelopes enden mit Nichtnull-Exit. Genau ein Envelope pro Runner; Doppelungen stammen aus Harness/Shell. Details: CLI-Vertrag.
+- **Kompakter Fehler-Envelope:** Bei `PartialFailure` listet `data.results` nur fehlgeschlagene Items; erfolgreiche zählen als `succeeded_count`/`succeeded_envelope_ids` (das Journal führt die Liste). `execute_summary` und Success-Envelope bleiben unverändert (OUT-P1, Issue #6).
 - **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
-  1. Batch im Hintergrund mit initialem Timer von **60 Sekunden** starten (Warmup für realistische $\bar{T}_{\text{item}}$-Messung über mehrere IMAP-Operationen).
+  1. Batch im Hintergrund mit initialem Timer von **60 Sekunden** starten (Warmup für $\bar{T}_{\text{item}}$ über mehrere IMAP-Operationen).
   2. Beim Aufwachen `runner-progress.json` lesen: `status == "completed"` $\rightarrow$ Vollzugsmeldung; `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen; wiederholen.
-  3. Reduziert unnötiges Polling und schont Context Window und Ressourcen.
-- **Repair-Nachführung:** Ein `reconcile`-Lauf mit `apply_local_repairs` führt eine vorhandene `runner-progress.json` nach der Item-Schleife deterministisch auf ihr konsistentes End-Statum (`completed` bzw. `repaired`) nach; ein read-only Reconcile und eine fehlende Datei bleiben unberührt (siehe Abschnitt `reconcile`).
+  3. Reduziert Polling und schont Context Window/Ressourcen.
+- **Repair-Nachführung:** `reconcile --apply` führt eine vorhandene `runner-progress.json` nach (siehe Abschnitt `reconcile`).
 
 ---
 

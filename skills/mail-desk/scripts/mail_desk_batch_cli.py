@@ -75,6 +75,11 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
         argv = [runner, "--data-dir", data_dir, "--keep-input"]
     elif args.mode == "reconcile":
         argv = [runner, "--data-dir", data_dir, "--reconcile"]
+        if getattr(args, "apply", False):
+            argv.append("--apply")
+            approved_by = getattr(args, "approved_by", None)
+            if approved_by:
+                argv += ["--approved-by", approved_by]
     elif args.mode == "sync-sent":
         argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
     else:
@@ -153,9 +158,15 @@ def main() -> int:
     parser.add_argument("--workspace", default=".", help="workspace root (default: current directory)")
     parser.add_argument("--workspace-lease-id", default=None, help="owned workspace lease; delegated to the runner for draft")
     parser.add_argument("--workspace-conversation-id", default=None, help="owned workspace conversation; delegated to the runner for draft")
+    parser.add_argument("--apply", action="store_true", help="with reconcile: apply verified local repairs (explicit CLI approval; never mutates the mailbox)")
+    parser.add_argument("--approved-by", default=None, help="reviewer identity recorded in the --apply recovery receipt")
     parser.add_argument("--timeout", type=int, default=900, help="runner timeout in seconds")
     parser.add_argument("--keep", type=_positive_int, default=10, help="retain the newest N envelope/progress pairs in tmp/mail-batch (default 10)")
     args = parser.parse_args()
+    if args.apply and args.mode != "reconcile":
+        parser.error("--apply requires the reconcile mode")
+    if args.approved_by is not None and not args.apply:
+        parser.error("--approved-by requires --apply")
     if args.count is None:
         args.count = 150 if args.mode == "sync-sent" else 10
 

@@ -154,7 +154,10 @@ Timeouts enden sichtbar als `aborted`, nie als Erfolg oder dauerhaftes `running`
 Der first-class-Modus `reconcile` ist standardmäßig read-only: Er prüft Journal,
 Index, Log, Evidence und – wenn gebunden – das reale Ziel. Lokale Nachträge
 benötigen ausdrücklich `apply_local_repairs: true` sowie eine freigegebene
-Recovery-Receipt; er kopiert oder löscht niemals Mailboxdaten. Details stehen in
+Recovery-Receipt; die CLI aktiviert das nur über `reconcile --apply
+[--approved-by NAME]` und erzeugt dabei die Approval-Receipt selbst. `--apply`
+ohne `reconcile` ist ein Argumentfehler. Der Lauf kopiert oder löscht niemals
+Mailboxdaten. Details stehen in
 [`references/batch-runner.md`](references/batch-runner.md).
 Die optionale [Headerdiagnose](references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12)
 liefert begrenzte Zeit-/Outcome-Fakten ohne Rohheader/IDs/Exception-Texte;

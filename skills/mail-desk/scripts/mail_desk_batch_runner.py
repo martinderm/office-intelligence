@@ -1071,6 +1071,18 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--sync-sent", nargs="?", const=150, type=int, help="Fetch and index N recent Sent Items")
     parser.add_argument("--resolve", "-r", action="store_true", help="Auto-audit and resolve replies-needed cases against Sent Items")
     parser.add_argument("--reconcile", action="store_true", help="Read-only recovery report for the latest interrupted execute run")
+    parser.add_argument(
+        "--apply",
+        dest="apply_repairs",
+        action="store_true",
+        help="With --reconcile: apply verified local repairs (explicit CLI approval; never mutates the mailbox)",
+    )
+    parser.add_argument(
+        "--approved-by",
+        dest="approved_by",
+        default=None,
+        help="Reviewer identity recorded in the --apply recovery approval receipt (default: cli-operator)",
+    )
     parser.add_argument("--order", choices=["oldest", "newest"], default="oldest", help="Processing order (default: oldest)")
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
@@ -1124,6 +1136,12 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
         raise ArgumentParseError(
             "--evaluate-attachments/--no-evaluate-attachments are valid only with --draft or --inspect"
         )
+    apply_repairs = bool(getattr(args, "apply_repairs", False))
+    approved_by = getattr(args, "approved_by", None)
+    if apply_repairs and not args.reconcile:
+        raise ArgumentParseError("--apply requires --reconcile")
+    if approved_by is not None and not apply_repairs:
+        raise ArgumentParseError("--approved-by requires --apply")
     if args.reconcile and any((args.pipeline is not None, args.draft is not None, args.inspect is not None, args.dossier is not None, args.sync_sent is not None, args.resolve)):
         raise ArgumentParseError("--reconcile cannot be combined with another direct mode")
     if args.dossier is not None:
@@ -1161,7 +1179,19 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
     if args.resolve:
         return {"mode": "resolve", "auto_from_sent": True}
     if args.reconcile:
-        return {"mode": "reconcile", "check_folders": True, "apply_local_repairs": False}
+        config = {
+            "mode": "reconcile",
+            "check_folders": True,
+            "apply_local_repairs": apply_repairs,
+        }
+        if apply_repairs:
+            reviewer = (approved_by or "").strip() or "cli-operator"
+            config["approval"] = {
+                "state": "approved",
+                "reviewed_at": utc_now_iso(),
+                "reviewed_by": reviewer,
+            }
+        return config
     if args.draft is not None:
         expected_count = args.expected_count if args.expected_count is not None else args.draft
         if expected_count < 1:
