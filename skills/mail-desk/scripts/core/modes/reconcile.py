@@ -199,8 +199,15 @@ def run_reconcile_mode(
         evidence_ok: bool | None = None
         if isinstance(evidence, dict) and evidence.get("file"):
             path = (workspace_root / str(evidence["file"])).resolve()
+            # ``message_id`` is already normalized (lowercase, no angle brackets;
+            # Outlook/Exchange commonly emits uppercase hex).  Compare case-
+            # insensitively against the evidence text; an empty ID never matches.
             try:
-                evidence_ok = path.exists() and message_id in path.read_text(encoding="utf-8").lower()
+                evidence_ok = (
+                    bool(message_id)
+                    and path.exists()
+                    and message_id in path.read_text(encoding="utf-8").lower()
+                )
             except OSError:
                 evidence_ok = False
         complete_local = in_index and in_log and (evidence_ok in {True, None})

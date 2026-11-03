@@ -926,16 +926,24 @@ def verify_in_target_folder(
     except Exception:
         return None
 
-    candidates: list[str] = []
+    exact_candidates: list[str] = []
+    prefix_candidates: list[str] = []
 
-    # 1. Filter candidates by matching subject (exact or prefix, or both empty)
+    # 1. Filter candidates by matching subject.  Exact subject matches win;
+    # prefix matches are only a fallback.  Envelope listings are already in
+    # the backend's newest-first order, so keep that order instead of reversing.
     for env in envelopes:
         env_subj = env.get("subject", "").strip()
         if subject:
-            if env_subj.lower() == subject.strip().lower() or (len(subject.strip()) > 15 and env_subj.startswith(subject.strip()[:30])):
-                candidates.append(str(env["id"]))
+            wanted = subject.strip()
+            if env_subj.lower() == wanted.lower():
+                exact_candidates.append(str(env["id"]))
+            elif len(wanted) > 15 and env_subj.lower().startswith(wanted[:30].lower()):
+                prefix_candidates.append(str(env["id"]))
         elif not subject and not env_subj:
-            candidates.append(str(env["id"]))
+            prefix_candidates.append(str(env["id"]))
+
+    candidates = exact_candidates + prefix_candidates
 
     # 1b. Fallback to date only if no subject candidate found
     if not candidates and date_str:
@@ -948,14 +956,16 @@ def verify_in_target_folder(
 
     _record_listing(len(envelopes), len(candidates))
 
-    # 2. Check candidate headers (newest first, limit to top 5)
-    for cid in list(reversed(candidates))[:5]:
+    # 2. Check candidate headers in listing order (backend newest first, exact
+    # subject matches first, then prefix matches), limited to the top 5
+    for cid in candidates[:5]:
         if _header_matches(cid, "candidate"):
             return cid
 
-    # 3. Quick fallback: check top 5 newest envelopes if no candidates were found
+    # 3. Quick fallback: check the newest five envelopes in listing order if no
+    # candidates were found (never the last five)
     if not candidates:
-        for env in list(reversed(envelopes))[:5]:
+        for env in envelopes[:5]:
             cid = str(env["id"])
             if _header_matches(cid, "fallback"):
                 return cid

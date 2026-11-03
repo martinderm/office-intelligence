@@ -90,6 +90,16 @@ unverändert an den Runner delegiert, nicht bei anderen Modi. `sync-sent` liest
 die Mailbox, schreibt jedoch lokal Sent-Index, Runner-Ergebnis und Wrapper-Logs;
 es ist keine schreibfreie Operation.
 
+**SOP-Guard (leerer Posteingang, Vorlage für Consumer-Pipelines):** Meldet `draft`
+`is_empty: true`/`inbox_zero: true` (bzw. `total_drafted == 0`), ist der Lauf ein
+abgeschlossener No-op: `status: completed`, `processed: 0`; Review, Signieren und
+`execute` entfallen, der Lock wird freigegeben. `mail_desk_sign_manifest.py`
+beantwortet `items == []` selbst als No-op (Exit 0, `noop: true`, keine
+Dateiänderung). Für `0 < total_drafted < expected_count` ist `allow_fewer: true`
+beim Draft bzw. `--allow-fewer` beim Signieren der vorgesehene Weg, nie eine stille
+Erhöhung. Die konkrete Consumer-Datei `pipelines/mail-desk-batch.md` im
+Consumer-Repo übernimmt diese Guard-Clause als separaten Consumer-Schritt.
+
 ## Mutationen, Identität und Backend
 
 Vor jeder lokalen oder externen Mutation besteht verifizierte `workspace-lock`-
@@ -144,7 +154,10 @@ Timeouts enden sichtbar als `aborted`, nie als Erfolg oder dauerhaftes `running`
 Der first-class-Modus `reconcile` ist standardmäßig read-only: Er prüft Journal,
 Index, Log, Evidence und – wenn gebunden – das reale Ziel. Lokale Nachträge
 benötigen ausdrücklich `apply_local_repairs: true` sowie eine freigegebene
-Recovery-Receipt; er kopiert oder löscht niemals Mailboxdaten. Details stehen in
+Recovery-Receipt; die CLI aktiviert das nur über `reconcile --apply
+[--approved-by NAME]` und erzeugt dabei die Approval-Receipt selbst. `--apply`
+ohne `reconcile` ist ein Argumentfehler. Der Lauf kopiert oder löscht niemals
+Mailboxdaten. Details stehen in
 [`references/batch-runner.md`](references/batch-runner.md).
 Die optionale [Headerdiagnose](references/cli-operations.md#begrenzte-ziel-verifikationsdiagnose-issue-12)
 liefert begrenzte Zeit-/Outcome-Fakten ohne Rohheader/IDs/Exception-Texte;

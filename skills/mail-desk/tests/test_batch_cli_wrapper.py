@@ -106,6 +106,42 @@ class BuildArgsTests(unittest.TestCase):
         self.assertIn("OTHER-ACC", joined)
 
 
+class ReconcileApplyWrapperTests(unittest.TestCase):
+    """Issue #65: ``reconcile --apply [--approved-by NAME]`` opt-in threading."""
+
+    def test_reconcile_apply_threads_apply_and_approved_by(self) -> None:
+        argv = batch_cli._build_args(
+            _base_args(mode="reconcile", apply=True, approved_by="reviewer-a"), Path("/ws"),
+        )
+        self.assertIn("--reconcile", argv)
+        self.assertIn("--apply", argv)
+        self.assertEqual("reviewer-a", argv[argv.index("--approved-by") + 1])
+
+    def test_reconcile_without_apply_is_unchanged(self) -> None:
+        argv = batch_cli._build_args(
+            _base_args(mode="reconcile", apply=False, approved_by=None), Path("/ws"),
+        )
+        self.assertNotIn("--apply", argv)
+        self.assertNotIn("--approved-by", argv)
+
+    def test_apply_is_rejected_outside_reconcile(self) -> None:
+        for mode in ("draft", "execute", "sync-sent"):
+            with self.subTest(mode=mode), patch.object(
+                sys, "argv", ["batch-cli", mode, "--apply"],
+            ), contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as raised:
+                batch_cli.main()
+            self.assertEqual(2, raised.exception.code)
+            self.assertIn("--apply requires the reconcile mode", stderr.getvalue())
+
+    def test_approved_by_without_apply_is_rejected(self) -> None:
+        with patch.object(
+            sys, "argv", ["batch-cli", "reconcile", "--approved-by", "reviewer-a"],
+        ), contextlib.redirect_stderr(io.StringIO()) as stderr, self.assertRaises(SystemExit) as raised:
+            batch_cli.main()
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn("--approved-by requires --apply", stderr.getvalue())
+
+
 class ResolveAccountTests(unittest.TestCase):
     """Account derivation: unset means None (runner auto-binds); never a workspace literal."""
 

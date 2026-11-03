@@ -43,9 +43,62 @@ class VerifyHeaderDiagnosticsTests(unittest.TestCase):
             self.assertEqual(self.verify(facts), "1")
         self.assertEqual([row["outcome"] for row in facts["header_reads"]], ["mismatch", "match"])
         self.assertTrue(all(row["phase"] == "candidate" for row in facts["header_reads"]))
-        self.assertEqual([call.args[0][-1] for call in run.call_args_list[1:]], ["2", "1"])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list[1:]], ["0", "1"])
         self.assertEqual(facts["envelopes_seen"], 3)
         self.assertEqual(facts["candidate_count"], 3)
+
+    def test_exact_subject_match_is_prioritized_over_prefix_candidates(self):
+        """Issue #12: the generic 30-char prefix must never outrank an exact subject."""
+        facts = {}
+        subject = "[mitteilungsblatt] Mitteilungsblatt Nr. 1"
+        envelopes = [
+            {"id": "25", "subject": "[mitteilungsblatt] Mitteilungsblatt Nr. 25"},
+            {"id": "23", "subject": "[mitteilungsblatt] Mitteilungsblatt Nr. 23"},
+            {"id": "1", "subject": subject},
+        ]
+        with patch.object(himalaya, "run_himalaya", side_effect=[json.dumps(envelopes),
+                "Message-ID: <wanted@example.invalid>"]) as run:
+            self.assertEqual(
+                himalaya.verify_in_target_folder(
+                    "Newsletter", "<wanted@example.invalid>", subject=subject,
+                    account="synthetic-account", diagnostics=facts,
+                ),
+                "1",
+            )
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list[1:]], ["1"])
+        self.assertEqual(facts["candidate_count"], 3)
+        self.assertEqual([row["outcome"] for row in facts["header_reads"]], ["match"])
+
+    def test_prefix_only_candidates_keep_listing_order_as_supplied(self):
+        """Issue #12: prefix-only candidates keep the backend's newest-first order."""
+        facts = {}
+        # Wanted subject is longer than 15 chars, so the 30-char prefix matches
+        # both envelopes; neither envelope equals the wanted subject exactly.
+        subject = "[mitteilungsblatt] Mitteilungsblatt Nr. 2"
+        envelopes = [
+            {"id": "138", "subject": "[mitteilungsblatt] Mitteilungsblatt Nr. 25"},
+            {"id": "108", "subject": "[mitteilungsblatt] Mitteilungsblatt Nr. 23"},
+        ]
+        with patch.object(himalaya, "run_himalaya", side_effect=[json.dumps(envelopes),
+                "Message-ID: <wrong@example.invalid>", "Message-ID: <wanted@example.invalid>"]) as run:
+            self.assertEqual(
+                himalaya.verify_in_target_folder(
+                    "Newsletter", "<wanted@example.invalid>", subject=subject,
+                    account="synthetic-account", diagnostics=facts,
+                ),
+                "108",
+            )
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list[1:]], ["138", "108"])
+        self.assertEqual([row["outcome"] for row in facts["header_reads"]], ["mismatch", "match"])
+        self.assertEqual(facts["candidate_count"], 2)
+
+    def test_fallback_probes_the_first_five_listing_entries(self):
+        """Issue #12: no candidates means the newest five envelopes, not the last five."""
+        facts = {}
+        with patch.object(himalaya, "run_himalaya", side_effect=[self.listing(8, "Other")] + ["No ID"] * 5) as run:
+            self.assertIsNone(self.verify(facts))
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list[1:]], ["0", "1", "2", "3", "4"])
+        self.assertTrue(all(row["phase"] == "fallback" for row in facts["header_reads"]))
 
     def test_missing_header_does_not_verify(self):
         facts = {}
