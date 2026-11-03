@@ -204,6 +204,25 @@ class MailDeskCliGroupAEnvelopeTests(unittest.TestCase):
             self.assertEqual(1, missing["data"]["missing_count"])
             mocked.assert_called_once()
 
+    def test_preflight_accepts_json_flag_as_noop_and_still_runs_the_check(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            projects = root / "projects.json"
+            topics = root / "topics.json"
+            state = root / "state" / "preflight.json"
+            projects.write_text(json.dumps([{"id": "p", "mailbox_folder": "Projects/Test"}]), encoding="utf-8")
+            topics.write_text(json.dumps([{"id": "t", "mailbox_folder": "Topics/Test"}]), encoding="utf-8")
+            args = ["--json", "--projects", str(projects), "--topics", str(topics), "--state-file", str(state)]
+
+            code, stdout, stderr, mocked = self.preflight(root, args, '[{"name": "Projects/Test"}, {"name": "Topics/Test"}]')
+
+            self.assertEqual(0, code, stdout)
+            envelope = self.assert_envelope(stdout, "mailbox_preflight")
+            self.assertTrue(envelope["success"])
+            self.assertEqual("preflight", envelope["data"]["operation"])
+            self.assertEqual("", stderr)
+            mocked.assert_called_once()
+
     def test_preflight_argument_error_is_canonical(self):
         stdout, stderr = io.StringIO(), io.StringIO()
         with patch.object(sys, "argv", ["mailbox_preflight.py", "--unknown"]), redirect_stdout(stdout), redirect_stderr(stderr):

@@ -329,6 +329,7 @@ def _build_parser() -> StrictArgumentParser:
     parser = StrictArgumentParser(add_help=False, description=__doc__)
     parser.add_argument("--profile", choices=sorted(PROFILE_ACTIONS))
     parser.add_argument("--input", metavar="PATH")
+    parser.add_argument("--json", action="store_true")
     parser.add_argument("--help", action="store_true")
     return parser
 
