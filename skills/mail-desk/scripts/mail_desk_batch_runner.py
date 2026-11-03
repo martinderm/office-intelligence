@@ -247,6 +247,29 @@ def get_unprocessed_emails(
     return collected, known_count
 
 
+def _envelope_signature_hint(
+    signature_index: dict[tuple[str, str], dict[str, Any]],
+    env: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the non-authoritative subject/from routing hint for one envelope.
+
+    The hint is informational only: it is never authoritative, may appear in the
+    inspect output, never sets ``is_known``/``known_location`` and never causes an
+    envelope to be skipped.
+    """
+    env_subj = normalize_signature_text(env.get("subject"))
+    from_info = env.get("from")
+    from_addr_str = from_info.get("addr") if isinstance(from_info, dict) else str(from_info or "")
+    env_from = extract_email_address(from_addr_str)
+    entry = signature_index.get((env_subj, env_from)) or signature_index.get((env_subj, ""))
+    if not entry:
+        return None
+    return {
+        "final_folder": entry.get("final_folder") or entry.get("final_label"),
+        "message_id": entry.get("message_id"),
+    }
+
+
 def _scan_unprocessed_emails(
     folder: str,
     target_count: int,
@@ -261,6 +284,16 @@ def _scan_unprocessed_emails(
     tracker: BatchProgressTracker | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Collect unprocessed envelopes and return ``(collected, known_count, skipped_known)``.
+
+    Skip authority is the envelope's own normalized Message-ID: an envelope is
+    known only when that ID is a key of ``final-location-index.json``
+    ``items``.  The subject/from signature index is a non-authoritative routing
+    hint that never increments ``known_count``, never sets ``known_location``
+    and never triggers a ``continue``; new thread replies that reuse a subject
+    therefore stay visible and are fully read.  For those items the result may
+    carry a ``signature_hint`` (``final_folder``/``message_id``) that is not
+    authoritative, may appear in the inspect output, and is never adopted as an
+    index/journal/evidence decision.
 
     The skipped-known counter is returned instead of logged so the public wrapper
     can emit a single aggregated summary line per scan phase (OUT-P1, issue #5).
@@ -311,30 +344,23 @@ def _scan_unprocessed_emails(
                 continue
             inspected_eids.add(eid)
 
-            # Fast O(1) in-memory signature check before making any IMAP network calls
-            env_subj = normalize_signature_text(env.get("subject"))
-            from_info = env.get("from")
-            from_addr_str = from_info.get("addr") if isinstance(from_info, dict) else str(from_info or "")
-            env_from = extract_email_address(from_addr_str)
-            matched_entry = signature_index.get((env_subj, env_from)) or signature_index.get((env_subj, ""))
-
-            if matched_entry and skip_known:
-                known_count += 1
-                skipped_known += 1
-                continue
+            # Signature matches are routing hints only.  A physically present
+            # envelope may be skipped exclusively by its own Message-ID below;
+            # thread replies and same-subject mail stay visible.
+            signature_hint = _envelope_signature_hint(signature_index, env)
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
             email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
             mid = email_res.get("message_id")
-            is_known = bool((mid and mid in known_items) or matched_entry)
+            is_known = bool(mid and mid in known_items)
 
             if is_known:
                 known_count += 1
+                known_entry = known_items.get(mid) if mid else None
                 email_res["is_known"] = True
                 email_res["known_location"] = (
-                    (known_items.get(mid, {}) if mid else {}).get("final_folder")
-                    or (matched_entry.get("final_folder") if matched_entry else None)
+                    known_entry.get("final_folder") if isinstance(known_entry, dict) else None
                 )
                 if skip_known:
                     skipped_known += 1
@@ -342,6 +368,8 @@ def _scan_unprocessed_emails(
             else:
                 email_res["is_known"] = False
                 email_res["known_location"] = None
+                if signature_hint:
+                    email_res["signature_hint"] = signature_hint
 
             collected.append(email_res)
             if tracker:
@@ -371,30 +399,23 @@ def _scan_unprocessed_emails(
                 continue
             inspected_eids.add(eid)
 
-            # Fast O(1) in-memory signature check before making any IMAP network calls
-            env_subj = normalize_signature_text(env.get("subject"))
-            from_info = env.get("from")
-            from_addr_str = from_info.get("addr") if isinstance(from_info, dict) else str(from_info or "")
-            env_from = extract_email_address(from_addr_str)
-            matched_entry = signature_index.get((env_subj, env_from)) or signature_index.get((env_subj, ""))
-
-            if matched_entry and skip_known:
-                known_count += 1
-                skipped_known += 1
-                continue
+            # Signature matches are routing hints only.  A physically present
+            # envelope may be skipped exclusively by its own Message-ID below;
+            # thread replies and same-subject mail stay visible.
+            signature_hint = _envelope_signature_hint(signature_index, env)
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
             email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
             mid = email_res.get("message_id")
-            is_known = bool((mid and mid in known_items) or matched_entry)
+            is_known = bool(mid and mid in known_items)
 
             if is_known:
                 known_count += 1
+                known_entry = known_items.get(mid) if mid else None
                 email_res["is_known"] = True
                 email_res["known_location"] = (
-                    (known_items.get(mid, {}) if mid else {}).get("final_folder")
-                    or (matched_entry.get("final_folder") if matched_entry else None)
+                    known_entry.get("final_folder") if isinstance(known_entry, dict) else None
                 )
                 if skip_known:
                     skipped_known += 1
@@ -402,6 +423,8 @@ def _scan_unprocessed_emails(
             else:
                 email_res["is_known"] = False
                 email_res["known_location"] = None
+                if signature_hint:
+                    email_res["signature_hint"] = signature_hint
 
             collected.append(email_res)
             if tracker:

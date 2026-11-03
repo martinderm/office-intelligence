@@ -11,9 +11,9 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem Py
    Message-ID die Phasen `selected`, `copy_started`, `copied`, `verified`,
    `delete_started`, `source_deleted`, `indexed`, `logged`, `evidenced` und
    `complete` fest; `aborted` und `partial` sind explizite Endzustände. Nur
-   journal-eigene atomare Temp-Siblings werden aufgeräumt; Eingabemanifeste und
-   fremde Dateien bleiben Recovery-Evidenz. Ein Resume liest die gesamte
-   Phasenhistorie und beginnt exakt mit dem ersten noch fehlenden Schritt.
+   journal-eigene Temp-Siblings werden aufgeräumt; Manifeste/fremde Dateien bleiben
+   Recovery-Evidenz. Ein Resume liest die gesamte Phasenhistorie und beginnt exakt
+   mit dem ersten noch fehlenden Schritt.
 4. **Kontrollierter Einstieg:** Ein Auftrag über N Mails erzeugt zuerst einen
    regelbasierten, hash-gebundenen Manifest-Entwurf (`draft`); erst nach
    sichtbarer Review führen `execute` und `verify` aus. `pipeline` ist ebenfalls
@@ -22,7 +22,7 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem Py
 
 ### Implementierungsstruktur
 
-Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und kanonischem Ergebnis-Envelope; die Handler liegen unter `scripts/core/modes/` (`search`, `resolve`, `reconcile`, `inspect`, `draft`, `dossier`, `dossier_apply`, `dossier_synthesis`, `sync_sent`, `execute`, `verify`, `pipeline`), `search`/`resolve` direkt importiert/re-exportiert, die übrigen über Kompatibilitäts-Fassaden. So bleiben Imports, Patches, Modus-Aliase und Cleanup-/Manifest-/Sent-Index-/Mutations-/Konsistenz-Semantik stabil, ohne Importzyklus.
+Der Runner bleibt Eigentümer von CLI, Konfiguration, Dispatch und kanonischem Ergebnis-Envelope; die Handler liegen unter `scripts/core/modes/` (`search`, `resolve` direkt re-exportiert, die übrigen über Kompatibilitäts-Fassaden). So bleiben Imports, Patches, Modus-Aliase und Cleanup-/Manifest-/Sent-Index-/Mutations-/Konsistenz-Semantik stabil, ohne Importzyklus.
 
 ### Workspace-Bindung und Transport-Readiness
 
@@ -40,14 +40,13 @@ Manifest oder `--account` dürfen keine abweichende Auswahl treffen. Ein gleichl
 stoppt. Ein im Draft-/Dossier-Manifest enthaltener Account bleibt Teil der Reviewbindung
 und muss exakt übereinstimmen.
 
-Nach gültigem H2-Vertrag vor `execute` und vor der lesenden `pipeline` führt der Runner mit
-exakt diesem Account und Quellordner ein einzelnes read-only
-`himalaya -o json envelope list -f <folder> -s 1` (zehn Sekunden Timeout, ohne
-Retry) aus. Nur eine parsebare JSON-Liste (auch leer) ist gültig. Der Preflight
-liefert ein kanonisches `mailbox_readiness`-Envelope und stoppt bei
-fehlender/ungültiger Konfiguration, falschem Account, fehlendem Adapter, Timeout,
-Connectivity-Fehler oder ungültiger Minimalantwort vor jeder Progress-, Index-,
-Log-, Evidence- oder Mailbox-Mutation.
+Nach gültigem H2-Vertrag vor `execute` und der lesenden `pipeline` führt der Runner mit
+genau diesem Account/Quellordner ein read-only
+`himalaya -o json envelope list -f <folder> -s 1` (10 s, kein Retry) aus; nur eine
+parsebare JSON-Liste (auch leer) ist gültig. Das kanonische `mailbox_readiness`-Envelope
+stoppt bei ungültiger Konfiguration, falschem Account, fehlendem Adapter, Timeout,
+Connectivity-Fehler oder ungültiger Minimalantwort vor jeder Progress-, Index-, Log-,
+Evidence- oder Mailbox-Mutation.
 
 ---
 
@@ -80,12 +79,10 @@ Unter `data/mail-desk/` gelten folgende Standard-Dateinamen:
 `data/mail-desk/batch-recovery-journal.json` und
 `data/mail-desk/batch-manifest.json` bleiben strikt unter `data/mail-desk/`.
 Eine **Kopie** des geschlossenen Recovery-Journals darf nach
-`data/mail-desk/archive/YYYY-Www/` wandern (ISO-Wochenordner wie im
-`resolve`-Modus), das Journal selbst bleibt unter `data/mail-desk/`.
-Synthese-Markdown entsteht **ausschließlich** an den Handoff-Zielen
-`memory/references/projects/<decision.id>/…` bzw.
-`memory/references/topics/<decision.id>/…`. Helferskripte und Reviewer
-synthetisieren niemals in das Workspace-Root oder an andere Orte.
+`data/mail-desk/archive/YYYY-Www/` wandern (ISO-Woche wie `resolve`), das Journal
+selbst bleibt. Synthese-Markdown entsteht **ausschließlich** an den
+Handoff-Zielen `memory/references/projects|topics/<decision.id>/…`, nie im
+Workspace-Root oder anderswo.
 
 ---
 
@@ -129,7 +126,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--max-count <1..50>` | | Strikte Obergrenze für den `--dossier`-Inspect-Auftrag (Standard: 50). |
 | `--order <oldest\|newest>` | | Verarbeitungsreihenfolge nach Alter (Standard: `oldest`). |
 | `--folder <ORDNER>` | `-f` | Quellordner im Postfach (Standard: `INBOX`). |
-| `--skip-known` / `--no-skip-known` | | Überspringt bereits verarbeitete E-Mails aus `final-location-index.json` (Standard: `True`). |
+| `--skip-known` / `--no-skip-known` | | Überspringt eine Mail nur bei **eigener** normalisierter Message-ID in `final-location-index.json`/`items` (Standard: `True`); Thread-Replies bleiben sichtbar. |
 | `--query <AUSDRUCK>` | `-q` | Himalaya-Suchausdruck für `inspect`/`draft`/`pipeline`, bis zum Envelope-Abruf weitergereicht; nicht mit `--date` kombinieren. |
 | `--date <YYYY-MM-DD>` | | Exakter Himalaya-Datumsfilter für `inspect`/`draft`/`pipeline`; nicht mit `--query` kombinieren. |
 | `--min-confidence <high\|medium\|low>` | | Historische Pipeline-Option; erteilt keine Ausführung und filtert keine Review-Kandidaten. |
@@ -156,7 +153,14 @@ abschließenden Abruf in Zielgröße statt stiller Begrenzung. Prozessfehler ode
 Envelope-JSON sind Fehlerzustände, nie ein leeres Ergebnis.
 
 `skip_known` gilt identisch für `inspect`/`draft`/`pipeline`; `--no-skip-known` wird
-nicht durch einen internen Default überschrieben. `pipeline` liest nur den vorhandenen
+nicht durch einen internen Default überschrieben. Skip-Autorität ist allein die eigene
+normalisierte Message-ID in `final-location-index.json`/`items`; der
+Signaturindex ist nur ein nicht-autoritativer Hinweis und löst weder
+`known_count`/`known_location` noch einen Skip aus. Thread-Replies bleiben lesbar;
+`signature_hint` ist nicht autoritativ (kann im Inspect-Output erscheinen, wird
+aber nicht als Index-/Journal-/Evidence-Entscheidung übernommen); der
+`(subject, "")`-Fallback gilt nur für eindeutige Subjekte.
+`pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
 autorisieren dort keine Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht
 `completed`; eine fehlgeschlagene Delete-Operation wird nie als Routing-Erfolg
@@ -188,34 +192,32 @@ Vor `execute` ersetzt der Reviewer den Pending-Block durch:
 `execute` prüft Receipt/Hash, Account, Quellordner und Kandidatenzahl **vor** Mutationen:
 weniger nur mit `allow_fewer: true`, mehr niemals. Änderungen gehashter Angaben
 erfordern erneute Review. Alle sieben H2-Felder sind Pflicht: Fehlende Felder ergeben
-`incomplete_contract`, auch bei vollständig ungebundenen Altmanifesten. Keine
+`incomplete_contract`, auch bei ungebundenen Altmanifesten. Keine
 `legacy_unbound`-Ausnahme; ungültige/fehlende Receipts stoppen fail-closed.
 
 Issue #58: `pipeline` liefert nur `draft` (pending), `status: review_required`,
 `executed_count: 0`, leere Telemetrie/Handoff; keine Datei-/Sent-Index-Mutation.
-Den Draft separat sichern, freigeben, ausführen und verifizieren. Bestehender
-CLI-Input-Cleanup bleibt. `dossier_apply`: inneren vollständigen H2-Auftrag
-freigeben, danach äußere Dossier-Receipt darüber binden; beide Gates vor Delegation.
-Event-Dossier behält diese Reihenfolge. Altaufträge benötigen erneute Human-Review,
-kein automatisches Upgrade.
+Draft separat sichern, freigeben, ausführen, verifizieren; CLI-Input-Cleanup bleibt.
+`dossier_apply`: inneren H2-Auftrag freigeben, danach äußere Dossier-Receipt binden
+(beide Gates vor Delegation; Event-Dossier gleich). Altaufträge brauchen erneute
+Human-Review, kein Auto-Upgrade.
 
-Temporäre Manifest-Lese-/Löschoperationen behandeln Windows-Dateisperren mit maximal
-drei Versuchen und Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten und der
-Lauf meldet den Fehler.
+Temporäre Manifest-Lese-/Löschoperationen tolerieren Windows-Dateisperren mit max.
+drei Versuchen/Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten, der Lauf
+meldet den Fehler.
 
 ### Reviewte Korrekturen anwenden & neu signieren
 
 Korrekturen des Reviewers gehen ausschließlich in
-`data/mail-desk/batch-manifest.json` (pro Editor); `candidate_count` folgt immer
-`len(items)`. Die Kanonisierung ist exakt: `payload = dict(config)`,
-`payload.pop("review", None)`, dann
-`json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",",":"),
+`data/mail-desk/batch-manifest.json` (pro Editor); `candidate_count` folgt
+`len(items)`. Kanonisierung: `dict(config)`, `review` entfernen,
+`json.dumps(..., ensure_ascii=False, sort_keys=True, separators=(",",":"),
 allow_nan=False)` → SHA-256
-(`core/batch_contract.py:canonical_execute_request_sha256`). Alle übrigen Keys
-bleiben byte-identisch; genau der `review`-Block wird entfernt. Neu signiert wird
-mit `approval_receipt = {reviewed_at, reviewed_by, execute_request_sha256}`
-(exakt diese drei Keys, `review.state == "approved"`); bindet der Receipt-Hash
-nicht exakt dieses Manifest, scheitert `execute` mit `review_hash_mismatch`.
+(`core/batch_contract.py:canonical_execute_request_sha256`); alle übrigen Keys
+bleiben byte-identisch. Neu signiert wird mit
+`approval_receipt = {reviewed_at, reviewed_by, execute_request_sha256}`
+(exakt diese drei, `review.state == "approved"`); passt der Receipt-Hash nicht
+exakt, scheitert `execute` mit `review_hash_mismatch`.
 
 Ohne Quellcodestudium signiert das stdlib-Helferskript neu:
 
@@ -1237,10 +1239,10 @@ vorhandene `runner-progress.json` deterministisch auf `completed` bzw.
 
 ## Fehlerbehandlung & Sicherheit
 
-1. **Kein Datenverlust:** Schlägt ein Einzelschritt (z. B. Routing oder Index-Write) fehl, gibt das Skript `success: false` (kanonischer Fehler-Envelope) zurück und das Eingabemanifest **bleibt zur Fehleranalyse erhalten**.
-2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine temporäre Zwischendatei (`.tmp`) geschrieben und anschließend atomar ersetzt, um Korruption bei Prozessabbrüchen zu verhindern.
-3. **Plattformunabhängiges UTF-8:** Standard-Streams (`stdout`/`stderr`) und Datei-I/O sind strikt UTF-8 (verhindert Windows-`charmap`-Fehler bei Umlauten/Sonderzeichen).
-4. **Fehlertolerante Subprozess-Ausführung:** `errors="replace"` und Einzeit-Timeouts verhindern, dass langsame IMAP-Verbindungen oder fehlerhafte Zeichensätze den Batch blockieren.
+1. **Kein Datenverlust:** Schlägt ein Einzelschritt fehl, liefert das Skript `success: false` (kanonischer Fehler-Envelope) und das Eingabemanifest **bleibt erhalten**.
+2. **Atomare Index-Transaktion:** `final-location-index.json` wird über eine `.tmp`-Zwischendatei atomar ersetzt (kein Korruptionsfenster bei Abbruch).
+3. **Plattformunabhängiges UTF-8:** stdout/stderr und Datei-I/O sind strikt UTF-8 (keine Windows-`charmap`-Fehler).
+4. **Fehlertolerante Subprozesse:** `errors="replace"` und Einzeit-Timeouts halten langsame IMAP-Verbindungen oder defekte Zeichensätze vom Batch fern.
 
 ---
 

@@ -236,11 +236,40 @@ def extract_email_address(from_str: str | None) -> str:
 
 
 def build_signature_index(data_dir: Path) -> dict[tuple[str, str], dict[str, Any]]:
-    """Build fast in-memory signature lookup map from final index and action log."""
+    """Build a non-authoritative subject/from lookup from index and action log.
+
+    The index is only a routing hint.  It must never decide that a physically
+    present envelope is already known: the own Message-ID in
+    ``final-location-index.json`` remains the sole skip authority.
+
+    A subject-only ``(subject, "")`` fallback is registered only while every
+    record for that subject points at the same message/location.  Generic or
+    repeated subjects therefore stay ambiguous instead of silently taking the
+    first arbitrary record.
+    """
     index_data = load_final_index(data_dir / "final-location-index.json")
     items = index_data.get("items", {})
 
     signatures: dict[tuple[str, str], dict[str, Any]] = {}
+    fallback: dict[str, tuple[tuple[str, str], dict[str, Any]]] = {}
+    ambiguous_subjects: set[str] = set()
+
+    def _register(subj: str, from_addr: str, entry: dict[str, Any]) -> None:
+        if not subj:
+            return
+        # The subject-only key is owned exclusively by the ambiguity pass below;
+        # an empty sender must not claim it directly.
+        if from_addr:
+            signatures[(subj, from_addr)] = entry
+        identity = (
+            normalize_message_id(str(entry.get("message_id") or "")),
+            str(entry.get("final_folder") or entry.get("final_label") or ""),
+        )
+        previous = fallback.get(subj)
+        if previous is None:
+            fallback[subj] = (identity, entry)
+        elif previous[0] != identity:
+            ambiguous_subjects.add(subj)
 
     # 1. From final index entries
     for mid, val in items.items():
@@ -248,10 +277,9 @@ def build_signature_index(data_dir: Path) -> dict[tuple[str, str], dict[str, Any
             continue
         subj = normalize_signature_text(val.get("subject"))
         from_addr = extract_email_address(val.get("from"))
-        if subj:
-            signatures[(subj, from_addr)] = val
-            if (subj, "") not in signatures:
-                signatures[(subj, "")] = val
+        entry_info = dict(val)
+        entry_info.setdefault("message_id", normalize_message_id(str(mid)))
+        _register(subj, from_addr, entry_info)
 
     # 2. From action-log.jsonl entries
     action_log_path = data_dir / "action-log.jsonl"
@@ -268,7 +296,8 @@ def build_signature_index(data_dir: Path) -> dict[tuple[str, str], dict[str, Any
                             continue
                         subj = normalize_signature_text(rec.get("subject"))
                         from_addr = extract_email_address(rec.get("from"))
-                        target = rec.get("action", {}).get("target_folder") or rec.get("action", {}).get("target_label")
+                        action = rec.get("action") if isinstance(rec.get("action"), dict) else {}
+                        target = action.get("target_folder") or action.get("target_label")
                         entry_info = {
                             "message_id": mid,
                             "final_folder": target,
@@ -276,14 +305,17 @@ def build_signature_index(data_dir: Path) -> dict[tuple[str, str], dict[str, Any
                             "subject": rec.get("subject"),
                             "from": rec.get("from"),
                         }
-                        if subj:
-                            signatures[(subj, from_addr)] = entry_info
-                            if (subj, "") not in signatures:
-                                signatures[(subj, "")] = entry_info
+                        _register(subj, from_addr, entry_info)
                     except Exception:
                         continue
         except Exception:
             pass
+
+    for subj, (identity, entry) in fallback.items():
+        # Only a unique subject (one message and one target folder) may carry the
+        # sender-less fallback; an empty identity can never be authoritative.
+        if identity[0] and subj not in ambiguous_subjects:
+            signatures[(subj, "")] = entry
 
     return signatures
 
