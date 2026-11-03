@@ -656,17 +656,22 @@ def is_digitally_signed_pdf(pdf_path):
         return None
 
 def analyze_pdf_structure(pdf_path):
-    """Inspect PDF structure for fonts, images, text operators, and signatures."""
+    """Inspect PDF structure for fonts, images, text operators, signatures, tags."""
     safe_path = get_safe_path(pdf_path)
     if not os.path.isfile(safe_path):
-        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False}
+        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False, "is_tagged": False}
     try:
         with open(safe_path, "rb") as f:
             data = f.read()
     except Exception:
-        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False}
+        return {"has_fonts": False, "has_images": False, "has_text_streams": False, "is_signed": False, "is_tagged": False}
 
     is_signed = is_pdf_digitally_signed_bytes(data)
+    # PyMuPDF sees markers inside compressed object streams; raw bytes are only
+    # the fallback for environments without a usable PyMuPDF install.
+    is_tagged = _pdf_is_tagged(safe_path)
+    if is_tagged is None:
+        is_tagged = _pdf_tagged_from_bytes(data)
     has_fonts = bool(
         re.search(rb"/Type\s*/Font\b", data) or
         re.search(rb"/FontDescriptor\b", data) or
@@ -685,7 +690,8 @@ def analyze_pdf_structure(pdf_path):
         "has_fonts": has_fonts,
         "has_images": has_images,
         "has_text_streams": has_text_streams,
-        "is_signed": is_signed
+        "is_signed": is_signed,
+        "is_tagged": is_tagged,
     }
 
 def is_image_based_pdf(pdf_path, extracted_text=""):
@@ -702,6 +708,15 @@ def is_image_based_pdf(pdf_path, extracted_text=""):
         return False
 
     structure = analyze_pdf_structure(pdf_path)
+
+    # A tagged PDF with an actual text layer is a digital document even when the
+    # provided extraction is short or empty (OCRmyPDF output has no font markers
+    # that the byte heuristics above would see).
+    if structure.get("is_tagged"):
+        if text_clean:
+            return False
+        if _pdf_has_extractable_text(pdf_path) is True:
+            return False
 
     # If it has digital fonts or text streams and some extracted text, it's a short digital document, not a scan
     if (structure["has_fonts"] or structure["has_text_streams"]) and len(text_clean) > 0:
@@ -779,7 +794,13 @@ def run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=False, timeout=120, expected
 
     cmd = ["ocrmypdf", "-l", "deu", "--output-type", "pdf", "--optimize", "0"]
     if redo_ocr:
-        cmd.append("--redo-ocr")
+        # Explicit redo intentionally drops the old structure; OCRmyPDF rejects
+        # combining --redo-ocr with --skip-text in 17.x.
+        cmd.extend(["--redo-ocr", "--tagged-pdf-mode", "ignore"])
+    else:
+        # Keep existing text pages and their tags untouched; only image-only
+        # pages are OCR'd.
+        cmd.append("--skip-text")
     cmd.extend([safe_src, get_safe_path(target_output)])
 
     try:
@@ -873,6 +894,87 @@ def _load_pymupdf():
             continue
         return module, module_name
     return None, None
+
+
+_TAGGED_STRUCT_TREE_RE = re.compile(rb"/StructTreeRoot\b")
+_TAGGED_MARKINFO_RE = re.compile(rb"/MarkInfo\b")
+_TAGGED_MARKED_TRUE_RE = re.compile(rb"/Marked\s+true\b", re.IGNORECASE)
+
+
+def _pdf_tagged_from_bytes(data):
+    """Byte-level tagged-PDF detection for uncompressed PDFs.
+
+    Only a fallback: real OCRmyPDF output keeps ``/StructTreeRoot`` in a
+    compressed object stream where raw bytes cannot see it.
+    """
+    if not isinstance(data, (bytes, bytearray)):
+        return False
+    if _TAGGED_STRUCT_TREE_RE.search(data):
+        return True
+    return bool(
+        _TAGGED_MARKINFO_RE.search(data) and _TAGGED_MARKED_TRUE_RE.search(data)
+    )
+
+
+def _pdf_is_tagged(pdf_path):
+    """Return True/False from PyMuPDF, or None when PyMuPDF cannot decide.
+
+    ``None`` means the caller falls back to raw-byte detection.  Never raises and
+    always closes the document.
+    """
+    module, _ = _load_pymupdf()
+    if module is None:
+        return None
+    doc = None
+    try:
+        doc = module.open(get_safe_path(pdf_path))
+        catalog = doc.pdf_catalog()
+        if not catalog:
+            return False
+        kind, value = doc.xref_get_key(catalog, "StructTreeRoot")
+        if kind in ("xref", "dict"):
+            return True
+        kind, value = doc.xref_get_key(catalog, "MarkInfo")
+        if kind == "dict":
+            return bool(re.search(r"/Marked\s+true\b", value or "", re.IGNORECASE))
+        if kind == "xref":
+            marked_kind, marked_value = doc.xref_get_key(
+                int(str(value).split()[0]), "Marked"
+            )
+            if marked_kind in ("bool", "name") and str(marked_value).strip().lower() == "true":
+                return True
+            return False
+        return False
+    except Exception:
+        return None
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+
+def _pdf_has_extractable_text(pdf_path):
+    """Return True/False for the PDF's own text layer, or None if unknown."""
+    module, _ = _load_pymupdf()
+    if module is None:
+        return None
+    doc = None
+    try:
+        doc = module.open(get_safe_path(pdf_path))
+        for page in doc:
+            if (page.get_text() or "").strip():
+                return True
+        return False
+    except Exception:
+        return None
+    finally:
+        if doc is not None:
+            try:
+                doc.close()
+            except Exception:
+                pass
 
 
 def _pymupdf_version(module):
@@ -1811,6 +1913,17 @@ def mirror_ocr_applied(metadata, filemap_entry):
         return False
     return metadata.get("ocr_applied") in (True, "true")
 
+
+def _without_stale_mirror_flag(entry):
+    """Drop a derived ``mirror_stale`` flag before merging fresh mirror state.
+
+    The flag is recomputed on every run and is not a reserved generated field,
+    so a previous run's value must not leak into a now-current entry.
+    """
+    if isinstance(entry, dict) and "mirror_stale" in entry:
+        return {key: value for key, value in entry.items() if key != "mirror_stale"}
+    return entry
+
 def atomic_write_text(filepath, content):
     """Atomically replace a UTF-8 text file using a flushed sibling temporary file."""
     target_path = Path(os.path.abspath(filepath))
@@ -2248,7 +2361,7 @@ def run_conversion(args, run_state):
                         )
                     }
                 new_files_in_json[src_rel_workspace] = merge_curated_metadata(
-                    base_existing, updated_entry, overlay_entry,
+                    _without_stale_mirror_flag(base_existing), updated_entry, overlay_entry,
                     overlay_active=curation_overlay is not None,
                 )
 
@@ -2288,6 +2401,9 @@ def run_conversion(args, run_state):
                         "capability": exc.capability,
                     }
 
+        retained_mirrors = set()
+        retained_derivatives = set()
+
         if tasks_to_convert:
             results = dict(ocr_preflight_results)
             runnable_tasks = [task for task in tasks_to_convert if task["src_rel"] not in ocr_preflight_results]
@@ -2308,6 +2424,26 @@ def run_conversion(args, run_state):
                 res = results.get(src_rel_workspace, {"success": False, "error": "Unknown error"})
                 base_existing = t.get("base_existing", {})
                 overlay_entry = t.get("overlay_entry")
+
+                if not res.get("success"):
+                    # The source is still inventoried, so its previously
+                    # generated mirror/derivative must survive this failed
+                    # conversion; the orphan cleanup only removes artifacts of
+                    # sources that are no longer part of the inventory.
+                    retained_mirrors.add(dest_rel_workspace)
+                    if t.get("derivative_rel"):
+                        retained_derivatives.add(t["derivative_rel"])
+                    if isinstance(base_existing, dict):
+                        previous_mirror = base_existing.get("markdown_mirror")
+                        if isinstance(previous_mirror, str) and previous_mirror:
+                            retained_mirrors.add(previous_mirror)
+                        previous_derivative = base_existing.get("derivative")
+                        if (
+                            isinstance(previous_derivative, dict)
+                            and isinstance(previous_derivative.get("path"), str)
+                            and previous_derivative["path"]
+                        ):
+                            retained_derivatives.add(previous_derivative["path"])
 
                 if res.get("success"):
                     count_converted += 1
@@ -2379,7 +2515,7 @@ def run_conversion(args, run_state):
                     write_markdown_file(dest_abs, metadata, markdown_body)
                     processed_mirrors.add(dest_rel_workspace)
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(
-                        base_existing, file_entry, overlay_entry,
+                        _without_stale_mirror_flag(base_existing), file_entry, overlay_entry,
                         overlay_active=curation_overlay is not None,
                     )
 
@@ -2395,8 +2531,29 @@ def run_conversion(args, run_state):
                         "conversion_status": "conversion_required",
                         "conversion_error": str(err_msg)
                     }
+                    # Keep the retained mirror visible, but never present it as
+                    # current when it belongs to a different source revision.
+                    retained_mirror_rel = None
+                    mirror_candidates = (
+                        base_existing.get("markdown_mirror") if isinstance(base_existing, dict) else None,
+                        dest_rel_workspace,
+                    )
+                    for candidate in mirror_candidates:
+                        if not isinstance(candidate, str) or not candidate:
+                            continue
+                        candidate_abs = os.path.join(workspace_root, candidate)
+                        if os.path.exists(get_safe_path(candidate_abs)):
+                            retained_mirror_rel = candidate.replace("\\", "/")
+                            break
+                    if retained_mirror_rel:
+                        file_entry["markdown_mirror"] = retained_mirror_rel
+                        mirror_meta, _ = parse_markdown_file(
+                            os.path.join(workspace_root, retained_mirror_rel)
+                        )
+                        if mirror_source_sha256(mirror_meta) != t["src_sha256"]:
+                            file_entry["mirror_stale"] = True
                     new_files_in_json[src_rel_workspace] = merge_curated_metadata(
-                        base_existing, file_entry, overlay_entry,
+                        _without_stale_mirror_flag(base_existing), file_entry, overlay_entry,
                         overlay_active=curation_overlay is not None,
                     )
                     conversion_requirements.append({
@@ -2433,7 +2590,7 @@ def run_conversion(args, run_state):
                     if is_protected_output_file(mirror_rel_workspace, resolved):
                         continue
 
-                    if mirror_rel_workspace not in processed_mirrors:
+                    if mirror_rel_workspace not in processed_mirrors and mirror_rel_workspace not in retained_mirrors:
                         if exclude_dirs and mirror_rel_workspace not in cleanup_owned:
                             continue
                         print(f"Removing orphaned mirror: {mirror_rel_workspace}")
@@ -2453,7 +2610,7 @@ def run_conversion(args, run_state):
                 for f in filenames:
                     deriv_abs = os.path.join(root, f)
                     deriv_rel_workspace = os.path.relpath(deriv_abs, workspace_root).replace("\\", "/")
-                    if deriv_rel_workspace not in processed_derivatives:
+                    if deriv_rel_workspace not in processed_derivatives and deriv_rel_workspace not in retained_derivatives:
                         if exclude_dirs and deriv_rel_workspace not in cleanup_owned:
                             continue
                         print(f"Removing orphaned derivative: {deriv_rel_workspace}")

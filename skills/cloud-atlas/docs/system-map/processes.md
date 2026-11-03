@@ -52,6 +52,15 @@ Implementiert in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs
 ### Phase 3: Die PDF- & OCR-Verzweigungslogik
 Bei PDFs prüft der Konverter, ob digitaler Text vorhanden ist. Fehlt dieser (reine Scans / Bild-PDFs), greift die OCR-Policy:
 
+**Tagged-PDF-Erkennung (Issue #50):** `analyze_pdf_structure()` liefert immer
+`is_tagged`. Maßgeblich ist PyMuPDF (`pdf_catalog()` → `StructTreeRoot`, ersatzweise
+`MarkInfo`/`Marked`), weil OCRmyPDF den Strukturbaum in komprimierten Objektstreams
+ablegt; die Rohbyte-Prüfung (`/StructTreeRoot` bzw. `/MarkInfo` + `/Marked true`) ist
+nur der Fallback ohne nutzbares PyMuPDF. Ein getaggtes PDF mit eigener Textebene gilt
+als digital und erreicht die OCR-Verzweigung nicht — auch dann nicht, wenn die
+übergebene Textextraktion leer ist. Getaggte PDFs ohne jede Textebene bleiben
+OCR-Kandidaten.
+
 ```
 [PDF ohne Textlayer] ──► Prüfe --ocr-policy:
                               │
@@ -65,6 +74,13 @@ Bei PDFs prüft der Konverter, ob digitaler Text vorhanden ist. Fehlt dieser (re
                                   (Ausnahme)             In-Place Injektion der OCR-Ebene
                                                          in das Cloud-PDF mit Provenienz-Log.
 ```
+
+**OCRmyPDF-Aufruf (Issue #50):** Standard ist
+`ocrmypdf -l deu --output-type pdf --optimize 0 --skip-text`; vorhandene Textebenen
+und Tags bleiben unverändert, nur bild-only Seiten werden OCRt. Nur der explizite
+Redo-Zweig (`--redo-ocr`) nutzt `--redo-ocr --tagged-pdf-mode ignore` ohne
+`--skip-text` (die Optionen schließen sich in OCRmyPDF 17.x aus) und verwirft die
+Struktur bewusst.
 
 **Formularfelder-Reihenfolge (Issue #20):** Unabhängig von der OCR-Policy werden
 gefüllte AcroForm-Werte über `extract_pdf_form_fields()` rein lesend erfasst. Bei
@@ -82,6 +98,7 @@ Frontmatter wächst dabei nicht. `form_fields` ist ein **reserviertes generated 
 1. **Bildlink-Neutralisierung:** `neutralize_missing_local_image_links()` ersetzt Verweise auf lokale Bilder, die nicht extrahiert wurden, durch neutrale Text-Hinweise.
 2. **Frontmatter-Generierung:** `build_cloud_artifact_metadata()` erzeugt die 12 Pflichtschlüssel.
 3. **Atomarer Write:** Schreiben via `tempfile` + `os.replace`.
+4. **Retention & Orphan-Cleanup:** Mirror und Derivate gelöschter Quellen werden entfernt. Bleibt eine Quelle inventarisiert, deren Konvertierung fehlschlug (`conversion_required` oder `failed`), werden ihr Mirror und ihr Derivat nicht gelöscht. Ein retained Mirror wird nur dann als aktuell geführt, wenn sein Frontmatter-`source_sha256` dem aktuellen Quellhash entspricht; sonst schreibt der Konverter `mirror_stale: true` und Phase 2 adoptiert ihn weder als `artifact_metadata` noch als `converted`, sondern behält `conversion_required` und den `conversion_error` bei.
 
 ---
 
