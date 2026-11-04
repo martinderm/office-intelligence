@@ -519,6 +519,60 @@ noch Fetch.
 > Batch-Manifeste offline gegen `projects.json`/`topics.json`. Es ist **nicht** die
 > Draft-Neuklassifikation und hat mit der Anhang-Auswertung nichts zu tun.
 
+## Lokale Injection-Barrier (Issue #62)
+
+Vor der Body-Auswertung und vor jeder agentensichtbaren Ausgabe läuft in
+`inspect`, `draft` und `pipeline` ein deterministischer, rein lokaler Pre-Filter
+([`scripts/core/injection_barrier.py`](../scripts/core/injection_barrier.py)).
+Er nutzt ausschließlich Python-Stdlib, hat keinen Netzwerk-/Cloud-/Modellbezug
+und ersetzt keine Schreib-, Review- oder Lock-Gates.
+
+**Fencing:** `preview`/Body werden in feste Delimiter
+`<untrusted_mail_content fence_version="1" sha256="…">…</untrusted_mail_content>`
+gefasst; Mail- und Attachment-Delimiter-Spoofs werden zu
+`[ESCAPED_UNTRUSTED_TAG]`. Subject/From/To/Cc bleiben typisierte Datenfelder,
+werden aber gescannt. `inspect`-Ausgaben und `batch-inspected.json` enthalten
+deshalb gefencete Previews; der Scanner erkennt seinen eigenen Fence und
+wertet ihn nicht als Spoof.
+
+**Scan und Quarantäne:** Feste Default-Regeln erkennen instruction-ähnliche
+Phrasen (EN/DE), Fake-Rollenmarker, Fence-Spoofs, aktive/verdächtige URLs,
+gefährliche Anhangsnamen/-MIME, Steuer-/Bidi-/Zero-Width-Zeichen,
+Mixed-Script-Homoglyphen, aktives/hidden HTML und lange Encoded-Blobs. Die
+Schwelle ist fix `medium`. Geflaggte Mails werden unter
+`data/mail-desk/injection-quarantine/<id>/` als `record.json` (Schema 1,
+write-once), `fenced.txt` (write-once) und `observations.jsonl` (append-only)
+abgelegt; das globale `index.jsonl` ist ebenfalls append-only. Die ID ist
+deterministisch aus dem normalisierten `message_key`; Wiederholung ergänzt nur
+Beobachtungen. Keine Roh-MIME, keine Zugangsdaten, keine absoluten Pfade, kein
+`preview`-Feld im Record.
+
+**Fail-loud:** Geflaggte Mails werden aus `draft`-/`pipeline`-Manifesten und
+`inspect`-Proposals ausgeschlossen. Das Manifest trägt einen hash-gebundenen
+top-level `injection_barrier`-Block. `draft`/`pipeline` liefern `ok: false`,
+`status: "quarantined"`; die CLI-Hülle meldet `state: "Quarantined"`,
+`error.type: "InjectionQuarantine"` und Exit 1. `execute`,
+`mail_desk_sign_manifest.py`, der Batch-CLI-Wrapper und der innere
+`dossier_apply`-Execute stoppen vor jeder Mutation mit
+`injection_quarantine_present`, auch bei `allow_fewer`. Ein geflaggter Lauf ist
+kein `inbox_zero`; zuerst Quarantäne auflösen, dann neu draften.
+
+**Read-only-Grenze:** `inspect` bleibt mailbox-read-only und schreibt nur die
+Quarantäne-Evidence. Es kopiert, verschiebt oder löscht keine Mail.
+
+**Workspace-Policy:** Optional
+`memory/references/mail-desk/injection-barrier.json` (Schema 1) mit
+ausschließlich additiven Feldern `extra_instruction_phrases`,
+`extra_url_shortener_domains`, `extra_dangerous_extensions`,
+`extra_macro_extensions`. Fehlt die Datei, gelten die Bundle-Defaults; jede
+Schema-/Typ-/Größenabweichung stoppt fail-loud. Es gibt keinen Off-Schalter und
+keine Absenkung der Schwelle.
+
+**Fingerprint:** `classifier.py` und die Matching-Module bleiben unangetastet;
+`classifier_revision` rotiert nicht.
+
+
+
 ## Workspace-Integration: Attachment-Quarantäne (Integrationsempfehlung)
 
 Der Mail-Desk legt abgerufene Anhänge isoliert unter `data/mail-desk/attachments/<run_id>/` ab. Das Skill-Bundle selbst ist kein Mail-Desk-Laufzeitworkspace und verändert Consumer-`.gitignore`-Dateien nicht autonom. Die folgenden Integrationsregeln sind Empfehlungen für nutzende Consumer-Workspaces; vor einer Übernahme sind bestehende Workspace-Regeln sorgfältig zu prüfen, und vorhandene Regeln dürfen nicht unbesehen ersetzt werden.

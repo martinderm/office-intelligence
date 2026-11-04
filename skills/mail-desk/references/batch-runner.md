@@ -214,6 +214,10 @@ Temporäre Manifest-Lese-/Löschoperationen tolerieren Windows-Dateisperren mit 
 drei Versuchen/Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten, der Lauf
 meldet den Fehler.
 
+### Lokale Injection-Barrier (Issue #62)
+
+`injection_quarantine_present`-Gate: SKILL.md, L2 §39.
+
 ### Reviewte Korrekturen anwenden & neu signieren
 
 Korrekturen des Reviewers gehen ausschließlich in

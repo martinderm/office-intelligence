@@ -195,12 +195,15 @@ class DraftModeTests(unittest.TestCase):
             self.assertTrue(callable(called.kwargs["source_sink"]))
             self.assertEqual(manifest, json.loads(output_path.read_text(encoding="utf-8")))
             self.assertEqual({
-                "ok": True, "mode": "draft", "folder": "INBOX", "order": "oldest",
+                "ok": True, "mode": "draft", "status": "completed",
+                "message": "Drafted 1 items.", "folder": "INBOX", "order": "oldest",
                 "total_drafted": 1, "is_empty": False, "inbox_zero": False,
                 "expected_count": 1, "allow_fewer": False,
                 "candidate_count": 1, "source_folder": "INBOX", "account": None,
                 "skip_known": True, "review": manifest["review"],
                 "manifest_file": str(output_path.resolve()), "draft": manifest,
+                "injection_barrier": manifest["injection_barrier"],
+                "quarantine_evidence": [],
             }, result)
 
     def test_draft_fetches_with_filters_and_preserves_progress_lifecycle(self) -> None:

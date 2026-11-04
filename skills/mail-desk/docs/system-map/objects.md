@@ -379,3 +379,56 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `inspect` bleibt ohne `evaluate_attachments`/`propose_manifest` rein lesend und liefert keine Evaluation. `evaluate_attachments: true` impliziert den top-level `manifest_proposal`; der Inspektor baut das Manifest über `draft_manifest(ordered_emails, …, source_sink=…)` (initiale Klassifikation zuerst) und ruft `install_draft_attachment_evaluations(...)` mit denselben Bindungen wie `draft` auf. Jedes Proposal-Item trägt genau ein finales `attachment_evaluation`.
   * `propose_manifest: true` bei deaktivierter Auswertung installiert je Proposal-Item genau ein `skipped`/`evaluation_disabled`/`not_applicable` ohne Rohabruf, Auswertung oder Neuklassifikation. Ein gemischter Batch (klar/geklärt/weiterhin mehrdeutig/bounded failed) bewahrt Reihenfolge und item-lokale Isolation.
   * Ein ausführbares Batch-Manifest entsteht nur bei explizitem `manifest_file`; `output_file` bleibt das normale Inspect-Ergebnis. Der langfristige Inspect-/Proposal-Output trägt keinen Rohinhalt, `prompt_content`, absolute Pfade oder Capability. Run-ID-/`already_fetched`-Idempotenz und Zero-Mutation werden unverändert von T01/T02 geerbt.
+
+---
+
+## 7. Injection-Quarantäne (Issue #62)
+
+Operative Evidence für den lokalen Pre-Filter, nicht Referenzwissen. Owner:
+[`scripts/core/injection_barrier.py`](../scripts/core/injection_barrier.py).
+Ablage ausschließlich unter `data/mail-desk/injection-quarantine/`.
+
+```text
+data/mail-desk/injection-quarantine/
+  index.jsonl                       # append-only, eine Zeile je Beobachtung
+  <quarantine_id>/                  # 16 Hex, deterministisch je message_key
+    record.json                     # Schema 1, write-once
+    fenced.txt                      # write-once, gefenceter Preview
+    observations.jsonl              # append-only, eine Zeile je Wiederholung
+```
+
+### 7.1 `record.json` (Schema 1)
+
+Pflichtfelder: `schema_version: 1`, `quarantine_id`, `status: "quarantined"`,
+`mode` (`inspect|draft|pipeline` der ersten Beobachtung), `message_key`,
+`message_id`, `envelope_id`, `folder`, `subject`, `from`, `date`,
+`content` (`sha256`, `bytes`, `fence_version`, `fenced_sha256`,
+`fenced_bytes`, `transformations`, `scan_truncated`), `findings[]`
+(`rule_id`, `severity`, `category`, `field`, `count`, bounded `samples[]`),
+`rule_ids`, `max_severity`, `policy` (`version`, `source`,
+`catalog_sha256`) und `first_observed_at`.
+
+Verboten: `preview`-Feld, Roh-MIME, Zugangsdaten/Secrets, absolute Pfade,
+vollständiger Body. `fenced.txt` ist die einzige Inhaltsevidence und bleibt
+operativ. `record.json` und `fenced.txt` werden nie überschrieben.
+
+### 7.2 `observations.jsonl` und `index.jsonl`
+
+Beide sind append-only. Eine Zeile trägt `schema_version`, `quarantine_id`,
+`observed_at`, `mode`, `message_key`, `content_sha256`, `max_severity`,
+`findings_count`, `rule_ids` und `policy_version`; der Index zusätzlich relative
+`record`/`fenced`-Pfade. Wiederholungen desselben `message_key` ergänzen nur
+diese Zeilen.
+
+### 7.3 `injection_barrier`-Manifestblock
+
+`draft`/`pipeline` hängen vor `add_draft_contract` einen deterministischen,
+hash-gebundenen Block an: `schema_version`, `fence_version`, `policy_version`,
+`scanned_count`, `quarantined_count`, `findings_count`, `findings_by_rule`,
+`quarantined[]` (je `quarantine_id`, `message_key`, `message_id`,
+`envelope_id`, `severity`, `rule_ids`, `content_sha256`) und
+`quarantine_root`. Er enthält keine Zeitstempel und keine Pfade außer dem
+relativen Root. `batch_contract.validate_execute_contract` verweigert jeden
+vorhandenen, malformed oder nicht-leeren Block mit
+`injection_quarantine_present`; ein Altmanifest ohne Block bleibt zulässig.
+

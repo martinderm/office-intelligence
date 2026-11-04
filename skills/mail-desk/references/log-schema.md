@@ -12,6 +12,11 @@ data/mail-desk/
   sent-index.jsonl          # leichter Index gesendeter Antworten (Header-/Routingmetadaten)
   final-location-index.json # schneller O(1)-Lookup für finale Backend-Location (nur script-basiert)
   runner-progress.json      # atomare Fortschrittsdatei bei Batch-Läufen
+  injection-quarantine/     # Issue #62: operative Evidence, kein Referenzwissen
+    index.jsonl             # append-only Quarantäne-Index
+    <id>/record.json        # Schema 1, write-once
+    <id>/fenced.txt         # write-once, gefenceter Mail-Inhalt
+    <id>/observations.jsonl # append-only Beobachtungen je Wiederholung
   archive/
     YYYY-Www/
       action-log.jsonl
@@ -295,6 +300,41 @@ Live-Fortschritts- und ETA-Statusdatei unter `data/mail-desk/runner-progress.jso
   "error": null
 }
 ```
+
+## injection-quarantine/ (Issue #62)
+
+Operative Evidence für Mail, die der lokale Injection-Barrier als `medium` oder
+höher geflaggt hat. Der Store liegt ausschließlich unter
+`data/mail-desk/injection-quarantine/` (Data Zone `data/`, nie
+`memory/references/`) und ist kein Task-/Wissensartefakt.
+
+```text
+injection-quarantine/
+  index.jsonl                       # append-only, eine Zeile je Beobachtung
+  <quarantine_id>/
+    record.json                     # Schema 1, write-once
+    fenced.txt                      # write-once, <untrusted_mail_content>-Fence
+    observations.jsonl              # append-only, eine Zeile je Wiederholung
+```
+
+- `quarantine_id`: 16 Hex, deterministisch aus `oi62:<policy_version>:<message_key>`.
+  Derselbe normalisierte `message_id`/Fallback-Key ergibt dieselbe ID.
+- `record.json` wird nie überschrieben. Wiederholungen erhöhen nur
+  `observations.jsonl` und `index.jsonl`; `record.json` bewahrt die erste
+  Beobachtung. `fenced.txt` wird ebenfalls nur einmal geschrieben.
+- `record.json` (Schema 1) trägt `quarantine_id`, `status: "quarantined"`,
+  `mode`, begrenzte Identität (`message_key`, `message_id`, `envelope_id`,
+  `folder`, `subject`, `from`, `date`), `content` (SHA-256/Bytes,
+  Fence-Version, Fenced-Hash, Transformationen, `scan_truncated`), `findings`
+  (bounded Rule-Samples), `rule_ids`, `max_severity`, `policy` und
+  `first_observed_at`. Kein `preview`-Feld, keine Roh-MIME, keine
+  Zugangsdaten, keine absoluten Pfade.
+- `observations.jsonl` und `index.jsonl` sind append-only und werden nur unter
+  der bestehenden seriellen `data/mail-desk/`-Schreibregel ergänzt.
+- `fenced.txt` ist gefencter operativer Inhalt und darf nie in konsolidierte
+  Referenz- oder Wissensdateien übernommen werden. Die
+  `<untrusted_mail_content fence_version="1" sha256="…">`-Delimiter sind fest;
+  Spoofs werden zu `[ESCAPED_UNTRUSTED_TAG]`.
 
 ## Idempotency
 
