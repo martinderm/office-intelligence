@@ -80,6 +80,7 @@ _OWN_FENCE_RE = re.compile(
     re.DOTALL,
 )
 _FENCE_SHA_RE = re.compile(r'\bsha256="(?P<sha>[0-9a-f]{64})"', re.IGNORECASE)
+_FENCE_INNER_SHA_RE = re.compile(r'\binner_sha256="(?P<sha>[0-9a-f]{64})"', re.IGNORECASE)
 
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _BIDI_CHARS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
@@ -725,7 +726,8 @@ def _scan_urls(
     field: str,
     policy: InjectionPolicy,
     collected: dict[tuple[str, str], dict[str, Any]],
-) -> None:
+) -> bool:
+    """Scan URLs; return ``True`` when the per-field URL cap was exceeded."""
     active_scheme = _ACTIVE_SCHEME_RE.search(normalized)
     if active_scheme:
         _add_finding(
@@ -737,10 +739,21 @@ def _scan_urls(
             sample=active_scheme.group(0),
         )
     urls: list[str] = []
+    urls_truncated = False
     for match in _URL_RE.finditer(normalized):
-        urls.append(match.group(0).rstrip(".,;:!?)]}'\"»”"))
         if len(urls) >= MAX_URLS_PER_FIELD:
+            urls_truncated = True
             break
+        urls.append(match.group(0).rstrip(".,;:!?)]}'\"»”"))
+    if urls_truncated:
+        _add_finding(
+            collected,
+            rule_id="IB-SCAN-001",
+            severity="low",
+            category="scan",
+            field=field,
+            sample=f"URL scan cap reached ({MAX_URLS_PER_FIELD})",
+        )
     shorteners = _dedupe(_DEFAULT_SHORTENER_DOMAINS + policy.extra_url_shortener_domains)
     for url in urls:
         host = _url_host(url)
@@ -806,6 +819,7 @@ def _scan_urls(
                 field=field,
                 sample=f"{label} -> {target}",
             )
+    return urls_truncated
 
 
 def _filename_extension(filename: str) -> str:
@@ -973,6 +987,8 @@ def _scan_text(
     field: str,
     policy: InjectionPolicy,
     collected: dict[tuple[str, str], dict[str, Any]],
+    *,
+    allow_escaped_marker: bool = False,
 ) -> bool:
     """Scan one field; return ``True`` when the scanned window was truncated."""
     truncated = len(raw) > MAX_SCAN_CHARS
@@ -984,14 +1000,19 @@ def _scan_text(
     haystack = html.unescape(normalized)
     _scan_control_characters(window, field, collected)
     _scan_instruction_patterns(haystack, field, policy, collected)
-    if _FENCE_SPOOF_RE.search(normalized):
+    spoofs = [match.group(0) for match in _FENCE_SPOOF_RE.finditer(normalized)]
+    if allow_escaped_marker:
+        # A verified own fence already replaced every spoof with this inert
+        # marker; re-scanning the fenced preview must not quarantine it again.
+        spoofs = [sample for sample in spoofs if sample != "[ESCAPED_UNTRUSTED_TAG]"]
+    if spoofs:
         _add_finding(
             collected,
             rule_id="IB-DELIM-001",
             severity="high",
             category="delimiter",
             field=field,
-            sample=_FENCE_SPOOF_RE.search(normalized).group(0),
+            sample=spoofs[0],
         )
     for token in _mixed_script_tokens(window):
         _add_finding(
@@ -1002,20 +1023,25 @@ def _scan_text(
             field=field,
             sample=token,
         )
-    _scan_urls(haystack, field, policy, collected)
+    urls_truncated = _scan_urls(haystack, field, policy, collected)
     _scan_html(haystack, field, collected)
     _scan_encoded(haystack, field, collected)
-    return truncated
+    return truncated or urls_truncated
 
 
-def _unwrap_own_fence(text: str) -> tuple[str, str | None]:
-    """Return ``(inner text, original sha256)`` for a well-formed own fence."""
+def _unwrap_own_fence(text: str) -> tuple[str, str | None, str | None]:
+    """Return ``(inner, raw sha256, inner sha256)`` for a well-formed own fence."""
     match = _OWN_FENCE_RE.match(text)
     if not match:
-        return text, None
+        return text, None, None
     attributes = match.group("attrs") or ""
     sha_match = _FENCE_SHA_RE.search(attributes)
-    return match.group("body"), (sha_match.group("sha").lower() if sha_match else None)
+    inner_sha_match = _FENCE_INNER_SHA_RE.search(attributes)
+    return (
+        match.group("body"),
+        sha_match.group("sha").lower() if sha_match else None,
+        inner_sha_match.group("sha").lower() if inner_sha_match else None,
+    )
 
 
 def _neutralize_for_fence(text: str) -> tuple[str, dict[str, int | bool]]:
@@ -1086,8 +1112,10 @@ def fence_untrusted_text(
     raw = str(text or "")
     digest = sha256 or hashlib.sha256(raw.encode("utf-8")).hexdigest()
     inner, counters = _neutralize_for_fence(raw)
+    inner_digest = hashlib.sha256(inner.encode("utf-8")).hexdigest()
     fenced = (
-        f'<{FENCE_TAG} fence_version="{FENCE_VERSION}" sha256="{digest}">\n'
+        f'<{FENCE_TAG} fence_version="{FENCE_VERSION}" sha256="{digest}" '
+        f'inner_sha256="{inner_digest}">\n'
         f"{inner}\n"
         f"{FENCE_CLOSE}"
     )
@@ -1142,10 +1170,45 @@ def assess_email(
     date = str(email.get("date", "") or "")
 
     raw_preview = str(email.get("preview", "") or "")
-    preview_inner, fenced_sha = _unwrap_own_fence(raw_preview)
+    preview_inner, fenced_sha, fenced_inner_sha = _unwrap_own_fence(raw_preview)
     already_fenced = preview_inner != raw_preview
+    actual_inner_sha = (
+        hashlib.sha256(preview_inner.encode("utf-8")).hexdigest()
+        if already_fenced
+        else None
+    )
+    # A fence is only "ours" when the inner digest matches the attribute. A
+    # sender-crafted wrapper must never bind an attacker-chosen content hash.
+    fence_valid = bool(
+        already_fenced
+        and fenced_inner_sha
+        and actual_inner_sha
+        and fenced_inner_sha == actual_inner_sha
+    )
 
     collected: dict[tuple[str, str], dict[str, Any]] = {}
+    prior_block = email.get("injection_barrier")
+    if isinstance(prior_block, Mapping) and prior_block.get("status") == "quarantined":
+        # A cached inspect result keeps its fail-closed quarantine signal even
+        # when fencing neutralised the original delimiter/control finding.
+        _add_finding(
+            collected,
+            rule_id="IB-PRIOR-001",
+            severity="high",
+            category="cache",
+            field="injection_barrier",
+            sample="prior quarantine annotation",
+        )
+    if already_fenced and not fence_valid:
+        _add_finding(
+            collected,
+            rule_id="IB-DELIM-001",
+            severity="high",
+            category="delimiter",
+            field="preview",
+            sample="forged or unverifiable fence hash",
+        )
+
     truncated = False
     for field in _TEXT_FIELDS:
         value = email.get(field)
@@ -1153,10 +1216,27 @@ def assess_email(
             continue
         if field == "preview" and already_fenced:
             value = preview_inner
-        truncated = _scan_text(value, field, active_policy, collected) or truncated
+        truncated = _scan_text(
+            value,
+            field,
+            active_policy,
+            collected,
+            allow_escaped_marker=(field == "preview" and fence_valid),
+        ) or truncated
     if extra_text:
         truncated = _scan_text(str(extra_text), "untrusted_external", active_policy, collected) or truncated
+    raw_attachments = email.get("attachments")
     attachments = _iter_attachment_metadata(email)
+    if isinstance(raw_attachments, list) and len(raw_attachments) > MAX_ATTACHMENTS:
+        _add_finding(
+            collected,
+            rule_id="IB-SCAN-001",
+            severity="low",
+            category="scan",
+            field="attachments",
+            sample=f"attachment scan cap reached ({MAX_ATTACHMENTS})",
+        )
+        truncated = True
     if attachments:
         _scan_attachments(attachments, active_policy, collected)
 
@@ -1169,22 +1249,31 @@ def assess_email(
     quarantined = _severity_at_least(max_severity, QUARANTINE_THRESHOLD)
 
     if already_fenced:
-        fenced_preview = raw_preview
-        if fenced_sha:
-            content_sha256 = fenced_sha
-        else:
-            content_sha256 = hashlib.sha256(preview_inner.encode("utf-8")).hexdigest()
         content_bytes = len(preview_inner.encode("utf-8"))
-        transformations: dict[str, int | bool] = {
-            "nul_removed": 0,
-            "control_replaced": 0,
-            "bidi_replaced": 0,
-            "zero_width_replaced": 0,
-            "tag_replaced": 0,
-            "tag_spoofs_escaped": 0,
-            "nfkc_changed": False,
-            "truncated": False,
-        }
+        if fence_valid:
+            fenced_preview = raw_preview
+            content_sha256 = fenced_sha or actual_inner_sha or hashlib.sha256(
+                preview_inner.encode("utf-8")
+            ).hexdigest()
+            transformations: dict[str, int | bool] = {
+                "nul_removed": 0,
+                "control_replaced": 0,
+                "bidi_replaced": 0,
+                "zero_width_replaced": 0,
+                "tag_replaced": 0,
+                "tag_spoofs_escaped": 0,
+                "nfkc_changed": False,
+                "truncated": False,
+            }
+        else:
+            # Re-fence an unverifiable wrapper from its scanned inner content;
+            # the record must never bind an attacker-chosen hash attribute.
+            content_sha256 = actual_inner_sha or hashlib.sha256(
+                preview_inner.encode("utf-8")
+            ).hexdigest()
+            fenced_preview, transformations = fence_untrusted_text(
+                preview_inner, sha256=content_sha256
+            )
     else:
         content_sha256 = hashlib.sha256(raw_preview.encode("utf-8")).hexdigest()
         content_bytes = len(raw_preview.encode("utf-8"))

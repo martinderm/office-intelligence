@@ -87,8 +87,12 @@ Cloud- oder Modellbezug. Implementiert in
   Archive, Bidi-/Mixed-Script-Namen), C0/C1-Steuerzeichen, Bidi- und
   Zero-Width-/Tag-Zeichen, Mixed-Script-Homoglyphen, aktives/hidden HTML und
   lange Base64-/Hex-Blobs. Die Scan-Fenster sind begrenzt (256 KiB je Feld,
-  frühestens 200 URLs/64 Anhänge); die Befunde sind sortiert, bounded und
-  deterministisch.
+  frühestens 200 URLs/64 Anhänge); eine Cap-Überschreitung markiert
+  `IB-SCAN-001` und `scan_truncated`. Ein nicht verifizierbarer eigener Fence
+  (fehlender/falscher `inner_sha256`) ist high `IB-DELIM-001` und wird aus dem
+  gescannten Inner neu gefencet; eine vorhandene
+  `injection_barrier.status: "quarantined"`-Annotation bleibt high
+  `IB-PRIOR-001`. Die Befunde sind sortiert, bounded und deterministisch.
 - **Quarantäne als Evidence:** Geflaggte Mails (Schwelle fix `medium`) werden
   unter `data/mail-desk/injection-quarantine/<16-hex-id>/` abgelegt:
   `record.json` (Schema 1, write-once), `fenced.txt` (write-once),

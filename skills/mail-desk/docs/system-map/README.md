@@ -1876,12 +1876,19 @@ Feste Default-Regeln und feste Prüfungen; Workspace-Kataloge dürfen nur
 | `IB-HOMO-001` | Mixed-Script-Token (Latein + Kyrillisch/Griechisch) | high |
 | `IB-HTML-001/002` | aktives HTML, `display:none`/hidden CSS | medium |
 | `IB-ENC-001` | langer Base64-/Hex-Blob | low |
+| `IB-SCAN-001` | Scan-Cap erreicht (Anhänge/URLs); `scan_truncated: true` | low |
+| `IB-PRIOR-001` | vorherige Quarantäne-Annotation im Inspect-Cache | high |
 | `IB-INSTR-006` | additive Workspace-Phrase | medium |
 
 Schwelle fix `medium`: high/medium quarantänieren; low wird gefencet/berichtet,
 aber nicht quarantäniert. Bounds: 256 KiB je Feld, max. 200 URLs, max. 64
 Anhänge, max. 3 Samples je Regel/Feld (≤160 Zeichen), sortierte und
-deterministische Befunde.
+deterministische Befunde. Eine Cap-Überschreitung wird als low `IB-SCAN-001`
+markiert und setzt `scan_truncated: true`; eine vorhandene
+`injection_barrier.status: "quarantined"`-Annotation aus dem Inspect-Cache
+bleibt als high `IB-PRIOR-001` fail-closed erhalten. Ein nicht verifizierbarer
+Fence (fehlender/falscher `inner_sha256`) ist high `IB-DELIM-001` und wird aus
+dem gescannten Inner neu gefencet.
 
 ### 39.4 Quarantäne-Evidence (Schema 1)
 
@@ -1960,12 +1967,6 @@ die Bundle-Defaults. Jede Schema-/Typ-/Größenabweichung
 (`InjectionPolicyError`) stoppt vor jedem Write. Es gibt keinen Off-Schalter
 und keine Absenkung der Schwelle. Kein Merge-/Policy-Bypass: Quarantäne wird
 vom Menschen aufgelöst, danach wird neu gedraftet.
-
-**Restgrenzen:** Header-only-Pfade (`search`, `sync_sent`, `resolve`) sind kein
-Body-Ingress und werden nicht gefencet; ihre Strings bleiben typisierte,
-niemals auszuführende Daten. Extrahierter Anhangstext bleibt beim bestehenden
-`<untrusted_attachment_content>`-Escaping; eine Instruction-Erkennung im
-extrahierten Text ist nicht Teil dieses Pakets.
 
 **Restgrenzen:** Header-only-Pfade (`search`, `sync_sent`, `resolve`) sind kein
 Body-Ingress und werden nicht gefencet; ihre Strings bleiben typisierte,
