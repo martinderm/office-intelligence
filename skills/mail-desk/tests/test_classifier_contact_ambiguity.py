@@ -175,6 +175,53 @@ class NeutralBodyReviewTests(unittest.TestCase):
         self.assertEqual("unknown", item["decision"]["kind"])
         self.assertIs(True, item["decision"]["review_required"])
 
+    def test_institutional_shared_signature_does_not_leak_domain_or_keyword(self) -> None:
+        # The shared person's institutional address embeds WEEK's domain and TUC
+        # keyword. Masking the ambiguous address must keep the body neutral.
+        institutional = "n.kassilly@tuc.ac.ke"
+        catalog = [
+            project_atael(
+                contacts=[{"name": "Nancy Kassilly", "email": institutional}]
+            ),
+            project_week(
+                keywords=["TUC"],
+                domains=["tuc.ac.ke"],
+                contacts=[
+                    {"name": "Nancy Kassilly", "email": institutional},
+                    {"name": "Dr. Susan Ouko", "email": "susan.ouko@tuc.ac.ke"},
+                ],
+            ),
+        ]
+        item = _classify(
+            catalog,
+            **{
+                "from": f"Nancy Kassilly <{institutional}>",
+                "preview": f"Best regards\nNancy Kassilly\n{institutional}\n",
+            },
+        )
+
+        self.assertEqual("unknown", item["decision"]["kind"])
+        self.assertEqual("INBOX", item["action"]["target_folder"])
+        self.assertIs(True, item["decision"]["review_required"])
+
+    def test_unique_contact_substring_inside_another_address_is_not_a_signal(self) -> None:
+        third = project_atael(
+            id="third",
+            kuerzel="THIRD",
+            mailbox_folder="Projekte/THIRD",
+            contacts=[{"email": "ann@example.test"}],
+            routing_priority=10,
+        )
+
+        item = _classify(
+            [project_atael(), project_week(), third],
+            cc="Joann <joann@example.test>",
+        )
+
+        self.assertEqual("unknown", item["decision"]["kind"])
+        self.assertEqual("INBOX", item["action"]["target_folder"])
+        self.assertIs(True, item["decision"]["review_required"])
+
     def test_body_with_only_shared_keyword_ties_into_review(self) -> None:
         catalog = [
             project_atael(keywords=["questionnaire"]),
@@ -384,6 +431,36 @@ class OwnerContractTests(unittest.TestCase):
             project_matching._body_name_matches("WEEK", "The WEEK final report.")
         )
 
+    def test_address_boundary_rejects_local_part_substrings(self) -> None:
+        self.assertTrue(
+            project_matching._address_in_text(
+                "ann@example.test", "Mail ann@example.test today."
+            )
+        )
+        self.assertFalse(
+            project_matching._address_in_text(
+                "ann@example.test", "Mail joann@example.test today."
+            )
+        )
+
+    def test_masking_removes_the_shared_address_and_embedded_domain(self) -> None:
+        masked = project_matching._mask_addresses(
+            "Signature n.kassilly@tuc.ac.ke",
+            frozenset({"n.kassilly@tuc.ac.ke"}),
+        )
+        self.assertNotIn("tuc.ac.ke", masked)
+
+    def test_academic_suffixes_do_not_break_the_name_signature(self) -> None:
+        signature = project_matching._contact_name_signature(
+            "Dr. Susan Ouko, PhD"
+        )
+        self.assertEqual("susan ouko", signature)
+        self.assertTrue(
+            project_matching._contact_name_in_text(
+                signature, "Please coordinate with Dr. Susan Ouko."
+            )
+        )
+
     def test_shared_person_email_is_never_a_signal(self) -> None:
         result = _select_project(
             ambiguous_catalog(),
@@ -414,6 +491,20 @@ class FallbackIsolationTests(unittest.TestCase):
             ambiguous_catalog(),
             topics=[topic],
             preview="Please find the questionnaire data attached.",
+        )
+
+        self.assertEqual("unknown", item["decision"]["kind"])
+        self.assertEqual("INBOX", item["action"]["target_folder"])
+        self.assertIs(True, item["decision"]["review_required"])
+
+    def test_zoom_notification_does_not_override_the_project_ambiguity(self) -> None:
+        item = _classify(
+            ambiguous_catalog(),
+            subject="Nancy ist dem Meeting beigetreten",
+            **{
+                "from": "Zoom <no-reply@zoom.us>",
+                "cc": "Nancy Kassilly <nkasili@yahoo.com>",
+            },
         )
 
         self.assertEqual("unknown", item["decision"]["kind"])

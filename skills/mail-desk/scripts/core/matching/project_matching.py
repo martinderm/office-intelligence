@@ -28,7 +28,7 @@ supplied, each matched exclusion is surfaced as a catalog-only
 
 Since issue #63 the owner also detects a contact that several catalog projects claim.  When
 the subject carries no catalog project identity, the body/preview scope is the arbiter
-through catalog-backed keywords, other contacts, domains and project names.  Exactly one
+through catalog-backed keywords, other contacts, domains and project kuerzel/id/aliases.  Exactly one
 contact peer with a signal wins; no signal or a tie returns the explicit review result
 ``{"id": "unclassified", "folder": "INBOX", ..., "review_required": True,
 "review_reason": AMBIGUOUS_CONTACT_REVIEW_REASON, "candidates": [...]}`` instead of a
@@ -81,10 +81,11 @@ AMBIGUOUS_CONTACT_REVIEW_REASON = "ambiguous_contact_generic_subject"
 #: Short/ambiguous acronyms that only match a project name as an exact subject token.
 _COMMON_WORD_ACRONYMS = {"WEEK", "LATEST", "USAGE", "PILOT", "START"}
 
-#: Contact-name titles/prefixes that never participate in a body name signal.
+#: Contact-name titles/prefixes/suffixes that never participate in a body name signal.
 _CONTACT_NAME_TITLES = frozenset({
     "dr", "prof", "professor", "mr", "mrs", "ms", "mx", "sir", "dame",
-    "ing", "mag", "dipl",
+    "ing", "mag", "dipl", "phd", "msc", "bsc", "mba", "drs", "univ",
+    "emeritus",
 })
 
 
@@ -559,6 +560,53 @@ def _contact_name_signature(name: object) -> str:
     return " ".join(tokens) if len(tokens) >= 2 else ""
 
 
+def _address_in_text(address: str, text: str) -> bool:
+    """Match a full e-mail address without accepting it inside another address.
+
+    ``ann@example.test`` must not match the local part of ``joann@example.test``.
+    The boundaries exclude every character that can occur in a local part or domain.
+    """
+    if not address:
+        return False
+    return bool(
+        re.search(
+            r"(?<![\w.+-])" + re.escape(address) + r"(?![\w.-])",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _mask_addresses(text: str, addresses: frozenset[str]) -> str:
+    """Blank out ambiguous contact addresses before arbitration scans the text.
+
+    A signature line containing the shared person's own address must not turn that
+    address's domain or an address-embedded keyword into a project signal.
+    """
+    masked = text
+    for address in sorted(addresses, key=len, reverse=True):
+        if address:
+            masked = re.sub(re.escape(address), " ", masked, flags=re.IGNORECASE)
+    return masked
+
+
+def _signature_tokens(signature: str) -> set[str]:
+    """Return the normalized tokens of a non-discriminating contact signature."""
+    return {token for token in signature.split() if token}
+
+
+def _name_is_non_discriminating(name: str, signatures: frozenset[str]) -> bool:
+    """Return True when a project name/keyword is only the shared person's name."""
+    tokens = {
+        token
+        for token in re.split(r"[^\w]+", str(name).casefold())
+        if token
+    }
+    if not tokens:
+        return False
+    return any(tokens.issubset(_signature_tokens(signature)) for signature in signatures)
+
+
 def _contact_name_in_text(signature: str, body_text: str) -> bool:
     """Return True when every conservative name token occurs in the body."""
     return all(
@@ -642,19 +690,26 @@ def _contact_arbitration_signals(
     if not body_text.strip() and not parties_lower.strip():
         return []
 
+    # The shared person's own signature address must not leak its domain or an
+    # address-embedded keyword into the arbitration scans.
+    arbitration_text = _mask_addresses(body_text, ambiguous_contacts)
     signals: list[str] = []
 
     # A contact that belongs to exactly this project (and no ambiguity peer) is a
     # decisive participant signal, even when the body stays neutral.
     for email in _external_contact_emails(project, internal_domains):
-        if email not in ambiguous_contacts and email in parties_lower:
+        if email not in ambiguous_contacts and _address_in_text(email, parties_lower):
             signals.append("unique_contact")
 
     keywords = project.get("keywords")
     if isinstance(keywords, list):
         for keyword in keywords:
             value = str(keyword).strip()
-            if value and _artifact_text_matches(body_text, value):
+            if (
+                value
+                and not _name_is_non_discriminating(value, non_discriminating_names)
+                and _artifact_text_matches(arbitration_text, value)
+            ):
                 signals.append(f"keyword:{value}")
 
     contacts = project.get("contacts")
@@ -667,13 +722,13 @@ def _contact_arbitration_signals(
             if (
                 email
                 and email not in ambiguous_contacts
-                and _artifact_text_matches(body_text, email)
+                and _address_in_text(email, arbitration_text)
             ):
                 signals.append("contact")
             elif (
                 name_key
                 and name_key not in non_discriminating_names
-                and _contact_name_in_text(name_key, body_text)
+                and _contact_name_in_text(name_key, arbitration_text)
             ):
                 signals.append("contact_name")
 
@@ -687,14 +742,17 @@ def _contact_arbitration_signals(
                 and value not in internal_domains
                 and re.search(
                     r"(?<![\w.-])" + re.escape(value) + r"(?![\w.-])",
-                    body_text,
+                    arbitration_text,
                     re.IGNORECASE,
                 )
             ):
                 signals.append(f"domain:{value}")
 
     for name in _project_subject_names(project):
-        if _body_name_matches(name, body_text):
+        if (
+            not _name_is_non_discriminating(name, non_discriminating_names)
+            and _body_name_matches(name, arbitration_text)
+        ):
             signals.append("name")
 
     return list(dict.fromkeys(signals))
@@ -732,8 +790,8 @@ def select_project_match(
     identity, a pure contact match alone is not a routing decision.  The body/preview
     scope (``body_text``; otherwise derived from ``full_text`` by removing the
     subject/from/to/cc headers) is used as the arbiter through catalog-backed
-    keywords, other project contacts, project domains and project names.  Exactly one
-    contact peer with a body signal wins; no signal or a tie returns the explicit
+    keywords, other project contacts, project domains and project kuerzel/id/aliases.
+    Exactly one contact peer with a body signal wins; no signal or a tie returns the explicit
     review result ``{"id": "unclassified", "folder": "INBOX", "name": "",
     "confidence": "low", "catalog": None, "review_required": True,
     "review_reason": "ambiguous_contact_generic_subject", "candidates": [...]}``
@@ -812,7 +870,7 @@ def select_project_match(
         email for email, owners in affiliations.items() if len(set(owners)) > 1
     )
     matched_ambiguous = sorted(
-        email for email in ambiguous_contacts if email in parties_lower
+        email for email in ambiguous_contacts if _address_in_text(email, parties_lower)
     )
     ambiguity_active = bool(matched_ambiguous) and not subject_identified
     ambiguity_candidates = sorted(
@@ -867,7 +925,9 @@ def select_project_match(
             has_name_in_body = any(
                 _body_name_matches(name, full_text) for name in names
             )
-            has_contact_match = any(c in parties_lower for c in external_contacts if c)
+            has_contact_match = any(
+                _address_in_text(c, parties_lower) for c in external_contacts if c
+            )
             has_domain_match = any(d in parties_lower for d in external_domains if d)
             has_kw_match = any(
                 kw.lower() in full_text_lower for kw in entry["keywords"] if len(kw) >= 4

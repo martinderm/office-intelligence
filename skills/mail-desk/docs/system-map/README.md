@@ -405,7 +405,7 @@ ist bei einem Betreff ohne Projektidentität (kein Kürzel/ID/Alias, kein typisc
 Betreffmuster) kein High-Confidence-Signal mehr. `select_project_match` wertet den
 Body/Preview als Schiedsrichter über ausschließlich katalogbelegte Signale
 (Projekt-Keywords, weitere Projektkontakte inkl. Koordinator/Konsortium,
-Projekt-Domains, Projektnamen); ein eindeutig nur diesem Projekt zugeordneter
+Projekt-Domains, Projektkürzel/-ID/-Aliase); ein eindeutig nur diesem Projekt zugeordneter
 externer Teilnehmerkontakt zählt ebenfalls, die mehrdeutige Person selbst ist nie
 ein Signal.
 Genau ein Projekt mit Signal gewinnt; sonst liefert der Owner ein explizites

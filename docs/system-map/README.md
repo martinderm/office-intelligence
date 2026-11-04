@@ -163,7 +163,7 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
  - **Personen-Mehrdeutigkeit bei generischem Betreff** (Issue #63): Ein Kontakt,
    den mehrere Projekte führen, ist ohne Projektidentität im Betreff kein
    High-Confidence-Signal; katalogbelegte Body-/Preview-Signale (Keywords,
-   weitere Kontakte, Domains, Projektnamen) arbitrieren. Neutraler Body oder
+   weitere Kontakte, Domains, Projektkürzel/-ID/-Aliase) arbitrieren. Neutraler Body oder
    Gleichstand endet als `unknown`/`unclassified` in `INBOX` mit
    `review_required: true` statt geratenem Routing; die
    `classifier_revision`-Rotation ist dokumentiert.

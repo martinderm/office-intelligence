@@ -505,7 +505,7 @@ Request-/Receipt-Verträge, Bounds und Beispiele:
   zieht Body/Preview als Schiedsrichter heran und wertet ausschließlich
   katalogbelegte projektspezifische Signale: Projekt-Keywords, weitere
   Projektkontakte (Koordinator/Konsortium, E-Mail oder vollständiger Name),
-  Projekt-Domains und Projektnamen. Ein ausschließlich diesem Projekt
+  Projekt-Domains und Projektkürzel/-ID/-Aliase. Ein ausschließlich diesem Projekt
   zugeordneter externer Kontakt in den Teilnehmern (To/Cc) zählt ebenfalls als
   Signal. Genau ein Projekt mit Signal gewinnt;
   ein neutraler Body oder ein Gleichstand endet bewusst als

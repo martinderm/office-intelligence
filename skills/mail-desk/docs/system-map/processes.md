@@ -79,7 +79,7 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
    - Bei Personen-Mehrdeutigkeit (ein externer Kontakt in mehreren Projekten) und
      generischem Betreff ohne Projektidentität entscheidet der Body/Preview als
      Schiedsrichter über katalogbelegte Keywords, weitere Projektkontakte, Domains und
-     Projektnamen. Ohne Signal oder bei Gleichstand verbleibt das Item als
+     Projektkürzel/-ID/-Aliase. Ohne Signal oder bei Gleichstand verbleibt das Item als
      `unknown`/`unclassified` mit `review_required: true` in `INBOX` — ohne
      automatische Verschiebung und ohne Rückfall auf `routing_priority`/Katalogreihenfolge.
    - Bei sonstiger Mehrdeutigkeit verbleibt das Item ohne automatische Verschiebung in `INBOX`.
