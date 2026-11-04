@@ -299,8 +299,13 @@ Owner der vollständigen Projekt-Vertikale hinzu: die Artefakt-Primitive
 `_select_project_artifacts`, `_catalog_artifact_title`, `_project_context_label`, der
 geteilte `_evidence_read_escalation`, `_build_project_evidence` und der extrahierte
 Root-Match-Owner `select_project_match`. Dieser kapselt die zuvor inline in `classify_email`
-liegende Projektkatalog-Schleife unverändert (Katalogreihenfolge, First-Match,
-High/Medium-Konfidenz, Ergebnisform).
+liegende Projektkatalog-Schleife (Katalogreihenfolge, First-Match,
+High/Medium-Konfidenz, Ergebnisform) und ergänzt seit Issue #63 die
+Kontakt-Mehrdeutigkeits-Arbitrierung (siehe §8): bei generischem Betreff und einem
+Kontakt, den mehrere nicht-unterdrückte Projekte führen, entscheidet ausschließlich ein
+katalogbelegtes Body-/Preview-Signal; ohne Signal oder bei Gleichstand entsteht ein
+explizites Review-Ergebnis statt eines geratenen Projektziels. Der normale
+Ergebnisvertrag `{id, folder, name, confidence, catalog}` bleibt unverändert.
 
 Mit **FR-13/MD-M1-T03** kommt
 [`matching/topic_matching.py`](../scripts/core/matching/topic_matching.py) als kanonischer
@@ -393,6 +398,28 @@ Kandidat gewinnt; nicht-Newsletter-Unterdrückung endet mit Review-Grund
 daedalus/runs/2026-09-22-office-intelligence-fr17-routing-determinism dokumentiert.
 Die classifier_revision-Rotation (ASTs von drei der fünf gebundenen Regelmodule geändert)
 ist genau einmal und genehmigt. Mail-Desk-Suite: 836/836 grün.
+
+**Issue #63 — Personen-Mehrdeutigkeit bei generischem Betreff (implementiert
+2026-11-04):** Ein externer Kontakt, den mehrere nicht-unterdrückte Projekte führen,
+ist bei einem Betreff ohne Projektidentität (kein Kürzel/ID/Alias, kein typisches
+Betreffmuster) kein High-Confidence-Signal mehr. `select_project_match` wertet den
+Body/Preview als Schiedsrichter über ausschließlich katalogbelegte Signale
+(Projekt-Keywords, weitere Projektkontakte inkl. Koordinator/Konsortium,
+Projekt-Domains, Projektnamen); ein eindeutig nur diesem Projekt zugeordneter
+externer Teilnehmerkontakt zählt ebenfalls, die mehrdeutige Person selbst ist nie
+ein Signal.
+Genau ein Projekt mit Signal gewinnt; sonst liefert der Owner ein explizites
+Review-Ergebnis `id: "unclassified"`, `folder: "INBOX"`, `confidence: "low"`,
+`review_required: true`, `review_reason: "ambiguous_contact_generic_subject"` und
+sortierte `candidates`. `classify_email` hält die Mail dann in `INBOX`
+(`keep_in_folder`) und blockiert Topic-/System-/DNR-Fallbacks; der deterministische
+Full-Body-Trigger nutzt den zweiten Pass zur Auflösung. Ein Betreff mit
+Projektkürzel/-alias und ein Kontakt mit nur einer Projektzugehörigkeit bleiben
+unverändert. Nachweis:
+[tests/test_classifier_contact_ambiguity.py](../tests/test_classifier_contact_ambiguity.py).
+Die ASTs von `classifier.py` und `matching/project_matching.py` haben sich geändert;
+`classifier_revision` rotiert damit genau einmal (dokumentiert, nicht still);
+`CLASSIFIER_RULES_VERSION` bleibt `md-e2-classifier-rules-v1`.
 
 ## 9. FR-17/MD-R2 — Thread-/Sibling-Kohärenz (MD-R2 abgeschlossen)
 

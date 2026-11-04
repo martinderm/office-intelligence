@@ -21,6 +21,7 @@ from .matching import ambiguity, project_matching, reply_heuristics, topic_match
 from .matching.date_parser import parse_date_to_year_month
 # Project/artifact/evidence callables stay importable from the facade by object identity.
 from .matching.project_matching import (
+    AMBIGUOUS_CONTACT_REVIEW_REASON,
     _artifact_candidate,
     _artifact_code_matches,
     _artifact_text_matches,
@@ -493,9 +494,13 @@ def classify_email(
     # 1. Dynamic Project Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
     matched_project = None
+    matched_topic = None
+    project_ambiguity_review = False
 
     if not thread_matched and not sibling_blocked:
         # Root project-catalog matching is owned by core.matching.project_matching.
+        # ``body_text`` is the preview plus the already-encapsulated untrusted attachment
+        # context, never the trusted headers; the ambiguity arbiter evaluates only it.
         root_project_match = select_project_match(
             projects or [],
             subject=subject,
@@ -505,43 +510,83 @@ def classify_email(
             to_str=to_str,
             parties=parties,
             cc_str=cc_str,
+            body_text="\n".join(
+                part for part in (preview, str(untrusted_external or "")) if part
+            ),
             suppressed_candidates=suppressed_candidates,
             internal_domains=tuple(reply_config.internal_domains),
         )
         if root_project_match:
-            matched_project = root_project_match
-            pid = root_project_match["id"]
-            target_folder = root_project_match["folder"]
-            decision = {
-                "kind": "project",
-                "id": pid,
-                "confidence": root_project_match["confidence"],
-                "needs_reply": needs_reply,
-            }
-            notes = f"Projektbezogene Abstimmung zu {root_project_match['name'].upper()} (Betreff: {subject})."
+            if root_project_match.get("review_required") is True:
+                # Issue #63: a contact listed by several projects plus a generic subject
+                # without a decisive body signal must not be guessed into one project.
+                # Keep the mail in INBOX as an explicit Review outcome; the deterministic
+                # full-body trigger then lets the second pass retry with the real body.
+                target_folder = "INBOX"
+                project_ambiguity_review = True
+                ambiguity_candidates = [
+                    str(value).strip()
+                    for value in root_project_match.get("candidates", [])
+                    if str(value).strip()
+                ]
+                decision = {
+                    "kind": "unknown",
+                    "id": "unclassified",
+                    "confidence": "low",
+                    "needs_reply": needs_reply,
+                    "review_required": True,
+                    "review_reason": str(
+                        root_project_match.get("review_reason")
+                        or AMBIGUOUS_CONTACT_REVIEW_REASON
+                    ),
+                }
+                candidate_text = ", ".join(
+                    value.upper() for value in ambiguity_candidates
+                )
+                notes = (
+                    "Mehrdeutiger Projektkontakt bei generischem Betreff"
+                    + (f" (Kandidaten: {candidate_text})" if candidate_text else "")
+                    + "; Body ohne eindeutiges Projekt-Signal. Review erforderlich."
+                )
+            else:
+                matched_project = root_project_match
+                pid = root_project_match["id"]
+                target_folder = root_project_match["folder"]
+                decision = {
+                    "kind": "project",
+                    "id": pid,
+                    "confidence": root_project_match["confidence"],
+                    "needs_reply": needs_reply,
+                }
+                notes = f"Projektbezogene Abstimmung zu {root_project_match['name'].upper()} (Betreff: {subject})."
 
-            ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
-            try:
-                ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
-            except ValueError:
-                ev_dir_rel = str(ev_dir.as_posix())
-            ev_file_rel = f"{ev_dir_rel}/{ym}.md"
-            ev_entry = (
-                f"- {ymd} — {ensure_sentence_end(subject)}\n"
-                f"  - Message-ID: `{norm_mid}` ({from_str})\n"
-                f"  - Aussagekern: {notes}\n"
-                f"  - Einordnung: Dokumentation der laufenden Projektkommunikation zu {pid.upper()}."
-            )
-            evidence_spec = {
-                "file": ev_file_rel,
-                "entry": ev_entry,
-            }
-            selected_project = root_project_match["catalog"]
+                ev_dir = resolve_evidence_dir("projects", pid, workspace_root=ws)
+                try:
+                    ev_dir_rel = str(ev_dir.relative_to(ws).as_posix())
+                except ValueError:
+                    ev_dir_rel = str(ev_dir.as_posix())
+                ev_file_rel = f"{ev_dir_rel}/{ym}.md"
+                ev_entry = (
+                    f"- {ymd} — {ensure_sentence_end(subject)}\n"
+                    f"  - Message-ID: `{norm_mid}` ({from_str})\n"
+                    f"  - Aussagekern: {notes}\n"
+                    f"  - Einordnung: Dokumentation der laufenden Projektkommunikation zu {pid.upper()}."
+                )
+                evidence_spec = {
+                    "file": ev_file_rel,
+                    "entry": ev_entry,
+                }
+                selected_project = root_project_match["catalog"]
 
     # --------------------------------------------------------------------------
     # 2. Dynamic Topic Catalog Matching (High / Medium confidence)
     # --------------------------------------------------------------------------
-    if not thread_matched and not sibling_blocked and not matched_project:
+    if (
+        not thread_matched
+        and not sibling_blocked
+        and not matched_project
+        and not project_ambiguity_review
+    ):
         # Root topic-catalog matching and the unique-subtopic fallback/override are owned
         # by core.matching.topic_matching.  The exact winning catalog object crosses the
         # seam so the detail step below needs no second inline topic-catalog lookup.
@@ -572,7 +617,13 @@ def classify_email(
     # --------------------------------------------------------------------------
     # 2-sys. Automated System Notifications & Junk Filtering
     # --------------------------------------------------------------------------
-    if not thread_matched and not sibling_blocked and not matched_project and not matched_topic:
+    if (
+        not thread_matched
+        and not sibling_blocked
+        and not matched_project
+        and not matched_topic
+        and not project_ambiguity_review
+    ):
         if (
             re.search(r"ist dem Meeting beigetreten|has joined the meeting", subject, re.IGNORECASE)
             and ("zoom.us" in from_str.lower() or "zoom" in full_text_lower)
@@ -602,7 +653,7 @@ def classify_email(
     # --------------------------------------------------------------------------
     # 2-dnr. Catalog do_not_route_if outcome (FR-17 / MD-R1)
     # --------------------------------------------------------------------------
-    if decision.get("kind") == "unknown" and suppressed_candidates:
+    if decision.get("kind") == "unknown" and suppressed_candidates and not project_ambiguity_review:
         if any(row.get("suppression_reason") == "newsletter" for row in suppressed_candidates):
             target_folder = NEWSLETTER_TARGET_FOLDER
             decision = {

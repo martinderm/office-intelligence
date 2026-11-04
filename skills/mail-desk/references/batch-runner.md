@@ -1554,6 +1554,9 @@ Anhangs-Hashes. Hash-Reihenfolge ist irrelevant; jede regel-/katalogrelevante Co
 Änderung bewegt die Revision, Kommentare/Formatierung und Host-Pfade nicht; Caller-, Mail-
 und Manifest-Werte können sie nicht setzen. Die einmalige Entflechtung der
 Klassifikationsregeln rotiert vorhandene `classifier_revision`-Werte genau einmal (genehmigt).
+**Issue #63 (2026-11-04)** ändert die ASTs von `classifier.py` und
+`matching/project_matching.py`; die vorhandenen Revisionen rotieren dadurch genau einmal
+(dokumentiert, nicht still), `CLASSIFIER_RULES_VERSION` bleibt unverändert.
 
 **Idempotenz / `already_fetched`:** `derive_evaluation_run_id` leitet aus Account-/Folder-/
 Envelope-/Message-Identität deterministisch eine sichere, PII-freie Run-ID je Nachricht ab

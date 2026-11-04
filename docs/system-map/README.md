@@ -160,6 +160,13 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
   Legacy-Shims (FR-13/MD-M2, FR-13 geschlossen).
  - **Katalogtreues Routing** mit `routing_priority`, Exaktcode-vor-Kontakt und
    `do_not_route_if` für Projekte und Topics inkl. Newsletter-Mapping (FR-17/MD-R1).
+ - **Personen-Mehrdeutigkeit bei generischem Betreff** (Issue #63): Ein Kontakt,
+   den mehrere Projekte führen, ist ohne Projektidentität im Betreff kein
+   High-Confidence-Signal; katalogbelegte Body-/Preview-Signale (Keywords,
+   weitere Kontakte, Domains, Projektnamen) arbitrieren. Neutraler Body oder
+   Gleichstand endet als `unknown`/`unclassified` in `INBOX` mit
+   `review_required: true` statt geratenem Routing; die
+   `classifier_revision`-Rotation ist dokumentiert.
  - **DNR-gegatete Sibling-Kohärenz** (FR-17/MD-R2).
  - **Begrenzte Client-Deadlines** für mehrordrige Himalaya-Operationen (FR-17/MD-R6).
  - **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
@@ -338,8 +345,12 @@ kanonische Owner `matching/project_matching.py` hinzu: er besitzt die Artefakt-P
 `_select_project_artifacts`, `_catalog_artifact_title`, `_project_context_label`, den
 geteilten `_evidence_read_escalation`, `_build_project_evidence` und den extrahierten
 Root-Match-Owner `select_project_match`, der die zuvor inline in `classify_email` liegende
-Projektkatalog-Schleife unverändert kapselt (Katalogreihenfolge, First-Match,
-High/Medium-Konfidenz, Ergebnisform). Mit **FR-13/MD-M1-T03** kommt der kanonische Owner
+Projektkatalog-Schleife kapselt (Katalogreihenfolge, First-Match, High/Medium-Konfidenz,
+Ergebnisform) und seit Issue #63 die Kontakt-Mehrdeutigkeits-Arbitrierung ergänzt: Bei
+generischem Betreff und einem Kontakt, den mehrere nicht-unterdrückte Projekte führen,
+entscheidet ausschließlich ein katalogbelegtes Body-/Preview-Signal; ohne Signal oder bei
+Gleichstand entsteht ein explizites Review-Ergebnis (`unclassified`/`INBOX`,
+`review_required: true`) statt eines geratenen Projektziels. Mit **FR-13/MD-M1-T03** kommt der kanonische Owner
 `matching/topic_matching.py` hinzu: er besitzt die Topic-/Subtopic-/Operation-/Event-Signale,
 -Auflösung, -Validierung, -Evidenz und die Safe-Target-Guards sowie die beiden extrahierten
 Owner-Callables `select_topic_match` (geordnete Root-Topic-Katalog-Schleife plus
@@ -380,6 +391,10 @@ und FR-13 geschlossen:** die sechs Quarantäne-Owner (`quarantine_index.py` — 
 unter `scripts/core/quarantine/`; die alten `core/attachment_*.py`-Pfade sind dünne
 `sys.modules`-aliasende Shims mit Objektidentität für Importe, Monkeypatch-Seams und
 `core.__init__`-Re-Exports (804 Tests grün, `classifier_revision` unrotiert).
+**Issue #63 (2026-11-04)** ändert die ASTs von `classifier.py` und
+`matching/project_matching.py`; die vorhandenen `classifier_revision`-Werte rotieren
+dadurch genau einmal (dokumentiert, nicht still), `CLASSIFIER_RULES_VERSION` bleibt
+`md-e2-classifier-rules-v1`.
 L2-Detail: [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §6 und §7.
 
 ---
