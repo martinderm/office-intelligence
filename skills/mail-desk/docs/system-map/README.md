@@ -418,8 +418,8 @@ Projektkürzel/-alias und ein Kontakt mit nur einer Projektzugehörigkeit bleibe
 unverändert. Nachweis:
 [tests/test_classifier_contact_ambiguity.py](../tests/test_classifier_contact_ambiguity.py).
 Die ASTs von `classifier.py` und `matching/project_matching.py` haben sich geändert;
-`classifier_revision` rotiert damit genau einmal (dokumentiert, nicht still);
-`CLASSIFIER_RULES_VERSION` bleibt `md-e2-classifier-rules-v1`.
+`classifier_revision` rotiert damit gegenüber dem Basisstand genau einmal (dokumentiert,
+nicht still); `CLASSIFIER_RULES_VERSION` bleibt `md-e2-classifier-rules-v1`.
 
 ## 9. FR-17/MD-R2 — Thread-/Sibling-Kohärenz (MD-R2 abgeschlossen)
 

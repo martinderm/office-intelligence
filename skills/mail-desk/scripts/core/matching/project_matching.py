@@ -563,14 +563,14 @@ def _contact_name_signature(name: object) -> str:
 def _address_in_text(address: str, text: str) -> bool:
     """Match a full e-mail address without accepting it inside another address.
 
-    ``ann@example.test`` must not match the local part of ``joann@example.test``.
-    The boundaries exclude every character that can occur in a local part or domain.
+    ``ann@example.test`` must not match the local part of ``joann@example.test`` or a
+    longer domain ``ann@example.test.evil``.  A sentence-final period is tolerated.
     """
     if not address:
         return False
     return bool(
         re.search(
-            r"(?<![\w.+-])" + re.escape(address) + r"(?![\w.-])",
+            r"(?<![\w.+-])" + re.escape(address) + r"(?![\w-]|\.[\w-])",
             text,
             re.IGNORECASE,
         )
@@ -581,12 +581,19 @@ def _mask_addresses(text: str, addresses: frozenset[str]) -> str:
     """Blank out ambiguous contact addresses before arbitration scans the text.
 
     A signature line containing the shared person's own address must not turn that
-    address's domain or an address-embedded keyword into a project signal.
+    address's domain or an address-embedded keyword into a project signal.  Masking is
+    boundary-aware: a shared ``ann@example.test`` must not erase the unique
+    ``joann@example.test`` (or a longer domain) from the text.
     """
     masked = text
     for address in sorted(addresses, key=len, reverse=True):
         if address:
-            masked = re.sub(re.escape(address), " ", masked, flags=re.IGNORECASE)
+            masked = re.sub(
+                r"(?<![\w.+-])" + re.escape(address) + r"(?![\w-]|\.[\w-])",
+                " ",
+                masked,
+                flags=re.IGNORECASE,
+            )
     return masked
 
 
@@ -600,7 +607,7 @@ def _name_is_non_discriminating(name: str, signatures: frozenset[str]) -> bool:
     tokens = {
         token
         for token in re.split(r"[^\w]+", str(name).casefold())
-        if token
+        if token and token not in _CONTACT_NAME_TITLES
     }
     if not tokens:
         return False

@@ -222,6 +222,35 @@ class NeutralBodyReviewTests(unittest.TestCase):
         self.assertEqual("INBOX", item["action"]["target_folder"])
         self.assertIs(True, item["decision"]["review_required"])
 
+    def test_shared_address_masking_does_not_swallow_a_longer_unique_address(self) -> None:
+        shared = "ann@example.test"
+        third = project_atael(
+            id="third",
+            kuerzel="THIRD",
+            mailbox_folder="Projekte/THIRD",
+            contacts=[{"email": "joann@example.test"}],
+            domains=["third.test"],
+            keywords=[],
+            routing_priority=10,
+        )
+
+        item = _classify(
+            [
+                project_atael(contacts=[{"email": shared}]),
+                project_week(contacts=[{"email": shared}], keywords=["questionnaire"]),
+                third,
+            ],
+            **{
+                "from": f"Ann <{shared}>",
+                "cc": "Bob <bob@third.test>",
+                "preview": "Please send the questionnaire to joann@example.test.",
+            },
+        )
+
+        self.assertEqual("unknown", item["decision"]["kind"])
+        self.assertEqual("INBOX", item["action"]["target_folder"])
+        self.assertIs(True, item["decision"]["review_required"])
+
     def test_body_with_only_shared_keyword_ties_into_review(self) -> None:
         catalog = [
             project_atael(keywords=["questionnaire"]),
@@ -437,9 +466,19 @@ class OwnerContractTests(unittest.TestCase):
                 "ann@example.test", "Mail ann@example.test today."
             )
         )
+        self.assertTrue(
+            project_matching._address_in_text(
+                "ann@example.test", "Mail ann@example.test."
+            )
+        )
         self.assertFalse(
             project_matching._address_in_text(
                 "ann@example.test", "Mail joann@example.test today."
+            )
+        )
+        self.assertFalse(
+            project_matching._address_in_text(
+                "ann@example.test", "Mail ann@example.test.evil today."
             )
         )
 
@@ -450,6 +489,13 @@ class OwnerContractTests(unittest.TestCase):
         )
         self.assertNotIn("tuc.ac.ke", masked)
 
+    def test_masking_keeps_a_longer_unique_address_intact(self) -> None:
+        masked = project_matching._mask_addresses(
+            "Write to joann@example.test.",
+            frozenset({"ann@example.test"}),
+        )
+        self.assertIn("joann@example.test", masked)
+
     def test_academic_suffixes_do_not_break_the_name_signature(self) -> None:
         signature = project_matching._contact_name_signature(
             "Dr. Susan Ouko, PhD"
@@ -458,6 +504,16 @@ class OwnerContractTests(unittest.TestCase):
         self.assertTrue(
             project_matching._contact_name_in_text(
                 signature, "Please coordinate with Dr. Susan Ouko."
+            )
+        )
+        self.assertTrue(
+            project_matching._name_is_non_discriminating(
+                "Prof. Nancy Kassilly", frozenset({"nancy kassilly"})
+            )
+        )
+        self.assertFalse(
+            project_matching._name_is_non_discriminating(
+                "TUC", frozenset({"nancy kassilly"})
             )
         )
 

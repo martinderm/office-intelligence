@@ -393,8 +393,8 @@ unter `scripts/core/quarantine/`; die alten `core/attachment_*.py`-Pfade sind d�
 `core.__init__`-Re-Exports (804 Tests grün, `classifier_revision` unrotiert).
 **Issue #63 (2026-11-04)** ändert die ASTs von `classifier.py` und
 `matching/project_matching.py`; die vorhandenen `classifier_revision`-Werte rotieren
-dadurch genau einmal (dokumentiert, nicht still), `CLASSIFIER_RULES_VERSION` bleibt
-`md-e2-classifier-rules-v1`.
+gegenüber dem Basisstand genau einmal (dokumentiert, nicht still),
+`CLASSIFIER_RULES_VERSION` bleibt `md-e2-classifier-rules-v1`.
 L2-Detail: [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §6 und §7.
 
 ---
