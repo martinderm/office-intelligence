@@ -95,7 +95,7 @@ ausschließlich über die bestehenden Producer-Seams
 `completion_report`), `skills/mail-desk/scripts/core/modes/verify.py`
 (Standalone-/Pipeline-Verify) und `skills/mail-desk/scripts/core/modes/reconcile.py`
 (abgeschlossener Reconcile). Referenzverträge:
-`skills/mail-desk/references/batch-runner.md` §Synthese-Handoff und §Completion-Gate.
+`skills/mail-desk/references/synthesis.md` §Synthese-Handoff und §Completion-Gate.
 
 - **Bare `status: "pending"`, ein `results: success` oder ein Execute-/Rohlauf genügen
   NICHT.** Ohne diesen Report bleibt der Handoff unreleased; Task-Desk nimmt daraus

@@ -1,7 +1,7 @@
 # Mail-Desk — Subsystem System Map: Seiteneffekte (Effects)
 
 > **Typ**: ICM Form 6 (`system-map`), Dimension: Seiteneffekte  
-> **Subsystem**: [`skills/mail-desk`](../SKILL.md)  
+> **Subsystem**: [`skills/mail-desk`](../../SKILL.md)
 > **Ziel**: Vollständige Dokumentation aller Sicherheitsgrenzen, Dateisystem-Barrieren, Fail-Closed-Bedingungen und Plattformspezifika.  
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
@@ -194,3 +194,21 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   unangetastet.
 
 Details: L2-§39, [`objects.md`](objects.md) §7, [`processes.md`](processes.md) §7.
+
+## 8. Kontext-Konsultation (Issue #64)
+
+- **Rein lesend und beratend:** `core/context_consultation.py` liest ausschließlich
+  Katalog- und Dossier-Dateien unterhalb des Workspace (bounded, Stdlib), schreibt
+  nichts, nutzt weder Netzwerk noch Mailbox und emittiert nur workspace-relative
+  POSIX-Pfade.
+- **Keine Autorisierung:** Die Metadaten (`decision.artifact_candidates.events`/
+  `.cloud_storage`) autorisieren keine Wissens-, Cloud- oder Task-Mutation, keinen
+  Cloud-Sync, kein Anlegen von Dossiers und ändern weder Routing, Evidence noch
+  Syntheseziele. Die bestehenden Lock-/Review-/Write-Gates bleiben unverändert.
+- **Schreibende Synthese bleibt Agentenarbeit:** Wissensdateien ändert nur das
+  LLM nach dem freigegebenen Handoff unter dem Single-Home-Vertrag; das
+  Evidenzlog bleibt chronologische Nachweisspur
+  ([`references/synthesis.md`](../../references/synthesis.md)).
+- `classifier.py`/Matching bleiben unangetastet, `classifier_revision` rotiert nicht.
+
+Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md) §8.

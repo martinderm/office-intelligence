@@ -251,6 +251,17 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    Matching und `classifier_revision` unangetastet; die separate
    Issue-#63-Regeländerung rotiert `classifier_revision` (siehe §8). Vollständiger Vertrag:
    [L2 §39](../../skills/mail-desk/docs/system-map/README.md#39-issue-62--lokale-injection-barrier).
+ - **Verbindliche Kontext-Konsultation (Issue #64):** Vor Analyse und
+   Post-Batch-Synthese wird für jedes berührte oder kandidierende Projekt/Topic der
+   kanonisch deklarierte Kontext in fester Reihenfolge konsultiert (Event-Dossier;
+   bei Projekten die `events/<slug>/index.md`-Ablage, bei Topics die
+   `subtopics[].events[]`-Referenz; Subtopic-Spezialnotiz/Steuerdateien;
+   Cloud-Atlas-`cloud_sync`), Owner und Scope nur aus
+   `projects.json`/`topics.json`. Strikter Single-Home-Vertrag, Evidenzlog
+   bleibt Chronologie, jeder Kontext liefert einen Konsultationsnachweis. Vertrag:
+   [`synthesis.md`](../../skills/mail-desk/references/synthesis.md); Detail:
+   [§11](#11-issue-64-verbindliche-kontext-konsultation) und
+   [L2 §40](../../skills/mail-desk/docs/system-map/README.md#40-issue-64--kontext-konsultation-und-anti-duplication).
 
 ---
 
@@ -408,6 +419,9 @@ unter `scripts/core/quarantine/`; die alten `core/attachment_*.py`-Pfade sind d�
 `matching/project_matching.py`; die vorhandenen `classifier_revision`-Werte rotieren
 gegenüber dem Basisstand genau einmal (dokumentiert, nicht still),
 `CLASSIFIER_RULES_VERSION` bleibt `md-e2-classifier-rules-v1`.
+**Issue #64** ändert die Classifier-/Matching-ASTs nicht und rotiert
+`classifier_revision` nicht: die Kontext-Konsultations-Metadaten entstehen additiv
+in `core/context_consultation.py` nach der Klassifikation (§11).
 L2-Detail: [`../../skills/mail-desk/docs/system-map/README.md`](../../skills/mail-desk/docs/system-map/README.md) §6 und §7.
 
 ---
@@ -529,3 +543,30 @@ Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md).
 Regression: `skills/mail-desk/tests/test_batch_runner_empty_inbox.py`,
 `skills/mail-desk/tests/test_maildesk_sign_manifest.py`,
 `skills/mail-desk/tests/test_batch_runner_modes.py`.
+
+## 11. Issue #64: Verbindliche Kontext-Konsultation
+
+Der kanonische Vertrag für Post-Batch-Synthese und Konsultation ist
+[`skills/mail-desk/references/synthesis.md`](../../skills/mail-desk/references/synthesis.md);
+Telemetrie, Syntheseziele, Synthese-Handoff und Completion-Gate sind dorthin aus dem
+Batch-Runner-Vertrag gezogen. Vor Analyse/Synthese wird je berührtem oder
+kandidierendem Projekt/Topic der deklarierte Kontext in fester Reihenfolge
+konsultiert: (1) Event-Dossier; bei Projekten ist die
+`events/<slug>/index.md`-Ablage die Deklaration, bei Topics/Subtopics die
+katalogdeklarierte `subtopics[].events[]`-Referenz, (2) Subtopic-Spezialnotiz bzw.
+Operations-/Projekt-/Topic-Steuerdatei, (3) deklarierte `cloud_sync`-Maps. Owner und
+Scope kommen nur aus `projects.json`/`topics.json`; bei Topics nicht katalogisierte
+oder fehlende Strukturen sind `review_required`, nie still gebunden oder angelegt.
+Anti-Duplication: striktes Single Home (Event-Dossier vor Subtopic-Notiz vor
+Steuerdatei), Evidenzlog bleibt Chronologie, Eltern-`index.md` verweist nur.
+
+Additive Classifier-Metadaten: `draft` und `inspect` (mit Manifest-Proposal) rufen nach
+der Klassifikation `core/context_consultation.py`; bounded
+`decision.artifact_candidates.events`/`.cloud_storage` (je max. 3), rein lesend und
+beratend, ohne Routing-, Evidence-, Target- oder Approval-Wirkung. Keine Cloud-/Task-/
+Wissensmutation. `classifier.py` und die Matching-Module bleiben unverändert,
+`classifier_revision` rotiert nicht (§6).
+
+L2: [Mail-Desk §40](../../skills/mail-desk/docs/system-map/README.md#40-issue-64--kontext-konsultation-und-anti-duplication).
+Tests: `skills/mail-desk/tests/test_context_consultation.py`,
+`skills/mail-desk/tests/test_synthesis_consultation_docs.py`.

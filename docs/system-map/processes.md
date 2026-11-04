@@ -48,8 +48,9 @@ Die Bearbeitung von E-Mails und die Erfassung von Aufgaben sind strikt getrennt:
 `verified_message_ids` alle Quell-IDs decken, plus passender freigegebener
 `data.synthesis_handoff` mit `status: "pending"`. Erzeugt wird der Report
 ausschließlich über die bestehenden Seams `core/completion.py`, `modes/verify.py`
-und `modes/reconcile.py` (Vertex-Referenzen: `references/batch-runner.md`
-§Synthese-Handoff/§Completion-Gate); ein bare `pending` oder ein `results: success`
+und `modes/reconcile.py` (Vertragsreferenz:
+`skills/mail-desk/references/synthesis.md` §Synthese-Handoff/§Completion-Gate);
+ein bare `pending` oder ein `results: success`
 genügt **nicht**. Bei der ersten Kandidatenaufnahme vergibt `task-desk` eine
 persistierte, opake `action_id` (UUID4) und schreibt `review-queue.json` (inkl.
 nichtleerem `title` und geprüftem `evidence_ref={file,anchor}`); die
@@ -59,6 +60,21 @@ nur bei `reply_status: "needed"` mit passender normalisierter Quelle im freigege
 `synthesis_handoff` zulässig (nur dieser zweite Eingang; `dossier_handoff` bleibt ein
 separater Vertrag). Register-Zielverträge:
 [`../../skills/task-desk/references/task-schemas.md`](../../skills/task-desk/references/task-schemas.md).
+
+**Post-Batch-Synthese mit Kontext-Konsultation (Issue #64):** Nach dem freigegebenen
+`synthesis_handoff` (`status: "pending"`, quellengebundener `completion_report`)
+konsultiert das LLM je berührtem Projekt/Topic zuerst den kanonisch deklarierten
+Kontext in fester Reihenfolge — (1) Event-Dossier (bei Projekten die
+`events/<slug>/index.md`-Ablage, bei Topics/Subtopics die katalogdeklarierte
+`subtopics[].events[]`-Referenz), (2) Subtopic-Spezialnotiz bzw.
+Operations-/Projekt-/Topic-Steuerdatei, (3) deklarierte `cloud_sync`-Maps — und
+entscheidet erst danach je Befund `updated`, `linked`,
+`noop` oder `review_required`. Geschrieben wird nur das Single Home (Event-Dossier >
+Subtopic-Notiz > Steuerdatei); das Evidenzlog bleibt Chronologie und erhält den
+`Message-ID`-Anker. Der Bericht führt je Kontext einen Konsultationsnachweis
+(`context`, `canonical_file`, `message_ids`, `outcome`, `reason`). Der Runner selbst
+schreibt weder Wissensdateien noch löst er Cloud- oder Task-Mutation aus. Vertrag:
+[`skills/mail-desk/references/synthesis.md`](../../skills/mail-desk/references/synthesis.md).
 
 ---
 

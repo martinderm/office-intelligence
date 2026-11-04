@@ -20,6 +20,7 @@ from ..attachment_reclassification import (
 )
 from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
+from ..context_consultation import add_context_consultation_metadata
 from ..himalaya import fetch_raw_message_eml, get_single_email_details, run_himalaya
 from ..index import load_final_index
 from ..injection_barrier import (
@@ -72,6 +73,9 @@ def run_inspect_mode(
     raw_mime_reader = _dependency(dependencies, "fetch_raw_message_eml", fetch_raw_message_eml)
     triggers_evaluation = _dependency(
         dependencies, "decision_triggers_evaluation", decision_triggers_evaluation
+    )
+    add_consultation_metadata = _dependency(
+        dependencies, "add_context_consultation_metadata", add_context_consultation_metadata
     )
 
     folder = config.get("folder", "INBOX")
@@ -238,6 +242,8 @@ def run_inspect_mode(
         # attachments[]/attachment_status/attachment_error and attachment_evaluation/files[]
         # contract as a written draft manifest, so it receives the same invariant.
         discard_inventory_contradicting_evaluations(manifest.get("items", []))
+        # Issue #64: advisory, read-only consultation hints; no routing/evidence effect.
+        add_consultation_metadata(manifest.get("items", []), workspace_root=workspace_root)
         # Issue #62: the hash-bindable quarantine block belongs to the proposal,
         # even though a plain inspect proposal has no review contract yet.
         manifest["injection_barrier"] = barrier_block
