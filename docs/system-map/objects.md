@@ -259,6 +259,13 @@ und [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting
   Mailfelder/Zugangsdaten/Pfade. Owner
   [`../../skills/mail-desk/scripts/core/diagnostics.py`](../../skills/mail-desk/scripts/core/diagnostics.py).
   L2-Detail: [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md) §5.6.
+* **`injection-quarantine/` (Issue #62)**: operative Evidence unter
+  `data/mail-desk/injection-quarantine/` mit `record.json` (Schema 1,
+  write-once), `fenced.txt` (write-once), `observations.jsonl` und
+  `index.jsonl` (append-only); deterministische 16-Hex-ID je `message_key`,
+  keine Roh-MIME/Zugangsdaten/absoluten Pfade, kein `preview`-Feld. Owner
+  [`../../skills/mail-desk/scripts/core/injection_barrier.py`](../../skills/mail-desk/scripts/core/injection_barrier.py).
+  L2-Detail: [`../../skills/mail-desk/docs/system-map/objects.md`](../../skills/mail-desk/docs/system-map/objects.md) §7.
 
 ### 4.2 Cloud-Atlas Objekte → [`../../skills/cloud-atlas/docs/system-map/objects.md`](../../skills/cloud-atlas/docs/system-map/objects.md)
 * **`filemap.json`**: Vollständiges Verzeichnisabbild der Cloud-Speicher inklusive Metadaten und Hashes.

@@ -61,10 +61,74 @@ def _failure(reason_code: str, message: str, **details: Any) -> dict[str, Any]:
     return {"ok": False, "reason_code": reason_code, "message": message, **details}
 
 
+def _injection_quarantine_failure(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Fail closed for a manifest that carries a quarantine block.
+
+    A manifest without the optional block remains valid (backward compatibility
+    for manifests drafted before Issue #62). Any present block is validated
+    strictly: a malformed or inconsistent block is itself a stop, never a
+    silent pass-through.
+    """
+    barrier = config.get("injection_barrier")
+    if barrier is None:
+        return None
+    if not isinstance(barrier, dict):
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest carries a malformed injection-barrier block.",
+        )
+    if barrier.get("schema_version") != 1:
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest injection-barrier block has an unsupported schema.",
+        )
+    quarantined_count = barrier.get("quarantined_count")
+    if (
+        isinstance(quarantined_count, bool)
+        or not isinstance(quarantined_count, int)
+        or quarantined_count < 0
+    ):
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest injection-barrier block has an invalid quarantined_count.",
+        )
+    quarantined_rows = barrier.get("quarantined")
+    if quarantined_rows is not None and not isinstance(quarantined_rows, list):
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest injection-barrier block has an invalid quarantined list.",
+        )
+    row_count = len(quarantined_rows) if isinstance(quarantined_rows, list) else 0
+    if row_count != quarantined_count:
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest injection-barrier block is internally inconsistent.",
+            quarantined_count=quarantined_count,
+            quarantine_rows=row_count,
+        )
+    if quarantined_count > 0:
+        quarantine_ids = sorted(
+            str(row.get("quarantine_id", ""))
+            for row in quarantined_rows
+            if isinstance(row, dict) and row.get("quarantine_id")
+        )
+        return _failure(
+            "injection_quarantine_present",
+            "Execute manifest contains quarantined injection findings; resolve the quarantine and re-draft.",
+            quarantined_count=quarantined_count,
+            quarantine_ids=quarantine_ids[:20],
+        )
+    return None
+
+
 def validate_execute_contract(
     config: dict[str, Any], *, effective_account: str | None,
 ) -> dict[str, Any]:
     """Fail closed for every request before any execute-side effect."""
+    quarantine_failure = _injection_quarantine_failure(config)
+    if quarantine_failure is not None:
+        return quarantine_failure
+
     missing = sorted(_CONTRACT_KEYS - set(config))
     if missing:
         return _failure(

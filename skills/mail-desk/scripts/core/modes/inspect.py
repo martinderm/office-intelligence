@@ -22,6 +22,11 @@ from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
 from ..himalaya import fetch_raw_message_eml, get_single_email_details, run_himalaya
 from ..index import load_final_index
+from ..injection_barrier import (
+    annotate_email_for_output,
+    assess_and_quarantine,
+    load_injection_policy,
+)
 
 
 def _required_dependency(
@@ -160,23 +165,54 @@ def run_inspect_mode(
                 email["is_known"] = False
                 email["known_location"] = None
 
+    # Issue #62: the barrier runs before any mail text becomes agent-visible.
+    # ``inspect`` remains mailbox-read-only; it writes only the quarantine
+    # evidence for flagged content.  The raw list stays untouched for the
+    # optional manifest proposal, while the emitted ``emails`` receive the
+    # fixed untrusted-content fence.
+    barrier_policy = load_injection_policy(workspace_root)
+    assessments, quarantine_results, barrier_block = assess_and_quarantine(
+        ordered_emails,
+        policy=barrier_policy,
+        data_dir=dd,
+        mode="inspect",
+    )
+    quarantined = barrier_block["quarantined_count"] > 0
+    emitted_emails = [
+        annotate_email_for_output(email, assessment)
+        for email, assessment in zip(ordered_emails, assessments)
+    ]
+
     output_data: dict[str, Any] = {
-        "ok": True,
+        "ok": not quarantined,
         "mode": "inspect",
+        "status": "quarantined" if quarantined else "completed",
         "folder": folder,
         "order": order,
         "total_inspected": len(ordered_emails),
         "known_count": known_count,
-        "emails": ordered_emails,
+        "emails": emitted_emails,
+        "injection_barrier": barrier_block,
+        "quarantine_evidence": quarantine_results,
     }
+    if quarantined:
+        output_data["message"] = (
+            "Injection-barrier quarantine: flagged mail was fenced and recorded as "
+            "evidence; mailbox content was not modified."
+        )
     if propose_manifest or evaluate_attachments:
         # Initial preview/body/full-read classification always completes first.  The
         # classifier reports the effective source it actually used through the transient
         # ``source_sink``, so the single reclassification consumes the same effective source
         # (preview or full-read) rather than the raw inspection entry.
+        clean_emails = [
+            email
+            for email, assessment in zip(ordered_emails, assessments)
+            if not assessment.quarantined
+        ]
         effective_sources: list[dict[str, Any]] = []
         manifest = draft(
-            ordered_emails,
+            clean_emails,
             workspace_root=workspace_root,
             full_reader=get_details,
             account=account,
@@ -202,6 +238,9 @@ def run_inspect_mode(
         # attachments[]/attachment_status/attachment_error and attachment_evaluation/files[]
         # contract as a written draft manifest, so it receives the same invariant.
         discard_inventory_contradicting_evaluations(manifest.get("items", []))
+        # Issue #62: the hash-bindable quarantine block belongs to the proposal,
+        # even though a plain inspect proposal has no review contract yet.
+        manifest["injection_barrier"] = barrier_block
         output_data["manifest_proposal"] = manifest
         if manifest_file:
             manifest_path = Path(manifest_file).expanduser().resolve()

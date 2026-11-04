@@ -238,6 +238,19 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    Kind-stdout; keine Verifikation, kein Retry, kein Fallback, kein Cleanup.
    Detail: L2-Map §35.
  - Himalaya-Adapter, Dossier-Synthese.
+ - **Lokale Injection-Barrier (Issue #62, Grenzvermerk):** mail-desk filtert
+   untrusted Mail-Ingress vor dem Agent-Context deterministisch und rein lokal:
+   feste `<untrusted_mail_content>`-Fences, Scan auf instruction-ähnliche
+   Muster, URLs, Anhänge, Steuerzeichen und Homoglyphen, Quarantäne-Evidence
+   unter `data/mail-desk/injection-quarantine/` und ein hash-gebundener
+   `injection_barrier`-Manifestblock, der `execute`, `sign_manifest`,
+   CLI-Wrapper und den inneren `dossier_apply`-Execute mit
+   `injection_quarantine_present` stoppt. Kein Cloud-Sanitizer, keine neue
+   Runtime-Abhängigkeit; `inspect` bleibt mailbox-read-only, die bestehenden
+   Write-Gates bleiben unverändert. Durch diese Barrier bleiben `classifier.py`/
+   Matching und `classifier_revision` unangetastet; die separate
+   Issue-#63-Regeländerung rotiert `classifier_revision` (siehe §8). Vollständiger Vertrag:
+   [L2 §39](../../skills/mail-desk/docs/system-map/README.md#39-issue-62--lokale-injection-barrier).
 
 ---
 

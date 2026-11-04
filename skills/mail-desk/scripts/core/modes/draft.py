@@ -15,6 +15,7 @@ from ..classifier import classify_email, draft_manifest
 from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
 from ..himalaya import fetch_raw_message_eml, get_single_email_details
+from ..injection_barrier import assess_and_quarantine, load_injection_policy
 from ..progress import BatchProgressTracker
 from ..sent_indexer import load_sent_index
 
@@ -115,12 +116,29 @@ def run_draft_mode(
 
     tracker.step("classifying_and_checking_sent")
     sent_lookup = load_sent(dd)
+    # Issue #62: deterministic pre-filter before any mail text reaches the
+    # classifier or an agent context.  Flagged items are recorded as
+    # quarantine evidence and never enter the reviewable manifest; the
+    # hash-bound top-level block makes the stop visible to execute and review.
+    barrier_policy = load_injection_policy(workspace_root)
+    assessments, quarantine_results, barrier_block = assess_and_quarantine(
+        emails,
+        policy=barrier_policy,
+        data_dir=dd,
+        mode="draft",
+    )
+    clean_emails = [
+        email
+        for email, assessment in zip(emails, assessments)
+        if not assessment.quarantined
+    ]
+    quarantined = barrier_block["quarantined_count"] > 0
     # FR-15/MD-E2-T01: the classifier reports the effective source it actually used for each
     # final initial decision (preview email, or full-read email when it re-read the envelope)
     # through an explicitly transient, non-persisted channel.
     effective_sources: list[dict[str, Any]] = []
     manifest = draft(
-        emails,
+        clean_emails,
         workspace_root=workspace_root,
         sent_lookup=sent_lookup,
         full_reader=full_reader,
@@ -150,6 +168,9 @@ def run_draft_mode(
     # manifest contract is attached.  The MD-E2 trigger gate already prevents a
     # contradiction; this guard keeps the invariant true for every composed manifest.
     discard_inventory_contradicting_evaluations(manifest.get("items", []))
+    # The block is attached before the review hash so the exact quarantine state
+    # is review-bound.  A later execute/sign self-check rejects it fail-closed.
+    manifest["injection_barrier"] = barrier_block
     manifest = add_draft_contract(
         manifest,
         expected_count=expected_count,
@@ -162,11 +183,18 @@ def run_draft_mode(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(output_path, manifest)
     total_drafted = len(manifest.get("items", []))
-    is_empty = total_drafted == 0
+    is_empty = total_drafted == 0 and not quarantined
     tracker.complete(f"Drafted {total_drafted} items to {output_path.name}")
     return {
-        "ok": True,
+        "ok": not quarantined,
         "mode": "draft",
+        "status": "quarantined" if quarantined else "completed",
+        "message": (
+            "Draft stopped for human review: flagged mail is quarantined and "
+            "excluded from the manifest; resolve it and re-draft."
+            if quarantined
+            else f"Drafted {total_drafted} items."
+        ),
         "folder": folder,
         "order": order,
         "total_drafted": total_drafted,
@@ -182,4 +210,6 @@ def run_draft_mode(
         "review": manifest["review"],
         "manifest_file": str(output_path),
         "draft": manifest,
+        "injection_barrier": barrier_block,
+        "quarantine_evidence": quarantine_results,
     }

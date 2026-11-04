@@ -63,6 +63,79 @@ und Final-Index-Regeln dürfen weder abgeschwächt noch parallel dupliziert werd
   Part-Metadaten halten das einzelne Item fail-closed in `INBOX` zur Review.
   Ein Abruf, eine Extraktion oder Cloud-Ablage ist dadurch noch nicht autorisiert.
 
+### Lokale Injection-Barrier (Issue #62)
+
+Vor der Body-Auswertung und vor jeder agentensichtbaren Ausgabe läuft ein
+deterministischer, rein lokaler Pre-Filter. Er ist eine zweite Schicht, keine
+Autorisierung, kein Ersatz für Review/Write-Gates und hat keinen Netzwerk-,
+Cloud- oder Modellbezug. Implementiert in
+[`scripts/core/injection_barrier.py`](scripts/core/injection_barrier.py).
+
+- **Fencing:** `preview`/Body werden in feste Delimiter
+  `<untrusted_mail_content fence_version="1" sha256="…">…</untrusted_mail_content>`
+  gefasst. Jeder Versuch, den Mail- oder den bestehenden
+  `<untrusted_attachment_content>`-Delimiter zu schließen oder zu spoofen, wird
+  deterministisch zu `[ESCAPED_UNTRUSTED_TAG]`; das ist keine Verhandlung und
+  keine Ausführung. Subject/From/To/Cc bleiben typisierte Datenfelder, werden
+  aber gescannt und bei Fund geflaggt. Extrahierter Anhangstext bleibt beim
+  bestehenden gekapselten `untrusted_external`-Handoff.
+- **Deterministischer Scan:** instruction-ähnliche Phrasen (EN/DE, feste
+  Default-Regeln plus additive Workspace-Signaturen), Fake-Rollenmarker,
+  Fence-Spoofs, aktive/verdächtige URLs (u. a. `javascript:`/`data:`,
+  Userinfo, IP-Literal, Punycode, Shortener, Markdown-Display-Drift),
+  Anhangsnamen/-MIME (u. a. ausführbare/Doppel-Endungen, Makros, HTML/RTF,
+  Archive, Bidi-/Mixed-Script-Namen), C0/C1-Steuerzeichen, Bidi- und
+  Zero-Width-/Tag-Zeichen, Mixed-Script-Homoglyphen, aktives/hidden HTML und
+  lange Base64-/Hex-Blobs. Die Scan-Fenster sind begrenzt (256 KiB je Feld,
+  frühestens 200 URLs/64 Anhänge); eine Cap-Überschreitung markiert
+  `IB-SCAN-001` und `scan_truncated`. Ein nicht verifizierbarer eigener Fence
+  (fehlender/falscher `inner_sha256`) ist high `IB-DELIM-001` und wird aus dem
+  gescannten Inner neu gefencet; eine vorhandene
+  `injection_barrier.status: "quarantined"`-Annotation bleibt high
+  `IB-PRIOR-001`. Die Befunde sind sortiert, bounded und deterministisch.
+- **Quarantäne als Evidence:** Geflaggte Mails (Schwelle fix `medium`) werden
+  unter `data/mail-desk/injection-quarantine/<16-hex-id>/` abgelegt:
+  `record.json` (Schema 1, write-once), `fenced.txt` (write-once),
+  `observations.jsonl` (append-only) sowie ein globales, append-only
+  `index.jsonl`. Die ID ist deterministisch aus dem normalisierten
+  `message_key`; Wiederholung schreibt den Record nicht neu, sondern ergänzt
+  Beobachtungen. Der Record enthält keine Roh-MIME, keine Zugangsdaten, keine
+  absoluten Hostpfade und kein `preview`-Feld; `fenced.txt` ist operative
+  Evidence und landet nie unter `memory/references/`.
+- **Fail-loud:** In `inspect`, `draft` und `pipeline` werden geflaggte Mails
+  gefencet und quarantäniert, aber aus jedem Manifest/Proposal
+  ausgeschlossen. Das Manifest trägt einen hash-gebundenen top-level
+  `injection_barrier`-Block (`scanned_count`, `quarantined_count`,
+  `findings_by_rule`, `quarantined[]`, `policy_version`). `draft`/`pipeline`
+  liefern `ok: false` und `status: "quarantined"`; die CLI meldet
+  `state: "Quarantined"`, `error.type: "InjectionQuarantine"` und Exit 1.
+  `execute`, `mail_desk_sign_manifest.py`, der Batch-CLI-Wrapper und der innere
+  `dossier_apply`-Execute stoppen vor jeder Mutation mit
+  `injection_quarantine_present` — auch bei `allow_fewer`. Ein geflaggter Lauf
+  ist kein `inbox_zero`; der Mensch muss die Quarantäne auflösen und neu
+  draften.
+- **Read-only-Grenze:** `inspect` bleibt mailbox-read-only und schreibt nur die
+  Quarantäne-Evidence; es kopiert, löscht oder verschiebt keine Mail. Die
+  bestehenden Write-Gates (H2-Review, `allow_fewer`, Lock, Final-Index)
+  bleiben unverändert.
+- **Policy:** Der optionale Workspace-Katalog
+  `memory/references/mail-desk/injection-barrier.json` (Schema 1) darf
+  Signaturen ausschließlich **additiv** ergänzen
+  (`extra_instruction_phrases`, `extra_url_shortener_domains`,
+  `extra_dangerous_extensions`, `extra_macro_extensions`). Fehlt er, gelten die
+  Bundle-Defaults; jede Schema-, Typ- oder Größenabweichung stoppt fail-loud
+  vor jedem Write. Es gibt keinen Schalter zum Deaktivieren und keine
+  Absenkung der Schwelle.
+- **Restgrenzen:** Header-only-Pfade (`search`, `sync_sent`, `resolve`) sind
+  kein Body-Ingress und werden nicht gefencet; ihre Strings bleiben typisierte,
+  niemals auszuführende Daten. Extrahierter Anhangstext bleibt beim bestehenden
+  `<untrusted_attachment_content>`-Escaping; eine Instruction-Erkennung im
+  extrahierten Text ist nicht Teil dieses Pakets.
+- **Fingerprint-Grenze:** `classifier.py` und die Matching-Module bleiben
+  durch diese Barrier unangetastet; `classifier_revision` rotiert durch die
+  Barrier nicht. Die separate Issue-#63-Regeländerung rotiert die Revision
+  (siehe Fachliche Entscheidungsregeln).
+
 Der `tool_version`-Wert für `ocrmypdf` wird ausschließlich aus den installierten
 Distributionsmetadaten via `importlib.metadata.version("ocrmypdf")` gelesen.
 Fehlende oder nicht lesbare Metadaten ergeben `unknown`; es gibt keinen

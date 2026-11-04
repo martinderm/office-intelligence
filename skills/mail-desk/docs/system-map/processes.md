@@ -462,3 +462,41 @@ strikt sequenziell und fail-closed:
    unverändert (roher Kind-stdout wird **nicht** durchgereicht).
 
 Details: L2-§35 und [`objects.md`](objects.md) §5.6.
+
+---
+
+## 7. Lokale Injection-Barrier (Issue #62)
+
+Vorgeschalteter, rein lokaler Pre-Filter für Body/Preview, Header und
+Anhangsmetadaten in `inspect`, `draft` und `pipeline`; kein Netzwerk, kein
+Modell, keine Mailbox-Mutation. Die bestehenden Review-/Lock-/Write-Gates
+bleiben unverändert.
+
+1. **Policy:** `load_injection_policy(workspace_root)` liest optional
+   `memory/references/mail-desk/injection-barrier.json` (Schema 1) streng und
+   ausschließlich additiv; fehlt sie, gelten die Bundle-Defaults.
+2. **Assess:** `assess_email(...)` scannt die Felder, fencet den Preview mit
+   `<untrusted_mail_content fence_version="1" sha256="…">` und stuft
+   `medium`/`high` als quarantänisiert ein.
+3. **Evidence:** `write_quarantine_evidence(...)` schreibt unter
+   `data/mail-desk/injection-quarantine/<id>/` den write-once `record.json`,
+   die write-once `fenced.txt` und eine append-only `observations.jsonl`; der
+   globale `index.jsonl` wird append-only ergänzt. Derselbe `message_key`
+   ergibt dieselbe ID, Wiederholung nur neue Beobachtungen.
+4. **Manifest/Proposal:** `draft`/`pipeline` schließen geflaggte Mails aus und
+   hängen vor `add_draft_contract` den hash-gebundenen
+   `injection_barrier`-Block an. `inspect` fencet die Ausgabe, schreibt die
+   Evidence und hält ein optionales Proposal frei von geflaggten Items;
+   `inspect` bleibt mailbox-read-only.
+5. **Gate:** `validate_execute_contract(...)` stoppt jeden vorhandenen,
+   malformed oder nicht-leeren Block mit `injection_quarantine_present`, bevor
+   `execute`/`sign_manifest`/CLI-Wrapper/`dossier_apply` eine Mutation beginnen.
+   `draft`/`pipeline` liefern `ok: false`, `status: "quarantined"`; die CLI
+   meldet `state: "Quarantined"`, `error.type: "InjectionQuarantine"`, Exit 1.
+6. **Mensch:** Quarantäne auflösen und neu draften; kein Auto-Bypass, kein
+   `allow_fewer`-Schlupfloch, kein `inbox_zero`.
+
+`classifier.py`/Matching bleiben durch diese Barrier unangetastet
+(`classifier_revision` rotiert durch die Barrier nicht; die separate
+Issue-#63-Regeländerung rotiert sie, siehe L2-§8). Details: L2-§39,
+[`objects.md`](objects.md) §7, [`effects.md`](effects.md) §7.

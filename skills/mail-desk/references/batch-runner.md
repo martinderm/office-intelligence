@@ -214,6 +214,10 @@ Temporäre Manifest-Lese-/Löschoperationen tolerieren Windows-Dateisperren mit 
 drei Versuchen/Backoff (0,1 s, 0,2 s); danach bleibt das Manifest erhalten, der Lauf
 meldet den Fehler.
 
+### Lokale Injection-Barrier (Issue #62)
+
+`injection_quarantine_present`-Gate: SKILL.md §39.
+
 ### Reviewte Korrekturen anwenden & neu signieren
 
 Korrekturen des Reviewers gehen ausschließlich in
@@ -1554,7 +1558,7 @@ Anhangs-Hashes. Hash-Reihenfolge ist irrelevant; jede regel-/katalogrelevante Co
 Änderung bewegt die Revision, Kommentare/Formatierung und Host-Pfade nicht; Caller-, Mail-
 und Manifest-Werte können sie nicht setzen. Die einmalige Entflechtung der
 Klassifikationsregeln rotiert vorhandene `classifier_revision`-Werte genau einmal (genehmigt).
-Issue #63: AST-Änderung, `classifier_revision` rotiert ab Basis einmal (dokumentiert).
+Issue #63: Revision rotiert einmal (dokumentiert).
 
 **Idempotenz / `already_fetched`:** `derive_evaluation_run_id` leitet aus Account-/Folder-/
 Envelope-/Message-Identität deterministisch eine sichere, PII-freie Run-ID je Nachricht ab
