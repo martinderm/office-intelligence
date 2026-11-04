@@ -132,7 +132,9 @@ Cloud- oder Modellbezug. Implementiert in
   `<untrusted_attachment_content>`-Escaping; eine Instruction-Erkennung im
   extrahierten Text ist nicht Teil dieses Pakets.
 - **Fingerprint-Grenze:** `classifier.py` und die Matching-Module bleiben
-  unangetastet; `classifier_revision` rotiert durch diese Barrier nicht.
+  durch diese Barrier unangetastet; `classifier_revision` rotiert durch die
+  Barrier nicht. Die separate Issue-#63-Regeländerung rotiert die Revision
+  (siehe Fachliche Entscheidungsregeln).
 
 Der `tool_version`-Wert für `ocrmypdf` wird ausschließlich aus den installierten
 Distributionsmetadaten via `importlib.metadata.version("ocrmypdf")` gelesen.
@@ -486,7 +488,13 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
 10. Fachliches Ziel entscheiden. Eine klare Zuordnung wird tatsächlich geroutet,
     nicht nur geloggt; Zielbildung und fehlende Ordner folgen ausschließlich
     [`references/folder-rules.md`](references/folder-rules.md). Unklare oder riskante
-    Fälle gehen in Review statt in eine autonome Mailbox-Aktion.
+    Fälle gehen in Review statt in eine autonome Mailbox-Aktion. **Review-Fokus
+    generische Betreffs:** Bei unspezifischen Betreffs (`QUESTIONNAIRE INFORMATION`,
+    `DATES AND DEADLINES`, `Update`, `Meeting`, `Report`) und einem Absender/Empfänger
+    mit Mehrfachrolle in mehreren Projekten vor jeder Manifest-Signatur den Body
+    gegenprüfen — auch im beschleunigten bzw. vollautonomen Modus. Bleibt der Body
+    neutral, ist `INBOX` mit `review_required: true` das Ergebnis; niemals allein
+    wegen `routing_priority` oder Katalogreihenfolge routen.
 11. Routing mit dem gewählten Adapter ausführen und finale Backend-Location
     verifizieren, **bevor** gemeinsame Daten gepflegt werden. Nur diese verifizierte
     finale Location darf in den Index. Bei Unterbrechung `reconcile` zuerst
@@ -563,6 +571,23 @@ Request-/Receipt-Verträge, Bounds und Beispiele:
 - Starke Project-Signale sind Projekt-ID/Akronym, Kontakt/Partner, Workpackage,
   Deliverable, Meeting oder laufender Projektthread; starke Topic-Signale sind
   fachliche Querschnittssignale ohne tragfähigen Projektbezug.
+- **Personen-Mehrdeutigkeit bei generischem Betreff (Issue #63):** Ist ein
+  Absender/Empfänger in mehreren Projekten als Kontakt hinterlegt und enthält
+  der Betreff weder Projektkürzel noch Alias noch ein typisches Betreffmuster,
+  ist der reine Kontakt-Treffer **kein** High-Confidence-Routing. Der Matcher
+  zieht Body/Preview als Schiedsrichter heran und wertet ausschließlich
+  katalogbelegte projektspezifische Signale: Projekt-Keywords, weitere
+  Projektkontakte (Koordinator/Konsortium, E-Mail oder vollständiger Name),
+  Projekt-Domains und Projektkürzel/-ID/-Aliase. Ein ausschließlich diesem Projekt
+  zugeordneter externer Kontakt in den Teilnehmern (To/Cc) zählt ebenfalls als
+  Signal. Genau ein Projekt mit Signal gewinnt;
+  ein neutraler Body oder ein Gleichstand endet bewusst als
+  `kind: "unknown"`/`id: "unclassified"` in `INBOX` mit `confidence: "low"`,
+  `review_required: true` und
+  `review_reason: "ambiguous_contact_generic_subject"` — kein geratenes Routing.
+  Die Signatur der mehrdeutigen Person selbst (E-Mail/Name) zählt nie als
+  Schiedsrichter. Ein Projektkürzel/-alias im Betreff und ein Kontakt mit nur
+  einer Projektzugehörigkeit behalten ihre bisherige Priorität.
 - Bei einem bereits gewählten Projekt wertet der Classifier zusätzlich den
   schema-v3-Katalogkontext aus: `workpackages`, deren `tasks` und
   `deliverables` sowie projektweite `milestones`. Eindeutige Treffer stehen

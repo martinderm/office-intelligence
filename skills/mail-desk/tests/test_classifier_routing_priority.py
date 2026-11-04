@@ -19,6 +19,13 @@ B-1 reproduction: ``usage-ng`` precedes ``atael`` in catalog order and wins toda
 through a pure TUM contact match, although the subject carries the exact ``ATAEL``
 code.  The target selects ``atael``.
 
+Issue #63 boundary: two projects that *share* the same external contact are no
+longer an orderable tie.  A generic subject plus a multi-affiliation contact and a
+neutral body is an explicit Review outcome (``unclassified``/``INBOX``), so the
+equally-strong-contact ordering tests below give each project its own contact and
+put both addresses in the mail's parties.  ``test_classifier_contact_ambiguity``
+pins the shared-contact behavior and its body arbitration.
+
 The pre-existing expectation in ``test_classifier_project_matching_module.py``
 (an earlier catalog contact entry beats a later exact subject code) still
 describes today's production behavior and is intentionally left unchanged; it
@@ -155,44 +162,72 @@ class TargetRoutingPriorityOrderingTests(unittest.TestCase):
     """Target (Red now): routing_priority orders equally strong catalog candidates."""
 
     def test_higher_routing_priority_wins_on_equal_contact_strength(self) -> None:
-        low = routing_fixtures.project_contact("low", routing_priority=50)
-        high = routing_fixtures.project_contact("high", routing_priority=65)
+        low = routing_fixtures.project_contact(
+            "low", routing_priority=50, email="low@example.test"
+        )
+        high = routing_fixtures.project_contact(
+            "high", routing_priority=65, email="high@example.test"
+        )
 
         result = _select_project(
-            [low, high], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [low, high],
+            _NEUTRAL_SUBJECT,
+            from_str="Low <low@example.test>",
+            cc_str="High <high@example.test>",
         )
 
         self.assertIsNotNone(result)
         self.assertEqual("high", result["id"])
 
     def test_missing_routing_priority_ranks_below_an_explicit_priority(self) -> None:
-        silent = routing_fixtures.project_contact_without_priority("silent")
-        explicit = routing_fixtures.project_contact("explicit", routing_priority=50)
+        silent = routing_fixtures.project_contact_without_priority(
+            "silent", email="silent@example.test"
+        )
+        explicit = routing_fixtures.project_contact(
+            "explicit", routing_priority=50, email="explicit@example.test"
+        )
 
         result = _select_project(
-            [silent, explicit], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [silent, explicit],
+            _NEUTRAL_SUBJECT,
+            from_str="Silent <silent@example.test>",
+            cc_str="Explicit <explicit@example.test>",
         )
 
         self.assertIsNotNone(result)
         self.assertEqual("explicit", result["id"])
 
     def test_string_priority_is_treated_as_missing_and_does_not_crash(self) -> None:
-        invalid = routing_fixtures.project_contact("invalid", routing_priority="80")
-        explicit = routing_fixtures.project_contact("explicit", routing_priority=50)
+        invalid = routing_fixtures.project_contact(
+            "invalid", routing_priority="80", email="invalid@example.test"
+        )
+        explicit = routing_fixtures.project_contact(
+            "explicit", routing_priority=50, email="explicit@example.test"
+        )
 
         result = _select_project(
-            [invalid, explicit], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [invalid, explicit],
+            _NEUTRAL_SUBJECT,
+            from_str="Invalid <invalid@example.test>",
+            cc_str="Explicit <explicit@example.test>",
         )
 
         self.assertIsNotNone(result)
         self.assertEqual("explicit", result["id"])
 
     def test_boolean_priority_is_treated_as_missing_and_does_not_crash(self) -> None:
-        invalid = routing_fixtures.project_contact("invalid", routing_priority=True)
-        explicit = routing_fixtures.project_contact("explicit", routing_priority=50)
+        invalid = routing_fixtures.project_contact(
+            "invalid", routing_priority=True, email="invalid@example.test"
+        )
+        explicit = routing_fixtures.project_contact(
+            "explicit", routing_priority=50, email="explicit@example.test"
+        )
 
         result = _select_project(
-            [invalid, explicit], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [invalid, explicit],
+            _NEUTRAL_SUBJECT,
+            from_str="Invalid <invalid@example.test>",
+            cc_str="Explicit <explicit@example.test>",
         )
 
         self.assertIsNotNone(result)
@@ -217,36 +252,59 @@ class RoutingPriorityCharacterizationTests(unittest.TestCase):
     """Characterization (green now and after): stable tie-breakers stay deterministic."""
 
     def test_equal_priorities_fall_back_to_catalog_order(self) -> None:
-        first = routing_fixtures.project_contact("first", routing_priority=50)
-        second = routing_fixtures.project_contact("second", routing_priority=50)
+        first = routing_fixtures.project_contact(
+            "first", routing_priority=50, email="first@example.test"
+        )
+        second = routing_fixtures.project_contact(
+            "second", routing_priority=50, email="second@example.test"
+        )
 
         result = _select_project(
-            [first, second], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [first, second],
+            _NEUTRAL_SUBJECT,
+            from_str="First <first@example.test>",
+            cc_str="Second <second@example.test>",
         )
 
         self.assertIsNotNone(result)
         self.assertEqual("first", result["id"])
 
     def test_two_catalog_entries_without_priority_fall_back_to_catalog_order(self) -> None:
-        first = routing_fixtures.project_contact_without_priority("first")
-        second = routing_fixtures.project_contact_without_priority("second")
+        first = routing_fixtures.project_contact_without_priority(
+            "first", email="first@example.test"
+        )
+        second = routing_fixtures.project_contact_without_priority(
+            "second", email="second@example.test"
+        )
 
         result = _select_project(
-            [first, second], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+            [first, second],
+            _NEUTRAL_SUBJECT,
+            from_str="First <first@example.test>",
+            cc_str="Second <second@example.test>",
         )
 
         self.assertIsNotNone(result)
         self.assertEqual("first", result["id"])
 
     def test_invalid_priorities_are_not_coerced_into_a_rank(self) -> None:
-        neutral = routing_fixtures.project_contact_without_priority("neutral")
-        boolean = routing_fixtures.project_contact("boolean", routing_priority=True)
-        text = routing_fixtures.project_contact("text", routing_priority="80")
+        neutral = routing_fixtures.project_contact_without_priority(
+            "neutral", email="neutral@example.test"
+        )
+        boolean = routing_fixtures.project_contact(
+            "boolean", routing_priority=True, email="boolean@example.test"
+        )
+        text = routing_fixtures.project_contact(
+            "text", routing_priority="80", email="text@example.test"
+        )
 
         for label, candidate in (("bool", boolean), ("str", text)):
             with self.subTest(invalid_priority=label):
                 result = _select_project(
-                    [neutral, candidate], _NEUTRAL_SUBJECT, from_str=_shared_contact_party()
+                    [neutral, candidate],
+                    _NEUTRAL_SUBJECT,
+                    from_str="Neutral <neutral@example.test>",
+                    cc_str=f"Candidate <{candidate['contacts'][0]['email']}>",
                 )
                 self.assertIsNotNone(result)
                 self.assertEqual("neutral", result["id"])

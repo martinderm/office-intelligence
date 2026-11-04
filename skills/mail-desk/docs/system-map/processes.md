@@ -76,7 +76,13 @@ Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und i
 3. Führt konservative Klassifikation durch:
    - Extrahiert Betreff, Sender und Text-Snippets.
    - Prüft Projektcodes (`WP...`, Projekt-IDs) und Topic-Schlagworte gegen `memory/references/`.
-   - Bei Mehrdeutigkeit verbleibt das Item ohne automatische Verschiebung in `INBOX`.
+   - Bei Personen-Mehrdeutigkeit (ein externer Kontakt in mehreren Projekten) und
+     generischem Betreff ohne Projektidentität entscheidet der Body/Preview als
+     Schiedsrichter über katalogbelegte Keywords, weitere Projektkontakte, Domains und
+     Projektkürzel/-ID/-Aliase. Ohne Signal oder bei Gleichstand verbleibt das Item als
+     `unknown`/`unclassified` mit `review_required: true` in `INBOX` — ohne
+     automatische Verschiebung und ohne Rückfall auf `routing_priority`/Katalogreihenfolge.
+   - Bei sonstiger Mehrdeutigkeit verbleibt das Item ohne automatische Verschiebung in `INBOX`.
 4. Berechnet den `review_hash` über alle vorgeschlagenen Aktionen und emittiert das `DraftManifest`.
 
 ### Phase 2: Review-Gate
@@ -490,6 +496,7 @@ bleiben unverändert.
 6. **Mensch:** Quarantäne auflösen und neu draften; kein Auto-Bypass, kein
    `allow_fewer`-Schlupfloch, kein `inbox_zero`.
 
-`classifier.py`/Matching bleiben unangetastet (`classifier_revision`
-unverändert). Details: L2-§39, [`objects.md`](objects.md) §7,
-[`effects.md`](effects.md) §7.
+`classifier.py`/Matching bleiben durch diese Barrier unangetastet
+(`classifier_revision` rotiert durch die Barrier nicht; die separate
+Issue-#63-Regeländerung rotiert sie, siehe L2-§8). Details: L2-§39,
+[`objects.md`](objects.md) §7, [`effects.md`](effects.md) §7.

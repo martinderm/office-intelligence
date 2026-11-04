@@ -26,6 +26,14 @@ excluded by their ``do_not_route_if`` declaration never match; when a collector 
 supplied, each matched exclusion is surfaced as a catalog-only
 ``{"kind", "id", "suppression_reason"}`` row.
 
+Since issue #63 the owner also detects a contact that several catalog projects claim.  When
+the subject carries no catalog project identity, the body/preview scope is the arbiter
+through catalog-backed keywords, other contacts, domains and project kuerzel/id/aliases.  Exactly one
+contact peer with a signal wins; no signal or a tie returns the explicit review result
+``{"id": "unclassified", "folder": "INBOX", ..., "review_required": True,
+"review_reason": AMBIGUOUS_CONTACT_REVIEW_REASON, "candidates": [...]}`` instead of a
+guessed project.  A subject naming a project and a single-affiliation contact keep their
+existing behavior.
 ``core.classifier`` remains the compatibility facade and re-exports every callable here by
 object identity.  This module never imports ``classifier.py`` (no import cycle) and performs
 no I/O at import time.
@@ -44,6 +52,7 @@ from .reply_heuristics import DEFAULT_INTERNAL_DOMAINS
 __all__ = [
     "select_project_match",
     "GENERIC_FREEMAIL_DOMAINS",
+    "AMBIGUOUS_CONTACT_REVIEW_REASON",
     "evaluate_do_not_route_signal",
     "evaluate_thread_sibling_do_not_route",
     "match_thread_project_inheritance",
@@ -65,8 +74,19 @@ __all__ = [
 #: ``hotmail.com`` out; the latter belongs to the separate sent-indexer whitelist).
 GENERIC_FREEMAIL_DOMAINS: tuple[str, ...] = ("gmail.com", "outlook.com", "yahoo.com")
 
+#: The bounded review reason emitted when a contact listed by several projects cannot be
+#: resolved by a unique catalog-backed body/preview signal (issue #63).
+AMBIGUOUS_CONTACT_REVIEW_REASON = "ambiguous_contact_generic_subject"
+
 #: Short/ambiguous acronyms that only match a project name as an exact subject token.
 _COMMON_WORD_ACRONYMS = {"WEEK", "LATEST", "USAGE", "PILOT", "START"}
+
+#: Contact-name titles/prefixes/suffixes that never participate in a body name signal.
+_CONTACT_NAME_TITLES = frozenset({
+    "dr", "prof", "professor", "mr", "mrs", "ms", "mx", "sir", "dame",
+    "ing", "mag", "dipl", "phd", "msc", "bsc", "mba", "drs", "univ",
+    "emeritus",
+})
 
 
 def _artifact_text_matches(text: str, value: object) -> bool:
@@ -391,6 +411,360 @@ def _routing_priority(entry: Mapping[str, Any]) -> float:
     return float(value)
 
 
+def _project_subject_names(project: Mapping[str, Any]) -> list[str]:
+    """Return the catalog-backed project names that may identify it in a subject."""
+    identifier = str(project.get("id", "")).strip()
+    kuerzel = str(project.get("kuerzel", "")).strip()
+    aliases = project.get("aliases")
+    alias_values = (
+        [str(alias).strip() for alias in aliases if str(alias).strip()]
+        if isinstance(aliases, list)
+        else []
+    )
+    return [name for name in [kuerzel, identifier] + alias_values if name and len(name) >= 3]
+
+
+def _is_short_acronym(value: str) -> bool:
+    """Return True when a name/pattern needs the exact-case short-acronym guard."""
+    return (
+        len(value) <= 4
+        or value.upper() in _COMMON_WORD_ACRONYMS
+        or (value.isupper() and len(value) <= 6)
+    )
+
+
+def _subject_name_matches(name: str, subject: str, normalized_subject: str) -> bool:
+    """Match one project name in a subject with the documented acronym guard."""
+    name_norm = re.sub(r"[-_]+", " ", name)
+    if _is_short_acronym(name):
+        name_upper = name.upper()
+        if (
+            re.search(r"\b" + re.escape(name_upper) + r"\b", subject)
+            or re.search(r"\b" + re.escape(name_norm.upper()) + r"\b", normalized_subject)
+        ):
+            return True
+        return bool(
+            re.search(
+                r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(name) + r"(?:\]|\)|\b)",
+                subject,
+                re.IGNORECASE,
+            )
+        )
+    return bool(
+        re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE)
+        or re.search(
+            r"\b" + re.escape(name_norm) + r"\b",
+            normalized_subject,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _subject_pattern_matches(pattern: str, subject: str, normalized_subject: str) -> bool:
+    """Match one ``typical_subject_patterns`` value with the documented guard."""
+    pattern_norm = re.sub(r"[-_]+", " ", pattern)
+    if _is_short_acronym(pattern):
+        pattern_upper = pattern.upper()
+        if (
+            re.search(r"\b" + re.escape(pattern_upper) + r"\b", subject)
+            or re.search(r"\b" + re.escape(pattern_norm.upper()) + r"\b", normalized_subject)
+        ):
+            return True
+        return bool(
+            re.search(
+                r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(pattern) + r"(?:\]|\)|\b)",
+                subject,
+                re.IGNORECASE,
+            )
+        )
+    return bool(
+        (pattern and pattern.lower() in subject.lower())
+        or (
+            pattern_norm
+            and re.search(
+                r"\b" + re.escape(pattern_norm) + r"\b",
+                normalized_subject,
+                re.IGNORECASE,
+            )
+        )
+    )
+
+
+def _project_subject_strength(project: Mapping[str, Any], subject: str) -> int:
+    """Return 3 for an exact subject name, 2 for a typical pattern, else 0."""
+    normalized_subject = re.sub(r"[-_]+", " ", subject)
+    if any(
+        _subject_name_matches(name, subject, normalized_subject)
+        for name in _project_subject_names(project)
+    ):
+        return 3
+    patterns = project.get("typical_subject_patterns")
+    if isinstance(patterns, list):
+        for pattern in patterns:
+            value = str(pattern).strip()
+            if value and _subject_pattern_matches(value, subject, normalized_subject):
+                return 2
+    return 0
+
+
+def _body_scope_text(
+    full_text: str,
+    subject: str,
+    from_str: str,
+    to_str: str,
+    cc_str: str,
+) -> str:
+    """Return the body/preview portion of a classifier input.
+
+    The facade builds ``full_text`` as subject plus from/to/cc plus preview (plus an
+    optional encapsulated untrusted attachment context).  Removing the first header
+    occurrence yields exactly the body/preview scope the arbitration heuristic needs,
+    so a project keyword in the subject cannot become a body signal.
+    """
+    body = full_text
+    for header in (subject, from_str, to_str, cc_str):
+        if header:
+            body = body.replace(header, "\n", 1)
+    return re.sub(r"\n{2,}", "\n", body).strip()
+
+
+def _body_name_matches(name: str, body_text: str) -> bool:
+    """Match a project name in body text, mirroring the subject acronym guard."""
+    name_norm = re.sub(r"[-_]+", " ", name)
+    if _is_short_acronym(name):
+        return bool(
+            re.search(r"\b" + re.escape(name.upper()) + r"\b", body_text)
+            or re.search(r"\b" + re.escape(name_norm.upper()) + r"\b", body_text)
+        )
+    return bool(
+        re.search(r"\b" + re.escape(name) + r"\b", body_text, re.IGNORECASE)
+        or re.search(
+            r"\b" + re.escape(name_norm) + r"\b",
+            body_text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _contact_name_signature(name: object) -> str:
+    """Return a conservative multi-token contact-name signature, or ``""``.
+
+    Single-token names and initials are deliberately ignored: a surname alone is too
+    weak to arbitrate between two projects, while ``Dr. Susan Ouko`` becomes
+    ``susan ouko`` and is only used when both tokens occur in the body.
+    """
+    tokens: list[str] = []
+    for token in re.split(r"[^\w]+", str(name).casefold()):
+        if len(token) >= 3 and token not in _CONTACT_NAME_TITLES:
+            tokens.append(token)
+    return " ".join(tokens) if len(tokens) >= 2 else ""
+
+
+def _address_in_text(address: str, text: str) -> bool:
+    """Match a full e-mail address without accepting it inside another address.
+
+    ``ann@example.test`` must not match the local part of ``joann@example.test`` or a
+    longer domain ``ann@example.test.evil``.  A sentence-final period is tolerated.
+    """
+    if not address:
+        return False
+    return bool(
+        re.search(
+            r"(?<![\w.+-])" + re.escape(address) + r"(?![\w-]|\.[\w-])",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _mask_addresses(text: str, addresses: frozenset[str]) -> str:
+    """Blank out ambiguous contact addresses before arbitration scans the text.
+
+    A signature line containing the shared person's own address must not turn that
+    address's domain or an address-embedded keyword into a project signal.  Masking is
+    boundary-aware: a shared ``ann@example.test`` must not erase the unique
+    ``joann@example.test`` (or a longer domain) from the text.
+    """
+    masked = text
+    for address in sorted(addresses, key=len, reverse=True):
+        if address:
+            masked = re.sub(
+                r"(?<![\w.+-])" + re.escape(address) + r"(?![\w-]|\.[\w-])",
+                " ",
+                masked,
+                flags=re.IGNORECASE,
+            )
+    return masked
+
+
+def _signature_tokens(signature: str) -> set[str]:
+    """Return the normalized tokens of a non-discriminating contact signature."""
+    return {token for token in signature.split() if token}
+
+
+def _name_is_non_discriminating(name: str, signatures: frozenset[str]) -> bool:
+    """Return True when a project name/keyword is only the shared person's name."""
+    tokens = {
+        token
+        for token in re.split(r"[^\w]+", str(name).casefold())
+        if token and token not in _CONTACT_NAME_TITLES
+    }
+    if not tokens:
+        return False
+    return any(tokens.issubset(_signature_tokens(signature)) for signature in signatures)
+
+
+def _contact_name_in_text(signature: str, body_text: str) -> bool:
+    """Return True when every conservative name token occurs in the body."""
+    return all(
+        re.search(r"\b" + re.escape(token) + r"\b", body_text, re.IGNORECASE)
+        for token in signature.split()
+    )
+
+
+def _external_contact_emails(
+    project: Mapping[str, Any], internal_domains: tuple[str, ...]
+) -> list[str]:
+    """Return the project contacts the matcher treats as external."""
+    return [
+        email
+        for email in _project_contact_emails(project)
+        if not any(email.endswith("@" + domain) for domain in internal_domains)
+    ]
+
+
+def _project_contact_emails(project: Mapping[str, Any]) -> list[str]:
+    """Return every normalized catalog contact address, internal ones included."""
+    contacts = project.get("contacts")
+    if not isinstance(contacts, list):
+        return []
+    emails: list[str] = []
+    for contact in contacts:
+        if not isinstance(contact, Mapping):
+            continue
+        email = str(contact.get("email", "")).strip().lower()
+        if email:
+            emails.append(email)
+    return emails
+
+
+def _non_discriminating_contact_names(
+    entries: list[dict[str, Any]], ambiguous_contacts: frozenset[str]
+) -> set[str]:
+    """Return contact-name signatures that cannot identify one project side.
+
+    A person listed in more than one project (or the ambiguous contact itself under
+    another address) must never become a body signal for one of the peers.
+    """
+    ambiguous_keys: set[str] = set()
+    counts: dict[str, int] = {}
+    for entry in entries:
+        contacts = entry["project"].get("contacts")
+        if not isinstance(contacts, list):
+            continue
+        seen: set[str] = set()
+        for contact in contacts:
+            if not isinstance(contact, Mapping):
+                continue
+            key = _contact_name_signature(contact.get("name", ""))
+            if not key:
+                continue
+            seen.add(key)
+            if str(contact.get("email", "")).strip().lower() in ambiguous_contacts:
+                ambiguous_keys.add(key)
+        for key in seen:
+            counts[key] = counts.get(key, 0) + 1
+    return ambiguous_keys | {key for key, count in counts.items() if count >= 2}
+
+
+def _contact_arbitration_signals(
+    project: Mapping[str, Any],
+    body_text: str,
+    *,
+    parties_lower: str,
+    internal_domains: tuple[str, ...],
+    ambiguous_contacts: frozenset[str],
+    non_discriminating_names: frozenset[str],
+) -> list[str]:
+    """Return the catalog-backed arbitration signals for one project.
+
+    Only declared catalog data is consulted: a uniquely affiliated external contact in
+    the mail's parties, keywords, other project contacts, project domains and project
+    kuerzel/id/aliases.  The ambiguous contact itself and any name shared by several
+    projects are excluded, so the signal set can actually break the tie between the
+    contact peers.
+    """
+    if not body_text.strip() and not parties_lower.strip():
+        return []
+
+    # The shared person's own signature address must not leak its domain or an
+    # address-embedded keyword into the arbitration scans.
+    arbitration_text = _mask_addresses(body_text, ambiguous_contacts)
+    signals: list[str] = []
+
+    # A contact that belongs to exactly this project (and no ambiguity peer) is a
+    # decisive participant signal, even when the body stays neutral.
+    for email in _external_contact_emails(project, internal_domains):
+        if email not in ambiguous_contacts and _address_in_text(email, parties_lower):
+            signals.append("unique_contact")
+
+    keywords = project.get("keywords")
+    if isinstance(keywords, list):
+        for keyword in keywords:
+            value = str(keyword).strip()
+            if (
+                value
+                and not _name_is_non_discriminating(value, non_discriminating_names)
+                and _artifact_text_matches(arbitration_text, value)
+            ):
+                signals.append(f"keyword:{value}")
+
+    contacts = project.get("contacts")
+    if isinstance(contacts, list):
+        for contact in contacts:
+            if not isinstance(contact, Mapping):
+                continue
+            email = str(contact.get("email", "")).strip().lower()
+            name_key = _contact_name_signature(contact.get("name", ""))
+            if (
+                email
+                and email not in ambiguous_contacts
+                and _address_in_text(email, arbitration_text)
+            ):
+                signals.append("contact")
+            elif (
+                name_key
+                and name_key not in non_discriminating_names
+                and _contact_name_in_text(name_key, arbitration_text)
+            ):
+                signals.append("contact_name")
+
+    domains = project.get("domains")
+    if isinstance(domains, list):
+        for domain in domains:
+            value = str(domain).strip().lower()
+            if (
+                value
+                and value not in GENERIC_FREEMAIL_DOMAINS
+                and value not in internal_domains
+                and re.search(
+                    r"(?<![\w.-])" + re.escape(value) + r"(?![\w.-])",
+                    arbitration_text,
+                    re.IGNORECASE,
+                )
+            ):
+                signals.append(f"domain:{value}")
+
+    for name in _project_subject_names(project):
+        if (
+            not _name_is_non_discriminating(name, non_discriminating_names)
+            and _body_name_matches(name, arbitration_text)
+        ):
+            signals.append("name")
+
+    return list(dict.fromkeys(signals))
+
+
 def select_project_match(
     projects: list[dict[str, Any]],
     *,
@@ -401,6 +775,7 @@ def select_project_match(
     to_str: str,
     parties: str,
     cc_str: str = "",
+    body_text: str | None = None,
     suppressed_candidates: list[dict[str, Any]] | None = None,
     internal_domains: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
@@ -417,6 +792,19 @@ def select_project_match(
     reported on ``suppressed_candidates`` as catalog-only
     ``{"kind", "id", "suppression_reason"}`` rows when a collector list is supplied.
 
+    Contact ambiguity (issue #63): when an external contact of the mail belongs to
+    more than one non-suppressed catalog project and the subject carries no project
+    identity, a pure contact match alone is not a routing decision.  The body/preview
+    scope (``body_text``; otherwise derived from ``full_text`` by removing the
+    subject/from/to/cc headers) is used as the arbiter through catalog-backed
+    keywords, other project contacts, project domains and project kuerzel/id/aliases.
+    Exactly one contact peer with a body signal wins; no signal or a tie returns the explicit
+    review result ``{"id": "unclassified", "folder": "INBOX", "name": "",
+    "confidence": "low", "catalog": None, "review_required": True,
+    "review_reason": "ambiguous_contact_generic_subject", "candidates": [...]}``
+    instead of a guessed project.  A subject that names a project bypasses this path,
+    and a single-affiliation contact keeps its existing ``high`` behavior.
+
     ``internal_domains`` is the catalog-configured internal-domain boundary (FR-22/MD-ID3):
     ``None`` resolves to :data:`~core.matching.reply_heuristics.DEFAULT_INTERNAL_DOMAINS`,
     which is byte-identical to the previous ``@boku.ac.at`` literal.  The generic freemail
@@ -425,23 +813,13 @@ def select_project_match(
     resolved_internal_domains = (
         DEFAULT_INTERNAL_DOMAINS if internal_domains is None else tuple(internal_domains)
     )
-    best_key: tuple[float, float, int] | None = None
-    best_match: dict[str, Any] | None = None
     header_text = _header_scope_text(from_str, to_str, cc_str)
-    for catalog_index, proj in enumerate(projects or []):
-        p_id = proj.get("id", "").strip()
-        kuerzel = proj.get("kuerzel", "").strip()
-        aliases = [str(a).strip() for a in proj.get("aliases", []) if str(a).strip()]
-        keywords = [str(k).strip() for k in proj.get("keywords", []) if str(k).strip()]
-        typical_patterns = [str(p).strip() for p in proj.get("typical_subject_patterns", []) if str(p).strip()]
-        domains = [str(d).strip().lower() for d in proj.get("domains", []) if str(d).strip()]
-        contacts = [
-            str(c.get("email", "")).strip().lower()
-            for c in proj.get("contacts", [])
-            if isinstance(c, dict) and str(c.get("email", "")).strip()
-        ]
-        mb_folder = proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}"
+    parties_lower = str(parties or "").lower()
 
+    # First pass: exclude catalog entries and collect the data both the root match and
+    # the contact-ambiguity arbiter need.  Suppression rows keep their catalog order.
+    entries: list[dict[str, Any]] = []
+    for catalog_index, proj in enumerate(projects or []):
         exclusion = evaluate_do_not_route_signal(
             proj, subject=subject, header_text=header_text, from_str=from_str
         )
@@ -449,33 +827,88 @@ def select_project_match(
             if suppressed_candidates is not None:
                 suppressed_candidates.append({
                     "kind": "project",
-                    "id": p_id,
+                    "id": str(proj.get("id", "")).strip(),
                     "suppression_reason": exclusion["reason"],
                 })
             continue
+        p_id = str(proj.get("id", "")).strip()
+        kuerzel = str(proj.get("kuerzel", "")).strip()
+        keywords = proj.get("keywords")
+        typical_patterns = proj.get("typical_subject_patterns")
+        domains = proj.get("domains")
+        entries.append({
+            "catalog_index": catalog_index,
+            "project": proj,
+            "id": p_id,
+            "kuerzel": kuerzel,
+            "names": _project_subject_names(proj),
+            "keywords": (
+                [str(k).strip() for k in keywords if str(k).strip()]
+                if isinstance(keywords, list)
+                else []
+            ),
+            "patterns": (
+                [str(p).strip() for p in typical_patterns if str(p).strip()]
+                if isinstance(typical_patterns, list)
+                else []
+            ),
+            "domains": (
+                [str(d).strip().lower() for d in domains if str(d).strip()]
+                if isinstance(domains, list)
+                else []
+            ),
+            "external_contacts": _external_contact_emails(proj, resolved_internal_domains),
+            "folder": proj.get("mailbox_folder") or f"Projekte/{kuerzel or p_id.upper()}",
+        })
+
+    # Second pass precondition: a contact that several projects claim, opposite a subject
+    # without any catalog project identity.  A subject naming a project keeps the
+    # existing strength-3/2 precedence, and a single-affiliation contact stays high.
+    subject_identified = {
+        entry["catalog_index"]
+        for entry in entries
+        if _project_subject_strength(entry["project"], subject) > 0
+    }
+    affiliations: dict[str, list[int]] = {}
+    for entry in entries:
+        for email in entry["external_contacts"]:
+            affiliations.setdefault(email, []).append(entry["catalog_index"])
+    ambiguous_contacts = frozenset(
+        email for email, owners in affiliations.items() if len(set(owners)) > 1
+    )
+    matched_ambiguous = sorted(
+        email for email in ambiguous_contacts if _address_in_text(email, parties_lower)
+    )
+    ambiguity_active = bool(matched_ambiguous) and not subject_identified
+    ambiguity_candidates = sorted(
+        {
+            entry["kuerzel"] or entry["id"]
+            for entry in entries
+            if set(entry["external_contacts"]).intersection(matched_ambiguous)
+        },
+        key=str.casefold,
+    )
+
+    subj_norm = re.sub(r"[-_]+", " ", subject)
+    best_key: tuple[float, float, int] | None = None
+    best_match: dict[str, Any] | None = None
+    matches: dict[int, dict[str, Any]] = {}
+
+    for entry in entries:
+        proj = entry["project"]
+        catalog_index = entry["catalog_index"]
+        p_id = entry["id"]
+        kuerzel = entry["kuerzel"]
+        mb_folder = entry["folder"]
+        names = entry["names"]
 
         matched_project: dict[str, Any] | None = None
         matched_proj_confidence = "low"
         matched_strength = 0
 
         # 1a. Match explicit ID, Kürzel, or Alias in Subject (High confidence)
-        names = [n for n in [kuerzel, p_id] + aliases if n and len(n) >= 3]
-        subj_norm = re.sub(r"[-_]+", " ", subject)
         for name in names:
-            name_norm = re.sub(r"[-_]+", " ", name)
-            is_short_acronym = len(name) <= 4 or name.upper() in _COMMON_WORD_ACRONYMS or (name.isupper() and len(name) <= 6)
-            matched_name = False
-            if is_short_acronym:
-                name_upper = name.upper()
-                if re.search(r"\b" + re.escape(name_upper) + r"\b", subject) or re.search(r"\b" + re.escape(name_norm.upper()) + r"\b", subj_norm):
-                    matched_name = True
-                elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(name) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
-                    matched_name = True
-            else:
-                if re.search(r"\b" + re.escape(name) + r"\b", subject, re.IGNORECASE) or re.search(r"\b" + re.escape(name_norm) + r"\b", subj_norm, re.IGNORECASE):
-                    matched_name = True
-
-            if matched_name:
+            if _subject_name_matches(name, subject, subj_norm):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                 matched_proj_confidence = "high"
                 matched_strength = 3
@@ -483,21 +916,8 @@ def select_project_match(
 
         # 1b. Typical Subject Patterns in Subject
         if matched_project is None:
-            for pat in typical_patterns:
-                pat_norm = re.sub(r"[-_]+", " ", pat)
-                is_short_pat = len(pat) <= 4 or pat.upper() in _COMMON_WORD_ACRONYMS or (pat.isupper() and len(pat) <= 6)
-                matched_pat = False
-                if is_short_pat:
-                    pat_upper = pat.upper()
-                    if re.search(r"\b" + re.escape(pat_upper) + r"\b", subject) or re.search(r"\b" + re.escape(pat_norm.upper()) + r"\b", subj_norm):
-                        matched_pat = True
-                    elif re.search(r"(?:\[|\(|projekt\s+|project\s+)" + re.escape(pat) + r"(?:\]|\)|\b)", subject, re.IGNORECASE):
-                        matched_pat = True
-                else:
-                    if (pat and pat.lower() in subject.lower()) or (pat_norm and re.search(r"\b" + re.escape(pat_norm) + r"\b", subj_norm, re.IGNORECASE)):
-                        matched_pat = True
-
-                if matched_pat:
+            for pat in entry["patterns"]:
+                if _subject_pattern_matches(pat, subject, subj_norm):
                     matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
                     matched_proj_confidence = "high"
                     matched_strength = 2
@@ -505,22 +925,20 @@ def select_project_match(
 
         # 1c. Name in body with matching domain/contact or project keyword
         if matched_project is None:
-            external_contacts = [
-                c
-                for c in contacts
-                if c and not any(c.endswith("@" + d) for d in resolved_internal_domains)
-            ]
+            external_contacts = entry["external_contacts"]
             external_domains = [
-                d for d in domains if d and d not in resolved_internal_domains
+                d for d in entry["domains"] if d and d not in resolved_internal_domains
             ]
             has_name_in_body = any(
-                (re.search(r"\b" + re.escape(n.upper()) + r"\b", full_text) if (len(n) <= 4 or n.upper() in _COMMON_WORD_ACRONYMS or (n.isupper() and len(n) <= 6))
-                 else re.search(r"\b" + re.escape(n) + r"\b", full_text, re.IGNORECASE))
-                for n in names
+                _body_name_matches(name, full_text) for name in names
             )
-            has_contact_match = any(c in parties for c in external_contacts if c)
-            has_domain_match = any(d in parties for d in external_domains if d)
-            has_kw_match = any(kw.lower() in full_text_lower for kw in keywords if len(kw) >= 4)
+            has_contact_match = any(
+                _address_in_text(c, parties_lower) for c in external_contacts if c
+            )
+            has_domain_match = any(d in parties_lower for d in external_domains if d)
+            has_kw_match = any(
+                kw.lower() in full_text_lower for kw in entry["keywords"] if len(kw) >= 4
+            )
 
             if has_name_in_body and (has_contact_match or has_domain_match or has_kw_match):
                 matched_project = {"id": p_id, "folder": mb_folder, "name": kuerzel or p_id}
@@ -529,7 +947,7 @@ def select_project_match(
             elif has_contact_match or (
                 has_domain_match
                 and not any(
-                    gen in parties
+                    gen in parties_lower
                     for gen in (*resolved_internal_domains, *GENERIC_FREEMAIL_DOMAINS)
                 )
             ):
@@ -543,10 +961,50 @@ def select_project_match(
 
         if matched_project is None:
             continue
-        candidate_key = (float(matched_strength), _routing_priority(proj), -catalog_index)
+        match = {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
+        matches[catalog_index] = match
+        candidate_key = (
+            float(matched_strength),
+            _routing_priority(proj),
+            -catalog_index,
+        )
         if best_key is None or candidate_key > best_key:
             best_key = candidate_key
-            best_match = {**matched_project, "confidence": matched_proj_confidence, "catalog": proj}
+            best_match = match
+
+    if ambiguity_active:
+        body_scope = (
+            str(body_text)
+            if body_text is not None
+            else _body_scope_text(full_text, subject, from_str, to_str, cc_str)
+        )
+        non_discriminating_names = frozenset(
+            _non_discriminating_contact_names(entries, ambiguous_contacts)
+        )
+        signal_owners = [
+            catalog_index
+            for catalog_index, match in matches.items()
+            if _contact_arbitration_signals(
+                match["catalog"],
+                body_scope,
+                parties_lower=parties_lower,
+                internal_domains=resolved_internal_domains,
+                ambiguous_contacts=ambiguous_contacts,
+                non_discriminating_names=non_discriminating_names,
+            )
+        ]
+        if len(signal_owners) == 1:
+            return matches[signal_owners[0]]
+        return {
+            "id": "unclassified",
+            "folder": "INBOX",
+            "name": "",
+            "confidence": "low",
+            "catalog": None,
+            "review_required": True,
+            "review_reason": AMBIGUOUS_CONTACT_REVIEW_REASON,
+            "candidates": ambiguity_candidates,
+        }
 
     return best_match
 

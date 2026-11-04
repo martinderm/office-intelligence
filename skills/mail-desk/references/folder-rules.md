@@ -23,6 +23,7 @@ Do not invent permanent folder names if a catalog entry exists. If a catalog ent
 | Spam quarantine notification, plausible legit signal visible in listed quarantined mail | leave in `INBOX` + review |
 | Newsletter-suppressed (topic/project `do_not_route_if` matches `newsletter` in subject/headers) | `Newsletter` (`copy_as_move`); review only if another strong candidate exists |
 | Other `do_not_route_if` suppression (`no-reply`, `mailing list`, automatic replies) | leave in `INBOX` + review |
+| Contact shared by several projects + generic subject + neutral/tied body | leave in `INBOX` + review (`ambiguous_contact_generic_subject`) |
 
 ## Suppression (do_not_route_if)
 
@@ -43,6 +44,23 @@ review reason. Thread (parent-folder) inheritance never consults `do_not_route_i
 `keep_in_folder` (with `target_folder: INBOX`) is the retention action behind the
 `leave in INBOX` rows above: the mail stays in its source folder and no mailbox write
 occurs.
+
+## Contact ambiguity under a generic subject
+
+When an external sender/recipient contact belongs to more than one non-suppressed
+project and the subject names none of them, a pure contact hit is not a routing
+decision. The body/preview is the arbiter: project keywords, other catalog contacts
+(coordinator/consortium, email or full name), project domains and project
+kuerzel/id/aliases.
+Exactly one project with such a signal wins; a neutral body or a tie leaves the mail in
+`INBOX` with `review_required: true` and review reason
+`ambiguous_contact_generic_subject`. The shared person's own email/name never counts
+as a discriminator, and a project code/alias in the subject keeps its normal
+precedence. This is also a mandatory manual review focus for generic subjects
+(`QUESTIONNAIRE INFORMATION`, `DATES AND DEADLINES`, `Update`, `Meeting`, `Report`),
+including accelerated/autonomous runs. If the same mail also carries a
+newsletter-suppressed catalog candidate, the contact ambiguity review takes precedence:
+the mail stays in `INBOX`, not in the `Newsletter` mapping.
 
 ## Backend mapping
 
