@@ -98,7 +98,11 @@ class ExecuteActionTypeContractTests(unittest.TestCase):
     def test_execute_handler_recognizes_documented_routing_actions(self):
         handler_literals = _handler_action_type_literals()
         self.assertIn("copy_as_move", handler_literals)
-        self.assertIn("keep_in_folder", handler_literals)
+        self.assertIn("delete", handler_literals)
+        # keep_in_folder is the handler's generic retention default and has no
+        # explicit comparison literal. Its behavior is pinned by
+        # test_batch_runner_modes.py:493-514 and test_maildesk_h4_recovery.py:51-69.
+        # This test must not suggest that keep_in_folder is an explicit handler comparison.
 
 
 if __name__ == "__main__":

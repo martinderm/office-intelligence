@@ -124,6 +124,11 @@ def main() -> int:
         default=None,
         help="Override or specify himalaya account name.",
     )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Accepted for CLI-contract uniformity; output is always the canonical JSON envelope.",
+    )
     try:
         args = parser.parse_args()
     except SystemExit as exc:

@@ -56,6 +56,17 @@ class LegacyCliAdapterTests(unittest.TestCase):
             result,
         )
 
+    def test_json_flag_is_accepted_as_noop(self):
+        source = canonical(data={"operation": "inspect", "result": {"total_items_in_manifest": 1}})
+        code, result = self.invoke(["--profile", "mail-desk-status-v1", "--json"], source)
+
+        self.assertEqual(0, code)
+        self.assertEqual(
+            {"status": "success", "data": {"total_items_in_manifest": 1}, "error": None},
+            result,
+        )
+        self.assertNotIn("unrecognized arguments", self.stderr)
+
     def test_himalaya_direct_operation_unwraps_raw_result(self):
         source = canonical(
             action="himalaya_client",

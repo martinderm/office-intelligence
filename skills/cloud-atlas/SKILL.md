@@ -148,9 +148,8 @@ Vor dem Aufruf prüft der ausführende Harness die Ownership mit
 `workspace-lock/scripts/workspace_lock_guard.py` und `require_workspace_lock()` unter
 Angabe seiner Lease- oder Conversation-ID. Der Guard bleibt als gemeinsame
 Sicherheitskomponente im `workspace-lock`-Skill; Cloud Atlas dupliziert ihn nicht. Der
-Operator hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ein lockfreier Lauf ist
-ausschließlich ein expliziter Single-Session-Legacy-Modus: keine parallelen Writer,
-sichtbare Warnung und dokumentierte Ausnahme. Er ist nie der sichere Default.
+Operator hält Erwerb, Lease-Status und Freigabe im Handoff fest. Ohne verifizierbare
+eigene Lease wird nicht mutiert; einen lockfreien Legacy-Modus gibt es nicht.
 
 ### Empfangsgrenze für Mail-Dossier-Preflights
 
@@ -447,5 +446,5 @@ Um Dateiverteilungen in den Cloud-Speichern sauber zu dokumentieren, nutzt diese
 * **Lokale Spiegelung & Derivate**: Konvertierte Markdown-Kopien liegen lokal unter `memory/cloud/` (niemals direkt im Cloud-Speicher). `.doc`-Derivate werden isoliert unter `memory/cloud/.../_derivatives/` abgelegt.
 * **.gitignore-Schutz**: Das Verzeichnis `data/cloud/` für Cloud-Junctions wird zwingend in `.gitignore` eingetragen (`data/cloud/`).
 * **Automatisierung (24h-Regel, Cleanups & Fallbacks)**: Die Prüfung auf Dateiversionen, Neukonvertierungen bei Quelländerungen, die task-gebundene Zeitstempel-Kontrolle (`last_synced_at` >6h/12h bei Cloud-Zugriff) und die Bereinigung verwaister Dateien erfolgen über den Skill **`cloud-atlas`**.
-* **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md](file:///d:/users/dagobert/agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md).
+* **Ausführliche Regeln**: Alle prozeduralen Abläufe und CLI-Aufrufe sind dokumentiert in [.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md](.agents/skills/office-intelligence/skills/cloud-atlas/SKILL.md).
 ```

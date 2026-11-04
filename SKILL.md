@@ -23,9 +23,9 @@ Die technische Ownership-Prüfung erfolgt vor dem Fach-Skript mit
 `require_workspace_lock()` mit seiner Lease- oder Conversation-ID. Der Guard bleibt
 im gemeinsamen `workspace-lock`-Skill und wird nicht in dieses Bundle kopiert.
 
-Ein lockfreier Lauf ist ausschließlich ein expliziter Single-Session-Legacy-Modus:
-keine parallelen Writer, sichtbare Warnung und dokumentierte Ausnahme. Details zu
-Mutationen, Nachweisen und ggf. externen Preconditions stehen im zuständigen Sub-Skill.
+Ohne verifizierbare eigene Lease wird nicht mutiert; einen lockfreien Legacy-Modus gibt
+es nicht. Details zu Mutationen, Nachweisen und ggf. externen Preconditions stehen im
+zuständigen Sub-Skill.
 
 ## Routing
 
