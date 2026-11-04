@@ -74,6 +74,10 @@ Meetings und Aufzeichnungen sind **empirische Roh-Evidenzen (Säule 2)**:
   `ingest_meeting.py --record -` an den Writer übergeben. Der Adapter schreibt weder
   Meeting-Dateien noch `meetings.json` und erfindet keine Uhrzeit/Dauer.
 - **Manuell/lokal:** `ingest_meeting.py --local --summary <p> [--transcript <p> [--raw <p>]] --workspace ...` erzeugt denselben Record und nutzt denselben Writer. Plan/Dry-run ist Default; Apply verlangt den Plan-Hash. Quellbytes bleiben exakt, Raw wird nie umgeschrieben, Quellen werden erst nach Register-Publikation journal-/hashgebunden verschoben. `--rewrite-frontmatter` ist die einzige explizite Frontmatter-Neuschreibung. Fehlende Zeiten/Dauern bleiben unbekannt.
+- **Größenlimits:** lokale Quellen (`--summary`/`--transcript`/`--raw`) sind auf **4 MiB UTF-8-Bytes pro Datei** begrenzt; die Meldung nennt Artefaktart, relativen Pfad und Limit. Der `--record`-Transport bleibt bei **512 KiB Zeichen pro Artefakt / 1 MiB pro Record**. Steuerzeichen (NUL und C0 außer `\t\n\r`, U+007F) werden mit Codepoint abgewiesen, nie normalisiert; CRLF/BOM bleiben byte-exakt.
+- **Adapter-Konvention:** große Raws (> 512 KiB Zeichen) im Workspace unter `data/inbox/` stagen und über `--local` einliefern; `--record` ist der portable Pfad bis 512 KiB / 1 MiB.
+- **Eskalation bei > 4 MiB (Issue #49):** nicht in Schein-Meetings splitten, keinen Stub registrieren, nicht manuell in die Evidence-Zone schreiben. Quelle behalten, Größe und SHA-256 melden, den Owner entscheiden lassen und auf #49 verweisen.
+- **Event-Katalog:** `--event` wird gegen `events[]` im Projekt-/Topic-Katalog validiert; der Event muss dort **vor dem ersten Ingest** eingetragen sein (sonst Rejection).
 - **Ein Aufruf pro Meeting, Batch-Ergebnisse bleiben pro Meeting sichtbar.** Ein
   Teilfehler ist kein vollständiger Sync-Erfolg. Exit `2` ist eine Rejection, Exit
   `3` bedeutet unbekannter/teilweiser Ausgang: zuerst `--inspect`, keine blinde

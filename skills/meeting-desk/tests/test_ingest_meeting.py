@@ -1604,6 +1604,264 @@ class LocalEntryTests(WriterTestBase):
 
 
 
+class LocalArtifactLimitTests(WriterTestBase):
+    """OI #49: ``--local`` artifacts are bounded in bytes (4 MiB), records are not."""
+
+    LOCAL_LIMIT = 4 * 1024 * 1024
+    ASR_LINE = "Sprecher 1: Grüße aus Wien — wir starten den Tag.\r\n"
+
+    def setUp(self):
+        super().setUp()
+        self.inbox = self.root / "data/inbox"
+        self.inbox.mkdir(parents=True)
+
+    def stage(self, name, data):
+        path = self.inbox / name
+        path.write_bytes(data if isinstance(data, bytes) else data.encode("utf-8"))
+        return path
+
+    def asr_text(self, characters):
+        return (self.ASR_LINE * (characters // len(self.ASR_LINE) + 1))[:characters]
+
+    def ascii_bytes(self, size):
+        unit = b"0123456789abcdef\n"
+        return (unit * (size // len(unit) + 1))[:size]
+
+    def snapshot(self):
+        return {path.relative_to(self.root).as_posix(): path.read_bytes()
+                for path in sorted(self.root.rglob("*")) if path.is_file()}
+
+    def local_args(self, **sources):
+        args = ["--local"]
+        for key in ("summary", "transcript", "raw"):
+            if key in sources:
+                args += [f"--{key}", sources[key]]
+        return [*args, "--date", "2026-10-07", "--title", "Limit meeting",
+                "--workspace", str(self.root)]
+
+    def plan_and_apply(self, args):
+        code, plan, stderr = run_cli(self.lock_root, args)
+        self.assertEqual(code, 0, plan)
+        self.assert_success(plan, "Plan")
+        lease = self.acquire()
+        code, applied, stderr = run_cli(
+            self.lock_root, [*args, "--lease-id", lease,
+                             "--apply-plan", plan["data"]["plan_sha256"]])
+        self.assertEqual(code, 0, applied)
+        self.assert_success(applied, "Applied")
+        return plan, applied, register_document(self.root)["meetings"][0]
+
+    def assert_owned(self, relative, data):
+        ownership = read_json(self.root / "data/meeting-desk/ownership.json")
+        item = [item for item in ownership["files"] if item["path"] == relative]
+        self.assertEqual(len(item), 1, relative)
+        written = (self.root / relative).read_bytes()
+        self.assertEqual(item[0]["sha256"], hashlib.sha256(written).hexdigest())
+        self.assertEqual(item[0]["bytes"], len(written))
+        self.assertTrue(written.endswith(data))
+
+    def assert_inspect_clean(self, entries=1):
+        code, inspected, stderr = run_cli(
+            self.lock_root, ["--inspect", "--workspace", str(self.root)])
+        self.assertEqual(code, 0, stderr)
+        self.assertFalse(inspected["data"]["recovery_required"], inspected)
+        self.assertEqual(inspected["data"]["journals"], [])
+        self.assertEqual(inspected["data"]["register"]["entries"], entries)
+        self.assertEqual(inspected["data"]["ownership"]["state"], "valid")
+
+    def assert_local_rejection(self, args, *fragments):
+        before = self.snapshot()
+        code, envelope, _ = run_cli(self.lock_root, args)
+        self.assertEqual(code, 2, envelope)
+        self.assert_rejected(envelope)
+        message = envelope["error"]["message"]
+        for fragment in fragments:
+            self.assertIn(fragment, message)
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(self.register_path.exists())
+        self.assertFalse(self.journal_dir().exists())
+        return message
+
+    def test_issue_49_realcase_583368_characters_publish_byte_exact(self):
+        text = self.asr_text(583_368)
+        data = text.encode("utf-8")
+        self.assertEqual(len(text), 583_368)
+        self.assertGreater(len(data), 583_368)
+        summary = "Summary of day one 会议\n".encode("utf-8")
+        self.stage("day1.summary.md", summary)
+        self.stage("day1.transcript.txt", data)
+        args = ["--local", "--summary", "data/inbox/day1.summary.md",
+                "--transcript", "data/inbox/day1.transcript.txt",
+                "--date", "2026-10-07", "--start-utc", "2026-10-07T07:00:00Z",
+                "--title", "Day one kick-off", "--workspace", str(self.root)]
+        plan, applied, entry = self.plan_and_apply(args)
+        self.assertEqual(plan["data"]["plan"]["local_sources"],
+                         [{"path": "data/inbox/day1.summary.md", "kind": "summary"},
+                          {"path": "data/inbox/day1.transcript.txt", "kind": "transcript"}])
+        transcript = (self.root / entry["transcript_path"]).read_bytes()
+        raw = (self.root / entry["transcript_raw_path"]).read_bytes()
+        self.assertEqual(raw, data)
+        self.assertTrue(transcript.endswith(b"---\n\n" + data))
+        self.assertEqual(transcript.count(data), 1)
+        self.assertTrue((self.root / entry["summary_path"]).read_bytes().endswith(summary))
+        self.assert_owned(entry["transcript_raw_path"], data)
+        self.assert_owned(entry["transcript_path"], data)
+        self.assertFalse((self.inbox / "day1.summary.md").exists())
+        self.assertFalse((self.inbox / "day1.transcript.txt").exists())
+        self.assert_inspect_clean()
+
+    def test_cjk_bytes_over_one_mib_but_under_four_mib_publish_byte_exact(self):
+        text = "会议" * 240_000
+        data = text.encode("utf-8")
+        self.assertEqual(len(text), 480_000)
+        self.assertGreater(len(data), 1024 * 1024)
+        self.assertLess(len(data), self.LOCAL_LIMIT)
+        self.stage("cjk.summary.md", "cjk summary\n")
+        self.stage("cjk.transcript.raw.md", data)
+        args = self.local_args(summary=str(self.inbox / "cjk.summary.md"),
+                               raw=str(self.inbox / "cjk.transcript.raw.md"))
+        _plan, _applied, entry = self.plan_and_apply(args)
+        self.assertIsNone(entry["transcript_path"])
+        self.assertEqual((self.root / entry["transcript_raw_path"]).read_bytes(), data)
+        self.assert_owned(entry["transcript_raw_path"], data)
+        self.assertFalse((self.inbox / "cjk.transcript.raw.md").exists())
+        self.assert_inspect_clean()
+
+    def test_exactly_four_mib_is_accepted_and_one_more_byte_is_rejected(self):
+        limit = self.LOCAL_LIMIT
+        self.assertEqual(self.writer.MAX_LOCAL_ARTIFACT_BYTES, limit)
+        data = self.ascii_bytes(limit)
+        self.stage("edge.summary.md", "edge summary\n")
+        self.stage("edge.transcript.md", data)
+        args = self.local_args(summary=str(self.inbox / "edge.summary.md"),
+                               transcript=str(self.inbox / "edge.transcript.md"))
+        _plan, _applied, entry = self.plan_and_apply(args)
+        self.assertEqual((self.root / entry["transcript_raw_path"]).read_bytes(), data)
+        self.assert_owned(entry["transcript_path"], data)
+        self.assert_inspect_clean()
+
+    def test_over_four_mib_is_rejected_with_limit_and_path_without_mutation(self):
+        limit = self.LOCAL_LIMIT
+        over = self.ascii_bytes(limit + 1)
+        small = "small summary\n"
+        for kind in ("summary", "transcript", "raw"):
+            with self.subTest(kind=kind):
+                name = f"over-{kind}.md"
+                self.stage(name, over)
+                sources = {"summary": str(self.stage("ok.summary.md", small))}
+                sources[kind] = str(self.inbox / name)
+                if kind != "raw":
+                    sources.setdefault("raw", str(self.stage("ok.raw.md", small)))
+                message = self.assert_local_rejection(
+                    self.local_args(**sources),
+                    f"local artifact '{kind}'", f"data/inbox/{name}",
+                    f"exceeds {limit} bytes (4 MiB)")
+                self.assertNotIn(str(self.root), message)
+                (self.inbox / name).unlink()
+
+    def test_control_characters_are_named_and_never_normalized(self):
+        for kind, flag in (("raw", "raw"), ("transcript", "transcript")):
+            for char in ("\x00", "\x0b", "\x0c", "\x1b", "\x7f"):
+                with self.subTest(kind=kind, codepoint=f"U+{ord(char):04X}"):
+                    name = f"ctl.{kind}.md"
+                    self.stage(name, f"before{char}after\n".encode("utf-8"))
+                    sources = {flag: str(self.inbox / name)}
+                    if kind == "raw":
+                        sources["summary"] = str(self.stage("ctl.summary.md", "ok\n"))
+                    self.assert_local_rejection(
+                        self.local_args(**sources),
+                        f"local artifact '{kind}'", f"data/inbox/{name}",
+                        f"U+{ord(char):04X}")
+                    (self.inbox / name).unlink()
+        self.stage("ctl.summary.md", "sum\x0cmary\n")
+        self.assert_local_rejection(
+            self.local_args(summary=str(self.inbox / "ctl.summary.md")),
+            "local artifact 'summary'", "data/inbox/ctl.summary.md", "U+000C")
+
+    def test_tab_newline_carriage_return_bom_and_crlf_stay_byte_exact(self):
+        raw = b"\xef\xbb\xbfSpeaker:\ttab\r\nline\rtwo\nlast\r\n"
+        transcript = b"\xef\xbb\xbfClean:\ttab\r\nline\rtwo\r\n"
+        self.stage("bytes.summary.md", b"\xef\xbb\xbfsummary\r\n")
+        self.stage("bytes.transcript.md", transcript)
+        self.stage("bytes.transcript.raw.md", raw)
+        args = self.local_args(summary=str(self.inbox / "bytes.summary.md"),
+                               transcript=str(self.inbox / "bytes.transcript.md"),
+                               raw=str(self.inbox / "bytes.transcript.raw.md"))
+        _plan, _applied, entry = self.plan_and_apply(args)
+        self.assertEqual((self.root / entry["transcript_raw_path"]).read_bytes(), raw)
+        self.assertTrue((self.root / entry["transcript_path"]).read_bytes()
+                        .endswith(b"---\n\n" + transcript))
+        self.assertTrue((self.root / entry["summary_path"]).read_bytes()
+                        .endswith(b"\xef\xbb\xbfsummary\r\n"))
+        self.assert_inspect_clean()
+
+    def test_record_transport_limits_are_unchanged(self):
+        limit_chars = self.writer.MAX_ARTIFACT_CHARS
+        self.assertEqual(limit_chars, 524_288)
+        self.assertEqual(self.writer.MAX_RECORD_BYTES, 1024 * 1024)
+        record = valid_record(1)
+        record["artifacts"]["summary_md"] = "x" * limit_chars
+        self.writer.validate_record(record)
+        record["artifacts"]["summary_md"] = "x" * (limit_chars + 1)
+        with self.assertRaisesRegex(self.writer._Reject, "exceeds 524288 characters"):
+            self.writer.validate_record(record)
+        path = write_record(self.root / "over-chars.json", record)
+        code, envelope, _ = run_cli(
+            self.lock_root, ["--record", str(path), "--workspace", str(self.root),
+                             "--dry-run"])
+        self.assertEqual(code, 2, envelope)
+        self.assert_rejected(envelope)
+        self.assertIn("exceeds 524288 characters", envelope["error"]["message"])
+
+        record["artifacts"]["summary_md"] = "x" * limit_chars
+        record["artifacts"]["transcript_md"] = "y" * limit_chars
+        record["artifacts"]["transcript_raw_md"] = "y" * limit_chars
+        path = write_record(self.root / "over-bytes.json", record)
+        self.assertGreater(path.stat().st_size, self.writer.MAX_RECORD_BYTES)
+        code, envelope, _ = run_cli(
+            self.lock_root, ["--record", str(path), "--workspace", str(self.root),
+                             "--dry-run"])
+        self.assertEqual(code, 2, envelope)
+        self.assert_rejected(envelope)
+        self.assertIn("size limit", envelope["error"]["message"])
+        self.assertFalse(self.register_path.exists())
+
+    def test_capabilities_report_local_and_record_limits_separately(self):
+        code, envelope, stderr = run_cli(self.lock_root, ["--capabilities"])
+        self.assertEqual(code, 0, stderr)
+        limits = envelope["data"]["limits"]
+        self.assertEqual(limits["local_artifact_bytes"], 4_194_304)
+        self.assertEqual(limits["artifact_chars"], 524_288)
+        self.assertEqual(limits["record_bytes"], 1_048_576)
+        self.assertEqual(limits["register_bytes"], 16 * 1024 * 1024)
+
+    def test_large_local_crash_before_register_then_recovery_is_byte_exact(self):
+        data = self.asr_text(583_368).encode("utf-8")
+        summary = self.stage("big.summary.md", "big summary\n")
+        transcript = self.stage("big.transcript.md", data)
+        raw = self.stage("big.transcript.raw.md", data)
+        lease = self.acquire()
+        driver = Path(__file__).resolve().parent / "_crash_local.py"
+        completed = subprocess.run(
+            [sys.executable, str(driver), str(WRITER_SCRIPT), str(self.root), lease,
+             str(self.lock_root), "5", str(summary), str(transcript), str(raw),
+             "2026-10-21"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        self.assertEqual(completed.returncode, 9, completed.stderr)
+        for source in (summary, transcript, raw):
+            self.assertTrue(source.exists())
+        self.assertTrue(list(self.journal_dir().glob("*.journal.json")))
+        recovered = self.writer.recover_workspace(
+            self.root, lease_id=lease, trusted_workspace_lock_root=self.lock_root)
+        self.assertTrue(recovered["success"], recovered)
+        for source in (summary, transcript, raw):
+            self.assertFalse(source.exists())
+        entry = register_document(self.root)["meetings"][0]
+        self.assertEqual((self.root / entry["transcript_raw_path"]).read_bytes(), data)
+        self.assert_owned(entry["transcript_path"], data)
+        self.assert_inspect_clean()
+
+
 class ProcessBoundaryTests(unittest.TestCase):
     def test_writer_module_has_no_network_or_install_imports(self):
         source = WRITER_SCRIPT.read_text(encoding="utf-8")

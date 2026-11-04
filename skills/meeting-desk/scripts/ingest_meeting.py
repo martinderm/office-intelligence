@@ -79,6 +79,9 @@ MAX_REGISTER_BYTES = 16 * 1024 * 1024
 MAX_JSON_DEPTH = 32
 MAX_JSON_NODES = 200_000
 MAX_ARTIFACT_CHARS = 512 * 1024
+# ``--local`` artifacts are operator-chosen files, not untrusted JSON: they are
+# bounded in UTF-8 bytes of the source file instead of record characters.
+MAX_LOCAL_ARTIFACT_BYTES = 4 * 1024 * 1024
 MAX_METADATA_BYTES = 64 * 1024
 MAX_ENTRIES = 20_000
 MAX_STRING = 500
@@ -360,7 +363,21 @@ def _duration(value: object) -> float | int | None:
 
 
 def validate_record(value: object) -> dict:
-    """Validate and normalize one Record-v1 object. Raises ``_Reject``."""
+    """Validate and normalize one Record-v1 object. Raises ``_Reject``.
+
+    This is the strict adapter validator: artifacts are bounded to
+    ``MAX_ARTIFACT_CHARS`` characters.
+    """
+    return _validate_record(value, artifact_limit=MAX_ARTIFACT_CHARS)
+
+
+def _validate_record(value: object, *, artifact_limit: int) -> dict:
+    """Shared Record-v1 validation; only the per-artifact character bound varies.
+
+    The ``--local`` entry passes ``MAX_LOCAL_ARTIFACT_BYTES`` here. Its real bound
+    is the byte size of the source file, checked before decoding; since a
+    character is at least one byte, this character limit can never bind first.
+    """
     record = _require_keys(value, _RECORD_KEYS, "record")
     if record["schema"] != RECORD_SCHEMA:
         raise _Reject(f"unsupported record schema (need {RECORD_SCHEMA!r})")
@@ -400,7 +417,7 @@ def validate_record(value: object) -> dict:
     for key in sorted(_ARTIFACT_KEYS):
         raw = artifacts[key]
         if raw is not None:
-            raw = _text(raw, f"record.artifacts.{key}", limit=MAX_ARTIFACT_CHARS, empty=True)
+            raw = _text(raw, f"record.artifacts.{key}", limit=artifact_limit, empty=True)
         normalized_artifacts[key] = raw
     summary = normalized_artifacts["summary_md"]
     transcript = normalized_artifacts["transcript_md"]
@@ -560,7 +577,8 @@ def _mkdir_chain(root: Path, relative_dir: PurePosixPath) -> None:
         raise _Reject("a workspace directory escapes its canonical data zone")
 
 
-def _read_bytes(path: Path, limit: int, where: str) -> bytes | None:
+def _read_bytes(path: Path, limit: int, where: str,
+                too_large: str | None = None) -> bytes | None:
     info = _lstat(path)
     if info is None:
         return None
@@ -569,7 +587,7 @@ def _read_bytes(path: Path, limit: int, where: str) -> bytes | None:
     if info.st_nlink > 1:
         raise _Reject(f"{where} is a hardlink alias")
     if info.st_size > limit:
-        raise _Reject(f"{where} exceeds the supported size")
+        raise _Reject(too_large or f"{where} exceeds the supported size")
     try:
         with path.open("rb") as handle:
             return handle.read(limit + 1)
@@ -1855,17 +1873,19 @@ def _reserved_local_source(relative: str) -> bool:
     return relative == _JOURNAL_DIR or relative.startswith(_JOURNAL_DIR + "/")
 
 
-def _source_text(root: Path, value: str, label: str,
-                 rewrite_frontmatter: bool) -> tuple[str, str, str]:
+def _source_text(root: Path, value: str, label: str, rewrite_frontmatter: bool,
+                 limit: int = MAX_LOCAL_ARTIFACT_BYTES) -> tuple[str, str, str]:
     """Read one local source file inside a canonical zone.
 
     Returns ``(workspace_relative_path, text, original_sha256)``. The lexical
     path is validated before any resolution: a child symlink/junction/reparse
     point or hardlink is rejected so a later move cannot delete the real file
     through an alias. The workspace root itself is the trusted anchor and may be
-    an alias. Bytes are decoded strictly as UTF-8; without
+    an alias. The UTF-8 byte size of the file is bounded by ``limit`` before
+    decoding. Bytes are decoded strictly as UTF-8; without
     ``rewrite_frontmatter`` the text is kept byte-exact (line endings included)
-    and any existing frontmatter is body.
+    and any existing frontmatter is body. Control characters are rejected with
+    the offending codepoint; content is never stripped or replaced.
     """
     if not isinstance(value, str) or not value:
         raise _Reject(f"{label} path is required")
@@ -1879,9 +1899,13 @@ def _source_text(root: Path, value: str, label: str,
     if _reserved_local_source(relative):
         raise _Reject(f"{label} names reserved writer state or catalog data")
     _safe_target(root, relative, label)
-    raw = _read_bytes(root / relative, MAX_RECORD_BYTES, label)
+    too_large = (f"local artifact {label!r} ({relative}) exceeds {limit} bytes "
+                 f"({limit // (1024 * 1024)} MiB)")
+    raw = _read_bytes(root / relative, limit, label, too_large)
     if raw is None:
         raise _Reject(f"{label} does not exist")
+    if len(raw) > limit:
+        raise _Reject(too_large)
     original_sha = _sha(raw)
     try:
         text = raw.decode("utf-8")
@@ -1891,6 +1915,10 @@ def _source_text(root: Path, value: str, label: str,
         stripped = re.sub(r"\A\ufeff?---\r?\n.*?\r?\n---[ \t]*(?:\r?\n)?", "", text, count=1,
                           flags=re.S)
         text = stripped
+    control = _CONTROL.search(text)
+    if control:
+        raise _Reject(f"local artifact {label!r} ({relative}) contains control "
+                      f"character U+{ord(control.group()):04X}")
     return relative, text, original_sha
 
 
@@ -1974,7 +2002,7 @@ def _local_record(*, workspace_root: Path, summary_path: str | None,
         "source_metadata": {"local_entry": True,
                             "source_sha256": sorted(item["sha256"] for item in sources)},
     }
-    return validate_record(record), sources
+    return _validate_record(record, artifact_limit=MAX_LOCAL_ARTIFACT_BYTES), sources
 
 
 def ingest_local(*, workspace_root, lease_id, conversation_id=None,
@@ -2311,6 +2339,7 @@ def capabilities() -> dict:
             "json_depth": MAX_JSON_DEPTH,
             "json_nodes": MAX_JSON_NODES,
             "artifact_chars": MAX_ARTIFACT_CHARS,
+            "local_artifact_bytes": MAX_LOCAL_ARTIFACT_BYTES,
             "source_metadata_bytes": MAX_METADATA_BYTES,
             "register_entries": MAX_ENTRIES,
             "identity_chars": _MAX_IDENTITY_CHARS,

@@ -94,6 +94,12 @@ Topic-Writer → Report ohne erfundenen Topic-Handoff. Verträge:
      und kein Register. Manuelle/lokale Dateien nutzen `--local --summary/--transcript
      [--raw]` mit demselben Record/Writer (Plan/Dry-run als Default, Apply nur mit
      Plan-Hash; Quellen werden erst nach Register-Publikation hashgebunden verschoben).
+   - Grenzen (Issue #49): `--record` 512 KiB Zeichen je Artefakt / 1 MiB je Record,
+     `--local` 4 MiB UTF-8-Bytes je Quelldatei; große Raws werden in `data/inbox/`
+     gestaged und per `--local` eingeliefert. Bei > 4 MiB nicht splitten, keinen Stub
+     registrieren, nicht manuell in die Evidence-Zone schreiben: Quelle behalten,
+     Größe/SHA-256 melden, Owner entscheiden lassen. `--event` muss vor dem ersten
+     Ingest in `events[]` des Projekt-/Topic-Katalogs stehen.
    - Trennung nach Granularität:
      - Einzel-Meeting, Call oder Vortrag → [`meeting-desk`](../../skills/meeting-desk/SKILL.md)
      - Mehrtägige Tagung, Konferenz mit Vortragsprogramm → [`event-documentation`](../../skills/event-documentation/SKILL.md)
