@@ -168,9 +168,27 @@ Field contract:
 The writer rejects: invalid UTF-8, duplicate keys, non-finite or overflowing
 numbers, lone surrogates, NUL, nesting deeper than 32, more than 200 000 JSON
 nodes, records over 1 MiB, `source_metadata` over 64 KiB, artifact strings over
-512 KiB, more than 20 000 register entries, and unknown root/block fields.
-Artifacts are UTF-8 text; no lossy decoding is offered. These are input-safety
-limits, not a general-purpose parser guarantee.
+512 KiB characters (`artifact_chars`, `--record` only), more than 20 000 register
+entries, and unknown root/block fields. Artifacts are UTF-8 text; no lossy
+decoding is offered. These are input-safety limits, not a general-purpose parser
+guarantee.
+
+Two different artifact bounds exist by design (OI #49):
+
+| Entry | Bound | Unit | Reported as |
+| :--- | :--- | :--- | :--- |
+| `--record` (untrusted adapter JSON) | 512 KiB per artifact, 1 MiB per record | characters / bytes | `limits.artifact_chars` = 524288, `limits.record_bytes` = 1048576 |
+| `--local` (operator-chosen files) | 4 MiB per source file | UTF-8 bytes of the file, checked before decoding | `limits.local_artifact_bytes` = 4194304 |
+
+`validate_record()` stays the strict adapter validator; the local entry uses a
+private variant of the same validation that applies the same semantic rules
+(non-empty, a transcript needs raw, control characters, UTF-8) but not the
+character bound. `register_bytes` (16 MiB) bounds the register and artifact
+reads, never artifact content. Artifact text may contain `\t`, `\n`, `\r` but
+no other C0 control character: NUL and U+0001–U+0008, U+000B, U+000C,
+U+000E–U+001F and U+007F are rejected, never stripped or replaced. For
+`--local` the diagnostic names the artifact kind, the workspace-relative source
+path and the codepoint (for example `U+000B`).
 
 ### Local-file entry
 
@@ -200,6 +218,19 @@ python skills/meeting-desk/scripts/ingest_meeting.py --local \
   with the flag a leading frontmatter block is stripped before storage. Raw is
   never text-rewritten and may be imported with a summary even when no clean
   transcript exists.
+* Each source file (`--summary`, `--transcript`, `--raw`) is bounded to
+  `MAX_LOCAL_ARTIFACT_BYTES` = 4 MiB (4 194 304 UTF-8 bytes of the file, checked
+  before decoding; exactly 4 MiB passes, one byte more is rejected). A larger
+  file is rejected before any mutation with `local artifact '<kind>'
+  (<workspace-relative path>) exceeds 4194304 bytes (4 MiB)`. BOM and CRLF are
+  published unchanged; raw gets no frontmatter and summary/transcript keep their
+  body byte-exact behind the generated frontmatter.
+* Adapter convention: a large raw (above the 512 KiB `--record` bound) is staged
+  in `data/inbox/` and delivered with `--local`; `--record` stays the portable
+  record path with 512 KiB characters / 1 MiB.
+* Escalation: above 4 MiB do not split into pseudo-meetings, do not register a
+  stub and do not write into the evidence zone by hand. Keep the source, report
+  size and SHA-256, let the owner decide and refer to issue #49.
 * Plan/dry-run is the default; apply needs the matching plan hash and an owned
   lease. The meeting ID defaults to `manual-<date|undated>-<slug>`; collisions
   or a different source under one ID reject without an automatic suffix; an

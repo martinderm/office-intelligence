@@ -8,7 +8,7 @@ Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
 CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-10-21) · 99 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-04) · 108 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
 >
@@ -49,7 +49,7 @@ Ad-hoc-Exporte bleiben stdout oder `.meeting-export.json` unter `data/`.
 | Registereintrag | 25 kanonische Felder + erhaltene Legacy-/Unknown-Felder | stabile Identität (`meeting_id`/`id`/source pair), opake Unicode-IDs exakt (≤512, keine Steuerzeichen), Dateinamen nur per Hash; keine Re-ID; unsourced Legacy nur über belegten Quell-Präfix |
 | Summary/Transkript | `*.summary.md`, `*.transcript.md` | generierte Frontmatter, byte-exakter Body, `status: provisional` bis menschliche Freigabe; `null` = nicht geliefert, nie Löschen |
 | Raw | `*.transcript.raw.md` | byte-exakt, kein Frontmatter, nach Erstpublikation unveränderlich; auch ohne Clean-Transcript eigenständig registriert; `null` lässt Bestand unverändert |
-| Local sources | `--local --summary/--transcript/--raw` in kanonischen Zonen | gleicher Record/Writer; Plan+Hash, byte-exakt; kindliche Links/Junctions/Hardlinks und Writer-State-/Katalogpfade vor Planung abgewiesen; Löschsteps journal-/hashgebunden nach Register |
+| Local sources | `--local --summary/--transcript/--raw` in kanonischen Zonen | gleicher Record/Writer; Plan+Hash, byte-exakt; je Quelle max. 4 MiB UTF-8-Bytes (`local_artifact_bytes`, vor dem Dekodieren; Meldung mit Artefaktart, relativem Pfad, Limit; Issue #49), C0-Steuerzeichen/U+007F mit Codepoint abgewiesen, CRLF/BOM unverändert; kindliche Links/Junctions/Hardlinks und Writer-State-/Katalogpfade vor Planung abgewiesen; Löschsteps journal-/hashgebunden nach Register. Große Raws werden in `data/inbox/` gestaged und per `--local` eingeliefert; > 4 MiB: Eskalation an den Owner (kein Split, kein Stub, kein manueller Evidence-Write) |
 | Ownership | `data/meeting-desk/ownership.json` (`meeting-desk-ownership/1`) | Pfad → Meeting-ID, SHA-256, Größe, Art, Writer-Version, Zeit |
 | Journal | `data/meeting-desk/journal/<id>.journal.json` (`meeting-desk-journal/1`) | Integritätsdigest, Prestate/Poststate, Steps, Stage-Hashes, Workspace-Fingerprint |
 | Staging | `data/meeting-desk/journal/<id>/stage/NNN.bin` | geplante Zielbytes, vor Publikation gehasht |
@@ -108,8 +108,13 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
 
 ## 5. Sicherheits- und Integritätsgates
 
-- **Record/JSON:** Größe (1 MiB), Tiefe 32, 200 000 Nodes, Duplicate Keys,
+- **Record/JSON (`--record`):** Größe (1 MiB), Artefakte 512 KiB Zeichen
+  (`artifact_chars`), Tiefe 32, 200 000 Nodes, Duplicate Keys,
   NaN/Infinity, Integer-Überlauf, Surrogates, NUL, unbekannte Felder.
+- **Lokale Artefakte (`--local`):** 4 MiB UTF-8-Bytes je Quelldatei
+  (`local_artifact_bytes`, Issue #49) statt Zeichenlimit; gleiche Semantikregeln
+  (nicht leer, Transcript braucht Raw, UTF-8, Steuerzeichen); der öffentliche
+  `validate_record()` bleibt der strikte 512-KiB-Adaptervalidator.
 - **Register:** 16 MiB, max. 20 000 Einträge, Objekt+Liste, keine stillen
   Reparaturen; mehrdeutige Identität oder Quellsystem-Widerspruch stoppt.
 - **Pfade:** kanonische Zonen, kein Traversal, keine Symlinks/Junctions/
@@ -178,7 +183,10 @@ Diagnostik; stdout genau eine Zeile.
   Link-/Alias-Gates, Human-File- und Raw-Schutz, Journal-Korruption,
   fremde/Orphan-Journal-Einträge inkl. echter NTFS-Junction, Crash nach jedem
   Publikationsschritt mit echter Recovery, Lease-Verlust vor Staging,
-  Local-Datei-Eingang mit Move/Crash, Builder→Writer→Datei.
+  Local-Datei-Eingang mit Move/Crash, Builder→Writer→Datei; Issue-#49-Grenzen
+  (`LocalArtifactLimitTests`: Realcase 583 368 Zeichen, CJK-Bytefall, Grenze
+  4 MiB / +1 Byte, Steuerzeichen mit Codepoint, CRLF/BOM, Record-Limits
+  unverändert, Capabilities, Crash/Recovery mit großem Raw).
 - `tests/test_build_clean_transcript.py`: Korrektur-Engine und
   Delegations-/Fehler-/Exit-Vertrag des Builders.
 - `tests/fixtures/meeting-record-v1.json`: gemeinsames SSOT-Paket mit

@@ -231,6 +231,15 @@ und [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting
   geliefert, nie Löschen; bestehende registrierte Pfade/Bytes bleiben bei
   partiellen Updates erhalten, inklusive Raw und menschlich abgeleiteter
   Clean-Fassung. Kein Record-Deletionsfeld.
+* **Artefaktgrenzen (Issue #49):** `--record` (untrusted JSON) bleibt bei 512 KiB
+  Zeichen je Artefakt (`artifact_chars`) und 1 MiB je Record (`record_bytes`).
+  Lokale Quellen (`--local`, Local sources) sind je Datei auf 4 MiB UTF-8-Bytes
+  begrenzt (`local_artifact_bytes`, vor dem Dekodieren geprüft; Meldung mit
+  Artefaktart, relativem Pfad und Limit). NUL/C0-Zeichen außer `\t\n\r` und
+  U+007F werden mit Codepoint abgewiesen, nie normalisiert; CRLF/BOM bleiben
+  byte-exakt. Große Raws werden in `data/inbox/` gestaged und per `--local`
+  eingeliefert; > 4 MiB wird an den Owner eskaliert (kein Split/Stub/manueller
+  Evidence-Write).
 * **Ownership (`data/meeting-desk/ownership.json`, Schema
   `meeting-desk-ownership/1`):** Pfad → Meeting-ID, SHA-256, Größe, Art,
   Writer-Version, Zeit. Generierte Updates nur gegen diesen Hash; nicht

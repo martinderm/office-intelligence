@@ -81,6 +81,25 @@ kommagetrennt), `--title`, `--meeting-id`, `--topic`/`--project`/`--event`,
   Quell-Frontmatter Teil des Bodys, mit Flag wird ein führender Frontmatter-Block
   vor dem Speichern entfernt. Raw wird nie umgeschrieben und darf mit Summary
   ohne Clean-Transcript importiert werden (kein-Utterance-Fall).
+* **Größe:** jede Quelle (`--summary`, `--transcript`, `--raw`) ist auf
+  `MAX_LOCAL_ARTIFACT_BYTES` = 4 MiB (4 194 304 UTF-8-Bytes der Datei, vor dem
+  Dekodieren geprüft) begrenzt; genau 4 MiB passieren, +1 Byte wird ohne
+  Mutation mit `local artifact '<art>' (<relativer Pfad>) exceeds 4194304 bytes
+  (4 MiB)` abgewiesen. Das ist eine Byte-Grenze, keine Zeichenzahl. Der
+  `--record`-Transport bleibt unverändert bei 512 KiB Zeichen pro Artefakt und
+  1 MiB pro Record (`--capabilities`: `limits.local_artifact_bytes`,
+  `artifact_chars`, `record_bytes`).
+* **Steuerzeichen:** nur UTF-8; `\t`, `\n`, `\r` sind erlaubt, NUL und alle
+  anderen C0-Zeichen sowie U+007F werden mit Artefaktart, Pfad und Codepoint
+  (z. B. `U+000B`) abgewiesen. Keine stille Normalisierung; CRLF und BOM werden
+  unverändert publiziert.
+* **Adapter-Konvention:** große Raws (> 512 KiB Zeichen) werden in `data/inbox/`
+  gestaged und über `--local` eingeliefert; `--record` bleibt für portable Records
+  mit 512 KiB Zeichen / 1 MiB.
+* **Eskalationsregel (> 4 MiB):** nicht in Schein-Meetings splitten, keinen Stub
+  registrieren, nicht manuell in die Evidence-Zone schreiben. Quelle behalten,
+  Größe und SHA-256 melden, den Owner entscheiden lassen und auf Issue #49
+  verweisen.
 * Quellen müssen reguläre, linkfreie Dateien in kanonischen Zonen sein; kindliche
   Symlinks/Junctions/Hardlinks sowie Writer-State- und Katalogpfade
   (`meetings.json`, `ownership.json`, Journal-Namespace, topics/projects/
