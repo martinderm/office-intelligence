@@ -178,6 +178,9 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
   ohne Sanitization-Launderung, fail-closed Alias-/Traversal-Validierung vor I/O,
   Dossier-Synthese, sowie die gebundene Draft-Diagnose Issue #19: opt-in/Default-aus,
   geschlossener Request plus separater hashgebundener Review-Input, Einmal-Marker vor
-  dem einzigen `message save`, fester Kindfilter und begrenzter fail-closed Parser)*
+  dem einzigen `message save`, fester Kindfilter und begrenzter fail-closed Parser;
+  lokale Injection-Barrier Issue #62: deterministischer Mail-Ingress-Prefilter mit
+  Fencing, Quarantäne-Evidence unter `data/mail-desk/injection-quarantine/` und
+  hash-gebundenem `injection_quarantine_present`-Gate, L2 §39)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, optionale AcroForm-Formularfelder-Extraktion mit Capture-vor-OCR-Reihenfolge Issue #20, Mirror-Sync)*

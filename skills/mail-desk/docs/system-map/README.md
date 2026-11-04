@@ -69,6 +69,12 @@ Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/anal
 74 Scripts, davon 59 Core-Dateien, 85 Testmodule (`git ls-files`).
 Draft-Transport: §33; menschlich abgenommener Event-Writer unverändert: §32.
 
+**Issue-#62-Frame, 2026-11-04:** 311 Dateien im Bundle, 193 unter
+`skills/mail-desk/`, 76 Scripts (61 Core-Dateien), 96 Testmodule
+(`git ls-files --cached --others --exclude-standard`). Lokale
+Injection-Barrier: §39. `classifier.py` und die Matching-Module bleiben
+unangetastet; `classifier_revision` ist unverändert.
+
 **Issue-#14-Frame, 2026-10-18 (historisch):** 177 Dateien, 74 Scripts, davon
 59 Core-Dateien, 84 Testmodule (`git ls-files --cached --others --exclude-standard`).
 Die nachfolgenden Merge-/Abnahmewerte bleiben historische Snapshots.
@@ -203,6 +209,7 @@ geschlossen.**
 | **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
 | **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
+| **Injection-Barrier (Issue #62)** | [`scripts/core/injection_barrier.py`](../scripts/core/injection_barrier.py) | Lokaler, deterministischer Pre-Filter vor dem Agent-Context: feste `<untrusted_mail_content>`-Fences, Scan auf instruction-ähnliche Phrasen/Rollenmarker/URLs/Anhänge/Steuerzeichen/Homoglyphen, additive Workspace-Signaturen, Quarantäne-Evidence unter `data/mail-desk/injection-quarantine/`, hash-gebundener `injection_barrier`-Manifestblock und `injection_quarantine_present`-Gate. Kein Netzwerk, keine Modellabhängigkeit, kein `classifier.py`-Eingriff. Details: [§39](#39-issue-62--lokale-injection-barrier). |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
 | **Integrität & Reconcile** | [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py)<br>[`scripts/core/readiness.py`](../scripts/core/readiness.py) | Read-first Batch-Recovery-Assessment über das Recovery-Journal: read-only Report; der optionale Repair-Pfad (`apply_local_repairs`) korrigiert fehlende **und** stale Index-/Log-Records nach frischer Ziel-Verifikation (append-only `reconciled`-Log-Eintrag, idempotent; Gates: Approval-Receipt + `check_folders`; null Mailbox-Mutationen) und führt `runner-progress.json` deterministisch nach (FR-19/MD-RC1). Quarantäne-Drift-Erkennung liegt bei `quarantine/quarantine_index.py`. |
@@ -239,7 +246,7 @@ geprüften Snapshot per stdin; der Runner prüft erneut, Input bleibt erhalten.
 Siehe [Ablauf](processes.md#phase-2-review-gate) und
 [Vertrag](../../references/batch-runner.md#review-gebundene-kandidatenzahl).
 
-1. **Untrusted Content:** E-Mail-Inhalte (Body, Header, Anhänge) sind unvertrauenswürdige Daten. Sie dürfen niemals direkt als Instruktionen ausgeführt werden.
+1. **Untrusted Content:** E-Mail-Inhalte (Body, Header, Anhänge) sind unvertrauenswürdige Daten. Sie dürfen niemals direkt als Instruktionen ausgeführt werden. Seit Issue #62 erzwingt die lokale Injection-Barrier vor dem Agent-Context Fencing, deterministischen Scan und Quarantäne (§39); sie ist eine zweite Schicht, kein Ersatz für Review- oder Write-Gates.
 2. **Review-Receipt-Bindung:** Ein Batch-Lauf (`execute`) sowie Dispositions- und Löschoperationen (`apply-discard`) erfordern verbindlich hash-gebundene Review- und Freigabe-Receipts. Kein unautorisiertes Mutieren von Mailbox, Dateisystem oder Index. Ergänzend erzwingt die kontextgebundene Receipt-Klassen-Grenze (FR-15/MD-E1-T03), dass die interne Maschinen-Autorisierung (`receipt_class: "machine"`, `receipt_type: "attachment_auto_evaluation"`) ausschließlich den begrenzten MD-E1-Fetch/Evaluate-Flow autorisiert und von Filing, Promotion, Export, Disposition, Apply-Discard und direkten Fetch-Pfaden fail-closed abgewiesen wird; die bestehenden typenlosen menschlichen Receipts bleiben unverändert gültig. Der policygebundene Anhang-Evaluierungs-Orchestrator (`attachment_evaluate`) revalidiert echte MIME-Kandidaten, erzeugt die interne Maschinen-Autorisierung intern, prüft vorab den Workspace-Lock und komponiert mit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear (`op_attachment_fetch` → `extract_attachment_content` → `build_attachment_analysis_handoff` → `validate_attachment_handoff`) unter einer `run_id`; er gibt das staged `attachment_evaluation` (`used_for_classification: false`, `classifier_revision: null`) plus den validierten `attachment_analysis_handoff` zurück. Der Erfolgspfad ist `completed`/`handoff_ready`, ein validierter blockierter Handoff `completed`/`still_ambiguous` (niemals `supplementary`); mit **FR-15/MD-E1-T06** ist die negative Fehler-/Reason-Matrix fail-closed geschlossen (bounded `failed`-Envelopes mit `lock_unavailable`, `policy_blocked`, `quota_exceeded`, `fetch_failed`, `extraction_failed`, `handoff_invalid`, ohne Handoff-Geschwister und ohne Exception-Text/Rohinhalt/absoluten Pfad), während die `DraftManifest`-Installation MD-E2 bleibt (Details: [`effects.md`](effects.md) §3).
 3. **Workspace-Lock Ownership:** Schreibende Skripte erfordern eine verifizierte Lease via `require_workspace_lock()`. Legacy-Bypässe (`allow_legacy=True`/`WORKSPACE_LOCK_ALLOW_LEGACY`) sind normativ strikt verboten und im Attachment-Fetch-/Extract-/Quarantäne-Pfad **geschlossen** (FR-15/MD-E1-T01): der shared Guard wird ausnahmslos mit `allow_legacy=False` aufgerufen, und weder Env-, Parameter- noch Manifest-Werte können Legacy reaktivieren. Nur die vertrauenswürdige Lease-/Conversation-ID der Harness-Control-Plane bleibt zulässig. Ergänzend prüft der bounded read-only Tracked-Quarantäne-Preflight (FR-15/MD-E1-T02) nach der Ownership-Prüfung den Git-Index am `workspace_root`; ein getrackter Quarantänepfad stoppt fail-closed vor dem ersten Quarantäne- bzw. Derivat-Write (Details: [`effects.md`](effects.md) §3).
 4. **Schema 1 Quarantäne-, Dispositions- & Journal-Integrität:** Der Quarantäne-Index erzwingt in Schema 1 exakt 17 kanonische Basisfelder und erlaubt bis zu 6 optionale additive Coverage-Felder (`analysis_completeness`, `truncation_reason`, `truncation_stage`, `handoff_character_count`, `analysis_character_budget`, `source_character_count`), strikt positive `size_bytes > 0` und deterministische 64-Hex `attachment_id`s. `analysis_status: "completed"` bezeichnet ausschließlich den technischen Abschluss, niemals die inhaltliche Vollständigkeit. Bei Altdaten ohne Coverage-Felder liefert `lookup_quarantine_entry()` in-memory `analysis_completeness: "unknown"`, während die Datei auf Disk unverändert und byte-identisch bleibt. Das Dispositionslog erzwingt deterministische `decision_id`s und Hash-Bindung an den Index. Das Discard-Journal erzwingt monotone Zustandsübergänge (`prepared` bis `completed`) und exakte Übereinstimmung von `history[-1]` mit Top-Level-Status. Unbekannte oder widersprüchliche Felder führen zum sofortigen Abbruch (`AttachmentIndexSchemaError`, `DispositionSchemaError`, `RecoveryJournalCorruptedError`).
@@ -1782,3 +1789,200 @@ Regression: [Empty-Inbox-Draft](../../tests/test_batch_runner_empty_inbox.py),
 
 Vertrag: [Batch-Runner](../../references/batch-runner.md).
 L1: [§10](../../../../docs/system-map/README.md#10-issue-67-rumpf-batches-und-inbox-zero).
+
+---
+
+## 39. Issue #62 — Lokale Injection-Barrier
+
+**Status:** implementiert und getestet (Desk-Suite). **Umfang:** `mail-desk`;
+keine bundle-weite Fencing-Kanonisierung, L1 nur Grenzvermerk. **Kein**
+externer Sanitizer, **kein** Netzwerk, **keine** neue Runtime-Abhängigkeit
+(Python-Stdlib). Die bestehenden Write-/Review-/Lock-Gates bleiben unverändert.
+
+### 39.1 Architektur und Aufrufpfad
+
+Kanonischer Owner:
+[`scripts/core/injection_barrier.py`](../scripts/core/injection_barrier.py).
+Die Modi [`inspect.py`](../scripts/core/modes/inspect.py),
+[`draft.py`](../scripts/core/modes/draft.py) und
+[`pipeline.py`](../scripts/core/modes/pipeline.py) rufen nach dem Mail-Read und
+**vor** Klassifikation/Manifestbildung:
+
+1. `load_injection_policy(workspace_root)` — optionaler, streng validierter
+   Workspace-Katalog; fehlend = Bundle-Defaults.
+2. `assess_and_quarantine(emails, policy, data_dir, mode)` — bewertet jede
+   Mail, schreibt für geflaggte Mails Evidence und liefert
+   `(assessments, quarantine_results, manifest_block)`.
+3. `annotate_email_for_output(...)` — fencet `preview` und ergänzt den
+   additiven `injection_barrier`-Block in agentensichtbaren `inspect`-Emails.
+
+`execute` liest keine Rohmail. Es konsumiert den hash-gebundenen
+`injection_barrier`-Block des Manifests über
+[`batch_contract.validate_execute_contract`](../scripts/core/batch_contract.py).
+
+```text
+Himalaya/IMAP preview + headers + attachment metadata
+        │
+        ▼
+core.injection_barrier.assess_email(...)
+  ├─ fenced preview (<untrusted_mail_content fence_version="1" sha256="…">)
+  ├─ deterministic scan + additive policy
+  └─ severity ≥ medium ──► quarantine evidence + excluded from manifest
+        │
+        ▼
+inspect output / draft|pipeline manifest (clean items only)
+        │
+        ▼
+validate_execute_contract(...) ──► injection_quarantine_present (stop)
+        │
+        ▼
+execute / verify / synthesis (unchanged gates)
+```
+
+**Fingerprint-Grenze:** `classifier.py` und die Matching-Module bleiben
+unangetastet; `classifier_revision` rotiert durch diese Änderung nicht.
+
+### 39.2 Fencing
+
+`preview`/Body werden in feste Delimiter
+`<untrusted_mail_content fence_version="1" sha256="…">…</untrusted_mail_content>`
+gefasst. Jeder Versuch, diesen Delimiter oder den bestehenden
+`<untrusted_attachment_content>`-Delimiter zu schließen oder zu spoofen, wird
+deterministisch zu `[ESCAPED_UNTRUSTED_TAG]`. NUL wird entfernt; C0/C1-,
+Bidi-, Zero-Width- und Unicode-Tag-Zeichen werden durch sichtbare Marker
+(`[CTRL]`, `[BIDI]`, `[ZW]`, `[TAG]`) ersetzt; NFKC wird auf die gefencete
+Kopie angewandt. Subject/From/To/Cc bleiben typisierte Datenfelder und werden
+gescannt, aber nicht gewrappt. Extrahierter Anhangstext bleibt beim bestehenden
+gekapselten `untrusted_external`-Handoff. Ein bereits gefencter Preview wird
+vor dem Scan entpackt und nicht erneut gefencet (idempotent; kein
+Delimiter-Finding).
+
+### 39.3 Deterministischer Scan
+
+Feste Default-Regeln und feste Prüfungen; Workspace-Kataloge dürfen nur
+**additive** Signaturen ergänzen:
+
+| Familie | Beispiele | Severity |
+| :--- | :--- | :--- |
+| `IB-INSTR-001/002/003` | „ignore previous instructions“, „ignoriere alle vorherigen Anweisungen“, Fake-Rollen (`you are now …`) | high |
+| `IB-INSTR-004/005` | Agenten-Adressierung/Aktion „ohne Rückfrage“, Credential-Abfrage | medium |
+| `IB-ROLE-001` | `<system>`, `[system]`, `### system` | high |
+| `IB-DELIM-001` | Mail-/Attachment-Fence-Spoof oder `[ESCAPED_UNTRUSTED_TAG]` | high |
+| `IB-URL-001/002/005` | `javascript:`/`data:`/`file:`, Userinfo, Markdown-Display-Drift | high |
+| `IB-URL-003/004/006` | IP-Literal/Punycode/Nonstandard-Port, Shortener, >20 URLs | medium/low |
+| `IB-ATT-001/004/005/006` | ausführbare/Doppel-Endung, Bidi-/Mixed-Script-Name, Executable-MIME | high |
+| `IB-ATT-002/003/007` | Makro-Office, HTML/RTF, Archiv | medium/low |
+| `IB-CTRL-001/002/003` | C0/C1, Bidi, Zero-Width/Tag | medium/high |
+| `IB-HOMO-001` | Mixed-Script-Token (Latein + Kyrillisch/Griechisch) | high |
+| `IB-HTML-001/002` | aktives HTML, `display:none`/hidden CSS | medium |
+| `IB-ENC-001` | langer Base64-/Hex-Blob | low |
+| `IB-SCAN-001` | Scan-Cap erreicht (Anhänge/URLs); `scan_truncated: true` | low |
+| `IB-PRIOR-001` | vorherige Quarantäne-Annotation im Inspect-Cache | high |
+| `IB-INSTR-006` | additive Workspace-Phrase | medium |
+
+Schwelle fix `medium`: high/medium quarantänieren; low wird gefencet/berichtet,
+aber nicht quarantäniert. Bounds: 256 KiB je Feld, max. 200 URLs, max. 64
+Anhänge, max. 3 Samples je Regel/Feld (≤160 Zeichen), sortierte und
+deterministische Befunde. Eine Cap-Überschreitung wird als low `IB-SCAN-001`
+markiert und setzt `scan_truncated: true`; eine vorhandene
+`injection_barrier.status: "quarantined"`-Annotation aus dem Inspect-Cache
+bleibt als high `IB-PRIOR-001` fail-closed erhalten. Ein nicht verifizierbarer
+Fence (fehlender/falscher `inner_sha256`) ist high `IB-DELIM-001` und wird aus
+dem gescannten Inner neu gefencet.
+
+### 39.4 Quarantäne-Evidence (Schema 1)
+
+```text
+data/mail-desk/injection-quarantine/
+  index.jsonl                         # append-only, eine Zeile je Beobachtung
+  <16-hex-quarantine-id>/
+    record.json                       # Schema 1, write-once
+    fenced.txt                        # write-once, gefenceter Preview/Platzhalter
+    observations.jsonl                # append-only, eine Zeile je Wiederholung
+```
+
+- `quarantine_id = sha256("oi62:<policy_version>:<message_key>")[:16]`;
+  `message_key` ist die normalisierte `message_id` oder ein deterministischer
+  `fallback:<hash>` aus Folder/Envelope-ID/Subject/Date.
+- `record.json` trägt `schema_version`, `quarantine_id`, `status`, `mode`
+  (erste Beobachtung), begrenzte Identität (`message_key`, `message_id`,
+  `envelope_id`, `folder`, `subject`, `from`, `date`), `content` (`sha256`,
+  `bytes`, `fence_version`, `fenced_sha256`, `fenced_bytes`,
+  `transformations`, `scan_truncated`), `findings`, `rule_ids`, `max_severity`,
+  `policy` und `first_observed_at`.
+- Kein `preview`-Feld, keine Roh-MIME, keine Zugangsdaten, keine absoluten
+  Pfade. `fenced.txt` ist operative Evidence und wird nie unter
+  `memory/references/` geschrieben.
+- Wiederholung schreibt `record.json`/`fenced.txt` nicht neu, sondern ergänzt
+  `observations.jsonl` und `index.jsonl`. Der Store ist append-only und
+  unterliegt der seriellen `data/mail-desk/`-Schreibregel.
+
+### 39.5 Manifestblock und Execute-Gate
+
+`draft`/`pipeline` hängen den Block **vor** `add_draft_contract(...)` an das
+Manifest, damit er im `execute_request_sha256` gebunden ist:
+
+```json
+"injection_barrier": {
+  "schema_version": 1,
+  "fence_version": 1,
+  "policy_version": 1,
+  "scanned_count": 2,
+  "quarantined_count": 1,
+  "findings_count": 1,
+  "findings_by_rule": {"IB-INSTR-001": 1},
+  "quarantined": [
+    {"quarantine_id": "…", "message_key": "…", "message_id": "…",
+     "envelope_id": "…", "severity": "high",
+     "rule_ids": ["IB-INSTR-001"], "content_sha256": "…"}
+  ],
+  "quarantine_root": "data/mail-desk/injection-quarantine"
+}
+```
+
+`validate_execute_contract` prüft den Block **vor** Count-/Review-Prüfungen.
+Jeder vorhandene, malformed oder nicht-leere Block stoppt mit dem benannten
+Reason Code **`injection_quarantine_present`**; ein Manifest ohne Block bleibt
+als Altmanifest zulässig und unterliegt weiter dem normalen Review-Gate.
+Derselbe Vertrag wirkt in `execute`, `mail_desk_sign_manifest.py`, im
+Batch-CLI-Wrapper und im inneren `dossier_apply`-Execute — vor jeder
+Mailbox-/Index-/Log-/Evidence-Mutation, auch bei `allow_fewer`.
+
+`draft`/`pipeline` liefern bei Quarantäne `ok: false`,
+`status: "quarantined"`, `injection_barrier` und `quarantine_evidence`;
+`total_drafted`/`candidate_count` zählen nur saubere Items. Die Runner-Hülle
+setzt `state: "Quarantined"`, `error.type: "InjectionQuarantine"`, Exit 1. Ein
+geflaggter Lauf ist nie `is_empty`/`inbox_zero`; der Mensch löst die Quarantäne
+auf und draftet neu. `inspect` bleibt mailbox-read-only, fencet die Ausgabe und
+schreibt nur die Quarantäne-Evidence; sein `manifest_proposal`/`manifest_file`
+enthält nur saubere Items und denselben Block.
+
+### 39.6 Workspace-Policy und Grenzen
+
+Optionaler Katalog `memory/references/mail-desk/injection-barrier.json`
+(Schema 1) mit ausschließlich additiven Feldern
+`extra_instruction_phrases`, `extra_url_shortener_domains`,
+`extra_dangerous_extensions`, `extra_macro_extensions`. Fehlt die Datei, gelten
+die Bundle-Defaults. Jede Schema-/Typ-/Größenabweichung
+(`InjectionPolicyError`) stoppt vor jedem Write. Es gibt keinen Off-Schalter
+und keine Absenkung der Schwelle. Kein Merge-/Policy-Bypass: Quarantäne wird
+vom Menschen aufgelöst, danach wird neu gedraftet.
+
+**Restgrenzen:** Header-only-Pfade (`search`, `sync_sent`, `resolve`) sind kein
+Body-Ingress und werden nicht gefencet; ihre Strings bleiben typisierte,
+niemals auszuführende Daten. Extrahierter Anhangstext bleibt beim bestehenden
+`<untrusted_attachment_content>`-Escaping; eine Instruction-Erkennung im
+extrahierten Text ist nicht Teil dieses Pakets.
+
+### 39.7 Tests und Metrik
+
+- Scanner/Fencer/Policy/Evidence: [`tests/test_injection_barrier.py`](../tests/test_injection_barrier.py) (75 Tests).
+- Modus-/Gate-Integration: [`tests/test_injection_barrier_modes.py`](../tests/test_injection_barrier_modes.py) (23 Tests).
+- Bestehende Desk-Suite inkl. der additiven Draft-Resultfelder in
+  [`tests/test_batch_runner_modes.py`](../tests/test_batch_runner_modes.py);
+  die `classifier_revision`-Tests bleiben unverändert.
+- Aktueller Frame (2026-11-04, `git ls-files --cached --others
+  --exclude-standard`): 311 Dateien im Bundle, 193 unter `skills/mail-desk/`,
+  76 unter `scripts/` (61 unter `scripts/core/`), 96 Testmodule unter `tests/`.
+
+L1-Grenzvermerk: [Paket-System-Map §2.1](../../../../docs/system-map/README.md#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket).

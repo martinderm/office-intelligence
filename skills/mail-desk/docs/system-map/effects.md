@@ -162,3 +162,35 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 * **Lock & Einmaligkeit:** shared Guard mit `allow_legacy=False`; der
   Einmal-Marker wird vor dem ersten Prozess konsumiert (Replay →
   `diagnostic_replay_refused`).
+
+---
+
+## 7. Lokale Injection-Barrier (Issue #62)
+
+- **Rein lokal, deterministisch, bounded:** nur Python-Stdlib; kein Netzwerk,
+  kein Modell, keine Cloud. Scan-Fenster 256 KiB je Feld, max. 200 URLs/64
+  Anhänge, max. 3 Samples je Regel/Feld (≤160 Zeichen); fixe Sortierung.
+- **Fencing statt Ausführung:** `preview` wird in feste
+  `<untrusted_mail_content fence_version="1" sha256="…">`-Delimiter gefasst;
+  Mail-/Attachment-Tag-Spoofs werden zu `[ESCAPED_UNTRUSTED_TAG]`. Header
+  bleiben typisierte Datenfelder und werden gescannt, nicht gewrappt.
+- **Quarantäne-Writes:** ausschließlich unter
+  `data/mail-desk/injection-quarantine/` (Data Zone `data/`); `record.json`
+  und `fenced.txt` write-once, `observations.jsonl`/`index.jsonl` append-only.
+  Kein `preview`-Feld, keine Roh-MIME, keine Zugangsdaten, keine absoluten
+  Pfade, keine Writes unter `memory/references/`.
+- **Fail-loud vor Mutation:** `draft`/`pipeline` setzen `ok: false`,
+  `status: "quarantined"`; die Runner-Hülle `state: "Quarantined"`,
+  `error.type: "InjectionQuarantine"`, Exit 1. `validate_execute_contract`
+  stoppt `execute`, `sign_manifest`, CLI-Wrapper und inneren `dossier_apply`
+  mit `injection_quarantine_present` vor Journal/Progress/Index/Log/Evidence/
+  Mailbox. Ein geflaggter Lauf ist kein `inbox_zero`.
+- **Additive Policy:** optionaler Workspace-Katalog (Schema 1) kann Signaturen
+  nur ergänzen; fehlend = Defaults, jede Abweichung = `InjectionPolicyError`
+  vor dem ersten Write. Kein Off-Schalter, keine Schwellenabsenkung.
+- **Read-only-Grenze:** `inspect` bleibt mailbox-read-only; es schreibt nur die
+  Quarantäne-Evidence. Die bestehenden Lock-/Review-/Write-Gates bleiben
+  unverändert; `classifier.py`/Matching und `classifier_revision` bleiben
+  unangetastet.
+
+Details: L2-§39, [`objects.md`](objects.md) §7, [`processes.md`](processes.md) §7.

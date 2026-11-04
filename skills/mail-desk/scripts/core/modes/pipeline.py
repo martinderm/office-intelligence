@@ -9,6 +9,7 @@ from ..batch_contract import add_draft_contract
 from ..classifier import draft_manifest
 from ..common import resolve_data_dir
 from ..himalaya import get_single_email_details
+from ..injection_barrier import assess_and_quarantine, load_injection_policy
 from ..sent_indexer import load_sent_index
 from ..synthesis_handoff import empty_synthesis_handoff
 from ..telemetry import empty_telemetry
@@ -58,23 +59,48 @@ def run_pipeline_mode(
     load_sent = _dependency(dependencies, "load_sent_index", load_sent_index)
     draft = _dependency(dependencies, "draft_manifest", draft_manifest)
     full_reader = _dependency(dependencies, "get_single_email_details", get_single_email_details)
+    # Issue #62: inspect/classify only after the deterministic barrier; flagged
+    # mail is quarantined as evidence and excluded from the pending draft.
+    barrier_policy = load_injection_policy(dd.parent.parent)
+    assessments, quarantine_results, barrier_block = assess_and_quarantine(
+        emails,
+        policy=barrier_policy,
+        data_dir=dd,
+        mode="pipeline",
+    )
+    clean_emails = [
+        email
+        for email, assessment in zip(emails, assessments)
+        if not assessment.quarantined
+    ]
+    quarantined = barrier_block["quarantined_count"] > 0
     manifest = draft(
-        emails, workspace_root=dd.parent.parent, sent_lookup=load_sent(dd),
+        clean_emails, workspace_root=dd.parent.parent, sent_lookup=load_sent(dd),
         full_reader=full_reader, account=account, sync_sent=False,
     )
     manifest["mode"] = "execute"
+    manifest["injection_barrier"] = barrier_block
     add_draft_contract(
         manifest, expected_count=expected_count, allow_fewer=allow_fewer,
         source_folder=folder, account=account, skip_known=skip_known,
     )
     return {
-        "ok": True, "mode": "pipeline", "status": "review_required",
-        "message": "Pipeline prepares a pending draft only; review and execute it separately.",
+        "ok": not quarantined,
+        "mode": "pipeline",
+        "status": "quarantined" if quarantined else "review_required",
+        "message": (
+            "Pipeline stopped for human review: flagged mail is quarantined and "
+            "excluded from the pending draft; resolve it and re-run."
+            if quarantined
+            else "Pipeline prepares a pending draft only; review and execute it separately."
+        ),
         "folder": folder, "order": str(config.get("order", "oldest")).lower(),
         "total_inspected": len(emails), "executed_count": 0, "verified_count": 0,
         "review_needed_count": len(manifest.get("items", [])),
         "review_needed_items": manifest.get("items", []),
         "execute_summary": None, "verify_summary": None,
         "draft": manifest, "review": manifest["review"],
+        "injection_barrier": barrier_block,
+        "quarantine_evidence": quarantine_results,
         "telemetry": empty_telemetry(), "synthesis_handoff": empty_synthesis_handoff(),
     }

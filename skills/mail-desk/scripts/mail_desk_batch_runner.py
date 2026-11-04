@@ -973,6 +973,18 @@ def _result_envelope(result: dict[str, Any], operation: str) -> dict[str, Any]:
             data,
         )
 
+    # Issue #62: a quarantine stop is not a generic failure and must stay
+    # visibly distinct in the envelope (CLI exit code follows success=false).
+    if result.get("status") == "quarantined":
+        return build_error(
+            CANONICAL_ACTION,
+            result.get("message")
+            or "Injection-barrier quarantine requires human review before execution.",
+            data,
+            error_type="InjectionQuarantine",
+            state="Quarantined",
+        )
+
     partial = _is_partial_failure(result)
     state = "PartialFailure" if partial else "Failed"
     if partial:
