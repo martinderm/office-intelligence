@@ -1,7 +1,7 @@
 # Mail-Desk — Subsystem System Map: Verben (Processes)
 
 > **Typ**: ICM Form 6 (`system-map`), Dimension: Verben  
-> **Subsystem**: [`skills/mail-desk`](../SKILL.md)  
+> **Subsystem**: [`skills/mail-desk`](../../SKILL.md)
 > **Ziel**: Detaillierte Darstellung aller Transformations-, Batch- und Quarantäne-Pipelines mit Code-Referenzen.  
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
@@ -61,14 +61,16 @@ Vollständige DTOs und Bounds: `references/event-dossier.md`.
          │
          ▼
 [6. Dossier & Handoff] ───────► scripts/core/modes/dossier_synthesis.py
-                                 └─► Action Candidates an task-desk
+          │                       ├─► Kontext-Konsultation vor Synthese
+          │                       │   (references/synthesis.md, §8)
+          │                       └─► Action Candidates an task-desk
 ```
 
 ---
 
 ## 2. Der reguläre Batch-Runner Lifecycle
 
-Definiert in [`references/batch-runner.md`](../references/batch-runner.md) und implementiert in [`scripts/core/modes/`](../scripts/core/modes/):
+Definiert in [`references/batch-runner.md`](../../references/batch-runner.md) und implementiert in [`scripts/core/modes/`](../../scripts/core/modes/):
 
 ### Phase 1: `draft` ([`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py))
 1. Lädt verarbeitete Mails aus `final-location-index.json` und `sent-index.json`.
@@ -500,3 +502,53 @@ bleiben unverändert.
 (`classifier_revision` rotiert durch die Barrier nicht; die separate
 Issue-#63-Regeländerung rotiert sie, siehe L2-§8). Details: L2-§39,
 [`objects.md`](objects.md) §7, [`effects.md`](effects.md) §7.
+
+## 8. Kontext-Konsultation und Post-Batch-Synthese (Issue #64)
+
+Der Runner schreibt keine Wissensdateien; die Post-Batch-Synthese ist LLM-/
+Agentenarbeit nach dem freigegebenen `synthesis_handoff`. Der kanonische Vertrag
+steht in [`references/synthesis.md`](../../references/synthesis.md) (Telemetrie,
+Syntheseziele, Handoff, Completion-Gate, Konsultation); `references/batch-runner.md`
+behält die operativen Envelopes und verweist dorthin. Mailinhalt bleibt untrusted
+data; keine Cloud-/Task-Mutation.
+
+```text
+draft / inspect (nach Klassifikation)
+  └─ context_consultation.add_context_consultation_metadata(items, workspace_root)
+        └─ decision.artifact_candidates.events / .cloud_storage   (≤ 3, read-only, beratend)
+execute ─► verify / reconcile ─► completion_report + synthesis_handoff (pending)
+                                      │
+                                      ▼
+   Consult (je berührtem/kandidierendem Projekt/Topic, feste Reihenfolge)
+     1. Event-Dossier        Projekt: events/<slug>/index.md (Ablage = Deklaration)
+                             Topic: subtopics[].events[] + exakte reference_md
+     2. Subtopic-Notiz / Steuerdatei  (spezifischste kanonische Datei gewinnt)
+     3. Cloud-Atlas          cloud_sync-Maps Projekt/Topic/Subtopic (kein Sync)
+                                      │
+                                      ▼
+   Write-Entscheid ─► kanonische Datei (Single Home) ─► Evidenz-Anker (Message-ID)
+                                      │
+                                      ▼
+   Bericht je Kontext: context, canonical_file, message_ids, outcome, reason
+```
+
+1. **Consult:** Owner/Scope ausschließlich aus `projects.json`/`topics.json`;
+   konsultiert werden nur kanonisch deklarierte Pfade. Bei Projekten ist die
+   `events/<slug>/index.md`-Ablage die Deklaration, bei Topics/Subtopics nur
+   `subtopics[].events[]`; fehlende, nichtkanonische oder (bei Topics) nicht
+   katalogisierte Dossiers sowie nicht deklarierte Cloud-Ressourcen ⇒
+   `review_required`, nie still gebunden oder angelegt
+   (`event-documentation` bleibt Owner der Erstellung).
+2. **Write-Entscheid:** neue substanzielle Erkenntnis (Vorgaben, Verfahren, Termine,
+   Vereinbarungen, Rollen, Entscheidungen, Deliverables, Risiken) ändert den
+   Fachtext; reine Bestätigung erhält nur den Evidenz-Anker; ohne Befund `noop`.
+3. **Single Home:** Event-Dossier > Subtopic-Spezialnotiz > Operations-/Projekt-/
+   Topic-Steuerdatei; Eltern-`index.md` verweist nur; keine Doppelpflege über
+   Geschwister-Subtopics. Konflikte mit menschlichem Text ⇒ `review_required`.
+4. **Bericht:** Review-/Run-Evidenz, kein kanonischer Wissensort und keine
+   zusätzliche Fachdatei unter `memory/references/`; ohne Konsultationsnachweis je
+   Kontext ist die Synthese unvollständig.
+
+Stopbedingungen: fehlende Kataloge, mehrdeutiges Ziel, nichtkanonischer Pfad,
+fehlendes Dossier, doppelte Event-IDs, nicht deklarierte Cloud-Ressource.
+Details: L2-§40, [`objects.md`](objects.md) §8, [`effects.md`](effects.md) §8.

@@ -76,13 +76,19 @@ Injection-Barrier: §39. Diese Barrier lässt `classifier.py` und die
 Matching-Module unangetastet; die separate Issue-#63-Regeländerung rotiert
 `classifier_revision` (siehe §8).
 
+**Issue-#64-Frame, 2026-11-04:** 316 Dateien im Bundle, 198 unter
+`skills/mail-desk/`, 77 Scripts (62 Core-Dateien), 99 Testmodule
+(`git ls-files --cached --others --exclude-standard`). Verbindliche
+Kontext-Konsultation und `references/synthesis.md`: §40. Issue #64 ändert
+`classifier.py` und die Matching-Module nicht; `classifier_revision` rotiert nicht.
+
 **Issue-#14-Frame, 2026-10-18 (historisch):** 177 Dateien, 74 Scripts, davon
 59 Core-Dateien, 84 Testmodule (`git ls-files --cached --others --exclude-standard`).
 Die nachfolgenden Merge-/Abnahmewerte bleiben historische Snapshots.
 Vertragserweiterung und Integrationsgrenzen: §32.
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)
-> **Subsystem**: [`skills/mail-desk`](../SKILL.md)
+> **Subsystem**: [`skills/mail-desk`](../../SKILL.md)
 > **Ziel**: Kompakte, zitierbare Architekturkarte der Mail-Desk-Engine (reproduzierbare Git-Index-Metrik via `git ls-files`, Kanonik-Ebene; **Merge-Frame 2026-10-17, Issue #8 × #9**: 176 getrackte Dateien; 74 getrackte Dateien unter `scripts/`, davon 59 unter `scripts/core` inkl. `scripts/core/quarantine/` (6 kanonische Quarantäne-Owner) und `matching/reply_heuristics.py`, `catalog_validator.py` sowie `mail_desk_batch_cli.py`/`catalog_inspect.py`/`mail_desk_sign_manifest.py` (Harness-Ausgabe-Boundaries); 83 Testmodule; Suite im Discovery-Frame `unittest discover -s skills/mail-desk/tests -t skills/mail-desk/tests -p "test_*.py"`. Historische Frames: Post-Altlasten 171 Dateien, 1309 Tests (1306 grün; beide Altlasten-Module `test_event_dossier`/`test_attachment_basename` entfernt, Spec in Git-History `0896334`, Nachverfolgung issues #8/#9); **#9-Frame: `test_attachment_basename` (6 Pins) wiederhergestellt → 1315 Tests / 1315 grün, Leserichtung je Pin-Gruppe in §30**); **#8 stellt die Event-Dossier-Fassade samt Pins wieder her (§31), Merge-Frame-Abnahme 2026-10-17: siehe §31-Ende**; verbleibender umgebungsabhängiger MD-A3-Timing-Flake-Satz (`test_maildesk_attachments_mda3`: 2–4 Tests je Lauf, isoliert grün, issue #10, inkl. `flaky_lock_marker_mda3.txt`-Marker-Race-Fund) → Ergebnis je Lauf um diese Familie schwankend; **DRAFT-P1 (issue #3) ist mit `tests/test_drafts_api.py` (23 Tests) im Suite-Zähler enthalten**) zur Vermeidung von Context-Bloat und Attention Drift bei Refactorings, Quarantäne-Erweiterungen und Bugfixes.
 > **Gültig für**: `skills/mail-desk/` relativ zum Repository-Root
 
@@ -211,7 +217,7 @@ geschlossen.**
 | **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Injection-Barrier (Issue #62)** | [`scripts/core/injection_barrier.py`](../scripts/core/injection_barrier.py) | Lokaler, deterministischer Pre-Filter vor dem Agent-Context: feste `<untrusted_mail_content>`-Fences, Scan auf instruction-ähnliche Phrasen/Rollenmarker/URLs/Anhänge/Steuerzeichen/Homoglyphen, additive Workspace-Signaturen, Quarantäne-Evidence unter `data/mail-desk/injection-quarantine/`, hash-gebundener `injection_barrier`-Manifestblock und `injection_quarantine_present`-Gate. Kein Netzwerk, keine Modellabhängigkeit, kein `classifier.py`-Eingriff. Details: [§39](#39-issue-62--lokale-injection-barrier). |
-| **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk. |
+| **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../scripts/core/synthesis_handoff.py)<br>[`scripts/core/context_consultation.py`](../../scripts/core/context_consultation.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk; `context_consultation.py` (Issue #64) hängt nach der Klassifikation bounded, rein lesende `artifact_candidates.events`/`.cloud_storage`-Hinweise an (Vertrag: [`synthesis.md`](../../references/synthesis.md), §40). |
 | **Batch & Orchestrierung** | [`scripts/core/modes/pipeline.py`](../scripts/core/modes/pipeline.py)<br>[`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py)<br>[`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py) | Hash-gebundene Review-Receipts, Ausführung, Verifikation. |
 | **Integrität & Reconcile** | [`scripts/core/modes/reconcile.py`](../scripts/core/modes/reconcile.py)<br>[`scripts/core/readiness.py`](../scripts/core/readiness.py) | Read-first Batch-Recovery-Assessment über das Recovery-Journal: read-only Report; der optionale Repair-Pfad (`apply_local_repairs`) korrigiert fehlende **und** stale Index-/Log-Records nach frischer Ziel-Verifikation (append-only `reconciled`-Log-Eintrag, idempotent; Gates: Approval-Receipt + `check_folders`; null Mailbox-Mutationen) und führt `runner-progress.json` deterministisch nach (FR-19/MD-RC1). Quarantäne-Drift-Erkennung liegt bei `quarantine/quarantine_index.py`. |
 
@@ -527,9 +533,9 @@ Mail-Desk-Suite: 887/887 grün.
 ## 14. FR-17/MD-R5 — Vertragsdokumentation und Laufzeit-Hygiene (MD-R5 abgeschlossen)
 
 Mit **FR-17/MD-R5** ist `keep_in_folder` als kanonischer
-`action.type`-Wert in [`references/batch-runner.md`](../references/batch-runner.md)
+`action.type`-Wert in [`references/batch-runner.md`](../../references/batch-runner.md)
 dokumentiert (Verbleib im Quellordner, kein Mailbox-Write; Befund B-6 behoben), mit
-Retention-Semantik in [`references/folder-rules.md`](../references/folder-rules.md); ein
+Retention-Semantik in [`references/folder-rules.md`](../../references/folder-rules.md); ein
 Contract-Test
 ([`tests/test_action_type_contract.py`](../tests/test_action_type_contract.py)) pinnt, dass
 die dokumentierte Enum-Menge exakt der produktionsemittierten Menge plus der Legacy-
@@ -2015,3 +2021,106 @@ extrahierten Text ist nicht Teil dieses Pakets.
   76 unter `scripts/` (61 unter `scripts/core/`), 96 Testmodule unter `tests/`.
 
 L1-Grenzvermerk: [Paket-System-Map §2.1](../../../../docs/system-map/README.md#21-mail-desk--verantwortlichkeits-detail-status-je-fr-paket).
+
+---
+
+## 40. Issue #64 — Kontext-Konsultation und Anti-Duplication
+
+**Status:** implementiert und getestet (Desk-Suite). **Umfang:** `mail-desk`;
+L1 mit Verweis und kurzem Vertragsabschnitt. Reine Dokumentations-/Metadaten-
+Änderung ohne neue Runtime-Abhängigkeit (Python-Stdlib), ohne Netzwerk, ohne
+Mailbox- oder Wissens-Mutation.
+
+### 40.1 Vertrag und Dokumentenschnitt
+
+Kanonischer Post-Batch- und Konsultationsvertrag ist
+[`references/synthesis.md`](../../references/synthesis.md). Aus
+[`references/batch-runner.md`](../../references/batch-runner.md) sind dorthin
+umgezogen: Post-Batch-Telemetrie, Syntheseziele, Synthese-Handoff und
+Completion-Gate samt Luna-Betriebsprofil (inhaltlich unverändert, inkl. Schemas,
+Statuswerte, Release-Gate, `target_selection_required`). `batch-runner.md` behält die
+operativen Envelopes und trägt den kompakten Abschnitt
+„Post-Batch-Kontext-Konsultation“ mit Verweis (Größen-Gate ≤ 8000 Wörter bleibt
+erfüllt). Querverweise in `skills/task-desk/SKILL.md`,
+`skills/task-desk/references/task-schemas.md` und der L1-`processes.md` zeigen auf
+`synthesis.md`. `SKILL.md` führt im Kernfluss die Pflicht-Kontext-Konsultation.
+
+### 40.2 Suchpfade (feste Reihenfolge, Katalog-first + Existenzbestätigung)
+
+Owner und Scope stammen ausschließlich aus `projects.json`/`topics.json`;
+konsultiert werden nur kanonisch deklarierte Pfade; bei Topics vorhandene, aber
+nicht katalogisierte Event-Strukturen sind `review_required` und werden nie still
+gebunden.
+
+1. **Event-Dossier:** bei Projekten die kanonische Ablage
+   `memory/references/projects/<project>/events/<event>/index.md` (die
+   Ordnerkonvention ist die Deklaration; `projects.json` führt keine Event-Liste),
+   bei Topics/Subtopics ausschließlich `subtopics[].events[]` mit gültiger
+   `reference_md` unter
+   `memory/references/topics/<topic>/subtopics/<subtopic>/events/<event>/index.md`
+   und vorhandener Datei. Kein automatisches Anlegen;
+   [`event-documentation`](../../../event-documentation/references/event-writer.md)
+   bleibt Owner.
+2. **Subtopic-Spezialnotiz / Steuerdateien:** `subtopics[].reference_md`,
+   Operations-`reference_md`, Projekt-/Topic-`reference_md`, `index.md`,
+   `signals.md`, `contacts.md`, `statusampel-*.md`, `workpackages/*.md`;
+   spezifischste kanonische Datei gewinnt.
+3. **Cloud-Atlas:** deklarierte `cloud_sync`-Maps auf Projekt-, Topic- und
+   Subtopic-Ebene; keine neuen Mounts/Pfade; nicht deklariert ⇒
+   `review_required`. `cloud_atlas_preflight` bleibt deklarativ, kein Sync.
+
+Konsultationsnachweis je Kontext: `context`, `canonical_file`, `message_ids`,
+`outcome` (`updated|linked|noop|review_required`), `reason`. Ohne diese Nachweise
+ist der Synthesebericht unvollständig.
+
+### 40.3 Anti-Duplication (striktes Single Home)
+
+Event-Dossier > Subtopic-Spezialnotiz > Operations-/Projekt-/Topic-Steuerdatei.
+Eltern-`index.md` verweist nur; das Evidenzlog (`memory/evidence/.../YYYY-MM.md`)
+bleibt chronologische Nachweisspur. Neue substanzielle Erkenntnisse ändern den
+Fachtext (plus kompakter `Message-ID`-Anker), reine Bestätigung erhält nur den
+Evidenz-Anker; keine Doppelpflege über Event-Dossier, Subtopic-Notiz,
+Projekt/Topic und Geschwister-Subtopics.
+
+### 40.4 Metadatenmodul und Aufrufstellen
+
+[`scripts/core/context_consultation.py`](../../scripts/core/context_consultation.py)
+exportiert `add_context_consultation_metadata(items, *, workspace_root,
+projects=None, topics=None)`. Aufruf in
+[`draft.py`](../../scripts/core/modes/draft.py) nach
+`discard_inventory_contradicting_evaluations(...)` und vor `add_draft_contract(...)`
+sowie in [`inspect.py`](../../scripts/core/modes/inspect.py) (Manifest-Proposal) an
+derselben Stelle vor dem `injection_barrier`-Block; beide über den patchbaren
+`_dependency`-Seam `add_context_consultation_metadata`. `pipeline` bleibt
+unverändert. Shape, Bounds und Lebenszyklus: [`objects.md`](objects.md) §8,
+Ablauf: [`processes.md`](processes.md) §8, Grenzen: [`effects.md`](effects.md) §8.
+
+Kurzfassung: bis zu 3 `events` und 3 `cloud_storage` je Item; Projekt-Events aus
+vorhandenen `events/<slug>/index.md`, Topic-Events nur des entschiedenen
+`decision.subtopic` mit exakt kanonischer `reference_md`; vom Classifier
+ausgewählte/kandidierte Events zuerst, dann Texttreffer (ID/Titel/Aliase/Keywords/
+`typical_subject_patterns` gegen Betreff und, falls im Item vorhanden, Preview),
+Restplätze deterministisch aufgefüllt.
+Rein lesend, ohne Wirkung auf Routing, Evidence, Targets, `confidence` oder
+`review_required`.
+
+### 40.5 Fingerprint-Grenze
+
+Issue #64 ändert `classifier.py` und die Matching-Module nicht; die Anreicherung
+läuft nach der Klassifikation in einem eigenen Modul. `classifier_revision`
+rotiert durch diese Änderung nicht; `CLASSIFIER_RULES_VERSION` bleibt
+unverändert.
+
+### 40.6 Tests und Metrik
+
+- Metadaten und Integration: [`tests/test_context_consultation.py`](../../tests/test_context_consultation.py) (24 Tests; 1 Plattform-Skip für Directory-Symlinks).
+- Dokumentationsvertrag: [`tests/test_synthesis_consultation_docs.py`](../../tests/test_synthesis_consultation_docs.py) (10 Tests);
+  `synthesis.md` ist in `tests/test_docs_no_ticket_labels.py` als operatives Dokument
+  (Label-Freiheit, genau eine Herkunftszeile) aufgenommen.
+- Bestehende Verträge (`test_batch_runner_slim.py`, `test_batch_runner_modes.py`,
+  `test_batch_runner_mde2_*`, Classifier-Tests) laufen unverändert.
+- Aktueller Frame (2026-11-04, `git ls-files --cached --others
+  --exclude-standard`): 316 Dateien im Bundle, 198 unter `skills/mail-desk/`,
+  77 unter `scripts/` (62 unter `scripts/core/`), 99 Testmodule unter `tests/`.
+
+L1: [Paket-System-Map §11](../../../../docs/system-map/README.md#11-issue-64-verbindliche-kontext-konsultation).

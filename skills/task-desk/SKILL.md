@@ -49,7 +49,7 @@ Status `pending` trägt. Erzeugt wird der Report ausschließlich über die beste
 Seams `skills/mail-desk/scripts/core/completion.py`,
 `skills/mail-desk/scripts/core/modes/verify.py` (Verify/Pipeline) und
 `skills/mail-desk/scripts/core/modes/reconcile.py` (abgeschlossener Reconcile); Verträge in
-[`../mail-desk/references/batch-runner.md`](../mail-desk/references/batch-runner.md)
+[`../mail-desk/references/synthesis.md`](../mail-desk/references/synthesis.md)
 §Synthese-Handoff und §Completion-Gate. Ein bare `status: "pending"`, ein
 `results: success` oder ein Rohlauf genügen **nicht**. Von der LLM-Synthese erzeugte
 `batch-*-synthesis.md`-Dateien sind **kein** kanonischer Produceroutput und kein

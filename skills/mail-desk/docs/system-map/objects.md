@@ -1,7 +1,7 @@
 # Mail-Desk — Subsystem System Map: Nomen (Objects)
 
 > **Typ**: ICM Form 6 (`system-map`), Dimension: Nomen  
-> **Subsystem**: [`skills/mail-desk`](../SKILL.md)  
+> **Subsystem**: [`skills/mail-desk`](../../SKILL.md)
 > **Ziel**: Vollständige Dokumentation aller Datenstrukturen, Indizes, Schemas und DTOs des Mail-Desks mit exakten Felddefinitionen und Quellcode-Zitaten.  
 > **Gültig für**: `skills/mail-desk/` und `data/mail-desk/` im Ziel-Workspace
 
@@ -341,7 +341,7 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   * `DraftError`/`DraftsFolderUnresolvedError`/`DraftJournalCorruptedError` tragen begrenzte `reason_code`s (`drafts_folder_unresolved`, `draft_verification_failed`, `draft_journal_corrupted`); `REPLACE_CRASH_WINDOW` dokumentiert das Crash-Fenster der Replace-Reihenfolge, `DRAFT_JOURNAL_FILENAME` benennt das getrennte Journal (§5.4).
   * **Draft-APPEND-Transport (Issue #11):** Die kanonische SMTPUTF8-Nachricht (CRLF, finales CRLF) geht als exakte UTF-8-Bytes über den keyword-only Seam `run_himalaya(..., stdin_bytes=...)` in die **binäre stdin-Pipe** von `message save -o plain -f <folder>`; **jede** Größe nutzt stdin (Schwelle 0, kein Größen-Split, kein argv-Rohliteral). Der Puffer wird strict als UTF-8 validiert, **bevor** Executable-/Config-Auflösung und Subprozess laufen (ungültige Bytes → begrenzter `ValueError` ohne Payload; Himalaya 1.2.0 würde sonst via `lines().map_while(Result::ok)` still abschneiden). Ein Transport-CRLF kompensiert Himalaya 1.2.0s `lines()`/CRLF-Join; `-o plain` verhindert den JSON-Bypass; Payload-Kommandos laufen genau einmal. `save_draft` übersetzt nur `HimalayaInvocationError` in `DRAFT_SAVE_FAILED_REASON = "draft_save_failed"` (Reason im `__cause__`, weder Verifikation noch Journal-Eintrag); andere Fehler propagieren. `OSError` (Start oder Kommunikation, Payload- **und** Nicht-Payload-Pfad) → `himalaya_launch_failed` mit unbekanntem Ausgang/nicht wiederholt, `BrokenPipeError` → `himalaya_stdin_failed`.
 * **Begrenzter Decision-Output & Runner-Envelope-Contracts (OUT-P1, 2026-10-16, Issues #5/#6):**
-  * `decision.suppressed_candidates` ist eine **Ausgabebegrenzung**: höchstens `core.classifier.MAX_SUPPRESSED_CANDIDATES_OUT` (3) Katalogdaten-Zeilen (`kind`, `id`, `suppression_reason`) plus `decision.suppressed_count` (Gesamtzahl). Die interne DNR-/Newsletter-Auswertung konsumiert weiterhin die vollständige Liste; kein Downstream-Leser benötigt sie. Feldspiegel: [`references/folder-rules.md`](../references/folder-rules.md).
+  * `decision.suppressed_candidates` ist eine **Ausgabebegrenzung**: höchstens `core.classifier.MAX_SUPPRESSED_CANDIDATES_OUT` (3) Katalogdaten-Zeilen (`kind`, `id`, `suppression_reason`) plus `decision.suppressed_count` (Gesamtzahl). Die interne DNR-/Newsletter-Auswertung konsumiert weiterhin die vollständige Liste; kein Downstream-Leser benötigt sie. Feldspiegel: [`references/folder-rules.md`](../../references/folder-rules.md).
   * **PartialFailure-Envelope** ([`scripts/mail_desk_batch_runner.py`](../scripts/mail_desk_batch_runner.py), `_result_envelope`): `data.results` trägt nur die fehlgeschlagenen Items; die erfolgreichen erscheinen als `data.succeeded_count` + `data.succeeded_envelope_ids` (IDs genügen). Das Recovery-Journal bleibt die vollständige Quelle. `data.execute_summary` und der Success-Envelope bleiben unverändert.
   * **Batch-CLI-Wrapper als empfohlener Ausgabe-Boundary:** `mail_desk_batch_cli.py` unterstützt `draft`/`execute`/`reconcile`/`sync-sent`, persistiert Runner-stdout/-stderr unter `<workspace>/tmp/mail-batch/` und emittiert nur den Summary-Envelope. Vor Wrapper-Persistenz/Pruning ist shared Workspace-Lock-Ownership ohne Legacy-Bypass nötig; explizite Lease-/Conversation-IDs werden bei `draft` unverändert an den Runner delegiert, in anderen Modi nur für Wrapper-Ownership verwendet. Account-/Review-Gates bleiben beim Runner. `sync-sent` ist mailbox-lesend, aber schreibt Sent-Index und lokale Ergebnisse. Fehlerhafte Runner-Ergebnisse ergeben Fehler-Summary und Nichtnull-Exit (Issue #5). Der Runner selbst schreibt **genau einen** Envelope auf stdout, etwaige Duplikate stammen aus Harness/Shell (SOP: [`references/cli-operations.md`](../../references/cli-operations.md) Item 7, [`references/batch-runner.md`](../../references/batch-runner.md) „Live-Fortschritts-Monitoring").
 * **Verifizierbare Receipt-Contracts & Scope-Requests (MD-Q3)** ([`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py)):
@@ -432,3 +432,54 @@ relativen Root. `batch_contract.validate_execute_contract` verweigert jeden
 vorhandenen, malformed oder nicht-leeren Block mit
 `injection_quarantine_present`; ein Altmanifest ohne Block bleibt zulässig.
 
+## 8. Kontext-Konsultations-Metadaten (Issue #64)
+
+Transiente, additive Draft-/Proposal-Metadaten, kein persistiertes Objekt eines
+eigenen Stores. Owner:
+[`scripts/core/context_consultation.py`](../../scripts/core/context_consultation.py)
+(`add_context_consultation_metadata(items, *, workspace_root, projects=None,
+topics=None)`). Sie leben nur in `decision.artifact_candidates` des Draft-Items:
+im `DraftManifest` sind sie Teil des Review-Hash-Inhalts, im
+`inspect`-`manifest_proposal` bleiben sie rein informativ.
+
+```json
+"artifact_candidates": {
+  "events": [
+    {"id": "workshop-2026", "title": "Workshop 2026",
+     "reference_md": "memory/references/topics/ops/subtopics/design/events/workshop-2026/index.md",
+     "subtopic": "design", "reasons": ["subject_id:workshop-2026"]}
+  ],
+  "cloud_storage": [
+    {"scope": "subtopic", "storage_id": "design-store", "reasons": ["declared_cloud_sync"]}
+  ]
+}
+```
+
+- **Shape:** `events[]` mit `id`, `reference_md` (workspace-relativ, POSIX),
+  `reasons[]` (`selected_event`/`event_candidate` vor Textsignalen), optional
+  `title` (Projekt: erste Markdown-Überschrift, ≤ 8 KiB
+  gelesen, ≤ 200 Zeichen) und `subtopic` (nur Topic); `cloud_storage[]` mit
+  `scope` (`project|topic|subtopic`), `storage_id`, `reasons`. Keine Pfade, URLs
+  oder absoluten Hostpfade.
+- **Bounds:** je Liste höchstens 3; ≤ 3 `reasons` (≤ 120 Zeichen); Projekt-
+  Verzeichnisscan ≤ 500 sortierte Einträge. Projekt-Event-Slug
+  `^[a-z0-9][a-z0-9_-]{0,99}$`; Topic-Event-ID `^[a-z0-9]+(?:-[a-z0-9]+)*$`;
+  Storage-ID `^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$`. Reihenfolge deterministisch:
+  `selected_event`/`event_candidate` vor Texttreffern vor Auffüllern, dann ID;
+  Storage: `subtopic` vor `topic`, dann ID.
+- **Lebenszyklus:** entsteht nach der Klassifikation in `draft` und im
+  `inspect`-Manifest-Proposal; wird nie neu klassifiziert oder fortgeschrieben.
+  Nur für `decision.kind` `project`/`topic` mit exakter Katalog-ID (eindeutiger
+  case-insensitiver Treffer erlaubt). Projekt-Events aus der kanonischen
+  `events/<slug>/index.md`-Ablage (Ordnerkonvention = Deklaration); Topic-Events
+  nur des bereits entschiedenen `decision.subtopic`, aktiv/legacy, gültige
+  ID/Titel, exakt kanonische `reference_md`, vorhandene reguläre Datei, keine
+  doppelten IDs.
+- **Nicht-Wirkung:** `artifact_candidates` wird nur angelegt, wenn mindestens ein
+  Kandidat existiert; vorhandene Artefaktlisten (`workpackage`, `task`, …) und
+  vorhandene `events`/`cloud_storage`-Keys bleiben unverändert. Keine Wirkung auf
+  `action`, `notes`, `evidence`, `synthesis_targets`, `event`, `event_candidates`,
+  `confidence`, `review_required`; `classifier_revision` rotiert nicht.
+
+Vertrag: [`references/synthesis.md`](../../references/synthesis.md); Ablauf:
+[`processes.md`](processes.md) §8; Grenzen: [`effects.md`](effects.md) §8.

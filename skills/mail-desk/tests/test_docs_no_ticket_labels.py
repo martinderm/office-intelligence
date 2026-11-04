@@ -27,6 +27,7 @@ BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 OPERATIVE_DOCS = (
     ("skills/mail-desk/SKILL.md",),
     ("skills/mail-desk/references/batch-runner.md",),
+    ("skills/mail-desk/references/synthesis.md",),
     ("skills/mail-desk/references/cli-operations.md",),
     ("skills/mail-desk/references/backends/himalaya.md",),
     ("skills/mail-desk/references/refactor-map.md",),

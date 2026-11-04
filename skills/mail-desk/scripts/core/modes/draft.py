@@ -14,6 +14,7 @@ from ..attachment_reclassification import (
 from ..classifier import classify_email, draft_manifest
 from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
+from ..context_consultation import add_context_consultation_metadata
 from ..himalaya import fetch_raw_message_eml, get_single_email_details
 from ..injection_barrier import assess_and_quarantine, load_injection_policy
 from ..progress import BatchProgressTracker
@@ -58,6 +59,9 @@ def run_draft_mode(
     raw_mime_reader = _dependency(dependencies, "fetch_raw_message_eml", fetch_raw_message_eml)
     triggers_evaluation = _dependency(
         dependencies, "decision_triggers_evaluation", decision_triggers_evaluation
+    )
+    add_consultation_metadata = _dependency(
+        dependencies, "add_context_consultation_metadata", add_context_consultation_metadata
     )
 
     dd = data_dir or resolve_data()
@@ -168,6 +172,9 @@ def run_draft_mode(
     # manifest contract is attached.  The MD-E2 trigger gate already prevents a
     # contradiction; this guard keeps the invariant true for every composed manifest.
     discard_inventory_contradicting_evaluations(manifest.get("items", []))
+    # Issue #64: advisory, read-only consultation hints (existing event dossiers and
+    # declared cloud storage IDs).  They never alter routing, evidence or targets.
+    add_consultation_metadata(manifest.get("items", []), workspace_root=workspace_root)
     # The block is attached before the review hash so the exact quarantine state
     # is review-bound.  A later execute/sign self-check rejects it fail-closed.
     manifest["injection_barrier"] = barrier_block
