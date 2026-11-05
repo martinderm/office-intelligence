@@ -1475,6 +1475,13 @@ class RegisteredSummaryPublishTests(WriterTestBase):
         self.addCleanup(self.ownership_path.write_bytes, self.ownership_path.read_bytes())
         ownership = read_json(self.ownership_path)
         record = next(item for item in ownership["files"] if item["path"] == summary_rel)
+        expected = {"duplicate": "ownership record is ambiguous",
+                    "kind": "kind other than summary",
+                    "other meeting": "not bound to this meeting",
+                    "no meeting_id": "not bound to this meeting",
+                    "no kind": "kind other than summary",
+                    "neither": "kind other than summary",
+                    "alias-bound": "not bound to this meeting"}
         for label, files in (
                 ("duplicate", ownership["files"] + [dict(record)]),
                 ("kind", [dict(item, kind="transcript") if item["path"] == summary_rel
@@ -1492,22 +1499,43 @@ class RegisteredSummaryPublishTests(WriterTestBase):
                 ("neither", [{k: v for k, v in item.items()
                               if k not in ("kind", "meeting_id")}
                              if item["path"] == summary_rel else item
-                             for item in ownership["files"]])):
+                             for item in ownership["files"]]),
+                # A record bound to the alias instead of the stable id is foreign too.
+                ("alias-bound", [dict(item, meeting_id="legacy-alias")
+                                 if item["path"] == summary_rel else item
+                                 for item in ownership["files"]])):
             with self.subTest(label):
                 self.ownership_path.write_text(
                     json.dumps({**ownership, "files": files}), encoding="utf-8")
                 before = self.artifact_state()
-                self.assert_rejected(self.publish_summary())
+                envelope = self.publish_summary()
+                self.assert_rejected(envelope)
+                # The hash still matches the file: the ownership guard must be
+                # what rejects, not the hash check.
+                self.assertIn(expected[label], envelope["message"])
+                self.assertNotIn("not provably writer-owned", envelope["message"])
                 self.assert_untouched(before)
 
-    def test_alias_match_binds_ownership_and_journal_to_the_stable_id(self):
+    def test_alias_match_binds_ownership_and_plan_to_the_stable_id(self):
         self.mutate_register(lambda doc: doc["meetings"][0].update(id="legacy-alias"))
+        planned = self.publish_summary(meeting_id="legacy-alias", dry_run=True)
+        self.assert_success(planned, "DryRun")
+        self.assertEqual(planned["data"]["plan"]["meeting_id"], self.meeting_id)
         envelope = self.publish_summary(meeting_id="legacy-alias")
         self.assert_success(envelope, "Applied")
         self.assertEqual(envelope["data"]["meeting_id"], "legacy-alias")
         owner = self.ownership_by_path()[self.entry["summary_path"]]
         self.assertEqual(owner["meeting_id"], self.meeting_id)
         self.assert_success(self.publish_summary(meeting_id="legacy-alias"), "Unchanged")
+
+    def test_entry_with_only_an_id_field_binds_to_that_id(self):
+        def only_id(document):
+            entry = document["meetings"][0]
+            entry["id"] = entry.pop("meeting_id")
+        self.mutate_register(only_id)
+        self.assert_success(self.publish_summary(), "Applied")
+        owner = self.ownership_by_path()[self.entry["summary_path"]]
+        self.assertEqual(owner["meeting_id"], self.meeting_id)
 
     def test_multiple_register_matches_are_ambiguous(self):
         def duplicate(document):

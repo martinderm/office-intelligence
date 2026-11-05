@@ -8,7 +8,7 @@ Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
 CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-11-05) · 132 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-05) · 133 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
 >

@@ -2183,8 +2183,8 @@ def _require_exclusive_registered_path(entries: list[dict], existing: dict, fiel
     # Every record the writer creates carries kind and meeting_id, so a record
     # without them is not provably this meeting's summary: both are required.
     if records and records[0].get("kind") != kind:
-        raise _Reject(f"the {kind} ownership record does not name the {kind} artifact "
-                      "kind; refusing publication")
+        raise _Reject(f"the {kind} ownership record has a kind other than {kind}; "
+                      "refusing publication")
     if records and records[0].get("meeting_id") != identity:
         raise _Reject(f"the {kind} ownership record is not bound to this meeting; "
                       "refusing publication")

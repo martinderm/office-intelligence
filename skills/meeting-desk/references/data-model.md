@@ -331,6 +331,10 @@ new hash and size.
   records lacking `kind` or `meeting_id` are rejected too, because every record
   the writer creates carries both; a
   file whose SHA-256 differs from the recorded hash (human edit).
+* **Identity.** Ownership is bound to the entry's stable ID (`meeting_id`, else
+  `id`). If the caller matched by an alias, `data.meeting_id` echoes the id that
+  was passed, while the plan (`plan.meeting_id`), the journal and the ownership
+  record carry the stable ID.
 * **Idempotent.** Identical bytes return `Unchanged` and write nothing.
   `dry_run=True` returns the plan (`action: publish_summary`) without a lease.
 * **Classification.** Rejection → exit 2. An open journal, or an interrupted
