@@ -6,6 +6,7 @@ import os
 import json
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -25,6 +26,58 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+#: Windows error codes meaning "another handle blocks the rename": 5 access
+#: denied, 32 sharing violation, 33 lock violation. Only these are retried.
+TRANSIENT_REPLACE_WINERRORS = frozenset({5, 32, 33})
+
+#: Backoff before each re-attempt of ``os.replace`` (issue #70): at most
+#: ``len + 1`` attempts and about 0.4 s in total, so a stuck handle cannot hang
+#: a batch. Only the replace is retried, never the staging write.
+REPLACE_RETRY_DELAYS_SECONDS = (0.02, 0.05, 0.1, 0.2)
+
+
+class AtomicReplaceError(OSError):
+    """``os.replace`` stayed blocked after the bounded retries; target untouched."""
+
+    reason_code = "atomic_replace_failed"
+
+    def __init__(self, target_name: str, attempts: int, cause: OSError) -> None:
+        self.attempts = attempts
+        self.cause_winerror = getattr(cause, "winerror", None)
+        super().__init__(
+            f"Atomic replace of '{target_name}' failed after {attempts} attempts "
+            f"(winerror={self.cause_winerror}): another process or handle keeps the "
+            "target open, or access is denied. The previous file is preserved."
+        )
+
+
+def _is_transient_replace_error(error: OSError) -> bool:
+    return (
+        isinstance(error, PermissionError)
+        and getattr(error, "winerror", None) in TRANSIENT_REPLACE_WINERRORS
+    )
+
+
+def replace_with_retry(source: Path, target: Path) -> None:
+    """``os.replace`` with a bounded retry for transient Windows sharing errors.
+
+    Anything that is not a transient sharing/denied error surfaces unchanged on
+    the first attempt. When the budget is exhausted a classified
+    ``AtomicReplaceError`` (an ``OSError``) is raised, chained to the last error.
+    """
+    attempts = len(REPLACE_RETRY_DELAYS_SECONDS) + 1
+    for attempt in range(1, attempts + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as error:
+            if not _is_transient_replace_error(error):
+                raise
+            if attempt == attempts:
+                raise AtomicReplaceError(Path(target).name, attempts, error) from error
+        time.sleep(REPLACE_RETRY_DELAYS_SECONDS[attempt - 1])
+
+
 def atomic_write_text(target: Path, content: str) -> None:
     """Durably write UTF-8 text to a sibling temporary file, then replace target."""
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -42,7 +95,7 @@ def atomic_write_text(target: Path, content: str) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, target)
+        replace_with_retry(temporary_path, target)
         temporary_path = None
     finally:
         if file_descriptor >= 0:
