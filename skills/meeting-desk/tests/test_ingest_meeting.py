@@ -1950,9 +1950,14 @@ class RetitleRegisteredMeetingTests(WriterTestBase):
                                          "transcript_path": self.transcript_rel})
         self.assertEqual([item["path"] for item in plan["files"]],
                          [self.summary_rel, self.transcript_rel])
+        self.assertEqual([item["frontmatter_title"] for item in plan["files"]],
+                         ["updated", "updated"])
         self.assertTrue(envelope["data"]["changed"])
         self.assertEqual(len(envelope["data"]["plan_sha256"]), 64)
         self.assert_untouched(before)
+        current = self.retitle(self.record["title"], dry_run=True, lease_id=None)
+        self.assertEqual([item["frontmatter_title"] for item in current["data"]["plan"]["files"]],
+                         ["current", "current"])
 
     # -- capability ----------------------------------------------------------
     def test_capabilities_expose_the_action_and_keep_existing_names(self):
@@ -2097,6 +2102,17 @@ class RetitleRegisteredMeetingTests(WriterTestBase):
         envelope = self.retitle()
         self.assert_rejected(envelope)
         self.assertIn("no summary or transcript", envelope["message"])
+        self.assert_untouched(before)
+
+    def test_rewrite_that_would_exceed_the_read_bound_is_rejected_before_staging(self):
+        content = "---\ntitle: \"Alt\"\n---\n\n" + "x" * 6000 + "\n"
+        self.assert_success(self.publish_summary(content), "Applied")
+        before = self.tree()
+        bound = len(content.encode("utf-8")) + 10
+        with patch.object(self.writer, "MAX_REGISTER_BYTES", bound):
+            envelope = self.retitle("T" * 100)
+        self.assert_rejected(envelope)
+        self.assertIn("would exceed the supported size", envelope["message"])
         self.assert_untouched(before)
 
     def test_meeting_with_only_a_summary_retitles_that_summary(self):

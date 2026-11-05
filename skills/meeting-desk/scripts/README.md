@@ -262,6 +262,12 @@ ingest_meeting.retitle_registered_meeting(
   inkonsistenter Bestand (z. B. Register alt, Dateien neu) wird nur dort repariert.
   `dry_run=True` liefert den Plan (`action: retitle_meeting`, `title.from/to`)
   ohne Lease. Offenes oder unterbrochenes Journal → `recovery_required` (Exit 3).
+* Bekannte Grenze: wurde ein Transkript über `publish_registered_transcript` unter
+  einem **Alias** statt der stabilen ID publiziert, ist sein Ownership-Eintrag an den
+  Alias gebunden; Retitle weist es dann ab („not bound to this meeting"), statt eine
+  Fremdbindung zu überschreiben. Eine Wiederholung mit identischen Bytes ändert die
+  Bindung nicht; erst eine inhaltliche Änderung des Transkripts unter der stabilen ID
+  bindet es neu (Owner-Entscheidung, falls dieser Fall auftritt).
 * Der Builder rendert den Titel aus seiner `--title`-Option: nach einer
   Titelkorrektur gehört der **neue** Titel in den dokumentierten Build-Aufruf,
   sonst setzt der nächste Lauf den Kopf zurück und `--check` meldet Drift.

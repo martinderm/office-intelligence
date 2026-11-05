@@ -2413,15 +2413,19 @@ def _retitle_plan(root: Path, meeting_id: str, title: str) -> dict:
             raise _Reject(f"the registered {kind} is not valid UTF-8") from None
         new_text, state = _retitle_text(current_text, title, kind)
         data = new_text.encode("utf-8")
+        digest = _sha(data)
         paths[field] = relative
-        files.append({"path": relative, "sha256": _sha(data), "bytes": len(data),
+        files.append({"path": relative, "sha256": digest, "bytes": len(data),
                       "exists": True, "owned_sha256": owner["sha256"],
                       "frontmatter_title": state})
         if data != current_bytes:
+            # The rewrite may grow the file; staging reads it back under this bound.
+            if len(data) > MAX_REGISTER_BYTES:
+                raise _Reject(f"the retitled {kind} would exceed the supported size")
             payload[relative] = data
             steps.append({"kind": "replace", "path": relative, "phase": "files",
-                          "stage": None, "pre_sha256": _sha(current_bytes),
-                          "post_sha256": _sha(data), "bytes": len(data)})
+                          "stage": None, "pre_sha256": owner["sha256"],
+                          "post_sha256": digest, "bytes": len(data)})
     if not paths:
         raise _Reject("the registered meeting has no summary or transcript to retitle")
 
