@@ -353,17 +353,25 @@ class ReplaceSiteOpenHandleTests(unittest.TestCase):
 class NoBareReplaceGuardTests(unittest.TestCase):
     """Issue #78: a new bare replace in mail-desk code must be a conscious decision."""
 
-    ALLOWED = {Path("core/common.py")}  # the helper itself
+    HELPER_FILE = Path("core/common.py")
+    HELPER_NAME = "replace_with_retry"  # the only function allowed to call os.replace
+
+    def _helper_lines(self, tree: ast.AST) -> range:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == self.HELPER_NAME:
+                return range(node.lineno, (node.end_lineno or node.lineno) + 1)
+        return range(0)
 
     def test_scripts_only_replace_files_through_the_bounded_helper(self):
         offenders: list[str] = []
         for path in sorted(SCRIPTS_ROOT.rglob("*.py")):
             relative = path.relative_to(SCRIPTS_ROOT)
-            if relative in self.ALLOWED:
-                continue
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            allowed_lines = self._helper_lines(tree) if relative == self.HELPER_FILE else range(0)
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                    continue
+                if node.lineno in allowed_lines:
                     continue
                 func = node.func
                 bare_os = (
@@ -372,8 +380,10 @@ class NoBareReplaceGuardTests(unittest.TestCase):
                     and func.value.id == "os"
                 )
                 # ``str.replace`` takes two positional arguments, ``datetime.replace``
-                # keywords only; ``Path.replace`` takes exactly one positional target.
-                bare_path = func.attr == "replace" and len(node.args) == 1 and not node.keywords
+                # keywords only; ``Path.replace``/``Path.rename`` take one positional target.
+                bare_path = (
+                    func.attr in {"replace", "rename"} and len(node.args) == 1 and not node.keywords
+                )
                 if bare_os or bare_path:
                     offenders.append(f"{relative.as_posix()}:{node.lineno}")
         self.assertEqual([], offenders)
