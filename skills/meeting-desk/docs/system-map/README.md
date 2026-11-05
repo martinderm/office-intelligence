@@ -8,7 +8,7 @@ Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
 CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-11-05) · 133 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-05) · 162 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
 >
@@ -49,6 +49,7 @@ Ad-hoc-Exporte bleiben stdout oder `.meeting-export.json` unter `data/`.
 | Registereintrag | 25 kanonische Felder + erhaltene Legacy-/Unknown-Felder | stabile Identität (`meeting_id`/`id`/source pair), opake Unicode-IDs exakt (≤512, keine Steuerzeichen), Dateinamen nur per Hash; keine Re-ID; unsourced Legacy nur über belegten Quell-Präfix |
 | Summary/Transkript | `*.summary.md`, `*.transcript.md` | generierte Frontmatter, byte-exakter Body, `status: provisional` bis menschliche Freigabe; `null` = nicht geliefert, nie Löschen |
 | Summary-Ersatz | `publish_registered_summary` (Python-API, kein CLI-Flag) | ersetzt **nur** den registrierten `summary_path` eines eindeutig identifizierten Meetings (Issue #52 P1); Transkript, Raw und deren Ownership-Einträge bleiben byte-/eintragsgleich; nur Ersatz, nie Neuanlage: ohne registrierten `summary_path` oder ohne registrierte Datei Rejection (kein Orphan); Inhalt = komplette Datei inkl. Frontmatter, byte-exakt gespeichert, Frontmatter wird nicht gerendert/geprüft |
+| Titelkorrektur | `retitle_registered_meeting` (Python-API, kein CLI-Flag) | setzt **nur** `title` im Registereintrag und die `title:`-Zeile im Summary-/Transkript-Frontmatter eines eindeutig identifizierten, Writer-eigenen Meetings (Issue #52 P5); Pfade/Slugs, Raw, Bodies, übrige Frontmatter-/Registerfelder und Ownership der unberührten Artefakte bleiben identisch; kein Rename/Rekey |
 | Raw | `*.transcript.raw.md` | byte-exakt, kein Frontmatter, nach Erstpublikation unveränderlich; auch ohne Clean-Transcript eigenständig registriert; `null` lässt Bestand unverändert |
 | Local sources | `--local --summary/--transcript/--raw` in kanonischen Zonen | gleicher Record/Writer; Plan+Hash, byte-exakt; je Quelle max. 4 MiB UTF-8-Bytes (`local_artifact_bytes`, vor dem Dekodieren; Meldung mit Artefaktart, relativem Pfad, Limit; Issue #49), C0-Steuerzeichen/U+007F mit Codepoint abgewiesen, CRLF/BOM unverändert; kindliche Links/Junctions/Hardlinks und Writer-State-/Katalogpfade vor Planung abgewiesen; Löschsteps journal-/hashgebunden nach Register. Große Raws werden in `data/inbox/` gestaged und per `--local` eingeliefert; > 4 MiB: Eskalation an den Owner (kein Split, kein Stub, kein manueller Evidence-Write) |
 | Ownership | `data/meeting-desk/ownership.json` (`meeting-desk-ownership/1`) | Pfad → Meeting-ID, SHA-256, Größe, Art, Writer-Version, Zeit |
@@ -85,7 +86,7 @@ Preflight (read-only)
 
 Jeder Fehler nach Journalerstellung → journal(failed), Exit 3 recovery_required.
 Plan-Rejection bei offenem Journal (z. B. veraltete Ownership nach unterbrochener
-Publikation) der Registered-Artifact-Seams (Transkript/Summary) → ebenfalls Exit 3.
+Publikation) der Registered-Artifact-Seams (Transkript/Summary/Titel) → ebenfalls Exit 3.
 Unveränderter Reingest → Unchanged (Exit 0), kein Write.
 ```
 
@@ -137,6 +138,16 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
   `review_reason` (`content-changed`); identischer Inhalt = `Unchanged`, kein Write.
   Schreibt nur Summary, Ownership-Eintrag des Summary und Register-Review-Zustand
   (gleiche Journal-Reihenfolge, Register zuletzt).
+- **Titelkorrektur (#52 P5):** dieselben Ownership-Regeln wie der Summary-Ersatz,
+  je Artefaktart (`summary`/`transcript`, Ownership an die stabile ID gebunden,
+  SHA-256 = aktuelle Bytes, keine geteilten/aliasierten Pfade); mindestens eines von
+  Summary/Transkript muss registriert sein, das Raw wird nie gelesen oder geschrieben.
+  Genau eine `title:`-Zeile im terminierten Frontmatter, Wert ein einzeiliger
+  JSON-String; sonst Rejection (Exit 2) ohne Mutation. Fehlt Frontmatter oder
+  `title:`-Zeile, bleibt das Artefakt byte-identisch. Nur tatsächlich geänderte
+  Dateien erhalten einen neuen Ownership-Eintrag; Review-/Inhaltsstatus bleiben
+  unverändert. Gleicher Titel = `Unchanged`, kein Write. Schreibt Dateien, Ownership,
+  Register zuletzt (gleiche Journal-Reihenfolge).
 - **Raw:** unveränderlich; abweichender Raw-Inhalt unter derselben Identität
   stoppt.
 - **Lease:** kanonischer Shared-Guard in place (`allow_legacy=False`), Root
@@ -183,6 +194,7 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
 | `ingest_meeting.ingest_record(...)` | Python-API, gibt Envelope-kompatibles Dict zurück |
 | `ingest_meeting.publish_registered_transcript(...)` | einzige Builder-Publikationsgrenze |
 | `ingest_meeting.publish_registered_summary(content, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Summary-Ersatzgrenze (#52 P1); gleiche Signatur/Envelopes wie der Transkriptpfad; Zustände `DryRun`/`Unchanged`/`Applied`/`Rejected`/`RecoveryRequired`; Plan-Action `publish_summary`; in `--capabilities` unter `data.actions` als `publish_registered_summary` ausgewiesen (bestehende Namen unverändert) |
+| `ingest_meeting.retitle_registered_meeting(title, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Titelkorrektur-Grenze (#52 P5); gleiche Envelopes/Zustände wie die Publish-Seams; Plan-Action `retitle_meeting` (`title.from/to`, `files[].frontmatter_title`); in `--capabilities` unter `data.actions` als `retitle_registered_meeting` ausgewiesen (bestehende Namen unverändert) |
 | `build_clean_transcript.py` | fachliche Ableitung; `--check` read-only; Publikation delegiert |
 | `verify_meeting_fixtures.py` | read-only Fixture-Digest + Record-Konformität |
 
@@ -208,6 +220,13 @@ Diagnostik; stdout genau eine Zeile.
   nicht-writer-eigene/mehrdeutige/aliasierte Summaries, fehlendes registriertes
   Summary, Lease-/Journal-/Eingabefehler, unterbrochene Publikation mit
   Recovery, Alias-Bindung an die stabile ID; Transkriptpfad unverändert.
+  Issue-#52-P5-Grenzen (`RetitleRegisteredMeetingTests`): Titel in Register +
+  Summary/Transkript-Frontmatter, stabile Pfade/Slugs, nur die `title:`-Zeile
+  geändert (Builder-Felder und Body erhalten, CRLF), Raw- und Ownership-Identität
+  der unberührten Artefakte, Hash-Fortschreibung, Idempotenz/Reparatur/Dry-Run,
+  Capability, nicht-writer-eigene/mehrdeutige/aliasierte/fehlende Artefakte,
+  mehrdeutiges Frontmatter, Lease-/Journal-/Eingabefehler, unterbrochene
+  Publikation mit Recovery, Alias-Bindung an die stabile ID, Folgepublikation.
 - `tests/test_build_clean_transcript.py`: Korrektur-Engine und
   Delegations-/Fehler-/Exit-Vertrag des Builders.
 - `tests/fixtures/meeting-record-v1.json`: gemeinsames SSOT-Paket mit

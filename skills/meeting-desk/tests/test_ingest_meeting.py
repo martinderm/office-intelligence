@@ -1711,6 +1711,494 @@ class RegisteredSummaryPublishTests(WriterTestBase):
         self.assert_success(self.publish_transcript(content, self.meeting_id), "Unchanged")
 
 
+class RetitleRegisteredMeetingTests(WriterTestBase):
+    """OI #52 P5: ``retitle_registered_meeting`` changes the title and nothing else."""
+
+    NEW_TITLE = "Förderanträge – Abstimmung \"LLL\" 日本語"
+    # Builder-style header: extra fields and a body that must survive verbatim.
+    CLEAN_TRANSCRIPT = (
+        "---\nmeeting_id: \"ticnote-tn-900007\"\ntitle: \"Aufnahme 27.10.\"\n"
+        "date: null\ndateString: \"\"\nsource_raw: \"raw.md\"\ncorrections_count: 16\n"
+        "unklar_count: 16\nprovenance: meeting-desk §2b (Zwei-Artefakt-Prinzip)\n---\n\n"
+        "# Bereinigungsliste\n\n| # | Original |\n|---|---|\n| 1 | Robin |\n\n---\n\n"
+        "title: kein Frontmatter, nur Body\r\nRobin Example: Text.\n")
+
+    def setUp(self):
+        super().setUp()
+        self.write_catalogs(topics=[{"id": "catalogue-topic", "title": "Synthetic"}])
+        self.record = valid_record(6)
+        self.assert_success(self.ingest(self.record, topic_slug="catalogue-topic"), "Applied")
+        self.entry = register_document(self.root)["meetings"][0]
+        self.meeting_id = self.entry["meeting_id"]
+        self.ownership_path = self.root / "data/meeting-desk/ownership.json"
+        self.summary_rel = self.entry["summary_path"]
+        self.transcript_rel = self.entry["transcript_path"]
+        self.raw_rel = self.entry["transcript_raw_path"]
+
+    # -- helpers ---------------------------------------------------------
+    def retitle(self, title=None, meeting_id=None, **options):
+        lease = self.acquire()
+        options.setdefault("workspace_root", self.root)
+        options.setdefault("lease_id", lease)
+        options.setdefault("trusted_workspace_lock_root", self.lock_root)
+        return self.writer.retitle_registered_meeting(
+            self.NEW_TITLE if title is None else title,
+            meeting_id=meeting_id or self.meeting_id, **options)
+
+    def use_clean_transcript(self):
+        """Publish a builder-style transcript through the sanctioned seam."""
+        self.assert_success(self.publish_transcript(self.CLEAN_TRANSCRIPT, self.meeting_id),
+                            "Applied")
+
+    def state(self):
+        entry = register_document(self.root)["meetings"][0]
+        state = {key: (self.root / entry[key]).read_bytes()
+                 for key in ("summary_path", "transcript_path", "transcript_raw_path")}
+        state["register"] = self.register_path.read_bytes()
+        state["ownership"] = self.ownership_path.read_bytes()
+        return state
+
+    def tree(self):
+        return {path.relative_to(self.root).as_posix(): path.read_bytes()
+                for path in sorted(self.root.rglob("*")) if path.is_file()}
+
+    def owners(self):
+        return {item["path"]: item for item in read_json(self.ownership_path)["files"]}
+
+    def sha(self, relative):
+        return hashlib.sha256((self.root / relative).read_bytes()).hexdigest()
+
+    def mutate_register(self, mutate):
+        document = register_document(self.root)
+        mutate(document)
+        self.write_register(document)
+
+    def assert_untouched(self, before_tree):
+        self.assertEqual(self.tree(), before_tree)
+        self.assertFalse(self.journal_dir().exists() and any(self.journal_dir().iterdir()))
+
+    @staticmethod
+    def frontmatter_title_line(data: bytes) -> str:
+        return next(line for line in data.decode("utf-8").splitlines()
+                    if line.startswith("title:"))
+
+    # -- success, consistency and byte identity ----------------------------
+    def test_retitle_updates_register_summary_and_transcript_only(self):
+        self.use_clean_transcript()
+        before = self.state()
+        tree_before = self.tree()
+        owners_before = self.owners()
+        entry_before = register_document(self.root)["meetings"][0]
+
+        envelope = self.retitle()
+        self.assert_success(envelope, "Applied")
+        self.assertTrue(envelope["data"]["changed"])
+        self.assertEqual(envelope["data"]["paths"],
+                         {"summary_path": self.summary_rel,
+                          "transcript_path": self.transcript_rel})
+
+        after = self.state()
+        encoded = json.dumps(self.NEW_TITLE, ensure_ascii=False)
+        entry_after = register_document(self.root)["meetings"][0]
+        self.assertEqual(entry_after["title"], self.NEW_TITLE)
+        for key in ("summary_path", "transcript_path"):
+            self.assertEqual(self.frontmatter_title_line(after[key]), f"title: {encoded}")
+        # Paths and slugs are stable: no file appeared, vanished or moved.
+        self.assertEqual(set(self.tree()) - {"data/meeting-desk/ownership.json"},
+                         set(tree_before) - {"data/meeting-desk/ownership.json"})
+        for key in ("summary_path", "transcript_path", "transcript_raw_path"):
+            self.assertEqual(entry_after[key], entry_before[key])
+        self.assertIn("synthetic-fractional-duration", self.summary_rel)
+        self.assertNotIn("forderantrage", self.summary_rel)
+        # Every other register field is unchanged (title is the only difference).
+        self.assertEqual({k: v for k, v in entry_after.items() if k != "title"},
+                         {k: v for k, v in entry_before.items() if k != "title"})
+        # Raw is byte-identical and its ownership record is exactly the same.
+        self.assertEqual(after["transcript_raw_path"], before["transcript_raw_path"])
+        self.assertEqual(self.owners()[self.raw_rel], owners_before[self.raw_rel])
+
+    def test_only_the_title_line_changes_in_the_artifacts(self):
+        self.use_clean_transcript()
+        before = self.state()
+        self.assert_success(self.retitle(), "Applied")
+        after = self.state()
+        encoded = json.dumps(self.NEW_TITLE, ensure_ascii=False)
+        for key in ("summary_path", "transcript_path"):
+            old_lines = before[key].decode("utf-8").split("\n")
+            new_lines = after[key].decode("utf-8").split("\n")
+            self.assertEqual(len(old_lines), len(new_lines))
+            changed = [(a, b) for a, b in zip(old_lines, new_lines) if a != b]
+            self.assertEqual(len(changed), 1, key)
+            self.assertTrue(changed[0][0].startswith("title: "))
+            self.assertEqual(changed[0][1], f"title: {encoded}")
+
+    def test_transcript_body_and_builder_frontmatter_fields_survive(self):
+        self.use_clean_transcript()
+        self.assert_success(self.retitle(), "Applied")
+        text = (self.root / self.transcript_rel).read_bytes().decode("utf-8")
+        expected = self.CLEAN_TRANSCRIPT.replace(
+            'title: "Aufnahme 27.10."',
+            "title: " + json.dumps(self.NEW_TITLE, ensure_ascii=False), 1)
+        self.assertEqual(text, expected)
+        for fragment in ("corrections_count: 16", "unklar_count: 16",
+                         "provenance: meeting-desk §2b (Zwei-Artefakt-Prinzip)",
+                         "| 1 | Robin |", "title: kein Frontmatter, nur Body\r\n"):
+            self.assertIn(fragment, text)
+
+    def test_writer_rendered_frontmatter_stays_otherwise_identical(self):
+        before = (self.root / self.summary_rel).read_bytes().decode("utf-8")
+        self.assert_success(self.retitle("Neuer Titel"), "Applied")
+        after = (self.root / self.summary_rel).read_bytes().decode("utf-8")
+        self.assertEqual(after, before.replace(
+            'title: "Synthetic fractional duration"', 'title: "Neuer Titel"', 1))
+
+    def test_crlf_frontmatter_keeps_its_line_endings(self):
+        content = "---\r\ndocument_type: meeting-summary\r\ntitle: \"Alt\"\r\n---\r\n\r\nBody\r\n"
+        self.assert_success(self.publish_summary(content), "Applied")
+        self.assert_success(self.retitle("Neu"), "Applied")
+        self.assertEqual((self.root / self.summary_rel).read_bytes(),
+                         content.replace('"Alt"', '"Neu"').encode("utf-8"))
+
+    def publish_summary(self, content):
+        lease = self.acquire()
+        return self.writer.publish_registered_summary(
+            content, workspace_root=self.root, lease_id=lease, meeting_id=self.meeting_id,
+            trusted_workspace_lock_root=self.lock_root)
+
+    def test_ownership_hashes_match_and_untouched_records_are_identical(self):
+        self.use_clean_transcript()
+        owners_before = self.owners()
+        self.assert_success(self.retitle(), "Applied")
+        owners = self.owners()
+        self.assertEqual(set(owners), set(owners_before))
+        for relative, kind in ((self.summary_rel, "summary"),
+                               (self.transcript_rel, "transcript")):
+            data = (self.root / relative).read_bytes()
+            self.assertEqual(owners[relative]["sha256"], hashlib.sha256(data).hexdigest())
+            self.assertEqual(owners[relative]["bytes"], len(data))
+            self.assertEqual(owners[relative]["kind"], kind)
+            self.assertEqual(owners[relative]["meeting_id"], self.meeting_id)
+            self.assertEqual(owners[relative]["writer_version"], "meeting-desk/1")
+            self.assertNotEqual(owners[relative]["sha256"], owners_before[relative]["sha256"])
+        self.assertEqual(owners[self.raw_rel], owners_before[self.raw_rel])
+        # Other writer operations stay possible without a human edit in between.
+        self.assert_success(self.publish_transcript(
+            self.CLEAN_TRANSCRIPT.replace("16", "17"), self.meeting_id), "Applied")
+        self.assert_success(self.publish_summary(
+            "---\ntitle: \"X\"\n---\n\nBody\n"), "Applied")
+
+    def test_reingest_after_retitle_is_still_allowed(self):
+        self.assert_success(self.retitle(), "Applied")
+        record = copy.deepcopy(self.record)
+        record["title"] = self.NEW_TITLE
+        record["artifacts"]["summary_md"] = "Reviewed summary.\n"
+        envelope = self.ingest(record, topic_slug="catalogue-topic")
+        self.assert_success(envelope, "Applied")
+        self.assertEqual(register_document(self.root)["meetings"][0]["summary_path"],
+                         self.summary_rel)
+
+    def test_unrelated_entries_and_root_extras_are_preserved(self):
+        def extend(document):
+            document["note"] = {"keep": True}
+            other = copy.deepcopy(document["meetings"][0])
+            other["meeting_id"] = "ticnote-other"
+            other["source"] = {"system": "ticnote", "account_ref": None,
+                               "external_id": "other"}
+            other["summary_path"] = other["transcript_path"] = other["transcript_raw_path"] = None
+            document["meetings"].append(other)
+        self.mutate_register(extend)
+        before = register_document(self.root)
+        self.assert_success(self.retitle(), "Applied")
+        after = register_document(self.root)
+        self.assertEqual(after["note"], {"keep": True})
+        self.assertEqual(after["meetings"][1], before["meetings"][1])
+
+    # -- idempotence and dry run -------------------------------------------
+    def test_repeat_is_unchanged_and_writes_nothing(self):
+        self.use_clean_transcript()
+        self.assert_success(self.retitle(), "Applied")
+        settled = self.tree()
+        again = self.retitle()
+        self.assert_success(again, "Unchanged")
+        self.assertFalse(again["data"]["changed"])
+        self.assertEqual(self.tree(), settled)
+
+    def test_current_title_on_fresh_workspace_is_a_no_op(self):
+        before = self.tree()
+        envelope = self.retitle(self.record["title"])
+        self.assert_success(envelope, "Unchanged")
+        self.assert_untouched(before)
+
+    def test_partial_inconsistency_is_repaired_without_touching_consistent_files(self):
+        self.assert_success(self.retitle(), "Applied")
+        self.mutate_register(lambda doc: doc["meetings"][0].update(title="stale"))
+        summary_before = (self.root / self.summary_rel).read_bytes()
+        owners_before = self.owners()
+        self.assert_success(self.retitle(), "Applied")
+        self.assertEqual(register_document(self.root)["meetings"][0]["title"], self.NEW_TITLE)
+        self.assertEqual((self.root / self.summary_rel).read_bytes(), summary_before)
+        self.assertEqual(self.owners(), owners_before)
+
+    def test_dry_run_plans_the_change_and_mutates_nothing(self):
+        before = self.tree()
+        envelope = self.retitle(dry_run=True, lease_id=None)
+        self.assert_success(envelope, "DryRun")
+        plan = envelope["data"]["plan"]
+        self.assertEqual(plan["action"], "retitle_meeting")
+        self.assertEqual(plan["title"], {"from": self.record["title"], "to": self.NEW_TITLE})
+        self.assertEqual(plan["paths"], {"summary_path": self.summary_rel,
+                                         "transcript_path": self.transcript_rel})
+        self.assertEqual([item["path"] for item in plan["files"]],
+                         [self.summary_rel, self.transcript_rel])
+        self.assertTrue(envelope["data"]["changed"])
+        self.assertEqual(len(envelope["data"]["plan_sha256"]), 64)
+        self.assert_untouched(before)
+
+    # -- capability ----------------------------------------------------------
+    def test_capabilities_expose_the_action_and_keep_existing_names(self):
+        actions = self.writer.capabilities()["actions"]
+        self.assertIn("retitle_registered_meeting", actions)
+        for name in ("ingest_record", "ingest_local", "publish_registered_transcript",
+                     "publish_registered_summary", "inspect", "recover"):
+            self.assertIn(name, actions)
+        self.assertIn("retitle_registered_meeting", self.writer.__all__)
+        code, envelope, stderr = run_cli(self.lock_root, ["--capabilities"])
+        self.assertEqual(code, 0, stderr)
+        self.assertEqual(envelope["data"]["actions"], actions)
+
+    # -- frontmatter without a (single) title line ---------------------------
+    def test_artifact_without_a_title_line_is_left_alone(self):
+        content = "---\ndocument_type: meeting-summary\n---\n\nBody\n"
+        self.assert_success(self.publish_summary(content), "Applied")
+        owners_before = self.owners()
+        self.assert_success(self.retitle(), "Applied")
+        self.assertEqual((self.root / self.summary_rel).read_bytes(), content.encode("utf-8"))
+        self.assertEqual(self.owners()[self.summary_rel], owners_before[self.summary_rel])
+        self.assertEqual(register_document(self.root)["meetings"][0]["title"], self.NEW_TITLE)
+        self.assertEqual(
+            self.frontmatter_title_line((self.root / self.transcript_rel).read_bytes()),
+            "title: " + json.dumps(self.NEW_TITLE, ensure_ascii=False))
+
+    def test_ambiguous_or_unparseable_frontmatter_title_is_rejected(self):
+        cases = {
+            "duplicate": ("---\ntitle: \"A\"\ntitle: \"B\"\n---\n\nBody\n", "several title lines"),
+            "plain scalar": ("---\ntitle: Plain\n---\n\nBody\n", "single-line quoted string"),
+            "json garbage": ("---\ntitle: \"a\" \"b\"\n---\n\nBody\n", "single-line quoted string"),
+            "unterminated": ("---\ntitle: \"A\"\n\nBody without close\n", "unterminated"),
+        }
+        for label, (content, message) in cases.items():
+            with self.subTest(label):
+                self.assert_success(self.publish_summary(content), "Applied")
+                before = self.tree()
+                envelope = self.retitle()
+                self.assert_rejected(envelope)
+                self.assertIn(message, envelope["message"])
+                self.assert_untouched(before)
+
+    # -- fail-closed ownership ----------------------------------------------
+    def test_human_edited_artifact_is_not_rewritten(self):
+        for key in ("summary_path", "transcript_path"):
+            with self.subTest(key):
+                target = self.root / self.entry[key]
+                original = target.read_bytes()
+                target.write_bytes(b"---\ntitle: \"Hand\"\n---\n\nhuman edited\n")
+                before = self.tree()
+                envelope = self.retitle()
+                self.assert_rejected(envelope)
+                self.assertIn("not provably writer-owned", envelope["message"])
+                self.assert_untouched(before)
+                target.write_bytes(original)
+
+    def test_artifact_without_ownership_record_is_rejected(self):
+        ownership = read_json(self.ownership_path)
+        ownership["files"] = [item for item in ownership["files"]
+                              if item["path"] != self.transcript_rel]
+        self.ownership_path.write_text(json.dumps(ownership), encoding="utf-8")
+        before = self.tree()
+        self.assert_rejected(self.retitle())
+        self.assert_untouched(before)
+
+    def test_ambiguous_or_foreign_ownership_records_are_rejected(self):
+        ownership = read_json(self.ownership_path)
+        record = next(item for item in ownership["files"] if item["path"] == self.summary_rel)
+        cases = {
+            "duplicate": ownership["files"] + [dict(record)],
+            "other meeting": [dict(item, meeting_id="ticnote-other") if item is record
+                              else item for item in ownership["files"]],
+            "wrong kind": [dict(item, kind="transcript") if item is record else item
+                           for item in ownership["files"]],
+            "alias-bound": [dict(item, meeting_id="legacy-alias") if item is record
+                            else item for item in ownership["files"]],
+        }
+        for label, files in cases.items():
+            with self.subTest(label):
+                self.ownership_path.write_text(
+                    json.dumps({**ownership, "files": files}), encoding="utf-8")
+                before = self.tree()
+                self.assert_rejected(self.retitle())
+                self.assert_untouched(before)
+
+    def test_unknown_and_multiply_matching_meetings_are_rejected(self):
+        before = self.tree()
+        envelope = self.retitle(meeting_id="ticnote-does-not-exist")
+        self.assert_rejected(envelope)
+        self.assertIn("exactly one registered meeting", envelope["message"])
+        self.assert_untouched(before)
+        self.mutate_register(lambda doc: doc["meetings"].append(
+            copy.deepcopy(doc["meetings"][0])))
+        before = self.tree()
+        envelope = self.retitle()
+        self.assert_rejected(envelope)
+        self.assertIn("exactly one registered meeting", envelope["message"])
+        self.assert_untouched(before)
+
+    def test_shared_or_aliased_paths_are_rejected(self):
+        original = register_document(self.root)
+        variants = {
+            "summary as transcript": ("summary_path", "transcript_path"),
+            "transcript as raw": ("transcript_path", "transcript_raw_path"),
+            "summary as raw": ("summary_path", "transcript_raw_path"),
+        }
+        for label, (target, source) in variants.items():
+            with self.subTest(label):
+                document = copy.deepcopy(original)
+                document["meetings"][0][target] = document["meetings"][0][source]
+                self.write_register(document)
+                before = self.tree()
+                self.assert_rejected(self.retitle())
+                self.assert_untouched(before)
+        document = copy.deepcopy(original)
+        other = copy.deepcopy(document["meetings"][0])
+        other.update(meeting_id="ticnote-other",
+                     source={"system": "ticnote", "account_ref": None, "external_id": "o"})
+        document["meetings"].append(other)
+        self.write_register(document)
+        before = self.tree()
+        self.assert_rejected(self.retitle())
+        self.assert_untouched(before)
+
+    def test_missing_registered_file_or_path_outside_evidence_is_rejected(self):
+        (self.root / self.transcript_rel).unlink()
+        before = self.tree()
+        envelope = self.retitle()
+        self.assert_rejected(envelope)
+        self.assertIn("missing", envelope["message"])
+        self.assert_untouched(before)
+        self.mutate_register(lambda doc: doc["meetings"][0].update(
+            summary_path="data/escape.summary.md"))
+        before = self.tree()
+        self.assert_rejected(self.retitle())
+        self.assert_untouched(before)
+
+    def test_meeting_without_summary_or_transcript_is_rejected(self):
+        self.mutate_register(lambda doc: doc["meetings"][0].update(
+            summary_path=None, transcript_path=None))
+        before = self.tree()
+        envelope = self.retitle()
+        self.assert_rejected(envelope)
+        self.assertIn("no summary or transcript", envelope["message"])
+        self.assert_untouched(before)
+
+    def test_meeting_with_only_a_summary_retitles_that_summary(self):
+        self.mutate_register(lambda doc: doc["meetings"][0].update(transcript_path=None))
+        transcript_before = (self.root / self.transcript_rel).read_bytes()
+        envelope = self.retitle()
+        self.assert_success(envelope, "Applied")
+        self.assertEqual(envelope["data"]["paths"], {"summary_path": self.summary_rel})
+        self.assertEqual((self.root / self.transcript_rel).read_bytes(), transcript_before)
+
+    # -- input, lease and error classification -------------------------------
+    def test_invalid_title_or_meeting_id_is_rejected_before_any_write(self):
+        before = self.tree()
+        for label, title in (("empty", ""), ("blank", "  "), ("none", None), ("bytes", b"x"),
+                             ("nul", "a\x00b"), ("control", "a\x07b"),
+                             ("surrogate", "a\ud800b"), ("long", "x" * 501)):
+            with self.subTest(label):
+                lease = self.acquire()
+                envelope = self.writer.retitle_registered_meeting(
+                    title, workspace_root=self.root, lease_id=lease,
+                    meeting_id=self.meeting_id, trusted_workspace_lock_root=self.lock_root)
+                self.assert_rejected(envelope)
+        for meeting_id in ("", None, 7):
+            with self.subTest(meeting_id=meeting_id):
+                lease = self.acquire()
+                envelope = self.writer.retitle_registered_meeting(
+                    "Titel", workspace_root=self.root, lease_id=lease, meeting_id=meeting_id,
+                    trusted_workspace_lock_root=self.lock_root)
+                self.assert_rejected(envelope)
+        self.assert_untouched(before)
+
+    def test_foreign_lease_is_rejected_without_mutation(self):
+        before = self.tree()
+        envelope = self.retitle(lease_id="not-the-owner")
+        self.assert_rejected(envelope)
+        self.assert_untouched(before)
+
+    def test_open_journal_blocks_retitle(self):
+        self.journal_dir().mkdir(parents=True, exist_ok=True)
+        (self.journal_dir() / "human-note.txt").write_bytes(b"foreign\n")
+        before = self.tree()
+        envelope = self.retitle()
+        self.assert_envelope(envelope)
+        self.assertFalse(envelope["success"])
+        self.assertEqual(envelope["state"], "RecoveryRequired")
+        self.assertEqual(self.tree(), before)
+
+    def test_interrupted_retitle_requires_recovery_and_recovers_forward(self):
+        real_publish = self.writer._publish_one
+        calls = []
+
+        def failing(root, step):
+            calls.append(step["path"])
+            if len(calls) == 2:  # summary written, transcript step interrupted
+                raise OSError("simulated crash")
+            return real_publish(root, step)
+
+        raw = (self.root / self.raw_rel).read_bytes()
+        with patch.object(self.writer, "_publish_one", failing):
+            envelope = self.retitle()
+        self.assert_envelope(envelope)
+        self.assertEqual(envelope["state"], "RecoveryRequired")
+        self.assertEqual(self.retitle()["state"], "RecoveryRequired")
+        self.assertTrue(self.writer.inspect_workspace(self.root)["data"]["recovery_required"])
+        recovered = self.writer.recover_workspace(
+            self.root, lease_id=self.lease, trusted_workspace_lock_root=self.lock_root)
+        self.assert_success(recovered, "Recovered")
+        encoded = json.dumps(self.NEW_TITLE, ensure_ascii=False)
+        for relative in (self.summary_rel, self.transcript_rel):
+            self.assertEqual(self.frontmatter_title_line((self.root / relative).read_bytes()),
+                             f"title: {encoded}")
+            self.assertEqual(self.owners()[relative]["sha256"], self.sha(relative))
+        self.assertEqual(register_document(self.root)["meetings"][0]["title"], self.NEW_TITLE)
+        self.assertEqual((self.root / self.raw_rel).read_bytes(), raw)
+        self.assert_success(self.retitle(), "Unchanged")
+
+    # -- identity -------------------------------------------------------------
+    def test_alias_match_binds_ownership_and_plan_to_the_stable_id(self):
+        self.mutate_register(lambda doc: doc["meetings"][0].update(id="legacy-alias"))
+        planned = self.retitle(meeting_id="legacy-alias", dry_run=True)
+        self.assert_success(planned, "DryRun")
+        self.assertEqual(planned["data"]["plan"]["meeting_id"], self.meeting_id)
+        envelope = self.retitle(meeting_id="legacy-alias")
+        self.assert_success(envelope, "Applied")
+        self.assertEqual(envelope["data"]["meeting_id"], "legacy-alias")
+        for relative in (self.summary_rel, self.transcript_rel):
+            self.assertEqual(self.owners()[relative]["meeting_id"], self.meeting_id)
+        self.assert_success(self.retitle(meeting_id="legacy-alias"), "Unchanged")
+        self.assert_success(self.retitle(), "Unchanged")
+
+    def test_entry_with_only_an_id_field_keeps_that_id(self):
+        def only_id(document):
+            entry = document["meetings"][0]
+            entry["id"] = entry.pop("meeting_id")
+        self.mutate_register(only_id)
+        self.assert_success(self.retitle(), "Applied")
+        entry = register_document(self.root)["meetings"][0]
+        self.assertNotIn("meeting_id", entry)
+        self.assertEqual(entry["id"], self.meeting_id)
+        self.assertEqual(self.owners()[self.summary_rel]["meeting_id"], self.meeting_id)
+
+
 class LocalEntryTests(WriterTestBase):
     def setUp(self):
         super().setUp()

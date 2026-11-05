@@ -341,6 +341,44 @@ new hash and size.
   publication (journal left behind, later retries included), → `recovery_required`
   (exit 3) with explicit `--recover`; the writer never retries silently.
 
+### Title correction (`retitle_registered_meeting`, Issue #52 P5)
+
+A third registered-artifact seam corrects the title of an existing meeting without
+a hand edit (which would break ownership):
+`ingest_meeting.retitle_registered_meeting(title, *, workspace_root, lease_id,
+meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)`
+(Python API, no CLI flag). It shares the plan, lease, journal and recovery path of
+the other seams and returns the same envelopes (`DryRun`/`Unchanged`/`Applied`/
+`Rejected`/`RecoveryRequired`; plan action `retitle_meeting`).
+
+* **What changes.** The register entry's `title`, and the single `title:` line of
+  the leading frontmatter of the registered summary and transcript (the writer
+  renders it and the clean-transcript builder header carries it as
+  `title: "<JSON string>"`). Nothing else: all other lines and line endings, the
+  bodies, other frontmatter fields (`corrections_count`, `unklar_count`,
+  `provenance`, …), every other register field including the review/content
+  status, and the raw transcript (no frontmatter, immutable, never read for
+  writing) stay byte- and record-identical.
+* **Paths and slugs are stable.** The file stem is not recomputed, nothing is
+  renamed or re-keyed; a title change that would need a different path is not
+  supported by this seam.
+* **Ownership.** Only files whose bytes actually change get a new ownership record
+  (hash, size, time); untouched artifacts keep theirs. Same fail-closed rules as the
+  summary seam for the registered path, per artifact kind: one matching entry, path
+  under `memory/evidence/`, no shared/aliased path or foreign file name, exactly one
+  ownership record of the right `kind` bound to the entry's stable ID, hash equal to
+  the current bytes, file present. At least one of summary/transcript must be
+  registered.
+* **Frontmatter.** An artifact without frontmatter or without a `title:` line is left
+  untouched (`frontmatter_title: absent` in the plan). An unterminated block, several
+  `title:` lines or a value that is not a single-line JSON string is ambiguous and is
+  rejected without mutation. `title` follows the `record.title` rules (non-empty,
+  ≤ 500 characters, no control characters other than TAB/LF/CR).
+* **Idempotent and repairing.** The same title is `Unchanged` (no write); a partially
+  inconsistent state (for example register old, files new) is repaired only where it
+  differs. The builder renders its header title from `--title`, so subsequent builder
+  calls must pass the new title.
+
 ---
 
 ## 5. Writer journal, ownership and recovery
