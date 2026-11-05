@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .common import utc_now_iso
+from .common import replace_with_retry, utc_now_iso
 
 
 class BatchProgressTracker:
@@ -105,7 +105,7 @@ class BatchProgressTracker:
             with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
                 json.dump(state, f, ensure_ascii=False, indent=2)
                 f.write("\n")
-            os.replace(temp_path, self.progress_file)
+            replace_with_retry(Path(temp_path), self.progress_file)
             temp_path = None
         except Exception:
             pass

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id
+from .common import normalize_message_id, replace_with_retry
 
 
 def _atomic_write_text(target: Path, content: str) -> None:
@@ -26,7 +26,7 @@ def _atomic_write_text(target: Path, content: str) -> None:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary_path, target)
+        replace_with_retry(temporary_path, target)
         temporary_path = None
     finally:
         try:

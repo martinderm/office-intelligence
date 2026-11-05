@@ -18,7 +18,7 @@ import tempfile
 import time
 from typing import Any
 
-from core.common import normalize_message_id, resolve_data_dir, utc_now_iso
+from core.common import normalize_message_id, replace_with_retry, resolve_data_dir, utc_now_iso
 from core.attachment_policy import sanitize_attachment_filename
 from core.attachment_fetch import (
     INVENTORY_FILENAME,
@@ -384,7 +384,7 @@ def save_quarantine_index_atomic(
         f.write("\n")
         temp_path = Path(f.name)
 
-    temp_path.replace(index_path)
+    replace_with_retry(temp_path, index_path)
 
 
 # ==============================================================================

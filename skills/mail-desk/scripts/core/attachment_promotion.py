@@ -1544,7 +1544,7 @@ def _write_inventory_atomic(inv_file: Path, data: bytes) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, inv_file)
+        replace_with_retry(tmp_path, inv_file)
     except OSError:
         _unlink_quiet(tmp_path)
         raise
@@ -2572,7 +2572,7 @@ def write_cloud_atlas_refresh_handoff(handoff: Mapping[str, Any], output_path: P
 
     The handoff hash is recomputed before writing; a tampered mapping raises
     :class:`PromotionHandoffError`.  The write uses a flushed sibling temp file plus
-    ``os.replace`` (the dossier-handoff pattern) and never touches any other path.
+    ``replace_with_retry`` (the dossier-handoff pattern) and never touches any other path.
     """
     if not isinstance(handoff, Mapping):
         raise PromotionHandoffError("write_cloud_atlas_refresh_handoff requires a handoff mapping.")
@@ -2601,7 +2601,7 @@ def write_cloud_atlas_refresh_handoff(handoff: Mapping[str, Any], output_path: P
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, path)
+        replace_with_retry(tmp_path, path)
     except OSError:
         _unlink_quiet(tmp_path)
         raise
