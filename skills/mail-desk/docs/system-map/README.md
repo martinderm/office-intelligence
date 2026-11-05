@@ -1002,7 +1002,7 @@ den vollständigen MD-P1-Preflight erneut aus (das übergebene
 Preflight-Envelope ist Evidenz, nicht Autorität — Hash + 5 Feldbindungen
 revalidiert). Journal `data/mail-desk/attachment-promotions/<promotion_id>/
 promotion-journal.json` Schema 1, atomar (Sibling-Temp + `fsync` +
-`os.replace`), hash-chained Phasen `approved` → `preflight_verified` →
+`replace_with_retry`, begrenzter Windows-Sharing-Retry: [effects.md §1.3](effects.md#13-atomarer-austausch--begrenzter-windows-sharing-retry-issue-70)), hash-chained Phasen `approved` → `preflight_verified` →
 `temp_written` → `target_promoted` → `target_verified` → (`
 source_cleanup_pending`) → `completed` plus terminal `failed`/
 `recovery_required`; `promotion_id` deterministisch aus `review_hash` +

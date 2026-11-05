@@ -138,7 +138,7 @@ class AtomicReplaceRetryTests(unittest.TestCase):
         delays = common.REPLACE_RETRY_DELAYS_SECONDS
         self.assertGreaterEqual(len(delays), 1)
         self.assertLessEqual(len(delays), 6)
-        self.assertLessEqual(sum(delays), 1.0)
+        self.assertLessEqual(sum(delays), 0.5, "documented budget is about 0.4 s")
         self.assertTrue(all(delay > 0 for delay in delays))
 
     def test_non_transient_errors_are_not_retried(self):
