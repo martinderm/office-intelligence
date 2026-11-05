@@ -36,7 +36,9 @@ python skills/meeting-desk/scripts/ingest_meeting.py --recover --workspace <work
 
 * `--capabilities` ist read-only, braucht weder Workspace noch Lease und liefert
   `data.record_schema: "meeting-record/1"`, `data.writer_version:
-  "meeting-desk/1"` plus Limits/Actions im Sechs-Feld-Envelope.
+  "meeting-desk/1"` plus Limits/Actions im Sechs-Feld-Envelope. `data.actions`
+  nennt `ingest_record`, `ingest_local`, `publish_registered_transcript`,
+  `publish_registered_summary` (Issue #52 P1), `inspect`, `recover`.
 * stdout enthält genau einen Envelope `action/success/state/message/data/error`;
   stderr bleibt begrenzte Diagnostik. Der Envelope wird als UTF-8-Bytes
   geschrieben (cp1252/CJK/Emoji-sicher, auch nach erfolgreichem Apply); ein
@@ -184,6 +186,36 @@ Details: [`../references/data-model.md`](../references/data-model.md). Kurz:
   Race-Freiheit gegen einen bösartigen gleichzeitigen Dateisystemakteur.
   Nicht journalbewusste Leser sehen keine garantierte globale
   Snapshot-Isolation.
+
+### Summary-Ersatz (`publish_registered_summary`, Issue #52 P1)
+
+Python-API neben `publish_registered_transcript` (kein CLI-Flag), in
+`--capabilities` unter `data.actions` ausgewiesen:
+
+```python
+ingest_meeting.publish_registered_summary(
+    content, workspace_root=..., lease_id=..., meeting_id=<registered-id>,
+    conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)
+```
+
+* Ersetzt **nur** den registrierten `summary_path` des eindeutig identifizierten
+  Meetings. Transkript, Raw und deren Ownership-Einträge bleiben byte- bzw.
+  eintragsgleich; im Register ändern sich nur `content_status`
+  (`provisional`), `review_recommended`, `review_reason` und `last_synced_at`.
+* `content` ist die komplette Summary-Datei inkl. Frontmatter (UTF-8, byte-exakt,
+  ≤ 4 MiB, nicht leer, keine NUL/C0-Steuerzeichen außer TAB/LF/CR). Der Writer
+  rendert oder prüft das Frontmatter nicht — der Aufrufer hält es konsistent.
+* **Nur Ersatz, nie Neuanlage:** fehlt der registrierte `summary_path` oder die
+  registrierte Datei, wird abgewiesen (Exit 2, keine Mutation, kein Orphan);
+  Neuanlage über `ingest_record`/`--local`.
+* **Fail-closed:** abgewiesen werden kein/mehrere Registertreffer, Pfad außerhalb
+  `memory/evidence/`, Nicht-Summary-Pfad oder mit einem anderen Register-Pfadfeld
+  (auch eines anderen Meetings) geteilter Pfad, fehlender/doppelter/artfremder
+  Ownership-Eintrag und Hash-Abweichung (Handedit).
+* Identischer Inhalt → `Unchanged` ohne Write; `dry_run=True` liefert den Plan
+  (`action: publish_summary`) ohne Lease. Offenes oder nach unterbrochener
+  Publikation verbliebenes Journal → `recovery_required` (Exit 3), Wiederholung
+  nur nach explizitem `--recover`.
 
 ## build_clean_transcript.py
 

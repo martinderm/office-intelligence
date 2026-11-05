@@ -8,6 +8,8 @@ One public boundary owns every meeting ingest file mutation:
   summary/transcript/raw artifacts plus ``meetings.json``.
 * ``publish_registered_transcript()`` is the only publication seam for the
   deterministic clean-transcript builder.
+* ``publish_registered_summary()`` replaces only the registered, writer-owned
+  summary (OI #52 P1); transcript, raw and their ownership stay untouched.
 * ``inspect_workspace()`` is a read-only view of journals, register and
   ownership state; ``recover_workspace()`` resumes an interrupted publication
   under a freshly owned lease.
@@ -53,6 +55,7 @@ __all__ = [
     "ingest_record",
     "ingest_local",
     "publish_registered_transcript",
+    "publish_registered_summary",
     "inspect_workspace",
     "recover_workspace",
     "validate_record",
@@ -2044,40 +2047,92 @@ def publish_registered_transcript(content, *, workspace_root, lease_id, meeting_
                                   conversation_id=None, trusted_workspace_lock_root=None,
                                   dry_run=False) -> dict:
     """Publish builder output only onto the registered transcript path."""
+    return _publish_registered(
+        "transcript", content, workspace_root=workspace_root, lease_id=lease_id,
+        meeting_id=meeting_id, conversation_id=conversation_id,
+        trusted_workspace_lock_root=trusted_workspace_lock_root, dry_run=dry_run)
+
+
+def publish_registered_summary(content, *, workspace_root, lease_id, meeting_id,
+                               conversation_id=None, trusted_workspace_lock_root=None,
+                               dry_run=False) -> dict:
+    """Replace only the registered, writer-owned summary of one meeting (OI #52, P1).
+
+    ``content`` is the complete summary file text including its frontmatter; the
+    writer stores it byte-exact and does not render or inspect the frontmatter.
+    The transcript, the raw transcript and their ownership records stay
+    untouched. This path replaces an existing summary only: a meeting without a
+    registered ``summary_path`` or without the registered file is rejected
+    instead of creating an orphan, and a summary that is not provably
+    writer-owned is never overwritten.
+    """
+    return _publish_registered(
+        "summary", content, workspace_root=workspace_root, lease_id=lease_id,
+        meeting_id=meeting_id, conversation_id=conversation_id,
+        trusted_workspace_lock_root=trusted_workspace_lock_root, dry_run=dry_run)
+
+
+# Registered-artifact publication seams: one shared plan/apply path per kind.
+# ``replace_only`` kinds never create a missing file and run the stricter
+# aliasing/ownership checks of ``_require_exclusive_registered_path``.
+_REGISTERED_ARTIFACTS = {
+    "transcript": {"field": "transcript_path", "action": "publish_transcript",
+                   "replace_only": False},
+    "summary": {"field": "summary_path", "action": "publish_summary",
+                "replace_only": True},
+}
+
+
+def _publish_registered(kind: str, content, *, workspace_root, lease_id, meeting_id,
+                        conversation_id=None, trusted_workspace_lock_root=None,
+                        dry_run=False) -> dict:
+    spec = _REGISTERED_ARTIFACTS[kind]
     try:
         workspace = _workspace_root(workspace_root)
         if not isinstance(meeting_id, str) or not meeting_id:
-            raise _Reject("a meeting id is required to publish a transcript")
+            raise _Reject(f"a meeting id is required to publish a {kind}")
         if not isinstance(content, str):
-            raise _Reject("transcript content must be text")
+            raise _Reject(f"{kind} content must be text")
         if not content.strip():
-            raise _Reject("transcript content must not be empty")
+            raise _Reject(f"{kind} content must not be empty")
         data = content.encode("utf-8")
-        context = _transcript_plan(workspace, meeting_id, data)
+        if spec["replace_only"]:
+            if len(data) > MAX_LOCAL_ARTIFACT_BYTES:
+                raise _Reject(f"{kind} content exceeds the supported size")
+            if _CONTROL.search(content):
+                raise _Reject(f"{kind} content contains unsupported control characters")
+        try:
+            context = _registered_plan(workspace, meeting_id, data, spec, kind)
+        except _Reject:
+            # An interrupted publication leaves stale ownership behind; an open
+            # journal is the real cause and is classified as recovery_required.
+            if not dry_run:
+                _require_quiet_journals(workspace)
+            raise
         plan, plan_sha = context["plan"], _sha(_canonical(context["plan"]))
         if dry_run:
             return _success_envelope("DryRun", "Dry run: no workspace mutation.",
                                      {"meeting_id": meeting_id, "plan": plan,
                                       "plan_sha256": plan_sha, "changed": context["changed"]})
         if not context["changed"]:
-            return _success_envelope("Unchanged", "The registered transcript is unchanged.",
+            return _success_envelope("Unchanged", f"The registered {kind} is unchanged.",
                                      {"meeting_id": meeting_id, "paths": plan["paths"],
                                       "changed": False, "plan_sha256": plan_sha})
         _require_quiet_journals(workspace)
         guard_module = _load_guard(_trusted_lock_root(trusted_workspace_lock_root))
         guard = _Guard(guard_module, workspace, lease_id, conversation_id)
         _require_lease(guard)
-        current = _transcript_plan(workspace, meeting_id, data)
+        current = _registered_plan(workspace, meeting_id, data, spec, kind)
         if not current["changed"]:
-            return _success_envelope("Unchanged", "The registered transcript is unchanged.",
+            return _success_envelope("Unchanged", f"The registered {kind} is unchanged.",
                                      {"meeting_id": meeting_id,
                                       "paths": current["plan"]["paths"], "changed": False})
         record = {"meeting_id": meeting_id, "_workspace": str(workspace),
                   "_register_existed": True}
         publication = _apply(workspace, record, current["payload"], current["ownership"],
                              current["register_bytes"], current["steps"], guard,
-                             action="publish_transcript")
-        return _success_envelope("Applied", "Registered transcript updated.",
+                             action=spec["action"])
+        return _success_envelope("Applied", f"Registered {kind} updated.",
                                  {"meeting_id": meeting_id, "entry": current["entry"],
                                   "paths": current["plan"]["paths"], "changed": True,
                                   "plan_sha256": plan_sha, **publication})
@@ -2096,29 +2151,64 @@ def publish_registered_transcript(content, *, workspace_root, lease_id, meeting_
                                error={"type": "Rejected", "message": "writer failure"})
 
 
-def _transcript_plan(root: Path, meeting_id: str, data: bytes) -> dict:
+def _require_exclusive_registered_path(entries: list[dict], existing: dict, field: str,
+                                       relative: str, ownership: dict, kind: str) -> None:
+    """Reject a registered path that is aliased or whose ownership is ambiguous.
+
+    Replacing a file through one register field must never also change another
+    artifact: the path must belong to exactly one register field of exactly one
+    meeting, carry the expected artifact kind and have a single ownership record
+    of the same kind.
+    """
+    if _artifact_kind(relative) != kind:
+        raise _Reject(f"the registered {field} does not name a {kind} artifact")
+    references = 0
+    for entry in entries:
+        for key in ("summary_path", "transcript_path", "transcript_raw_path"):
+            if entry.get(key) == relative:
+                if entry is not existing or key != field:
+                    raise _Reject(f"the registered {field} is shared with another registered "
+                                  "artifact; refusing ambiguous publication")
+                references += 1
+    if references != 1:
+        raise _Reject(f"the registered {field} is ambiguous; refusing publication")
+    records = [item for item in ownership["files"] if item["path"] == relative]
+    if len(records) > 1:
+        raise _Reject(f"the {kind} ownership record is ambiguous; refusing publication")
+    if records and records[0].get("kind") not in (None, kind):
+        raise _Reject(f"the {kind} ownership record names a different artifact kind; "
+                      "refusing publication")
+
+
+def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind: str) -> dict:
+    field = spec["field"]
     register, entries, register_raw = _read_register(root)
     matches = [entry for entry in entries if meeting_id in _entry_identities(entry)[0]]
     if len(matches) != 1:
         raise _Reject("the meeting id does not identify exactly one registered meeting")
     existing = matches[0]
-    relative = existing.get("transcript_path")
+    relative = existing.get(field)
     if not isinstance(relative, str) or not relative:
-        raise _Reject("the registered meeting has no transcript_path")
+        raise _Reject(f"the registered meeting has no {field}")
     if not relative.startswith("memory/evidence/"):
-        raise _Reject("the registered transcript_path is outside the evidence zone")
-    _safe_target(root, relative, "registered transcript_path")
+        raise _Reject(f"the registered {field} is outside the evidence zone")
+    _safe_target(root, relative, f"registered {field}")
     ownership = _ownership_document(
         _read_json_file(root, _OWNERSHIP, MAX_REGISTER_BYTES, "ownership record")[0])
+    if spec["replace_only"]:
+        _require_exclusive_registered_path(entries, existing, field, relative, ownership, kind)
     target = root / relative
     owner = _ownership_entry(ownership, relative)
     exists = _lstat(target) is not None
+    if spec["replace_only"] and not exists:
+        raise _Reject(f"the registered {kind} file is missing; this path only replaces an "
+                      "existing registered file")
     current_bytes: bytes | None = None
     if exists:
-        current_bytes = _read_bytes(target, MAX_REGISTER_BYTES, "registered transcript")
+        current_bytes = _read_bytes(target, MAX_REGISTER_BYTES, f"registered {kind}")
         if (owner is None or not isinstance(owner.get("sha256"), str)
                 or _sha(current_bytes) != owner["sha256"]):
-            raise _Reject("the registered transcript is not provably writer-owned; refusing "
+            raise _Reject(f"the registered {kind} is not provably writer-owned; refusing "
                           "orphan publication")
     digest = _sha(data)
     changed = not _same_bytes(target, data)
@@ -2134,8 +2224,10 @@ def _transcript_plan(root: Path, meeting_id: str, data: bytes) -> dict:
     document = dict(register["document"])
     document["meetings"] = [entry if item is existing else item for item in entries]
     register_bytes = _json_text(document).encode("utf-8") if entry_changed else register_raw
+    ownership_identity = (_effective_identity(existing, {"meeting_id": meeting_id})
+                          if spec["replace_only"] else meeting_id)
     updated_ownership = _new_ownership(ownership, {relative: data},
-                                       {"meeting_id": meeting_id}, drop=set())
+                                       {"meeting_id": ownership_identity}, drop=set())
     ownership_step, ownership_changed = _ownership_step(root, ownership, updated_ownership)
 
     steps: list[dict] = []
@@ -2153,8 +2245,8 @@ def _transcript_plan(root: Path, meeting_id: str, data: bytes) -> dict:
         steps.append(register_step)
     changed = changed or ownership_changed or register_step_changed
     plan = {"schema": PLAN_SCHEMA, "writer_version": WRITER_VERSION,
-            "record_schema": RECORD_SCHEMA, "action": "publish_transcript",
-            "meeting_id": meeting_id, "paths": {"transcript_path": relative},
+            "record_schema": RECORD_SCHEMA, "action": spec["action"],
+            "meeting_id": meeting_id, "paths": {field: relative},
             "register": {"path": _REGISTER, "existed": register["existed"]},
             "files": [{"path": relative, "sha256": digest, "bytes": len(data),
                        "exists": exists,
@@ -2329,7 +2421,7 @@ def capabilities() -> dict:
         "record_schema": RECORD_SCHEMA,
         "writer_version": WRITER_VERSION,
         "actions": ["ingest_record", "ingest_local", "publish_registered_transcript",
-                    "inspect", "recover"],
+                    "publish_registered_summary", "inspect", "recover"],
         "record_root_fields": sorted(_RECORD_KEYS),
         "source_systems": sorted(_SYSTEMS),
         "exit_codes": {"0": "success", "2": "rejected", "3": "recovery_required"},

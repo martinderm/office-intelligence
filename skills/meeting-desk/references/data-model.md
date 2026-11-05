@@ -298,6 +298,39 @@ is provably writer-owned (recorded hash). A byte-identical rebuild is a no-op.
 `--check` stays read-only. For a byte-identical rebuild the same metadata options
 belong to the documented call.
 
+### Summary replacement (`publish_registered_summary`, Issue #52 P1)
+
+The summary has its own publication seam next to the transcript seam:
+`ingest_meeting.publish_registered_summary(content, *, workspace_root, lease_id,
+meeting_id, conversation_id=None, trusted_workspace_lock_root=None,
+dry_run=False)` (Python API like `publish_registered_transcript`; there is no
+CLI flag). It replaces **only** the registered `summary_path` of exactly one
+meeting. The transcript, the raw transcript and their ownership records are not
+read for writing, so they stay byte- and record-identical; the register entry
+only moves to `content_status: provisional` with `review_recommended` and a
+`content-changed` reason, and the summary ownership record is rewritten with the
+new hash and size.
+
+* `content` is the complete summary file text including frontmatter. It is stored
+  byte-exact (UTF-8, no newline translation); the writer does not render or
+  validate the frontmatter, so the caller keeps `document_type`, `meeting_id`
+  and the other header fields consistent. At most 4 MiB UTF-8 bytes, not empty,
+  no NUL/C0 control characters other than TAB/LF/CR.
+* **Replace only.** A meeting without a registered `summary_path`, or whose
+  registered file is missing, is rejected (`Rejected`, exit 2); the path never
+  creates a summary, so no orphan is produced. Create or re-create a summary
+  with `ingest_record` / `--local`.
+* **Fail-closed ownership.** Rejected without mutation: no or several matching
+  register entries; `summary_path` outside `memory/evidence/`; a path that is not
+  a summary artifact or is shared with any other register path field (including
+  another meeting's); a missing, duplicated or non-`summary` ownership record; a
+  file whose SHA-256 differs from the recorded hash (human edit).
+* **Idempotent.** Identical bytes return `Unchanged` and write nothing.
+  `dry_run=True` returns the plan (`action: publish_summary`) without a lease.
+* **Classification.** Rejection → exit 2. An open journal, or an interrupted
+  publication (journal left behind, later retries included), → `recovery_required`
+  (exit 3) with explicit `--recover`; the writer never retries silently.
+
 ---
 
 ## 5. Writer journal, ownership and recovery
