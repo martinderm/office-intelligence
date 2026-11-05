@@ -21,7 +21,7 @@ import sys
 import uuid
 from typing import Any, Mapping
 
-from core.common import normalize_message_id, resolve_data_dir, utc_now_iso
+from core.common import normalize_message_id, replace_with_retry, resolve_data_dir, utc_now_iso
 from core.attachment_policy import sanitize_attachment_filename
 from core.attachment_fetch import (
     INVENTORY_FILENAME,
@@ -1357,7 +1357,7 @@ def _save_discard_journal_atomic(journal_path: Path, journal_data: dict[str, Any
             f.write(data_bytes)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, journal_path)
+        replace_with_retry(tmp_path, journal_path)
     except Exception as err:
         if tmp_path.exists():
             try:

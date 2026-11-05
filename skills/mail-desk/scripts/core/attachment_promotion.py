@@ -77,7 +77,7 @@ from core.attachment_authorization import (
     RECEIPT_TYPE_ATTACHMENT_AUTO_EVALUATION,
     guard_context_authorization,
 )
-from core.common import normalize_message_id, utc_now_iso
+from core.common import normalize_message_id, replace_with_retry, utc_now_iso
 from core.modes.dossier_synthesis import canonical_json_sha256
 from core.quarantine.attachment_fetch import (
     INVENTORY_FILENAME,
@@ -1265,7 +1265,7 @@ def _write_journal_atomic(journal_path: Path, journal: dict[str, Any]) -> None:
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(tmp_path, journal_path)
+        replace_with_retry(tmp_path, journal_path)
     except OSError:
         _unlink_quiet(tmp_path)
         raise

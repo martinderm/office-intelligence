@@ -13,7 +13,11 @@ Der Batch-Runner bündelt mehrstufige E-Mail-Verarbeitungsabläufe in **einem Py
    `complete` fest; `aborted` und `partial` sind explizite Endzustände. Nur
    journal-eigene Temp-Siblings werden aufgeräumt; Manifeste/fremde Dateien bleiben
    Recovery-Evidenz. Ein Resume liest die gesamte Phasenhistorie und beginnt exakt
-   mit dem ersten noch fehlenden Schritt.
+   mit dem ersten noch fehlenden Schritt. Jeder Journal-Write ersetzt das Ziel
+   atomar; blockiert unter Windows ein fremdes Handle den Austausch (`WinError 5`),
+   wird nur der Replace begrenzt wiederholt (höchstens 5 Versuche, rund 0,4 s) und
+   danach als `AtomicReplaceError` (`atomic_replace_failed`) gemeldet — das letzte
+   gültige Journal bleibt unverändert erhalten.
 4. **Kontrollierter Einstieg:** Ein Auftrag über N Mails erzeugt zuerst einen
    regelbasierten, hash-gebundenen Manifest-Entwurf (`draft`); erst nach
    sichtbarer Review führen `execute` und `verify` aus. `pipeline` ist ebenfalls

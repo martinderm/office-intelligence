@@ -229,7 +229,7 @@ geschlossen.**
 | :--- | :--- | :--- |
 | **Nomen** (Struktur & Zustand) | [`objects.md`](objects.md) | `attachment-quarantine-index.json` (Schema 1 mit optionalen Coverage-Feldern), `attachment-disposition-log.jsonl`, `attachment-discard-journal.json`, `.quarantine-inventory.json`, `final-location-index.json`, `draft-journal.json` (Schema 1, ungesendete Draft-API; getrennt vom Batch-Recovery-Journal), Dossiers, DTOs. |
 | **Verben** (Ablauf & Transformation) | [`processes.md`](processes.md) | Batch-Lifecycles (`draft` → `execute` → `verify`), Quarantäne-, Coverage- & Dispositions-Ablauf, Recovery-Workflow, Reconcile, Himalaya-Intake sowie der ungesendete Draft-Lifecycle (Drafts-Ordner-Auflösung → APPEND → `\Deleted` + EXPUNGE). |
-| **Seiteneffekte** (Umwelt & Grenzen) | [`effects.md`](effects.md) | Windows UNC-Drive Normalisierung, 0x400 Reparse-Point Bann, Tempfile-Replace, Secret-Filter, Recovery-Scope-Drift, Coverage-Fail-Closed-Integrität. |
+| **Seiteneffekte** (Umwelt & Grenzen) | [`effects.md`](effects.md) | Windows UNC-Drive Normalisierung, 0x400 Reparse-Point Bann, Tempfile-Replace mit begrenztem Windows-Sharing-Retry (`core/common.py`, Issue #70, [§1.3](effects.md#13-atomarer-austausch--begrenzter-windows-sharing-retry-issue-70)), Secret-Filter, Recovery-Scope-Drift, Coverage-Fail-Closed-Integrität. |
 
 ---
 
@@ -1002,7 +1002,7 @@ den vollständigen MD-P1-Preflight erneut aus (das übergebene
 Preflight-Envelope ist Evidenz, nicht Autorität — Hash + 5 Feldbindungen
 revalidiert). Journal `data/mail-desk/attachment-promotions/<promotion_id>/
 promotion-journal.json` Schema 1, atomar (Sibling-Temp + `fsync` +
-`os.replace`), hash-chained Phasen `approved` → `preflight_verified` →
+`replace_with_retry`, begrenzter Windows-Sharing-Retry: [effects.md §1.3](effects.md#13-atomarer-austausch--begrenzter-windows-sharing-retry-issue-70)), hash-chained Phasen `approved` → `preflight_verified` →
 `temp_written` → `target_promoted` → `target_verified` → (`
 source_cleanup_pending`) → `completed` plus terminal `failed`/
 `recovery_required`; `promotion_id` deterministisch aus `review_hash` +
