@@ -1481,7 +1481,18 @@ class RegisteredSummaryPublishTests(WriterTestBase):
                           else item for item in ownership["files"]]),
                 ("other meeting", [dict(item, meeting_id="ticnote-other-meeting")
                                    if item["path"] == summary_rel else item
-                                   for item in ownership["files"]])):
+                                   for item in ownership["files"]]),
+                # Hash matches the file, but the binding fields are absent.
+                ("no meeting_id", [{k: v for k, v in item.items() if k != "meeting_id"}
+                                   if item["path"] == summary_rel else item
+                                   for item in ownership["files"]]),
+                ("no kind", [{k: v for k, v in item.items() if k != "kind"}
+                             if item["path"] == summary_rel else item
+                             for item in ownership["files"]]),
+                ("neither", [{k: v for k, v in item.items()
+                              if k not in ("kind", "meeting_id")}
+                             if item["path"] == summary_rel else item
+                             for item in ownership["files"]])):
             with self.subTest(label):
                 self.ownership_path.write_text(
                     json.dumps({**ownership, "files": files}), encoding="utf-8")

@@ -326,8 +326,10 @@ new hash and size.
 * **Fail-closed ownership.** Rejected without mutation: no or several matching
   register entries; `summary_path` outside `memory/evidence/`; a transcript/raw file name
   or a path shared with any other register path field (including another
-  meeting's); a missing, duplicated, non-`summary` or other-meeting ownership
-  record (the record is bound to the entry's stable ID, never to an alias); a
+  meeting's); a missing or duplicated ownership record, or one whose `kind` is not
+  `summary` or whose `meeting_id` is not the entry's stable ID (never an alias);
+  records lacking `kind` or `meeting_id` are rejected too, because every record
+  the writer creates carries both; a
   file whose SHA-256 differs from the recorded hash (human edit).
 * **Idempotent.** Identical bytes return `Unchanged` and write nothing.
   `dry_run=True` returns the plan (`action: publish_summary`) without a lease.

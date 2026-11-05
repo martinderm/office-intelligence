@@ -2162,7 +2162,8 @@ def _require_exclusive_registered_path(entries: list[dict], existing: dict, fiel
     Replacing a file through one register field must never also change another
     artifact: the path must belong to exactly one register field of exactly one
     meeting, not carry a transcript/raw file name (``_artifact_kind``) and have a
-    single ownership record of the same kind that is bound to this meeting.
+    single ownership record whose ``kind`` and ``meeting_id`` equal the expected
+    kind and ``identity`` (missing fields are rejected, not tolerated).
     """
     if _artifact_kind(relative) != kind:
         raise _Reject(f"the registered {field} does not name a {kind} artifact")
@@ -2179,12 +2180,13 @@ def _require_exclusive_registered_path(entries: list[dict], existing: dict, fiel
     records = [item for item in ownership["files"] if item["path"] == relative]
     if len(records) > 1:
         raise _Reject(f"the {kind} ownership record is ambiguous; refusing publication")
-    if records and records[0].get("kind") not in (None, kind):
-        raise _Reject(f"the {kind} ownership record names a different artifact kind; "
-                      "refusing publication")
-    bound = records[0].get("meeting_id") if records else None
-    if isinstance(bound, str) and bound and bound != identity:
-        raise _Reject(f"the {kind} ownership record is bound to a different meeting; "
+    # Every record the writer creates carries kind and meeting_id, so a record
+    # without them is not provably this meeting's summary: both are required.
+    if records and records[0].get("kind") != kind:
+        raise _Reject(f"the {kind} ownership record does not name the {kind} artifact "
+                      "kind; refusing publication")
+    if records and records[0].get("meeting_id") != identity:
+        raise _Reject(f"the {kind} ownership record is not bound to this meeting; "
                       "refusing publication")
 
 

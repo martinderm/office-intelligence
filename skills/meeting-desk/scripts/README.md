@@ -212,7 +212,8 @@ ingest_meeting.publish_registered_summary(
   `memory/evidence/`, Transkript-/Raw-Dateiname oder mit einem anderen
   Register-Pfadfeld (auch eines anderen Meetings) geteilter Pfad, fehlender/
   doppelter/artfremder/an ein anderes Meeting gebundener Ownership-Eintrag
-  (gebunden wird an die stabile ID, nie an einen Alias) und Hash-Abweichung
+  (`kind` und `meeting_id` müssen exakt `summary` bzw. die stabile ID — nie ein
+  Alias — sein; fehlende Felder werden abgewiesen) und Hash-Abweichung
   (Handedit).
 * Identischer Inhalt → `Unchanged` ohne Write; `dry_run=True` liefert den Plan
   (`action: publish_summary`) ohne Lease. Offenes oder nach unterbrochener
