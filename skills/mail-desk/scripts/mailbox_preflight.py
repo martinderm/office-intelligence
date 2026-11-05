@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 import sys
 import tempfile
@@ -19,6 +18,7 @@ if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
 from core import build_error, build_success, emit_json, run_himalaya, utc_now_iso
+from core.common import replace_with_retry
 
 
 ACTION = "mailbox_preflight"
@@ -72,7 +72,7 @@ def _write_state_atomic(path: Path, payload: dict) -> None:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
         handle.write("\n")
         temporary_path = Path(handle.name)
-    os.replace(temporary_path, path)
+    replace_with_retry(temporary_path, path)
 
 
 def _emit_success(message: str, data: dict) -> None:

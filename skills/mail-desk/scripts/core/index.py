@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .common import normalize_message_id, utc_now_iso
+from .common import normalize_message_id, replace_with_retry, utc_now_iso
 
 ALLOWED_FIELDS = {
     "message_id",
@@ -54,7 +54,7 @@ def save_final_index_atomic(index_path: Path, data: dict[str, Any]) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
         f.write("\n")
         temp_path = Path(f.name)
-    temp_path.replace(index_path)
+    replace_with_retry(temp_path, index_path)
 
 
 def validate_index_payload(payload: dict[str, Any], mode: str) -> None:

@@ -26,7 +26,7 @@ from typing import Any, Callable
 import uuid
 import zipfile
 
-from core.common import normalize_message_id, resolve_data_dir
+from core.common import normalize_message_id, replace_with_retry, resolve_data_dir
 # The two preflight exception classes are deliberately re-exported here (alongside the functions
 # actually used below) so the MD-E1 evaluation orchestrator can catch the exact preflight
 # exceptions without importing `core.quarantine_preflight` directly: that direct import is
@@ -901,7 +901,7 @@ def _record_in_quarantine_inventory_unlocked(
     tmp_inv = run_dir / f".inv.{uuid.uuid4().hex}.tmp"
     with tmp_inv.open("w", encoding="utf-8") as fh:
         json.dump(inv, fh, indent=2, sort_keys=True)
-    os.replace(tmp_inv, inv_file)
+    replace_with_retry(tmp_inv, inv_file)
 
 
 def _record_in_quarantine_inventory(

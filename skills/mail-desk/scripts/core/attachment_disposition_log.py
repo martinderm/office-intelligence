@@ -1669,7 +1669,7 @@ def update_quarantine_inventory_atomic(
             f.write(inv_bytes)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_file, inv_file)
+        replace_with_retry(tmp_file, inv_file)
     except Exception as err:
         if tmp_file.exists():
             try:
