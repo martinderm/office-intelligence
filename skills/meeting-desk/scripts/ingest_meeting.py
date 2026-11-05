@@ -2101,14 +2101,17 @@ def _publish_registered(kind: str, content, *, workspace_root, lease_id, meeting
                 raise _Reject(f"{kind} content exceeds the supported size")
             if _CONTROL.search(content):
                 raise _Reject(f"{kind} content contains unsupported control characters")
-        try:
-            context = _registered_plan(workspace, meeting_id, data, spec, kind)
-        except _Reject:
-            # An interrupted publication leaves stale ownership behind; an open
-            # journal is the real cause and is classified as recovery_required.
-            if not dry_run:
-                _require_quiet_journals(workspace)
-            raise
+        def plan_now() -> dict:
+            try:
+                return _registered_plan(workspace, meeting_id, data, spec, kind)
+            except _Reject:
+                # An interrupted publication leaves stale ownership behind; an open
+                # journal is the real cause and is classified as recovery_required.
+                if not dry_run:
+                    _require_quiet_journals(workspace)
+                raise
+
+        context = plan_now()
         plan, plan_sha = context["plan"], _sha(_canonical(context["plan"]))
         if dry_run:
             return _success_envelope("DryRun", "Dry run: no workspace mutation.",
@@ -2122,12 +2125,12 @@ def _publish_registered(kind: str, content, *, workspace_root, lease_id, meeting
         guard_module = _load_guard(_trusted_lock_root(trusted_workspace_lock_root))
         guard = _Guard(guard_module, workspace, lease_id, conversation_id)
         _require_lease(guard)
-        current = _registered_plan(workspace, meeting_id, data, spec, kind)
+        current = plan_now()
         if not current["changed"]:
             return _success_envelope("Unchanged", f"The registered {kind} is unchanged.",
                                      {"meeting_id": meeting_id,
                                       "paths": current["plan"]["paths"], "changed": False})
-        record = {"meeting_id": meeting_id, "_workspace": str(workspace),
+        record = {"meeting_id": current["identity"], "_workspace": str(workspace),
                   "_register_existed": True}
         publication = _apply(workspace, record, current["payload"], current["ownership"],
                              current["register_bytes"], current["steps"], guard,
@@ -2152,13 +2155,14 @@ def _publish_registered(kind: str, content, *, workspace_root, lease_id, meeting
 
 
 def _require_exclusive_registered_path(entries: list[dict], existing: dict, field: str,
-                                       relative: str, ownership: dict, kind: str) -> None:
+                                       relative: str, ownership: dict, kind: str,
+                                       identity: str) -> None:
     """Reject a registered path that is aliased or whose ownership is ambiguous.
 
     Replacing a file through one register field must never also change another
     artifact: the path must belong to exactly one register field of exactly one
-    meeting, carry the expected artifact kind and have a single ownership record
-    of the same kind.
+    meeting, not carry a transcript/raw file name (``_artifact_kind``) and have a
+    single ownership record of the same kind that is bound to this meeting.
     """
     if _artifact_kind(relative) != kind:
         raise _Reject(f"the registered {field} does not name a {kind} artifact")
@@ -2178,6 +2182,10 @@ def _require_exclusive_registered_path(entries: list[dict], existing: dict, fiel
     if records and records[0].get("kind") not in (None, kind):
         raise _Reject(f"the {kind} ownership record names a different artifact kind; "
                       "refusing publication")
+    bound = records[0].get("meeting_id") if records else None
+    if isinstance(bound, str) and bound and bound != identity:
+        raise _Reject(f"the {kind} ownership record is bound to a different meeting; "
+                      "refusing publication")
 
 
 def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind: str) -> dict:
@@ -2195,8 +2203,13 @@ def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind:
     _safe_target(root, relative, f"registered {field}")
     ownership = _ownership_document(
         _read_json_file(root, _OWNERSHIP, MAX_REGISTER_BYTES, "ownership record")[0])
+    # Summary ownership is bound to the entry's stable ID, never to an alias the
+    # caller matched by; the transcript seam keeps the id it was called with.
+    identity = (_effective_identity(existing, {"meeting_id": meeting_id})
+                if spec["replace_only"] else meeting_id)
     if spec["replace_only"]:
-        _require_exclusive_registered_path(entries, existing, field, relative, ownership, kind)
+        _require_exclusive_registered_path(entries, existing, field, relative, ownership,
+                                           kind, identity)
     target = root / relative
     owner = _ownership_entry(ownership, relative)
     exists = _lstat(target) is not None
@@ -2224,10 +2237,8 @@ def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind:
     document = dict(register["document"])
     document["meetings"] = [entry if item is existing else item for item in entries]
     register_bytes = _json_text(document).encode("utf-8") if entry_changed else register_raw
-    ownership_identity = (_effective_identity(existing, {"meeting_id": meeting_id})
-                          if spec["replace_only"] else meeting_id)
     updated_ownership = _new_ownership(ownership, {relative: data},
-                                       {"meeting_id": ownership_identity}, drop=set())
+                                       {"meeting_id": identity}, drop=set())
     ownership_step, ownership_changed = _ownership_step(root, ownership, updated_ownership)
 
     steps: list[dict] = []
@@ -2246,7 +2257,7 @@ def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind:
     changed = changed or ownership_changed or register_step_changed
     plan = {"schema": PLAN_SCHEMA, "writer_version": WRITER_VERSION,
             "record_schema": RECORD_SCHEMA, "action": spec["action"],
-            "meeting_id": meeting_id, "paths": {field: relative},
+            "meeting_id": identity, "paths": {field: relative},
             "register": {"path": _REGISTER, "existed": register["existed"]},
             "files": [{"path": relative, "sha256": digest, "bytes": len(data),
                        "exists": exists,
@@ -2254,7 +2265,7 @@ def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind:
             "changed": changed}
     return {"plan": plan, "entry": entry, "payload": {relative: data},
             "register_bytes": register_bytes, "ownership": updated_ownership,
-            "steps": steps, "changed": changed}
+            "steps": steps, "changed": changed, "identity": identity}
 
 
 # ---------------------------------------------------------------------------

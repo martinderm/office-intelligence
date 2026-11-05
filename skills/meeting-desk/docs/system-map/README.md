@@ -8,7 +8,7 @@ Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
 CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-11-05) · 131 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-05) · 132 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
 >
@@ -84,6 +84,8 @@ Preflight (read-only)
   journal(completed) → journal identity/hash recheck → Journal/Stage entfernen → Applied (Exit 0)
 
 Jeder Fehler nach Journalerstellung → journal(failed), Exit 3 recovery_required.
+Plan-Rejection bei offenem Journal (z. B. veraltete Ownership nach unterbrochener
+Publikation) der Registered-Artifact-Seams (Transkript/Summary) → ebenfalls Exit 3.
 Unveränderter Reingest → Unchanged (Exit 0), kein Write.
 ```
 
@@ -125,11 +127,12 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
   Writer-eigene Dateien werden nicht überschrieben; identische Bytes sind No-op.
 - **Summary-Ersatz (#52 P1):** gleiche Ownership-Regel, strenger gefasst:
   genau ein Registereintrag; `summary_path` unter `memory/evidence/`, Artefaktart
-  `summary` und kein Alias eines anderen Register-Pfadfelds (weder
-  `transcript_path`/`transcript_raw_path` noch Pfad eines anderen Meetings); genau
-  ein Ownership-Eintrag der Art `summary`, dessen SHA-256 zu den aktuellen Bytes
-  passt; Datei muss existieren. Verstoß = Rejection (Exit 2) ohne Mutation. Inhalt
-  ≤ 4 MiB UTF-8-Bytes, ohne NUL/C0-Steuerzeichen (außer TAB/LF/CR). Geänderter
+  kein `*.transcript.md`/`*.transcript.raw.md`-Name und kein Alias eines anderen
+  Register-Pfadfelds (weder `transcript_path`/`transcript_raw_path` noch Pfad eines
+  anderen Meetings); genau ein Ownership-Eintrag der Art `summary`, an die stabile
+  Meeting-ID des Eintrags gebunden (nie an einen Alias), dessen SHA-256 zu den
+  aktuellen Bytes passt; Datei muss existieren. Verstoß = Rejection (Exit 2) ohne Mutation. Inhalt
+  ≤ 4 MiB UTF-8-Bytes, ohne NUL/C0/U+007F-Steuerzeichen (außer TAB/LF/CR). Geänderter
   Inhalt setzt `content_status: provisional`, `review_recommended` und
   `review_reason` (`content-changed`); identischer Inhalt = `Unchanged`, kein Write.
   Schreibt nur Summary, Ownership-Eintrag des Summary und Register-Review-Zustand
@@ -204,7 +207,7 @@ Diagnostik; stdout genau eine Zeile.
   Transkript-/Raw-Byte- und Ownership-Identität, Idempotenz/Dry-Run, Capability,
   nicht-writer-eigene/mehrdeutige/aliasierte Summaries, fehlendes registriertes
   Summary, Lease-/Journal-/Eingabefehler, unterbrochene Publikation mit
-  Recovery; Transkriptpfad unverändert.
+  Recovery, Alias-Bindung an die stabile ID; Transkriptpfad unverändert.
 - `tests/test_build_clean_transcript.py`: Korrektur-Engine und
   Delegations-/Fehler-/Exit-Vertrag des Builders.
 - `tests/fixtures/meeting-record-v1.json`: gemeinsames SSOT-Paket mit

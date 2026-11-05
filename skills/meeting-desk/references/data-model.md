@@ -296,7 +296,10 @@ Publication is delegated to the canonical writer: only the registered
 `transcript_path` of exactly one meeting may be updated, and only while the file
 is provably writer-owned (recorded hash). A byte-identical rebuild is a no-op.
 `--check` stays read-only. For a byte-identical rebuild the same metadata options
-belong to the documented call.
+belong to the documented call. A planning rejection while a journal is open (for
+example stale ownership after an interrupted publication) is reported as
+`recovery_required` (exit 3), not as a plain rejection; this holds for both the
+transcript and the summary seam.
 
 ### Summary replacement (`publish_registered_summary`, Issue #52 P1)
 
@@ -307,23 +310,24 @@ dry_run=False)` (Python API like `publish_registered_transcript`; there is no
 CLI flag). It replaces **only** the registered `summary_path` of exactly one
 meeting. The transcript, the raw transcript and their ownership records are not
 read for writing, so they stay byte- and record-identical; the register entry
-only moves to `content_status: provisional` with `review_recommended` and a
-`content-changed` reason, and the summary ownership record is rewritten with the
+only moves to `content_status: provisional` with `review_recommended`, a
+`content-changed` reason and a fresh `last_synced_at`, and the summary ownership record is rewritten with the
 new hash and size.
 
 * `content` is the complete summary file text including frontmatter. It is stored
   byte-exact (UTF-8, no newline translation); the writer does not render or
   validate the frontmatter, so the caller keeps `document_type`, `meeting_id`
   and the other header fields consistent. At most 4 MiB UTF-8 bytes, not empty,
-  no NUL/C0 control characters other than TAB/LF/CR.
+  no NUL/C0/U+007F control characters other than TAB/LF/CR.
 * **Replace only.** A meeting without a registered `summary_path`, or whose
   registered file is missing, is rejected (`Rejected`, exit 2); the path never
   creates a summary, so no orphan is produced. Create or re-create a summary
   with `ingest_record` / `--local`.
 * **Fail-closed ownership.** Rejected without mutation: no or several matching
-  register entries; `summary_path` outside `memory/evidence/`; a path that is not
-  a summary artifact or is shared with any other register path field (including
-  another meeting's); a missing, duplicated or non-`summary` ownership record; a
+  register entries; `summary_path` outside `memory/evidence/`; a transcript/raw file name
+  or a path shared with any other register path field (including another
+  meeting's); a missing, duplicated, non-`summary` or other-meeting ownership
+  record (the record is bound to the entry's stable ID, never to an alias); a
   file whose SHA-256 differs from the recorded hash (human edit).
 * **Idempotent.** Identical bytes return `Unchanged` and write nothing.
   `dry_run=True` returns the plan (`action: publish_summary`) without a lease.

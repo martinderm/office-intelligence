@@ -203,15 +203,17 @@ ingest_meeting.publish_registered_summary(
   eintragsgleich; im Register ändern sich nur `content_status`
   (`provisional`), `review_recommended`, `review_reason` und `last_synced_at`.
 * `content` ist die komplette Summary-Datei inkl. Frontmatter (UTF-8, byte-exakt,
-  ≤ 4 MiB, nicht leer, keine NUL/C0-Steuerzeichen außer TAB/LF/CR). Der Writer
+  ≤ 4 MiB, nicht leer, keine NUL/C0/U+007F-Steuerzeichen außer TAB/LF/CR). Der Writer
   rendert oder prüft das Frontmatter nicht — der Aufrufer hält es konsistent.
 * **Nur Ersatz, nie Neuanlage:** fehlt der registrierte `summary_path` oder die
   registrierte Datei, wird abgewiesen (Exit 2, keine Mutation, kein Orphan);
   Neuanlage über `ingest_record`/`--local`.
 * **Fail-closed:** abgewiesen werden kein/mehrere Registertreffer, Pfad außerhalb
-  `memory/evidence/`, Nicht-Summary-Pfad oder mit einem anderen Register-Pfadfeld
-  (auch eines anderen Meetings) geteilter Pfad, fehlender/doppelter/artfremder
-  Ownership-Eintrag und Hash-Abweichung (Handedit).
+  `memory/evidence/`, Transkript-/Raw-Dateiname oder mit einem anderen
+  Register-Pfadfeld (auch eines anderen Meetings) geteilter Pfad, fehlender/
+  doppelter/artfremder/an ein anderes Meeting gebundener Ownership-Eintrag
+  (gebunden wird an die stabile ID, nie an einen Alias) und Hash-Abweichung
+  (Handedit).
 * Identischer Inhalt → `Unchanged` ohne Write; `dry_run=True` liefert den Plan
   (`action: publish_summary`) ohne Lease. Offenes oder nach unterbrochener
   Publikation verbliebenes Journal → `recovery_required` (Exit 3), Wiederholung
@@ -247,7 +249,9 @@ Datenzonen des Workspace liegen (`memory/references/`, `memory/evidence/`,
 Pflicht; `--out` muss exakt der registrierte `transcript_path` dieses eindeutig
 identifizierten Meetings sein. Ein fehlender Registereintrag wird zuerst über
 Ingest angelegt. Eine verwaiste Direktveröffentlichung, eine nicht
-Writer-eigene Datei oder ein offenes Journal wird abgewiesen. `--force` bleibt
+Writer-eigene Datei oder ein offenes Journal wird abgewiesen; eine Plan-Rejection
+bei offenem Journal (z. B. veraltete Ownership nach unterbrochener Publikation)
+meldet `recovery_required` (Exit 3). `--force` bleibt
 aus Kompatibilitätsgründen akzeptiert, umgeht aber nie Ownership oder
 No-Clobber. `--check` bleibt rein lesend.
 

@@ -1472,20 +1472,31 @@ class RegisteredSummaryPublishTests(WriterTestBase):
 
     def test_duplicate_or_foreign_kind_ownership_records_are_ambiguous(self):
         summary_rel = self.entry["summary_path"]
-        original = self.ownership_path.read_bytes()
+        self.addCleanup(self.ownership_path.write_bytes, self.ownership_path.read_bytes())
         ownership = read_json(self.ownership_path)
         record = next(item for item in ownership["files"] if item["path"] == summary_rel)
         for label, files in (
                 ("duplicate", ownership["files"] + [dict(record)]),
                 ("kind", [dict(item, kind="transcript") if item["path"] == summary_rel
-                          else item for item in ownership["files"]])):
+                          else item for item in ownership["files"]]),
+                ("other meeting", [dict(item, meeting_id="ticnote-other-meeting")
+                                   if item["path"] == summary_rel else item
+                                   for item in ownership["files"]])):
             with self.subTest(label):
                 self.ownership_path.write_text(
                     json.dumps({**ownership, "files": files}), encoding="utf-8")
                 before = self.artifact_state()
                 self.assert_rejected(self.publish_summary())
                 self.assert_untouched(before)
-        self.ownership_path.write_bytes(original)
+
+    def test_alias_match_binds_ownership_and_journal_to_the_stable_id(self):
+        self.mutate_register(lambda doc: doc["meetings"][0].update(id="legacy-alias"))
+        envelope = self.publish_summary(meeting_id="legacy-alias")
+        self.assert_success(envelope, "Applied")
+        self.assertEqual(envelope["data"]["meeting_id"], "legacy-alias")
+        owner = self.ownership_by_path()[self.entry["summary_path"]]
+        self.assertEqual(owner["meeting_id"], self.meeting_id)
+        self.assert_success(self.publish_summary(meeting_id="legacy-alias"), "Unchanged")
 
     def test_multiple_register_matches_are_ambiguous(self):
         def duplicate(document):
@@ -1513,6 +1524,7 @@ class RegisteredSummaryPublishTests(WriterTestBase):
 
     def test_summary_path_aliasing_transcript_or_raw_is_rejected(self):
         original = register_document(self.root)
+        self.addCleanup(self.write_register, original)
         for alias in ("transcript_path", "transcript_raw_path"):
             with self.subTest(alias):
                 document = copy.deepcopy(original)
@@ -1526,7 +1538,6 @@ class RegisteredSummaryPublishTests(WriterTestBase):
                                  (self.root / self.entry["transcript_raw_path"]).read_bytes())
                 self.assertFalse(self.journal_dir().exists()
                                  and any(self.journal_dir().iterdir()))
-        self.write_register(original)
 
     def test_summary_path_outside_evidence_zone_is_rejected(self):
         self.mutate_register(lambda doc: doc["meetings"][0].update(
