@@ -934,11 +934,8 @@ def _extract_content_internal(
 
         source_character_count = len(decoded_str)
         if len(decoded_str) > max_chars:
+            extracted_text = decoded_str[:max_chars]
             truncation_reason = "max_chars_exceeded"
-            extracted_text = (
-                decoded_str[:max_chars]
-                + f"\n\n[TRUNCATED: Content exceeded {truncation_reason} limit]"
-            )
         else:
             extracted_text = decoded_str
         method = "native"

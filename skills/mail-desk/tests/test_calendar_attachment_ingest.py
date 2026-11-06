@@ -351,9 +351,9 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
         )
         self.assertEqual(result["status"], "extracted")
         self.assertEqual(result["truncation_reason"], "max_chars_exceeded")
-        self.assertIn("[TRUNCATED: Content exceeded max_chars_exceeded limit]", result["extracted_text"])
         max_chars = self.limits["max_chars_per_attachment"]
-        self.assertEqual(len(result["extracted_text"].split("\n\n[TRUNCATED:")[0]), max_chars)
+        self.assertEqual(len(result["extracted_text"]), max_chars)
+        self.assertEqual(result["extracted_text"], large_ics[:max_chars])
 
 
 class TestCalendarExtractModule(unittest.TestCase):
