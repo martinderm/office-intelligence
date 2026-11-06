@@ -30,6 +30,7 @@ sys.path.insert(0, str(CALENDAR_DESK_ROOT / "scripts"))
 from core.caldav_client import (  # noqa: E402
     CalDAVClient,
     CalDAVProtocolError,
+    _make_fenced_record,
     parse_dav_xml,
 )
 
@@ -55,6 +56,7 @@ class MockCalDAVHandler(http.server.BaseHTTPRequestHandler):
     """Hermetic in-memory CalDAV test handler."""
 
     expected_auth: Optional[str] = "Basic " + base64.b64encode(b"testuser:testpass").decode("ascii")
+    last_principal_propfind_body: bytes = b""
 
     def log_message(self, format: str, *args: Any) -> None:
         # Suppress standard logging during tests
@@ -80,7 +82,11 @@ class MockCalDAVHandler(http.server.BaseHTTPRequestHandler):
         depth = self.headers.get("Depth", "0")
         parsed = urlparse(self.path)
 
+        length = int(self.headers.get("Content-Length", 0))
+        req_body = self.rfile.read(length) if length > 0 else b""
+
         if parsed.path.rstrip("/") == "/dav/principals":
+            MockCalDAVHandler.last_principal_propfind_body = req_body
             # Principal discovery response
             xml_resp = (
                 '<?xml version="1.0" encoding="utf-8" ?>\n'
@@ -158,6 +164,81 @@ class MockCalDAVHandler(http.server.BaseHTTPRequestHandler):
 
         # Handle calendar-query or calendar-multiget
         if "calendar-query" in body or "calendar-multiget" in body:
+            if "broken" in self.path:
+                escaped_ics = SAMPLE_ICS_PAYLOAD.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                xml_resp = (
+                    '<?xml version="1.0" encoding="utf-8" ?>\n'
+                    '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/corrupt-event.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop>\n'
+                    '        <D:getetag>"etag-corrupt"</D:getetag>\n'
+                    '        <C:calendar-data>TOTAL CORRUPTION NOT A VALID ICS :::</C:calendar-data>\n'
+                    '      </D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/event-123.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop>\n'
+                    '        <D:getetag>"etag-v1"</D:getetag>\n'
+                    f'        <C:calendar-data>{escaped_ics}</C:calendar-data>\n'
+                    '      </D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '</D:multistatus>'
+                )
+                data = xml_resp.encode("utf-8")
+                self.send_response(207)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            if "standalone-override" in self.path:
+                override_ics = (
+                    "BEGIN:VCALENDAR\r\n"
+                    "VERSION:2.0\r\n"
+                    "PRODID:-//office-intelligence//calendar-desk//EN\r\n"
+                    "BEGIN:VEVENT\r\n"
+                    "UID:standalone-override@office-intelligence.test\r\n"
+                    "RECURRENCE-ID:20261102T090000Z\r\n"
+                    "DTSTAMP:20261101T080000Z\r\n"
+                    "DTSTART:20261102T093000Z\r\n"
+                    "DTEND:20261102T103000Z\r\n"
+                    "SUMMARY:Standalone Override Meeting\r\n"
+                    "STATUS:CONFIRMED\r\n"
+                    "END:VEVENT\r\n"
+                    "END:VCALENDAR\r\n"
+                )
+                escaped_ics = override_ics.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                xml_resp = (
+                    '<?xml version="1.0" encoding="utf-8" ?>\n'
+                    '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/override-only.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop>\n'
+                    '        <D:getetag>"etag-override-1"</D:getetag>\n'
+                    f'        <C:calendar-data>{escaped_ics}</C:calendar-data>\n'
+                    '      </D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '</D:multistatus>'
+                )
+                data = xml_resp.encode("utf-8")
+                self.send_response(207)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             escaped_ics = SAMPLE_ICS_PAYLOAD.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             xml_resp = (
                 '<?xml version="1.0" encoding="utf-8" ?>\n'
@@ -190,6 +271,17 @@ class MockCalDAVHandler(http.server.BaseHTTPRequestHandler):
             return
 
         parsed = urlparse(self.path)
+        if parsed.path.endswith("oversized.ics"):
+            chunk = b"A" * (1024 * 1024)
+            total_len = len(chunk) * 5
+            self.send_response(200)
+            self.send_header("Content-Type", "text/calendar; charset=utf-8")
+            self.send_header("Content-Length", str(total_len))
+            self.end_headers()
+            for _ in range(5):
+                self.wfile.write(chunk)
+            return
+
         if parsed.path.endswith("event-123.ics"):
             data = SAMPLE_ICS_PAYLOAD.encode("utf-8")
             self.send_response(200)
@@ -286,6 +378,31 @@ class TestSafeXmlParser(unittest.TestCase):
         with self.assertRaises(CalDAVProtocolError) as ctx:
             parse_dav_xml(unsafe_xml)
         self.assertEqual(ctx.exception.code, "CALDAV_UNSAFE_XML")
+
+    def test_parse_dav_xml_blocks_utf16_doctype_and_entity(self) -> None:
+        # UTF-16 LE with DOCTYPE
+        utf16_le_doc = (
+            '<?xml version="1.0" encoding="utf-16"?>\n'
+            '<!DOCTYPE test [\n'
+            '  <!ELEMENT test ANY >\n'
+            ']>\n'
+            '<test>payload</test>'
+        ).encode("utf-16-le")
+        with self.assertRaises(CalDAVProtocolError) as ctx_le:
+            parse_dav_xml(utf16_le_doc)
+        self.assertEqual(ctx_le.exception.code, "CALDAV_UNSAFE_XML")
+
+        # UTF-16 BE with ENTITY
+        utf16_be_ent = (
+            '<?xml version="1.0" encoding="utf-16"?>\n'
+            '<!DOCTYPE test [\n'
+            '  <!ENTITY xxe SYSTEM "file:///etc/passwd">\n'
+            ']>\n'
+            '<test>&xxe;</test>'
+        ).encode("utf-16-be")
+        with self.assertRaises(CalDAVProtocolError) as ctx_be:
+            parse_dav_xml(utf16_be_ent)
+        self.assertEqual(ctx_be.exception.code, "CALDAV_UNSAFE_XML")
 
     def test_parse_dav_xml_oversized_rejected(self) -> None:
         # 4 MiB + 1 byte
@@ -455,6 +572,119 @@ class TestCalDAVClient(unittest.TestCase):
             self.assertNotIn(secret_pass, err_msg)
             self.assertNotIn(secret_pass, err_repr)
             self.assertNotIn("Basic ", err_msg)
+
+    def test_request_blocks_cross_origin_absolute_urls_and_protects_auth(self) -> None:
+        client = CalDAVClient(
+            principal_url=f"{self.base_url}/dav/principals",
+            username="testuser",
+            password="testpass",
+            timeout_seconds=0.5,
+            allow_loopback_http=True,
+            default_tz="Europe/Vienna",
+        )
+
+        # Check different port raises CALDAV_REDIRECT_FORBIDDEN and does not connect
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        sock.settimeout(0.2)
+        dummy_port = sock.getsockname()[1]
+        try:
+            with self.assertRaises(CalDAVProtocolError) as ctx_port:
+                client.get_event(f"http://127.0.0.1:{dummy_port}/evil.ics")
+            self.assertEqual(ctx_port.exception.code, "CALDAV_REDIRECT_FORBIDDEN")
+            # Verify no connection arrived at dummy socket
+            with self.assertRaises((socket.timeout, BlockingIOError, OSError)):
+                conn, _ = sock.accept()
+                conn.close()
+        finally:
+            sock.close()
+
+        # Cross-host URL
+        with self.assertRaises(CalDAVProtocolError) as ctx_host:
+            client.get_event("http://evil.example.com/cal/leak.ics")
+        self.assertEqual(ctx_host.exception.code, "CALDAV_REDIRECT_FORBIDDEN")
+
+        # Scheme change
+        with self.assertRaises(CalDAVProtocolError) as ctx_scheme:
+            client.get_event(f"https://127.0.0.1:{self.port}/evil.ics")
+        self.assertEqual(ctx_scheme.exception.code, "CALDAV_REDIRECT_FORBIDDEN")
+
+    def test_request_aborts_on_oversized_response_stream(self) -> None:
+        client = self.get_client()
+        oversized_url = f"{self.base_url}/dav/calendars/users/testuser/work/oversized.ics"
+        with self.assertRaises(CalDAVProtocolError) as ctx:
+            client.get_event(oversized_url)
+        self.assertEqual(ctx.exception.code, "CALDAV_OVERSIZED_RESPONSE")
+
+    def test_discover_calendars_sends_explicit_propfind_body(self) -> None:
+        client = self.get_client()
+        MockCalDAVHandler.last_principal_propfind_body = b""
+        calendars = client.discover_calendars()
+        self.assertIsInstance(calendars, list)
+        req_body = MockCalDAVHandler.last_principal_propfind_body.decode("utf-8", errors="ignore")
+        self.assertTrue(len(req_body) > 0, "PROPFIND body must not be empty")
+        self.assertIn("current-user-principal", req_body)
+        self.assertIn("calendar-home-set", req_body)
+
+    def test_query_events_per_resource_error_isolation(self) -> None:
+        client = self.get_client()
+        broken_collection_url = f"{self.base_url}/dav/calendars/users/testuser/broken/"
+        result = client.query_events(
+            broken_collection_url,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T00:00:00Z",
+            expand_recurrences=True,
+        )
+        self.assertIn("records", result)
+        # Corrupt event is skipped/isolated, while the valid event is returned
+        self.assertEqual(len(result["records"]), 1)
+        self.assertEqual(result["records"][0]["uid"], "event-123@office-intelligence.test")
+
+    def test_query_events_preserves_standalone_override_without_master(self) -> None:
+        client = self.get_client()
+        override_collection_url = f"{self.base_url}/dav/calendars/users/testuser/standalone-override/"
+        result = client.query_events(
+            override_collection_url,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T00:00:00Z",
+            expand_recurrences=True,
+        )
+        self.assertIn("records", result)
+        self.assertEqual(len(result["records"]), 1)
+        self.assertEqual(result["records"][0]["summary"], "Standalone Override Meeting")
+        self.assertEqual(result["records"][0]["recurrence_id"], "20261102T090000Z")
+
+    def test_make_fenced_record_fences_organizer_and_attendees_cn(self) -> None:
+        raw_rec = {
+            "uid": "fence-cn-test@office-intelligence.test",
+            "summary": "Project Meeting",
+            "description": "Discuss project deliverables",
+            "location": "Room A",
+            "organizer": {
+                "cn": "Dr. Eve Evil",
+                "email": "eve@evil.test",
+            },
+            "attendees": [
+                {
+                    "cn": "Alice Colleague",
+                    "email": "alice@company.test",
+                    "partstat": "ACCEPTED",
+                },
+                {
+                    "cn": "Bob Partner",
+                    "email": "bob@partner.test",
+                    "partstat": "DECLINED",
+                },
+            ],
+        }
+        fenced = _make_fenced_record(raw_rec)
+        self.assertIn("<untrusted_calendar_content", fenced["organizer"]["cn"])
+        self.assertIn("Dr. Eve Evil", fenced["organizer"]["cn"])
+        self.assertIn("<untrusted_calendar_content", fenced["attendees"][0]["cn"])
+        self.assertIn("Alice Colleague", fenced["attendees"][0]["cn"])
+        self.assertIn("<untrusted_calendar_content", fenced["attendees"][1]["cn"])
+        self.assertIn("Bob Partner", fenced["attendees"][1]["cn"])
 
 
 if __name__ == "__main__":

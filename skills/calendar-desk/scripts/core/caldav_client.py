@@ -15,13 +15,19 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import xml.parsers.expat
 from datetime import datetime, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from core.ical_codec import expand_record_occurrences, parse_ics_to_records
+from core.ical_codec import (
+    MAX_ICS_BYTES,
+    expand_record_occurrences,
+    parse_ics_to_records,
+)
 from core.injection_fence import fence_calendar_record
 
 MAX_XML_BYTES = 4_194_304  # 4 MiB
+MAX_RESPONSE_BYTES = max(MAX_XML_BYTES, MAX_ICS_BYTES)
 
 
 class CalDAVProtocolError(RuntimeError):
@@ -79,6 +85,36 @@ def parse_dav_xml(raw_xml: bytes | str) -> ET.Element:
             "Unsafe XML payload contains <!DOCTYPE or <!ENTITY declarations",
         )
 
+    # Check UTF-16 LE and BE representations
+    if (
+        b"<\x00!\x00d\x00o\x00c\x00t\x00y\x00p\x00e" in lower
+        or b"<\x00!\x00e\x00n\x00t\x00i\x00t\x00y" in lower
+        or b"\x00<\x00!\x00d\x00o\x00c\x00t\x00y\x00p\x00e" in lower
+        or b"\x00<\x00!\x00e\x00n\x00t\x00i\x00t\x00y" in lower
+    ):
+        raise CalDAVProtocolError(
+            "CALDAV_UNSAFE_XML",
+            "Unsafe XML payload contains <!DOCTYPE or <!ENTITY declarations",
+        )
+
+    # Also enforce via expat parser DTD / Entity handlers
+    def _forbid_dtd(*args: Any, **kwargs: Any) -> None:
+        raise CalDAVProtocolError(
+            "CALDAV_UNSAFE_XML",
+            "Unsafe XML payload contains <!DOCTYPE or <!ENTITY declarations",
+        )
+
+    try:
+        expat_parser = xml.parsers.expat.ParserCreate()
+        expat_parser.StartDoctypeDeclHandler = _forbid_dtd
+        expat_parser.EntityDeclHandler = _forbid_dtd
+        expat_parser.Parse(raw_bytes, False)
+    except CalDAVProtocolError:
+        raise
+    except Exception:
+        # Non-DTD syntax errors will be caught and normalized by ET.fromstring below
+        pass
+
     try:
         return ET.fromstring(raw_bytes)
     except Exception as exc:
@@ -110,6 +146,26 @@ def _make_fenced_record(record: dict[str, Any]) -> dict[str, Any]:
     for field in ("summary", "description", "location"):
         if field in fc and isinstance(fc[field], dict) and "fenced" in fc[field]:
             fenced_rec[field] = fc[field]["fenced"]
+
+    organizer = fenced_rec.get("organizer")
+    if isinstance(organizer, dict):
+        org_fc = fc.get("organizer_cn")
+        if isinstance(org_fc, dict) and "fenced" in org_fc:
+            organizer["cn"] = org_fc["fenced"]
+
+    attendees = fenced_rec.get("attendees")
+    if isinstance(attendees, list):
+        att_fcs = fc.get("attendees_cn")
+        if isinstance(att_fcs, list):
+            att_idx = 0
+            for att in attendees:
+                if isinstance(att, dict) and str(att.get("cn", "") or ""):
+                    if att_idx < len(att_fcs):
+                        att_fc = att_fcs[att_idx]
+                        if isinstance(att_fc, dict) and "fenced" in att_fc:
+                            att["cn"] = att_fc["fenced"]
+                        att_idx += 1
+
     return fenced_rec
 
 
@@ -201,6 +257,27 @@ class CalDAVClient:
         body: bytes | None = None,
         headers: dict[str, str] | None = None,
     ) -> tuple[int, dict[str, str], bytes]:
+        full_url = urllib.parse.urljoin(self.principal_url, url)
+
+        # Origin Pinning (#2): verify (scheme, hostname, port) match principal_url origin
+        target_parsed = urllib.parse.urlparse(full_url)
+        principal_parsed = urllib.parse.urlparse(self.principal_url)
+
+        target_scheme = target_parsed.scheme.lower()
+        target_host = (target_parsed.hostname or "").lower()
+        target_port = target_parsed.port or (80 if target_scheme == "http" else 443)
+
+        principal_scheme = principal_parsed.scheme.lower()
+        principal_host = (principal_parsed.hostname or "").lower()
+        principal_port = principal_parsed.port or (80 if principal_scheme == "http" else 443)
+
+        if (target_scheme, target_host, target_port) != (principal_scheme, principal_host, principal_port):
+            raise CalDAVProtocolError(
+                "CALDAV_REDIRECT_FORBIDDEN",
+                f"Cross-origin request forbidden: target '{full_url}' does not match principal origin '{self.principal_url}'",
+                secret_to_redact=self.password,
+            )
+
         req_headers = {
             "Authorization": self._auth_header,
             "User-Agent": "calendar-desk/1.0",
@@ -208,7 +285,6 @@ class CalDAVClient:
         if headers:
             req_headers.update(headers)
 
-        full_url = urllib.parse.urljoin(self.principal_url, url)
         req = urllib.request.Request(
             full_url, data=body, headers=req_headers, method=method
         )
@@ -217,7 +293,14 @@ class CalDAVClient:
             with self._opener.open(req, timeout=self.timeout_seconds) as resp:
                 status = resp.status
                 resp_headers = dict(resp.headers)
-                resp_bytes = resp.read()
+                resp_bytes = resp.read(MAX_RESPONSE_BYTES + 1)
+                if len(resp_bytes) > MAX_RESPONSE_BYTES:
+                    raise CalDAVProtocolError(
+                        "CALDAV_OVERSIZED_RESPONSE",
+                        f"Response payload exceeded maximum allowed size of {MAX_RESPONSE_BYTES} bytes",
+                        status_code=status,
+                        secret_to_redact=self.password,
+                    )
                 return status, resp_headers, resp_bytes
         except urllib.error.HTTPError as exc:
             try:
@@ -265,10 +348,19 @@ class CalDAVClient:
     def discover_calendars(self) -> list[dict[str, Any]]:
         """Discover user principal, calendar home set, and calendar collections."""
         # Step 1: Query principal URL for current-user-principal and calendar-home-set
+        discovery_body = (
+            '<?xml version="1.0" encoding="utf-8" ?>\n'
+            '<D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+            '  <D:prop>\n'
+            '    <D:current-user-principal/>\n'
+            '    <C:calendar-home-set/>\n'
+            '  </D:prop>\n'
+            '</D:propfind>'
+        ).encode("utf-8")
         status, _, resp_bytes = self._request(
             "PROPFIND",
             self.principal_url,
-            body=None,
+            body=discovery_body,
             headers={
                 "Depth": "0",
                 "Content-Type": "application/xml; charset=utf-8",
@@ -427,47 +519,63 @@ class CalDAVClient:
             if not resp_node.tag.endswith("response"):
                 continue
 
-            href = _find_text(resp_node, ".//{DAV:}href", ".//href")
-            etag = _find_text(resp_node, ".//{DAV:}getetag", ".//getetag")
-            data_node = _find_elem(
-                resp_node,
-                ".//{urn:ietf:params:xml:ns:caldav}calendar-data",
-                ".//calendar-data",
-            )
-            if data_node is None or not data_node.text:
-                continue
+            try:
+                href = _find_text(resp_node, ".//{DAV:}href", ".//href")
+                etag = _find_text(resp_node, ".//{DAV:}getetag", ".//getetag")
+                data_node = _find_elem(
+                    resp_node,
+                    ".//{urn:ietf:params:xml:ns:caldav}calendar-data",
+                    ".//calendar-data",
+                )
+                if data_node is None or not data_node.text:
+                    continue
 
-            raw_ics = data_node.text.strip()
-            parsed_records = parse_ics_to_records(
-                raw_ics,
-                account=account,
-                calendar_alias=calendar_alias,
-                etag=etag,
-                href=href,
-                default_tz=self.default_tz,
-            )
-            if not parsed_records:
-                continue
+                raw_ics = data_node.text.strip()
+                parsed_records = parse_ics_to_records(
+                    raw_ics,
+                    account=account,
+                    calendar_alias=calendar_alias,
+                    etag=etag,
+                    href=href,
+                    default_tz=self.default_tz,
+                )
+                if not parsed_records:
+                    continue
 
-            if expand_recurrences:
-                masters = [r for r in parsed_records if not r.get("recurrence_id")]
-                overrides = [r for r in parsed_records if r.get("recurrence_id")]
+                if expand_recurrences:
+                    masters = [r for r in parsed_records if not r.get("recurrence_id")]
+                    overrides = [r for r in parsed_records if r.get("recurrence_id")]
 
-                for master in masters:
-                    expanded = expand_record_occurrences(
-                        master,
-                        window_start_utc,
-                        window_end_utc,
-                        override_records=overrides,
-                        max_instances=max_items,
-                    )
-                    for rec in expanded:
+                    for master in masters:
+                        expanded = expand_record_occurrences(
+                            master,
+                            window_start_utc,
+                            window_end_utc,
+                            override_records=overrides,
+                            max_instances=max_items,
+                        )
+                        for rec in expanded:
+                            all_records.append(rec)
+                            all_fenced.append(_make_fenced_record(rec))
+
+                    if not masters and overrides:
+                        for rec in overrides:
+                            rec_copy = copy.deepcopy(rec)
+                            m_rec = re.search(
+                                r"^RECURRENCE-ID[^:\r\n]*:([^\r\n]+)",
+                                raw_ics,
+                                re.MULTILINE,
+                            )
+                            if m_rec:
+                                rec_copy["recurrence_id"] = m_rec.group(1).strip()
+                            all_records.append(rec_copy)
+                            all_fenced.append(_make_fenced_record(rec_copy))
+                else:
+                    for rec in parsed_records:
                         all_records.append(rec)
                         all_fenced.append(_make_fenced_record(rec))
-            else:
-                for rec in parsed_records:
-                    all_records.append(rec)
-                    all_fenced.append(_make_fenced_record(rec))
+            except Exception:
+                continue
 
         return {
             "records": all_records[:max_items],

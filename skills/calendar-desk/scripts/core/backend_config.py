@@ -260,7 +260,9 @@ def resolve_calendar_target(
 
     # Compute absolute collection URL
     if cal_meta.get("collection_url"):
-        collection_url = cal_meta["collection_url"]
+        collection_url = urllib.parse.urljoin(
+            credentials.principal_url, cal_meta["collection_url"]
+        )
     else:
         path = cal_meta.get("collection_path", "")
         collection_url = urllib.parse.urljoin(credentials.principal_url, path)
@@ -271,6 +273,34 @@ def resolve_calendar_target(
         raise CalDAVConfigError(
             "CALDAV_USERINFO_FORBIDDEN",
             f"Calendar collection URL '{collection_url}' contains forbidden embedded credentials",
+        )
+
+    coll_scheme = parsed_coll.scheme.lower()
+    coll_host = (parsed_coll.hostname or "").lower()
+    coll_port = parsed_coll.port or (80 if coll_scheme == "http" else 443)
+
+    if coll_scheme == "http":
+        is_loopback = coll_host in ("127.0.0.1", "localhost", "::1")
+        if not (credentials.allow_loopback_http and is_loopback):
+            raise CalDAVConfigError(
+                "CALDAV_INSECURE_URL",
+                f"Insecure HTTP URL '{collection_url}' is forbidden. CalDAV requires HTTPS (loopback HTTP allowed only when allow_loopback_http=True on 127.0.0.1/::1/localhost)",
+            )
+    elif coll_scheme != "https":
+        raise CalDAVConfigError(
+            "CALDAV_INSECURE_URL",
+            f"Unsupported URL scheme '{coll_scheme}' in '{collection_url}'; must be https://",
+        )
+
+    parsed_princ = urllib.parse.urlparse(credentials.principal_url)
+    princ_scheme = parsed_princ.scheme.lower()
+    princ_host = (parsed_princ.hostname or "").lower()
+    princ_port = parsed_princ.port or (80 if princ_scheme == "http" else 443)
+
+    if (coll_scheme, coll_host, coll_port) != (princ_scheme, princ_host, princ_port):
+        raise CalDAVConfigError(
+            "CALDAV_CROSS_ORIGIN_URL",
+            f"Calendar collection URL origin '{(coll_scheme, coll_host, coll_port)}' does not match principal URL origin '{(princ_scheme, princ_host, princ_port)}'",
         )
 
     role = cal_meta.get("role", "primary")

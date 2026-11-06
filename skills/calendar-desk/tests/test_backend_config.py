@@ -439,6 +439,86 @@ class TestBackendConfig(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "CALDAV_CALENDAR_NOT_FOUND")
 
+    def test_collection_url_enforces_https_and_matching_origin(self) -> None:
+        mock_env = {
+            "CALDAV_USERNAME_WORK": "user",
+            "CALDAV_PASSWORD_WORK": "secret",
+        }
+        # Insecure HTTP collection_url
+        cfg_insecure = {
+            "schema": "calendar-desk-backend/1",
+            "default_account": "work",
+            "accounts": {
+                "work": {
+                    "principal_url": "https://cal.example.com/dav/",
+                    "calendars": {
+                        "insecure": {
+                            "collection_url": "http://insecure.example.com/cal",
+                            "role": "shared",
+                        }
+                    },
+                }
+            },
+        }
+        with self.assertRaises(CalDAVConfigError) as ctx_insecure:
+            resolve_calendar_target(
+                cfg_insecure, calendar_alias="insecure", env=mock_env
+            )
+        self.assertIn(
+            ctx_insecure.exception.code,
+            ("CALDAV_INSECURE_URL", "CALDAV_CROSS_ORIGIN_URL", "CALDAV_CONFIG_INVALID"),
+        )
+
+        # Cross-origin collection_url (different host)
+        cfg_cross = {
+            "schema": "calendar-desk-backend/1",
+            "default_account": "work",
+            "accounts": {
+                "work": {
+                    "principal_url": "https://cal.example.com/dav/",
+                    "calendars": {
+                        "cross": {
+                            "collection_url": "https://other.example.com/cal",
+                            "role": "shared",
+                        }
+                    },
+                }
+            },
+        }
+        with self.assertRaises(CalDAVConfigError) as ctx_cross:
+            resolve_calendar_target(
+                cfg_cross, calendar_alias="cross", env=mock_env
+            )
+        self.assertIn(
+            ctx_cross.exception.code,
+            ("CALDAV_CROSS_ORIGIN_URL", "CALDAV_REDIRECT_FORBIDDEN", "CALDAV_CONFIG_INVALID"),
+        )
+
+        # Port mismatch
+        cfg_port = {
+            "schema": "calendar-desk-backend/1",
+            "default_account": "work",
+            "accounts": {
+                "work": {
+                    "principal_url": "https://cal.example.com/dav/",
+                    "calendars": {
+                        "port": {
+                            "collection_url": "https://cal.example.com:8443/cal",
+                            "role": "shared",
+                        }
+                    },
+                }
+            },
+        }
+        with self.assertRaises(CalDAVConfigError) as ctx_port:
+            resolve_calendar_target(
+                cfg_port, calendar_alias="port", env=mock_env
+            )
+        self.assertIn(
+            ctx_port.exception.code,
+            ("CALDAV_CROSS_ORIGIN_URL", "CALDAV_REDIRECT_FORBIDDEN", "CALDAV_CONFIG_INVALID"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
