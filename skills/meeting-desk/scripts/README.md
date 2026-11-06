@@ -38,7 +38,8 @@ python skills/meeting-desk/scripts/ingest_meeting.py --recover --workspace <work
   `data.record_schema: "meeting-record/1"`, `data.writer_version:
   "meeting-desk/1"` plus Limits/Actions im Sechs-Feld-Envelope. `data.actions`
   nennt `ingest_record`, `ingest_local`, `publish_registered_transcript`,
-  `publish_registered_summary` (Issue #52 P1), `inspect`, `recover`.
+  `publish_registered_summary` (Issue #52 P1), `retitle_registered_meeting`
+  (Issue #52 P5), `inspect`, `recover`.
 * stdout enthält genau einen Envelope `action/success/state/message/data/error`;
   stderr bleibt begrenzte Diagnostik. Der Envelope wird als UTF-8-Bytes
   geschrieben (cp1252/CJK/Emoji-sicher, auch nach erfolgreichem Apply); ein
@@ -219,6 +220,57 @@ ingest_meeting.publish_registered_summary(
   (`action: publish_summary`) ohne Lease. Offenes oder nach unterbrochener
   Publikation verbliebenes Journal → `recovery_required` (Exit 3), Wiederholung
   nur nach explizitem `--recover`.
+
+### Titelkorrektur (`retitle_registered_meeting`, Issue #52 P5)
+
+Python-API neben den beiden Publish-Seams (kein CLI-Flag, keine Adapter-Anbindung),
+in `--capabilities` unter `data.actions` ausgewiesen. Ersetzt den „Handedit
+von Titel in Summary/Transkript/Register", der die Ownership bricht:
+
+```python
+ingest_meeting.retitle_registered_meeting(
+    title, workspace_root=..., lease_id=..., meeting_id=<registered-id>,
+    conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)
+```
+
+* Setzt **nur** den Titel: `title` des Registereintrags plus die einzelne
+  `title:`-Zeile im führenden Frontmatter des registrierten Summarys und
+  Transkripts (writer-gerendert und Builder-Kopf: `title: "<JSON-String>"`). Alle
+  anderen Zeilen, Zeilenenden, Bodies und Frontmatter-Felder (`corrections_count`,
+  `unklar_count`, `provenance`, …) sowie alle anderen Registerfelder — auch
+  Review-/Inhaltsstatus — bleiben unverändert.
+* **Pfade und Slugs bleiben stabil:** keine Umbenennung, kein neuer Dateistamm,
+  kein Rekey. Das Raw-Transkript hat per Vertrag kein Frontmatter, ist unveränderlich
+  und wird nie zum Schreiben gelesen: Bytes und Ownership-Eintrag bleiben identisch.
+* `title` wie `record.title` (nicht leer, ≤ 500 Zeichen, keine NUL/C0/U+007F-
+  Steuerzeichen außer TAB/LF/CR, keine losen Surrogates).
+* Ein Artefakt ohne Frontmatter oder ohne `title:`-Zeile bleibt byte-identisch
+  (kein Titel, der inkonsistent sein könnte); `plan.files[].frontmatter_title`
+  nennt `updated`/`current`/`absent`.
+* **Fail-closed (Exit 2, keine Mutation):** kein/mehrere Registertreffer; weder
+  Summary noch Transkript registriert; Pfad außerhalb `memory/evidence/`; fehlende
+  registrierte Datei; Pfad geteilt/aliasiert oder mit falschem Dateinamen; fehlender/
+  doppelter/artfremder/an ein anderes Meeting oder einen Alias gebundener Ownership-
+  Eintrag; Hash-Abweichung (Handedit); unterminierter Frontmatter-Block, mehrere
+  `title:`-Zeilen oder ein Wert, der kein einzeiliger JSON-String ist.
+* Ownership: nur die tatsächlich geänderten Dateien erhalten einen neuen Eintrag
+  (SHA-256, Größe, Zeit); unberührte Artefakte behalten ihren Eintrag unverändert.
+  Reihenfolge wie bei jeder Publikation: Dateien, Ownership, Register zuletzt;
+  danach bleiben `build_clean_transcript`, `publish_registered_summary` und
+  `ingest_record` ohne Wiederherstellung zulässig.
+* Idempotent: gleicher Titel → `Unchanged`, kein Write; ein teilweise
+  inkonsistenter Bestand (z. B. Register alt, Dateien neu) wird nur dort repariert.
+  `dry_run=True` liefert den Plan (`action: retitle_meeting`, `title.from/to`)
+  ohne Lease. Offenes oder unterbrochenes Journal → `recovery_required` (Exit 3).
+* Bekannte Grenze: wurde ein Transkript über `publish_registered_transcript` unter
+  einem **Alias** statt der stabilen ID publiziert, ist sein Ownership-Eintrag an den
+  Alias gebunden; Retitle weist es dann ab („not bound to this meeting"), statt eine
+  Fremdbindung zu überschreiben. Eine Wiederholung mit identischen Bytes ändert die
+  Bindung nicht; erst eine inhaltliche Änderung des Transkripts unter der stabilen ID
+  bindet es neu (Owner-Entscheidung, falls dieser Fall auftritt).
+* Der Builder rendert den Titel aus seiner `--title`-Option: nach einer
+  Titelkorrektur gehört der **neue** Titel in den dokumentierten Build-Aufruf,
+  sonst setzt der nächste Lauf den Kopf zurück und `--check` meldet Drift.
 
 ## build_clean_transcript.py
 

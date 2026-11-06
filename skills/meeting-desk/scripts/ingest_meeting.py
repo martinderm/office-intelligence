@@ -10,6 +10,9 @@ One public boundary owns every meeting ingest file mutation:
   deterministic clean-transcript builder.
 * ``publish_registered_summary()`` replaces only the registered, writer-owned
   summary (OI #52 P1); transcript, raw and their ownership stay untouched.
+* ``retitle_registered_meeting()`` changes only the title of one registered,
+  writer-owned meeting (OI #52 P5): register entry plus the ``title:`` line of
+  the summary/transcript frontmatter; paths, slugs, raw and bodies stay.
 * ``inspect_workspace()`` is a read-only view of journals, register and
   ownership state; ``recover_workspace()`` resumes an interrupted publication
   under a freshly owned lease.
@@ -56,6 +59,7 @@ __all__ = [
     "ingest_local",
     "publish_registered_transcript",
     "publish_registered_summary",
+    "retitle_registered_meeting",
     "inspect_workspace",
     "recover_workspace",
     "validate_record",
@@ -2072,6 +2076,37 @@ def publish_registered_summary(content, *, workspace_root, lease_id, meeting_id,
         trusted_workspace_lock_root=trusted_workspace_lock_root, dry_run=dry_run)
 
 
+def retitle_registered_meeting(title, *, workspace_root, lease_id, meeting_id,
+                               conversation_id=None, trusted_workspace_lock_root=None,
+                               dry_run=False) -> dict:
+    """Change the title of one registered, writer-owned meeting (OI #52 P5).
+
+    Sets ``title`` in the register entry and in the ``title:`` line of the
+    frontmatter of the registered summary and transcript, and nothing else:
+    paths, file-name slugs, the raw transcript, all bodies, every other
+    frontmatter line and every other register field stay as they are. Only
+    provably writer-owned artifacts are rewritten and their ownership hashes
+    are advanced; anything not provably writer-owned, ambiguous or aliased is
+    rejected without mutation.
+    """
+    try:
+        workspace = _workspace_root(workspace_root)
+        if not isinstance(meeting_id, str) or not meeting_id:
+            raise _Reject("a meeting id is required to retitle a meeting")
+        new_title = _text(title, "title", limit=500)
+        try:
+            new_title.encode("utf-8")
+        except UnicodeEncodeError:
+            raise _Reject("title contains an unpaired surrogate") from None
+        return _execute_registered(
+            lambda: _retitle_plan(workspace, meeting_id, new_title),
+            label="meeting title", workspace=workspace, lease_id=lease_id,
+            meeting_id=meeting_id, conversation_id=conversation_id,
+            trusted_workspace_lock_root=trusted_workspace_lock_root, dry_run=dry_run)
+    except Exception as exc:
+        return _registered_failure(exc)
+
+
 # Registered-artifact publication seams: one shared plan/apply path per kind.
 # ``replace_only`` kinds never create a missing file and run the stricter
 # aliasing/ownership checks of ``_require_exclusive_registered_path``.
@@ -2101,57 +2136,78 @@ def _publish_registered(kind: str, content, *, workspace_root, lease_id, meeting
                 raise _Reject(f"{kind} content exceeds the supported size")
             if _CONTROL.search(content):
                 raise _Reject(f"{kind} content contains unsupported control characters")
-        def plan_now() -> dict:
-            try:
-                return _registered_plan(workspace, meeting_id, data, spec, kind)
-            except _Reject:
-                # An interrupted publication leaves stale ownership behind; an open
-                # journal is the real cause and is classified as recovery_required.
-                if not dry_run:
-                    _require_quiet_journals(workspace)
-                raise
+        return _execute_registered(
+            lambda: _registered_plan(workspace, meeting_id, data, spec, kind),
+            label=kind, workspace=workspace, lease_id=lease_id, meeting_id=meeting_id,
+            conversation_id=conversation_id,
+            trusted_workspace_lock_root=trusted_workspace_lock_root, dry_run=dry_run)
+    except Exception as exc:
+        return _registered_failure(exc)
 
-        context = plan_now()
-        plan, plan_sha = context["plan"], _sha(_canonical(context["plan"]))
-        if dry_run:
-            return _success_envelope("DryRun", "Dry run: no workspace mutation.",
-                                     {"meeting_id": meeting_id, "plan": plan,
-                                      "plan_sha256": plan_sha, "changed": context["changed"]})
-        if not context["changed"]:
-            return _success_envelope("Unchanged", f"The registered {kind} is unchanged.",
-                                     {"meeting_id": meeting_id, "paths": plan["paths"],
-                                      "changed": False, "plan_sha256": plan_sha})
-        _require_quiet_journals(workspace)
-        guard_module = _load_guard(_trusted_lock_root(trusted_workspace_lock_root))
-        guard = _Guard(guard_module, workspace, lease_id, conversation_id)
-        _require_lease(guard)
-        current = plan_now()
-        if not current["changed"]:
-            return _success_envelope("Unchanged", f"The registered {kind} is unchanged.",
-                                     {"meeting_id": meeting_id,
-                                      "paths": current["plan"]["paths"], "changed": False})
-        record = {"meeting_id": current["identity"], "_workspace": str(workspace),
-                  "_register_existed": True}
-        publication = _apply(workspace, record, current["payload"], current["ownership"],
-                             current["register_bytes"], current["steps"], guard,
-                             action=spec["action"])
-        return _success_envelope("Applied", f"Registered {kind} updated.",
-                                 {"meeting_id": meeting_id, "entry": current["entry"],
-                                  "paths": current["plan"]["paths"], "changed": True,
-                                  "plan_sha256": plan_sha, **publication})
-    except _RecoveryRequired as exc:
+
+def _execute_registered(make_plan, *, label: str, workspace: Path, lease_id, meeting_id,
+                        conversation_id, trusted_workspace_lock_root, dry_run: bool) -> dict:
+    """Shared plan -> lease -> re-plan -> journalled apply flow of the registered seams.
+
+    ``make_plan()`` returns the plan context of one seam (``plan``, ``entry``,
+    ``payload``, ``register_bytes``, ``ownership``, ``steps``, ``changed``,
+    ``identity``) and raises ``_Reject`` without mutation. Failures propagate to
+    ``_registered_failure``.
+    """
+    def plan_now() -> dict:
+        try:
+            return make_plan()
+        except _Reject:
+            # An interrupted publication leaves stale ownership behind; an open
+            # journal is the real cause and is classified as recovery_required.
+            if not dry_run:
+                _require_quiet_journals(workspace)
+            raise
+
+    context = plan_now()
+    plan, plan_sha = context["plan"], _sha(_canonical(context["plan"]))
+    if dry_run:
+        return _success_envelope("DryRun", "Dry run: no workspace mutation.",
+                                 {"meeting_id": meeting_id, "plan": plan,
+                                  "plan_sha256": plan_sha, "changed": context["changed"]})
+    if not context["changed"]:
+        return _success_envelope("Unchanged", f"The registered {label} is unchanged.",
+                                 {"meeting_id": meeting_id, "paths": plan["paths"],
+                                  "changed": False, "plan_sha256": plan_sha})
+    _require_quiet_journals(workspace)
+    guard_module = _load_guard(_trusted_lock_root(trusted_workspace_lock_root))
+    guard = _Guard(guard_module, workspace, lease_id, conversation_id)
+    _require_lease(guard)
+    current = plan_now()
+    if not current["changed"]:
+        return _success_envelope("Unchanged", f"The registered {label} is unchanged.",
+                                 {"meeting_id": meeting_id,
+                                  "paths": current["plan"]["paths"], "changed": False})
+    record = {"meeting_id": current["identity"], "_workspace": str(workspace),
+              "_register_existed": True}
+    publication = _apply(workspace, record, current["payload"], current["ownership"],
+                         current["register_bytes"], current["steps"], guard,
+                         action=current["plan"]["action"])
+    return _success_envelope("Applied", f"Registered {label} updated.",
+                             {"meeting_id": meeting_id, "entry": current["entry"],
+                              "paths": current["plan"]["paths"], "changed": True,
+                              "plan_sha256": plan_sha, **publication})
+
+
+def _registered_failure(exc: Exception) -> dict:
+    """Map a registered-seam failure to its envelope (rejection or recovery stop)."""
+    if isinstance(exc, _RecoveryRequired):
         return _recovery_envelope(str(exc) or "recovery is required")
-    except _Reject as exc:
+    if isinstance(exc, _Reject):
         return _empty_envelope(False, "Rejected", str(exc),
                                error={"type": "Rejected", "message": str(exc)})
-    except (OSError, UnicodeError, ValueError):
+    if isinstance(exc, (OSError, UnicodeError, ValueError)):
         return _empty_envelope(False, "Rejected",
                                "input, catalog, lock or target validation failed",
                                error={"type": "Rejected",
                                       "message": "input, catalog, lock or target validation failed"})
-    except Exception:
-        return _empty_envelope(False, "Rejected", "writer failure",
-                               error={"type": "Rejected", "message": "writer failure"})
+    return _empty_envelope(False, "Rejected", "writer failure",
+                           error={"type": "Rejected", "message": "writer failure"})
 
 
 def _require_exclusive_registered_path(entries: list[dict], existing: dict, field: str,
@@ -2266,6 +2322,139 @@ def _registered_plan(root: Path, meeting_id: str, data: bytes, spec: dict, kind:
                        "owned_sha256": (owner or {}).get("sha256")}],
             "changed": changed}
     return {"plan": plan, "entry": entry, "payload": {relative: data},
+            "register_bytes": register_bytes, "ownership": updated_ownership,
+            "steps": steps, "changed": changed, "identity": identity}
+
+
+# Register fields whose files carry a writer-rendered ``title:`` frontmatter line.
+# The raw transcript has no frontmatter and is immutable: it is never read for
+# writing, so it stays byte- and ownership-identical.
+_RETITLE_ARTIFACTS = (("summary_path", "summary"), ("transcript_path", "transcript"))
+_TITLE_LINE = re.compile(r'title:[ \t]*("(?:[^"\\]|\\.)*")[ \t]*\Z')
+
+
+def _retitle_text(text: str, title: str, where: str) -> tuple[str, str]:
+    """Replace the single ``title:`` line of the leading frontmatter, byte-exact.
+
+    Returns ``(text, state)`` with state ``updated``, ``current`` (already that
+    title) or ``absent`` (no frontmatter or no title line: nothing to retitle).
+    Only that one line changes; its line ending, every other line and the body
+    are kept verbatim. An unterminated frontmatter block, several title lines or
+    a title value that is not a single-line JSON string is ambiguous and rejected.
+    """
+    lines = re.findall(r"[^\n]*\n|[^\n]+", text)
+    if not lines or lines[0].rstrip("\r\n") != "---":
+        return text, "absent"
+    close = next((index for index in range(1, len(lines))
+                  if lines[index].rstrip("\r\n") == "---"), None)
+    if close is None:
+        raise _Reject(f"the registered {where} has an unterminated frontmatter block; "
+                      "refusing to retitle")
+    found = [index for index in range(1, close) if lines[index].startswith("title:")]
+    if not found:
+        return text, "absent"
+    if len(found) > 1:
+        raise _Reject(f"the registered {where} frontmatter has several title lines; "
+                      "refusing to retitle")
+    line = lines[found[0]]
+    eol = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+    match = _TITLE_LINE.match(line[:len(line) - len(eol)])
+    try:
+        current = json.loads(match.group(1)) if match else None
+    except ValueError:
+        current = None
+    if not isinstance(current, str):
+        raise _Reject(f"the registered {where} frontmatter title is not a single-line "
+                      "quoted string; refusing to retitle")
+    if current == title:
+        return text, "current"
+    lines[found[0]] = f"title: {json.dumps(title, ensure_ascii=False)}{eol}"
+    return "".join(lines), "updated"
+
+
+def _retitle_plan(root: Path, meeting_id: str, title: str) -> dict:
+    register, entries, register_raw = _read_register(root)
+    matches = [entry for entry in entries if meeting_id in _entry_identities(entry)[0]]
+    if len(matches) != 1:
+        raise _Reject("the meeting id does not identify exactly one registered meeting")
+    existing = matches[0]
+    identity = _effective_identity(existing, {"meeting_id": meeting_id})
+    ownership = _ownership_document(
+        _read_json_file(root, _OWNERSHIP, MAX_REGISTER_BYTES, "ownership record")[0])
+
+    payload: dict[str, bytes] = {}
+    paths: dict[str, str] = {}
+    files: list[dict] = []
+    steps: list[dict] = []
+    for field, kind in _RETITLE_ARTIFACTS:
+        relative = existing.get(field)
+        if relative is None:
+            continue
+        if not isinstance(relative, str) or not relative:
+            raise _Reject(f"the registered {field} is malformed")
+        if not relative.startswith("memory/evidence/"):
+            raise _Reject(f"the registered {field} is outside the evidence zone")
+        _safe_target(root, relative, f"registered {field}")
+        _require_exclusive_registered_path(entries, existing, field, relative, ownership,
+                                           kind, identity)
+        target = root / relative
+        current_bytes = _read_bytes(target, MAX_REGISTER_BYTES, f"registered {kind}")
+        if current_bytes is None:
+            raise _Reject(f"the registered {kind} file is missing; retitle only rewrites an "
+                          "existing registered file")
+        owner = _ownership_entry(ownership, relative)
+        if (owner is None or not isinstance(owner.get("sha256"), str)
+                or _sha(current_bytes) != owner["sha256"]):
+            raise _Reject(f"the registered {kind} is not provably writer-owned; refusing "
+                          "to retitle")
+        try:
+            current_text = current_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            raise _Reject(f"the registered {kind} is not valid UTF-8") from None
+        new_text, state = _retitle_text(current_text, title, kind)
+        data = new_text.encode("utf-8")
+        digest = _sha(data)
+        paths[field] = relative
+        files.append({"path": relative, "sha256": digest, "bytes": len(data),
+                      "exists": True, "owned_sha256": owner["sha256"],
+                      "frontmatter_title": state})
+        if data != current_bytes:
+            # The rewrite may grow the file; staging reads it back under this bound.
+            if len(data) > MAX_REGISTER_BYTES:
+                raise _Reject(f"the retitled {kind} would exceed the supported size")
+            payload[relative] = data
+            steps.append({"kind": "replace", "path": relative, "phase": "files",
+                          "stage": None, "pre_sha256": owner["sha256"],
+                          "post_sha256": digest, "bytes": len(data)})
+    if not paths:
+        raise _Reject("the registered meeting has no summary or transcript to retitle")
+
+    entry = dict(existing)
+    entry_changed = existing.get("title") != title
+    if entry_changed:
+        entry["title"] = title
+    document = dict(register["document"])
+    document["meetings"] = [entry if item is existing else item for item in entries]
+    register_bytes = _json_text(document).encode("utf-8") if entry_changed else register_raw
+    updated_ownership = _new_ownership(ownership, payload, {"meeting_id": identity}, drop=set())
+    ownership_step, ownership_changed = _ownership_step(root, ownership, updated_ownership)
+    if ownership_step is not None:
+        steps.append(ownership_step)
+    register_step, register_step_changed = (
+        _register_step(root, register["existed"], register_bytes, register_raw)
+        if entry_changed else (None, False))
+    if register_step is not None:
+        steps.append(register_step)
+    changed = bool(payload) or ownership_changed or register_step_changed
+    old_title = existing.get("title")
+    plan = {"schema": PLAN_SCHEMA, "writer_version": WRITER_VERSION,
+            "record_schema": RECORD_SCHEMA, "action": "retitle_meeting",
+            "meeting_id": identity, "paths": paths,
+            "title": {"from": old_title if isinstance(old_title, str) else None,
+                      "to": title},
+            "register": {"path": _REGISTER, "existed": register["existed"]},
+            "files": files, "changed": changed}
+    return {"plan": plan, "entry": entry, "payload": payload,
             "register_bytes": register_bytes, "ownership": updated_ownership,
             "steps": steps, "changed": changed, "identity": identity}
 
@@ -2434,7 +2623,8 @@ def capabilities() -> dict:
         "record_schema": RECORD_SCHEMA,
         "writer_version": WRITER_VERSION,
         "actions": ["ingest_record", "ingest_local", "publish_registered_transcript",
-                    "publish_registered_summary", "inspect", "recover"],
+                    "publish_registered_summary", "retitle_registered_meeting",
+                    "inspect", "recover"],
         "record_root_fields": sorted(_RECORD_KEYS),
         "source_systems": sorted(_SYSTEMS),
         "exit_codes": {"0": "success", "2": "rejected", "3": "recovery_required"},
