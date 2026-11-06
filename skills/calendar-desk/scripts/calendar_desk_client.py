@@ -133,16 +133,19 @@ def build_parser() -> argparse.ArgumentParser:
     agenda_p.add_argument("--window-start", required=True, help="ISO-8601 start time (UTC).")
     agenda_p.add_argument("--window-end", required=True, help="ISO-8601 end time (UTC).")
     agenda_p.add_argument("--max-items", type=int, default=500, help="Maximum items to return.")
+    agenda_p.add_argument("--include-raw", action="store_true", default=False, help="Include raw unfenced calendar records.")
 
     search_p = subparsers.add_parser("search", help="Search calendar events.")
     search_p.add_argument("--window-start", required=True, help="ISO-8601 start time (UTC).")
     search_p.add_argument("--window-end", required=True, help="ISO-8601 end time (UTC).")
     search_p.add_argument("--query", default="", help="Query string to filter summary/description.")
     search_p.add_argument("--max-items", type=int, default=500, help="Maximum items to return.")
+    search_p.add_argument("--include-raw", action="store_true", default=False, help="Include raw unfenced calendar records.")
 
     # get-event
     get_p = subparsers.add_parser("get-event", help="Get a single event by resource URL.")
     get_p.add_argument("--url", required=True, help="Resource URL or href.")
+    get_p.add_argument("--include-raw", action="store_true", default=False, help="Include raw unfenced calendar records and raw_ics payload.")
 
     # freebusy
     fb_p = subparsers.add_parser("freebusy", help="Compute Free/Busy intervals and conflicts.")
@@ -157,6 +160,9 @@ def build_parser() -> argparse.ArgumentParser:
     slots_p.add_argument("--tzid", default="Europe/Vienna", help="IANA timezone for working hours.")
     slots_p.add_argument("--working-hours", default="09:00-17:00", help="Working hours format 'HH:MM-HH:MM'.")
     slots_p.add_argument("--min-slot-minutes", type=int, default=60, help="Minimum slot duration in minutes.")
+    slots_p.add_argument("--slot-minutes", type=int, default=60, help="Discrete slot duration in minutes.")
+    slots_p.add_argument("--max-slots", type=int, default=None, help="Maximum number of slots to return.")
+    slots_p.add_argument("--format", choices=["json", "termino"], default="json", help="Output format.")
     slots_p.add_argument("--buffer-minutes", type=int, default=0, help="Buffer padding in minutes.")
     slots_p.add_argument("--records-file", default=None, help="Optional JSON file of existing calendar records.")
     slots_p.add_argument("--termino-slots", action="store_true", help="Include termino-api formatted slot strings.")
@@ -407,8 +413,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         elif args.subcommand == "freebusy":
             records: list[dict[str, Any]] = []
-            if args.records_file and Path(args.records_file).is_file():
-                records = json.loads(Path(args.records_file).read_text(encoding="utf-8"))
+            if args.records_file:
+                rec_path = Path(args.records_file)
+                if not rec_path.is_file():
+                    raise CalDAVConfigError(
+                        "CALDAV_SOURCE_MISSING",
+                        f"Records file '{args.records_file}' not found",
+                    )
+                try:
+                    records = json.loads(rec_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise CalDAVConfigError(
+                        "CALDAV_SOURCE_MISSING",
+                        f"Failed to parse records file '{args.records_file}': {exc}",
+                    ) from exc
             elif cfg_file.is_file():
                 cfg = load_backend_config(cfg_file)
                 target = resolve_calendar_target(
@@ -432,6 +450,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.window_end,
                 )
                 records = query_res["records"]
+            else:
+                raise CalDAVConfigError(
+                    "CALDAV_SOURCE_MISSING",
+                    "No records file or backend config available for calendar query",
+                )
 
             res = compute_freebusy(records, args.window_start, args.window_end)
             _emit_result("freebusy", res, as_json=args.json)
@@ -439,8 +462,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         elif args.subcommand == "find-slots":
             records = []
-            if args.records_file and Path(args.records_file).is_file():
-                records = json.loads(Path(args.records_file).read_text(encoding="utf-8"))
+            if args.records_file:
+                rec_path = Path(args.records_file)
+                if not rec_path.is_file():
+                    raise CalDAVConfigError(
+                        "CALDAV_SOURCE_MISSING",
+                        f"Records file '{args.records_file}' not found",
+                    )
+                try:
+                    records = json.loads(rec_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise CalDAVConfigError(
+                        "CALDAV_SOURCE_MISSING",
+                        f"Failed to parse records file '{args.records_file}': {exc}",
+                    ) from exc
             elif cfg_file.is_file():
                 cfg = load_backend_config(cfg_file)
                 target = resolve_calendar_target(
@@ -464,6 +499,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.window_end,
                 )
                 records = query_res["records"]
+            else:
+                raise CalDAVConfigError(
+                    "CALDAV_SOURCE_MISSING",
+                    "No records file or backend config available for calendar query",
+                )
 
             res = find_free_slots(
                 records,
@@ -473,7 +513,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 working_hours=args.working_hours,
                 min_slot_minutes=args.min_slot_minutes,
                 buffer_minutes=args.buffer_minutes,
+                slot_minutes=args.slot_minutes,
+                max_slots=args.max_slots,
             )
+            if not args.json and (getattr(args, "format", "json") == "termino" or getattr(args, "termino_slots", False)):
+                for ts in res.get("termino_slots", []):
+                    sys.stdout.write(f"{ts}\n")
+                return 0
             _emit_result("find-slots", res, as_json=args.json)
             return 0
 
@@ -507,33 +553,48 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.window_end,
                 max_items=args.max_items,
             )
-            records = query_res["records"]
+            raw_records = query_res["records"]
             fenced_records = query_res.get("fenced_records", [])
             if args.subcommand == "search" and args.query:
                 q_lower = args.query.lower()
                 matching_indices = [
                     idx
-                    for idx, r in enumerate(records)
+                    for idx, r in enumerate(raw_records)
                     if q_lower in r.get("summary", "").lower()
                     or q_lower in r.get("description", "").lower()
                 ]
-                records = [records[i] for i in matching_indices]
+                raw_records = [raw_records[i] for i in matching_indices]
                 fenced_records = [
                     fenced_records[i] for i in matching_indices if i < len(fenced_records)
                 ]
+
+            if getattr(args, "include_raw", False):
+                payload_data = {
+                    "records": raw_records,
+                    "raw_records": raw_records,
+                    "fenced_records": fenced_records,
+                    "item_count": len(raw_records),
+                }
+            else:
+                payload_data = {
+                    "records": fenced_records,
+                    "fenced_records": fenced_records,
+                    "item_count": len(fenced_records),
+                }
+
             _emit_result(
                 args.subcommand,
-                {
-                    "records": records,
-                    "fenced_records": fenced_records,
-                    "item_count": len(records),
-                },
+                payload_data,
                 as_json=args.json,
             )
             return 0
 
         elif args.subcommand == "get-event":
-            evt = client.get_event(args.url)
+            evt = dict(client.get_event(args.url))
+            if not getattr(args, "include_raw", False):
+                evt.pop("raw_ics", None)
+                if "fenced_records" in evt:
+                    evt["records"] = evt["fenced_records"]
             _emit_result("get-event", evt, as_json=args.json)
             return 0
 

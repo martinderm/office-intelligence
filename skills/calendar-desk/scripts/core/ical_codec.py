@@ -745,6 +745,13 @@ def expand_record_occurrences(
 
         if _overlaps(cand_start_utc, cand_end_utc):
             occ = copy.deepcopy(record)
+            occ["rrule"] = None
+            occ["is_occurrence"] = True
+            if not occ.get("recurrence_id"):
+                if is_all_day:
+                    occ["recurrence_id"] = cand_date.strftime("%Y-%m-%d")
+                else:
+                    occ["recurrence_id"] = cand_start_utc.strftime("%Y%m%dT%H%M%SZ")
             if is_all_day:
                 occ["start"]["date"] = cand_date.strftime("%Y-%m-%d")
                 end_date = cand_date + timedelta(days=max(1, dur_minutes // 1440))

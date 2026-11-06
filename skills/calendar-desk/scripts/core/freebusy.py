@@ -7,9 +7,36 @@ working-hours evaluation, buffer padding, and termino-api slot generation.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from core.ical_codec import expand_record_occurrences, resolve_tzid
+from core.injection_fence import FENCE_TAG, sanitize_fence_collisions
+
+
+def fence_text(text: str) -> str:
+    """Fence text with <untrusted_calendar_content> tags, preventing duplicate fencing."""
+    raw = str(text or "")
+    close_tag = f"</{FENCE_TAG}>"
+    tag_prefix = f"<{FENCE_TAG}"
+    is_fenced = (
+        raw.startswith(f"<{FENCE_TAG}>")
+        or (
+            raw.startswith(tag_prefix)
+            and len(raw) > len(tag_prefix)
+            and (raw[len(tag_prefix)] == ">" or raw[len(tag_prefix)].isspace())
+        )
+    ) and raw.endswith(close_tag)
+
+    if is_fenced:
+        gt_pos = raw.find(">")
+        if gt_pos != -1 and gt_pos <= len(raw) - len(close_tag):
+            open_tag = raw[: gt_pos + 1]
+            inner = raw[gt_pos + 1 : -len(close_tag)]
+            sanitized_inner, _ = sanitize_fence_collisions(inner)
+            return f"{open_tag}{sanitized_inner}{close_tag}"
+
+    sanitized, _ = sanitize_fence_collisions(raw)
+    return f"<{FENCE_TAG}>{sanitized}</{FENCE_TAG}>"
 
 
 def compute_freebusy(
@@ -32,25 +59,30 @@ def compute_freebusy(
     overrides: list[dict[str, Any]] = []
     for r in records:
         r_dict = dict(r)
-        if r_dict.get("recurrence_id"):
+        if not r_dict.get("recurrence_id") and not r_dict.get("is_occurrence") and r_dict.get("rrule"):
+            masters.append(r_dict)
+        elif r_dict.get("recurrence_id") and not r_dict.get("is_occurrence"):
             overrides.append(r_dict)
         else:
-            masters.append(r_dict)
+            expanded_records.append(r_dict)
 
     for m in masters:
-        if m.get("rrule"):
-            matching_ovrs = [
-                ovr for ovr in overrides if ovr.get("uid") == m.get("uid")
-            ]
-            expanded = expand_record_occurrences(
-                m,
-                window_start_utc,
-                window_end_utc,
-                override_records=matching_ovrs,
-            )
-            expanded_records.extend(expanded)
-        else:
-            expanded_records.append(m)
+        matching_ovrs = [
+            ovr for ovr in overrides if ovr.get("uid") == m.get("uid")
+        ]
+        expanded = expand_record_occurrences(
+            m,
+            window_start_utc,
+            window_end_utc,
+            override_records=matching_ovrs,
+        )
+        expanded_records.extend(expanded)
+
+    # Any overrides that didn't have a matching master in masters
+    master_uids = {m.get("uid") for m in masters}
+    for ovr in overrides:
+        if ovr.get("uid") not in master_uids:
+            expanded_records.append(ovr)
 
     # 2. Filter busy intervals
     busy_list: list[dict[str, Any]] = []
@@ -97,7 +129,7 @@ def compute_freebusy(
         busy_list.append(
             {
                 "uid": rec.get("uid", ""),
-                "summary": rec.get("summary", ""),
+                "summary": fence_text(rec.get("summary", "")),
                 "start_utc": clamped_st.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "end_utc": clamped_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "duration_minutes": dur_mins,
@@ -191,6 +223,41 @@ def compute_freebusy(
     }
 
 
+def _add_free_interval(
+    free_st: datetime,
+    free_end: datetime,
+    tz: Any,
+    min_slot_minutes: int,
+    slot_minutes: Optional[int],
+    max_slots: Optional[int],
+    slots: list[dict[str, Any]],
+    termino_slots: list[str],
+) -> bool:
+    """Add slot(s) for a free interval. Returns True if max_slots limit has been reached."""
+    dur = int((free_end - free_st).total_seconds() // 60)
+    if dur < min_slot_minutes:
+        return False
+
+    if slot_minutes is not None and slot_minutes > 0:
+        step = timedelta(minutes=slot_minutes)
+        ptr = free_st
+        while ptr + step <= free_end:
+            if max_slots is not None and len(slots) >= max_slots:
+                return True
+            _append_slot(ptr, ptr + step, slot_minutes, tz, slots, termino_slots)
+            ptr += step
+            if max_slots is not None and len(slots) >= max_slots:
+                return True
+    else:
+        if max_slots is not None and len(slots) >= max_slots:
+            return True
+        _append_slot(free_st, free_end, dur, tz, slots, termino_slots)
+        if max_slots is not None and len(slots) >= max_slots:
+            return True
+
+    return False
+
+
 def find_free_slots(
     records: Sequence[Mapping[str, Any]],
     window_start_utc: str,
@@ -201,6 +268,8 @@ def find_free_slots(
     min_slot_minutes: int = 60,
     buffer_minutes: int = 0,
     weekdays_only: bool = True,
+    slot_minutes: Optional[int] = None,
+    max_slots: Optional[int] = None,
 ) -> dict[str, Any]:
     """Find available meeting slots within working hours in specified timezone."""
     fb_res = compute_freebusy(records, window_start_utc, window_end_utc)
@@ -286,17 +355,27 @@ def find_free_slots(
 
         # Invert busy into free intervals
         curr_ptr = day_st_utc
+        stop_all = False
         for b_st, b_end in merged_day_busy:
             if b_st > curr_ptr:
-                dur = int((b_st - curr_ptr).total_seconds() // 60)
-                if dur >= min_slot_minutes:
-                    _append_slot(curr_ptr, b_st, dur, tz, slots, termino_slots)
+                if _add_free_interval(
+                    curr_ptr, b_st, tz, min_slot_minutes, slot_minutes, max_slots, slots, termino_slots
+                ):
+                    stop_all = True
+                    break
             curr_ptr = max(curr_ptr, b_end)
 
+        if stop_all or (max_slots is not None and len(slots) >= max_slots):
+            break
+
         if day_end_utc > curr_ptr:
-            dur = int((day_end_utc - curr_ptr).total_seconds() // 60)
-            if dur >= min_slot_minutes:
-                _append_slot(curr_ptr, day_end_utc, dur, tz, slots, termino_slots)
+            if _add_free_interval(
+                curr_ptr, day_end_utc, tz, min_slot_minutes, slot_minutes, max_slots, slots, termino_slots
+            ):
+                break
+
+        if max_slots is not None and len(slots) >= max_slots:
+            break
 
         curr_date += timedelta(days=1)
 
@@ -307,6 +386,8 @@ def find_free_slots(
         "tzid": tzid,
         "working_hours": working_hours,
         "min_slot_minutes": min_slot_minutes,
+        "slot_minutes": slot_minutes,
+        "max_slots": max_slots,
         "buffer_minutes": buffer_minutes,
         "slots": slots,
         "termino_slots": termino_slots,
