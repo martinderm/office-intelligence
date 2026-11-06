@@ -1,6 +1,7 @@
 """CLI client and sub-agent entry point for skills/calendar-desk.
 
-Provides discover, agenda, search, get-event, freebusy, and find-slots commands
+Provides discover, agenda, search, get-event, freebusy, find-slots,
+plan, apply, inspect, recover, and respond-invitation commands
 with deterministic --json structured output envelope.
 """
 
@@ -10,6 +11,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -25,6 +27,17 @@ from core.backend_config import (  # noqa: E402
 )
 from core.caldav_client import CalDAVClient, CalDAVProtocolError  # noqa: E402
 from core.freebusy import compute_freebusy, find_free_slots  # noqa: E402
+from core.write_engine import (  # noqa: E402
+    CalendarWriteError,
+    _load_guard,
+    _trusted_lock_root,
+    apply_calendar_write,
+    inspect_workspace,
+    plan_calendar_write,
+    recover_workspace,
+    require_owned_workspace_lock,
+    respond_invitation,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -101,6 +114,51 @@ def build_parser() -> argparse.ArgumentParser:
     slots_p.add_argument("--records-file", default=None, help="Optional JSON file of existing calendar records.")
     slots_p.add_argument("--termino-slots", action="store_true", help="Include termino-api formatted slot strings.")
 
+    # plan
+    plan_p = subparsers.add_parser("plan", help="Dry-run plan a calendar write.")
+    plan_p.add_argument(
+        "--action",
+        default="create-event",
+        choices=["create-event", "update-event", "cancel-event", "delete-event"],
+        help="Write action.",
+    )
+    plan_p.add_argument("--uid", default=None, help="Event UID.")
+    plan_p.add_argument("--summary", default="", help="Event summary/title.")
+    plan_p.add_argument("--description", default="", help="Event description.")
+    plan_p.add_argument("--location", default="", help="Event location.")
+    plan_p.add_argument("--start", default=None, help="Event start time (ISO-8601).")
+    plan_p.add_argument("--end", default=None, help="Event end time (ISO-8601).")
+    plan_p.add_argument("--timezone", default=None, help="IANA timezone.")
+    plan_p.add_argument("--etag", default=None, help="Expected ETag for update/cancel/delete.")
+    plan_p.add_argument("--raw-ics-file", default=None, help="Path to existing raw ICS file.")
+    plan_p.add_argument("--no-persist", action="store_true", help="Do not persist proposal to disk.")
+
+    # apply
+    apply_p = subparsers.add_parser("apply", help="Apply an approved calendar write plan.")
+    apply_p.add_argument("--plan-file", required=True, help="Path to proposal JSON file.")
+    apply_p.add_argument("--receipt-file", required=True, help="Path to approval receipt JSON file.")
+    apply_p.add_argument("--lease-id", default=None, help="Workspace lock lease ID.")
+    apply_p.add_argument("--conversation-id", default=None, help="Workspace lock conversation ID.")
+    apply_p.add_argument("--lock-root", default=None, help="Path to workspace-lock skill.")
+
+    # inspect
+    subparsers.add_parser("inspect", help="Inspect calendar proposals, journals, and register.")
+
+    # recover
+    recover_p = subparsers.add_parser("recover", help="Reconcile interrupted in_progress journals.")
+    recover_p.add_argument("--lease-id", default=None, help="Workspace lock lease ID.")
+    recover_p.add_argument("--conversation-id", default=None, help="Workspace lock conversation ID.")
+    recover_p.add_argument("--lock-root", default=None, help="Path to workspace-lock skill.")
+
+    # respond-invitation
+    resp_p = subparsers.add_parser("respond-invitation", help="Respond to an event invitation (Phase 2).")
+    resp_p.add_argument(
+        "--partstat",
+        required=True,
+        help="Participation status (ACCEPTED, DECLINED, TENTATIVE).",
+    )
+    resp_p.add_argument("--uid", required=True, help="Event UID.")
+
     return parser
 
 
@@ -128,7 +186,179 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     try:
-        if args.subcommand == "freebusy":
+        # 1. Inspection and Phase-2 seam commands (do not require backend config)
+        if args.subcommand == "inspect":
+            insp_res = inspect_workspace(workspace_root)
+            _emit_result("inspect", insp_res, as_json=args.json)
+            return 0
+
+        elif args.subcommand == "respond-invitation":
+            respond_invitation(
+                partstat=args.partstat,
+                uid=args.uid,
+                account=args.account,
+                calendar_alias=args.calendar_alias,
+            )
+            return 0
+
+        elif args.subcommand == "recover":
+            client = None
+            if cfg_file.is_file():
+                try:
+                    cfg = load_backend_config(cfg_file)
+                    target = resolve_calendar_target(
+                        cfg,
+                        account_id=args.account,
+                        calendar_alias=args.calendar_alias,
+                        secrets_path=sec_file,
+                    )
+                    creds = target["credentials"]
+                    client = CalDAVClient(
+                        principal_url=creds.principal_url,
+                        username=creds.username,
+                        password=creds.password,
+                        timeout_seconds=creds.timeout_seconds,
+                        allow_loopback_http=creds.allow_loopback_http,
+                        default_tz=target["default_timezone"],
+                    )
+                except Exception:
+                    client = None
+
+            rec_res = recover_workspace(
+                workspace_root,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
+                lock_root=args.lock_root,
+                caldav_client=client,
+            )
+            _emit_result("recover", rec_res, as_json=args.json)
+            return 0
+
+        elif args.subcommand == "plan":
+            cfg = load_backend_config(cfg_file)
+            try:
+                target = resolve_calendar_target(
+                    cfg,
+                    account_id=args.account,
+                    calendar_alias=args.calendar_alias,
+                    secrets_path=sec_file,
+                )
+                account_id = target["account_id"]
+                calendar_alias = target["calendar_alias"]
+                collection_url = target["collection_url"]
+                write_policy = target["write_policy"]
+                target_tz = target["default_timezone"]
+            except CalDAVConfigError as exc:
+                if exc.code == "CALDAV_SECRET_MISSING":
+                    # Lock-free dry-run planning without secrets
+                    target_account = args.account or cfg.get("default_account")
+                    accounts = cfg.get("accounts", {})
+                    if not target_account or target_account not in accounts:
+                        raise CalDAVConfigError(
+                            "CALDAV_ACCOUNT_NOT_FOUND",
+                            f"Account '{target_account}' not found in configuration",
+                        )
+                    acct_meta = accounts[target_account] or {}
+                    calendars = acct_meta.get("calendars", {})
+                    target_alias = args.calendar_alias or "primary"
+                    if target_alias not in calendars:
+                        if args.calendar_alias is None and len(calendars) == 1:
+                            target_alias = next(iter(calendars))
+                        else:
+                            raise CalDAVConfigError(
+                                "CALDAV_CALENDAR_NOT_FOUND",
+                                f"Calendar alias '{target_alias}' not found in account '{target_account}'",
+                            )
+                    cal_meta = calendars[target_alias] or {}
+                    principal_url = acct_meta.get("principal_url", "")
+                    if cal_meta.get("collection_url"):
+                        collection_url = cal_meta["collection_url"]
+                    else:
+                        collection_url = urllib.parse.urljoin(principal_url, cal_meta.get("collection_path", ""))
+                    account_id = target_account
+                    calendar_alias = target_alias
+                    write_policy = cal_meta.get("write_policy", "read_only")
+                    target_tz = (
+                        cal_meta.get("default_timezone")
+                        or acct_meta.get("default_timezone")
+                        or cfg.get("default_timezone", "Europe/Vienna")
+                    )
+                else:
+                    raise
+
+            event_spec = None
+            if args.action == "create-event":
+                event_spec = {
+                    "summary": args.summary,
+                    "description": args.description,
+                    "location": args.location,
+                    "dtstart": args.start,
+                    "dtend": args.end,
+                    "timezone": args.timezone or target_tz,
+                }
+            existing_raw_ics = None
+            if args.raw_ics_file and Path(args.raw_ics_file).is_file():
+                existing_raw_ics = Path(args.raw_ics_file).read_text(encoding="utf-8")
+
+            plan_res = plan_calendar_write(
+                workspace_root,
+                action=args.action,
+                account=account_id,
+                calendar_alias=calendar_alias,
+                collection_url=collection_url,
+                write_policy=write_policy,
+                uid=args.uid,
+                event_spec=event_spec,
+                expected_etag=args.etag,
+                existing_raw_ics=existing_raw_ics,
+                persist=not args.no_persist,
+            )
+            _emit_result("plan", plan_res, as_json=args.json)
+            return 0
+
+        elif args.subcommand == "apply":
+            plan_path = Path(args.plan_file)
+            if not plan_path.is_file():
+                raise CalendarWriteError("PLAN_NOT_FOUND", f"Plan file '{args.plan_file}' not found")
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+
+            receipt_path = Path(args.receipt_file)
+            if not receipt_path.is_file():
+                raise CalendarWriteError(
+                    "APPROVAL_RECEIPT_INVALID", f"Receipt file '{args.receipt_file}' not found"
+                )
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+
+            cfg = load_backend_config(cfg_file)
+            target = resolve_calendar_target(
+                cfg,
+                account_id=plan.get("account") or args.account,
+                calendar_alias=plan.get("calendar_alias") or args.calendar_alias,
+                secrets_path=sec_file,
+            )
+            creds = target["credentials"]
+            client = CalDAVClient(
+                principal_url=creds.principal_url,
+                username=creds.username,
+                password=creds.password,
+                timeout_seconds=creds.timeout_seconds,
+                allow_loopback_http=creds.allow_loopback_http,
+                default_tz=target["default_timezone"],
+            )
+
+            apply_res = apply_calendar_write(
+                workspace_root,
+                plan=plan,
+                approval_receipt=receipt,
+                caldav_client=client,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
+                lock_root=args.lock_root,
+            )
+            _emit_result("apply", apply_res, as_json=args.json)
+            return 0
+
+        elif args.subcommand == "freebusy":
             records: list[dict[str, Any]] = []
             if args.records_file and Path(args.records_file).is_file():
                 records = json.loads(Path(args.records_file).read_text(encoding="utf-8"))
@@ -235,14 +465,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.subcommand == "search" and args.query:
                 q_lower = args.query.lower()
                 matching_indices = [
-                    idx for idx, r in enumerate(records)
+                    idx
+                    for idx, r in enumerate(records)
                     if q_lower in r.get("summary", "").lower()
                     or q_lower in r.get("description", "").lower()
                 ]
                 records = [records[i] for i in matching_indices]
                 fenced_records = [
-                    fenced_records[i] for i in matching_indices
-                    if i < len(fenced_records)
+                    fenced_records[i] for i in matching_indices if i < len(fenced_records)
                 ]
             _emit_result(
                 args.subcommand,
@@ -260,7 +490,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit_result("get-event", evt, as_json=args.json)
             return 0
 
-    except (CalDAVConfigError, CalDAVProtocolError) as exc:
+    except (CalDAVConfigError, CalDAVProtocolError, CalendarWriteError) as exc:
         err_dict = {"code": exc.code, "message": str(exc)}
         _emit_error(args.subcommand, err_dict, as_json=args.json)
         return 1

@@ -2,7 +2,7 @@
 
 Provides RFC-5545 iCalendar codec, timezone resolution, recurrence expansion,
 untrusted calendar content fencing, backend config loader, CalDAV client transport,
-and Free/Busy / slot finding engine without external dependencies.
+Free/Busy / slot finding engine, and two-phase write engine without external dependencies.
 """
 
 from __future__ import annotations
@@ -47,6 +47,20 @@ from core.injection_fence import (
     sanitize_fence_collisions,
     scan_calendar_text,
 )
+from core.write_engine import (
+    ENV_LOCK_ROOT,
+    CalendarWriteError,
+    _load_guard,
+    _trusted_lock_root,
+    apply_calendar_write,
+    canonical_json_sha256,
+    compute_plan_sha256,
+    inspect_workspace,
+    plan_calendar_write,
+    recover_workspace,
+    require_owned_workspace_lock,
+    respond_invitation,
+)
 
 __all__ = [
     "ICalCodecError",
@@ -79,4 +93,16 @@ __all__ = [
     "parse_dav_xml",
     "compute_freebusy",
     "find_free_slots",
+    "ENV_LOCK_ROOT",
+    "CalendarWriteError",
+    "_load_guard",
+    "_trusted_lock_root",
+    "apply_calendar_write",
+    "canonical_json_sha256",
+    "compute_plan_sha256",
+    "inspect_workspace",
+    "plan_calendar_write",
+    "recover_workspace",
+    "require_owned_workspace_lock",
+    "respond_invitation",
 ]
