@@ -40,6 +40,28 @@ from core.write_engine import (  # noqa: E402
 )
 
 
+def _resolve_env_secrets(secrets_file: Path, account_id: str | None) -> dict[str, str]:
+    """Helper to support top-level accounts in secrets.json via environment fallback."""
+    env_override = dict(os.environ)
+    if not account_id or not secrets_file.is_file():
+        return env_override
+    try:
+        sdata = json.loads(secrets_file.read_text(encoding="utf-8"))
+        top_accounts = sdata.get("accounts", {})
+        if account_id in top_accounts:
+            acct_data = top_accounts[account_id]
+            u_key = account_id.upper().replace("-", "_")
+            if acct_data.get("username"):
+                env_override[f"CALDAV_USERNAME_{u_key}"] = acct_data["username"]
+            if acct_data.get("password"):
+                env_override[f"CALDAV_PASSWORD_{u_key}"] = acct_data["password"]
+            if acct_data.get("principal_url"):
+                env_override[f"CALDAV_PRINCIPAL_URL_{u_key}"] = acct_data["principal_url"]
+    except Exception:
+        pass
+    return env_override
+
+
 def load_guard(trusted_root: str | Path | None = None) -> Any:
     """Public helper exposing the verified workspace lock guard module."""
     import importlib.util
@@ -259,11 +281,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             if cfg_file.is_file():
                 try:
                     cfg = load_backend_config(cfg_file)
+                    target_acct = args.account or cfg.get("default_account")
+                    env_override = _resolve_env_secrets(sec_file, target_acct)
                     target = resolve_calendar_target(
                         cfg,
                         account_id=args.account,
                         calendar_alias=args.calendar_alias,
                         secrets_path=sec_file,
+                        env=env_override,
                     )
                     creds = target["credentials"]
                     client = CalDAVClient(
@@ -340,6 +365,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise
 
             event_spec = None
+            updates = None
             if args.action == "create-event":
                 event_spec = {
                     "summary": args.summary,
@@ -349,6 +375,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "dtend": args.end,
                     "timezone": args.timezone or target_tz,
                 }
+            elif args.action == "update-event":
+                updates = {}
+                if args.summary:
+                    updates["summary"] = args.summary
+                if args.description:
+                    updates["description"] = args.description
+                if args.location:
+                    updates["location"] = args.location
+                if args.start:
+                    updates["start"] = args.start
+                if args.end:
+                    updates["end"] = args.end
+                event_spec = {k: v for k, v in updates.items()}
+                if args.timezone or target_tz:
+                    event_spec["timezone"] = args.timezone or target_tz
             existing_raw_ics = None
             if args.raw_ics_file and Path(args.raw_ics_file).is_file():
                 existing_raw_ics = Path(args.raw_ics_file).read_text(encoding="utf-8")
@@ -362,6 +403,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 write_policy=write_policy,
                 uid=args.uid,
                 event_spec=event_spec,
+                updates=updates,
                 expected_etag=args.etag,
                 existing_raw_ics=existing_raw_ics,
                 persist=not args.no_persist,
@@ -383,11 +425,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
 
             cfg = load_backend_config(cfg_file)
+            target_acct = plan.get("account") or args.account or cfg.get("default_account")
+            env_override = _resolve_env_secrets(sec_file, target_acct)
             target = resolve_calendar_target(
                 cfg,
                 account_id=plan.get("account") or args.account,
                 calendar_alias=plan.get("calendar_alias") or args.calendar_alias,
                 secrets_path=sec_file,
+                env=env_override,
             )
             creds = target["credentials"]
             client = CalDAVClient(
@@ -601,6 +646,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (CalDAVConfigError, CalDAVProtocolError, CalendarWriteError) as exc:
         err_dict = {"code": exc.code, "message": str(exc)}
         _emit_error(args.subcommand, err_dict, as_json=args.json)
+        if getattr(exc, "code", None) == "RECOVERY_REQUIRED":
+            return 3
         return 1
     except Exception as exc:
         err_dict = {"code": "INTERNAL_ERROR", "message": str(exc)}

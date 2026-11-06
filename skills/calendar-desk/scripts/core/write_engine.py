@@ -19,7 +19,10 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import sys
+import tempfile
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,6 +41,75 @@ class CalendarWriteError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -> None:
+    """Safely write content to file_path atomically via NamedTemporaryFile + os.replace."""
+    parent = file_path.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding=encoding,
+        dir=str(parent),
+        prefix=f".tmp-{file_path.name}-",
+        delete=False,
+    ) as tmp:
+        tmp.write(content)
+        tmp.flush()
+        tmp_name = tmp.name
+    os.replace(tmp_name, str(file_path))
+
+
+def _validate_safe_identifier(val: Any, name: str) -> None:
+    """Validate identifier against path traversal and dangerous characters."""
+    if not isinstance(val, str) or not val.strip():
+        raise CalendarWriteError("WRITE_VALIDATION_ERROR", f"{name} must be a non-empty string")
+    clean = val.strip()
+    if (
+        ".." in clean
+        or "/" in clean
+        or "\\" in clean
+        or clean.startswith(".")
+        or "\x00" in clean
+    ):
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"Invalid {name} '{val}': path traversal or illegal characters detected",
+        )
+
+
+def _validate_resource_url_within_collection(resource_url: str, collection_url: str) -> None:
+    """Ensure resource_url is properly contained within collection_url."""
+    res_parsed = urllib.parse.urlsplit(resource_url)
+    col_parsed = urllib.parse.urlsplit(collection_url)
+
+    if col_parsed.scheme and res_parsed.scheme:
+        if col_parsed.scheme.lower() != res_parsed.scheme.lower():
+            raise CalendarWriteError(
+                "WRITE_VALIDATION_ERROR",
+                f"resource_url scheme '{res_parsed.scheme}' does not match collection scheme '{col_parsed.scheme}'",
+            )
+    if col_parsed.netloc and res_parsed.netloc:
+        if col_parsed.netloc.lower() != res_parsed.netloc.lower():
+            raise CalendarWriteError(
+                "WRITE_VALIDATION_ERROR",
+                f"resource_url host '{res_parsed.netloc}' does not match collection host '{col_parsed.netloc}'",
+            )
+
+    col_path = col_parsed.path.rstrip("/") + "/"
+    res_path = res_parsed.path
+    if not res_path.startswith(col_path):
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"resource_url path '{res_path}' is outside collection path '{col_path}'",
+        )
+
+    remainder = res_path[len(col_path):]
+    if "/" in remainder or "\\" in remainder or ".." in remainder or not remainder:
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"resource_url path contains traversal or subdirectories: '{remainder}'",
+        )
 
 
 def _trusted_lock_root(explicit: str | Path | None = None) -> Path:
@@ -141,14 +213,24 @@ def _check_no_in_progress_journal(ws_path: Path) -> None:
         return
     for jf in journal_dir.glob("*.json"):
         try:
-            jdata = json.loads(jf.read_text(encoding="utf-8"))
-            if isinstance(jdata, dict) and jdata.get("status") == "in_progress":
+            content = jf.read_text(encoding="utf-8")
+            jdata = json.loads(content)
+            if not isinstance(jdata, dict):
                 raise CalendarWriteError(
                     "RECOVERY_REQUIRED",
-                    f"Interrupted write journal exists at '{jf.name}'. Workspace recovery required.",
+                    f"Corrupted write journal at '{jf.name}'. Workspace recovery required.",
                 )
-        except (json.JSONDecodeError, OSError):
-            pass
+            status = jdata.get("status")
+            if status in ("in_progress", "unknown_remote_outcome", "recovery_required"):
+                raise CalendarWriteError(
+                    "RECOVERY_REQUIRED",
+                    f"Interrupted write journal exists at '{jf.name}' (status: '{status}'). Workspace recovery required.",
+                )
+        except (json.JSONDecodeError, OSError) as exc:
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Corrupt or unreadable write journal at '{jf.name}': {exc}. Workspace recovery required.",
+            ) from exc
 
 
 def _normalize_spec_endpoint(dt_val: Any, tz_str: str, default_tz: str = "Europe/Vienna") -> dict[str, Any]:
@@ -219,6 +301,11 @@ def plan_calendar_write(
     """Execute dry-run planning without requiring a workspace lock."""
     ws_path = Path(workspace_root).resolve()
 
+    _validate_safe_identifier(account, "account")
+    _validate_safe_identifier(calendar_alias, "calendar_alias")
+    if uid is not None:
+        _validate_safe_identifier(uid, "uid")
+
     if write_policy != "dry_run_and_approval":
         raise CalendarWriteError(
             "CALENDAR_WRITE_FORBIDDEN",
@@ -241,8 +328,11 @@ def plan_calendar_write(
             raise CalendarWriteError("WRITE_VALIDATION_ERROR", f"UID is required for '{action}'")
 
     if not resource_url:
+        safe_seg = urllib.parse.quote(uid, safe="@_.-") + ".ics"
         col = collection_url.rstrip("/") + "/"
-        resource_url = f"{col}{uid}.ics"
+        resource_url = f"{col}{safe_seg}"
+    else:
+        _validate_resource_url_within_collection(resource_url, collection_url)
 
     staged_ics: str | None = None
     precondition: dict[str, Any] = {}
@@ -324,6 +414,23 @@ def plan_calendar_write(
             diff_summary = f"Cancel event (UID: {uid}, ETag: {expected_etag})"
         else:
             update_dict = dict(updates or {})
+            if event_spec and isinstance(event_spec, dict):
+                tz_name = event_spec.get("timezone") or "Europe/Vienna"
+                for k in ("summary", "description", "location", "status", "transp", "classification"):
+                    if k in event_spec and k not in update_dict:
+                        update_dict[k] = event_spec[k]
+                st_val = event_spec.get("start") or event_spec.get("dtstart")
+                if st_val and "start" not in update_dict:
+                    update_dict["start"] = _normalize_spec_endpoint(st_val, tz_name)
+                end_val = event_spec.get("end") or event_spec.get("dtend")
+                if end_val and "end" not in update_dict:
+                    update_dict["end"] = _normalize_spec_endpoint(end_val, tz_name)
+
+            if "start" in update_dict and not isinstance(update_dict["start"], dict):
+                update_dict["start"] = _normalize_spec_endpoint(update_dict["start"], "Europe/Vienna")
+            if "end" in update_dict and not isinstance(update_dict["end"], dict):
+                update_dict["end"] = _normalize_spec_endpoint(update_dict["end"], "Europe/Vienna")
+
             staged_ics = update_vevent_ics(
                 existing_raw_ics, update_dict, increment_sequence=True
             )
@@ -356,6 +463,10 @@ def plan_calendar_write(
         "staged_ics": staged_ics,
         "canonical_ics_sha256": canonical_ics_sha256,
         "diff_summary": diff_summary,
+        "pre_state": {
+            "etag": expected_etag,
+            "raw_ics": existing_raw_ics,
+        },
     }
 
     plan_sha256 = compute_plan_sha256(plan)
@@ -371,11 +482,8 @@ def plan_calendar_write(
 
     if persist:
         proposals_dir = ws_path / "data" / "calendar-desk" / "proposals"
-        proposals_dir.mkdir(parents=True, exist_ok=True)
         plan_file = proposals_dir / f"{plan_id}.json"
-        tmp_file = proposals_dir / f".tmp-{plan_id}.json"
-        tmp_file.write_text(json.dumps(plan, indent=2), encoding="utf-8")
-        os.replace(str(tmp_file), str(plan_file))
+        _atomic_write_text(plan_file, json.dumps(plan, indent=2))
 
     return plan
 
@@ -404,7 +512,39 @@ def apply_calendar_write(
     # 2. Check no existing in_progress journal
     _check_no_in_progress_journal(ws_path)
 
-    # 3. Validate approval receipt
+    # 3. Validate plan identifiers
+    _validate_safe_identifier(plan.get("plan_id"), "plan_id")
+    _validate_safe_identifier(plan.get("uid"), "uid")
+    _validate_safe_identifier(plan.get("account"), "account")
+    _validate_safe_identifier(plan.get("calendar_alias"), "calendar_alias")
+
+    # 4. Re-verify write policy from backend config
+    cfg_file = ws_path / ".agents" / "calendar-desk-backend.json"
+    if cfg_file.is_file():
+        cfg = load_backend_config(cfg_file)
+        accounts = cfg.get("accounts", {})
+        acct_meta = accounts.get(plan.get("account", ""))
+        if acct_meta:
+            cals = acct_meta.get("calendars", {})
+            cal_meta = cals.get(plan.get("calendar_alias", ""))
+            if cal_meta:
+                policy = cal_meta.get("write_policy", "read_only")
+                if policy != "dry_run_and_approval":
+                    raise CalendarWriteError(
+                        "CALENDAR_WRITE_FORBIDDEN",
+                        f"Write rejected: calendar policy is '{policy}', must be 'dry_run_and_approval'",
+                    )
+    if plan.get("write_policy") and plan["write_policy"] != "dry_run_and_approval":
+        raise CalendarWriteError(
+            "CALENDAR_WRITE_FORBIDDEN",
+            f"Write rejected: plan write_policy is '{plan['write_policy']}', must be 'dry_run_and_approval'",
+        )
+
+    # 5. Validate resource_url containment
+    if plan.get("resource_url") and plan.get("collection_url"):
+        _validate_resource_url_within_collection(plan["resource_url"], plan["collection_url"])
+
+    # 6. Validate approval receipt
     if approval_receipt.get("schema") != "calendar-desk-approval/1":
         raise CalendarWriteError(
             "APPROVAL_RECEIPT_INVALID",
@@ -438,10 +578,30 @@ def apply_calendar_write(
             f"Receipt plan_sha256 '{approval_receipt.get('plan_sha256')}' does not match plan '{plan.get('plan_sha256')}'",
         )
 
-    # 4. Stage journal file (in_progress)
+    # 7. Check for duplicate apply / existing journal
     journal_dir = ws_path / "data" / "calendar-desk" / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
     journal_file = journal_dir / f"{plan['plan_id']}.json"
+
+    if journal_file.exists():
+        try:
+            existing_j = json.loads(journal_file.read_text(encoding="utf-8"))
+            existing_status = existing_j.get("status") if isinstance(existing_j, dict) else "corrupted"
+        except Exception:
+            existing_status = "corrupted"
+        if existing_status in ("applied", "completed", "in_progress", "unknown_remote_outcome", "recovery_required", "corrupted"):
+            raise CalendarWriteError(
+                "WRITE_VALIDATION_ERROR",
+                f"Journal already exists for plan '{plan['plan_id']}' with status '{existing_status}'. Duplicate apply forbidden.",
+            )
+
+    # 8. Stage journal file (in_progress)
+    pre_state = plan.get("pre_state")
+    if not isinstance(pre_state, dict):
+        pre_state = {
+            "etag": plan.get("precondition", {}).get("if_match_etag"),
+            "raw_ics": plan.get("existing_raw_ics"),
+        }
 
     journal_data = {
         "status": "in_progress",
@@ -453,11 +613,13 @@ def apply_calendar_write(
         "uid": plan["uid"],
         "resource_url": plan["resource_url"],
         "precondition": plan["precondition"],
+        "pre_state": pre_state,
+        "staged_ics": plan.get("staged_ics"),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
-    journal_file.write_text(json.dumps(journal_data, indent=2), encoding="utf-8")
+    _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
 
-    # 5. Remote CalDAV execution
+    # 9. Remote CalDAV execution
     action = plan["action"]
     resource_url = plan["resource_url"]
     precondition = plan["precondition"]
@@ -475,6 +637,12 @@ def apply_calendar_write(
                 if_match_etag=precondition.get("if_match_etag"),
             )
             new_etag = resp.get("etag")
+            if new_etag is None and caldav_client is not None:
+                try:
+                    readback = caldav_client.get_event(resource_url)
+                    new_etag = readback.get("etag")
+                except Exception:
+                    pass
         elif action == "delete-event":
             resp = caldav_client.delete_event_resource(
                 resource_url,
@@ -485,18 +653,34 @@ def apply_calendar_write(
         if exc.code == "CALDAV_ETAG_CONFLICT" or getattr(exc, "status_code", None) == 412:
             journal_data["status"] = "aborted_precondition"
             journal_data["error"] = str(exc)
-            journal_file.write_text(json.dumps(journal_data, indent=2), encoding="utf-8")
+            _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
             raise CalendarWriteError(
                 "CALDAV_ETAG_CONFLICT",
                 f"CalDAV ETag precondition failed (HTTP 412): {exc}",
             ) from exc
-
-        journal_data["status"] = "aborted_error"
+        elif exc.code == "CALDAV_NETWORK_ERROR" or "network" in str(exc).lower():
+            journal_data["status"] = "unknown_remote_outcome"
+            journal_data["error"] = str(exc)
+            _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Network error during write to '{resource_url}': {exc}. Status unknown, recovery required.",
+            ) from exc
+        else:
+            journal_data["status"] = "aborted_error"
+            journal_data["error"] = str(exc)
+            _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
+            raise
+    except (TimeoutError, OSError) as exc:
+        journal_data["status"] = "unknown_remote_outcome"
         journal_data["error"] = str(exc)
-        journal_file.write_text(json.dumps(journal_data, indent=2), encoding="utf-8")
-        raise
+        _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
+        raise CalendarWriteError(
+            "RECOVERY_REQUIRED",
+            f"Network error/timeout during write to '{resource_url}': {exc}. Status unknown, recovery required.",
+        ) from exc
 
-    # 6. Re-verify lock ownership before publishing local evidence
+    # 10. Re-verify lock ownership before publishing local evidence
     require_owned_workspace_lock(
         ws_path,
         lease_id=lease_id,
@@ -504,7 +688,7 @@ def apply_calendar_write(
         lock_root=lock_root,
     )
 
-    # 7. Update local evidence register & raw ICS
+    # 11. Update local evidence register & raw ICS
     evidence_dir = ws_path / "memory" / "evidence" / "calendar"
     evidence_dir.mkdir(parents=True, exist_ok=True)
     reg_file = evidence_dir / "calendars.json"
@@ -513,12 +697,30 @@ def apply_calendar_write(
     if reg_file.is_file():
         try:
             reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            reg_data = {"schema": "calendar-desk-register/1", "events": []}
+            if not isinstance(reg_data, dict) or "events" not in reg_data:
+                raise ValueError("Register corrupt")
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Damaged evidence register at '{reg_file}': {exc}",
+            ) from exc
 
     events_list: list[dict[str, Any]] = reg_data.get("events", [])
     raw_dir = evidence_dir / "raw" / plan["account"] / plan["calendar_alias"]
-    raw_file = raw_dir / f"{plan['uid']}.ics"
+    safe_uid = re.sub(r"[^A-Za-z0-9_@.-]", "_", plan["uid"])
+    raw_file = (raw_dir / f"{safe_uid}.ics").resolve()
+    if not raw_file.is_relative_to(evidence_dir.resolve()):
+        raise CalendarWriteError("WRITE_VALIDATION_ERROR", "Path traversal detected in raw file path")
+
+    # Composite key deduplication: (account, calendar_alias, uid)
+    events_list = [
+        e for e in events_list
+        if not (
+            e.get("account") == plan["account"]
+            and e.get("calendar_alias") == plan["calendar_alias"]
+            and e.get("uid") == plan["uid"]
+        )
+    ]
 
     if action == "delete-event":
         if raw_file.exists():
@@ -526,13 +728,11 @@ def apply_calendar_write(
                 raw_file.unlink()
             except OSError:
                 pass
-        events_list = [e for e in events_list if e.get("uid") != plan["uid"]]
     else:
         raw_dir.mkdir(parents=True, exist_ok=True)
         if staged_ics:
-            raw_file.write_text(staged_ics, encoding="utf-8")
+            _atomic_write_text(raw_file, staged_ics)
 
-        events_list = [e for e in events_list if e.get("uid") != plan["uid"]]
         events_list.append({
             "uid": plan["uid"],
             "account": plan["account"],
@@ -545,13 +745,13 @@ def apply_calendar_write(
 
     reg_data["events"] = events_list
     reg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    reg_file.write_text(json.dumps(reg_data, indent=2), encoding="utf-8")
+    _atomic_write_text(reg_file, json.dumps(reg_data, indent=2))
 
-    # 8. Mark journal completed
+    # 12. Mark journal completed
     journal_data["status"] = "completed"
     journal_data["completed_at"] = datetime.now(timezone.utc).isoformat()
     journal_data["new_etag"] = new_etag
-    journal_file.write_text(json.dumps(journal_data, indent=2), encoding="utf-8")
+    _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
 
     register_rel = str(reg_file.relative_to(ws_path)).replace("\\", "/")
     return {
@@ -579,14 +779,22 @@ def inspect_workspace(workspace_root: str | Path) -> dict[str, Any]:
     if journal_dir.is_dir():
         for jf in journal_dir.glob("*.json"):
             try:
-                jdata = json.loads(jf.read_text(encoding="utf-8"))
-                if isinstance(jdata, dict):
-                    status = jdata.get("status", "unknown")
-                    journals_by_status[status] = journals_by_status.get(status, 0) + 1
-                    if status == "in_progress":
-                        in_progress_plans.append(jdata)
-            except (json.JSONDecodeError, OSError):
-                pass
+                content = jf.read_text(encoding="utf-8")
+                jdata = json.loads(content)
+                if not isinstance(jdata, dict):
+                    raise CalendarWriteError(
+                        "RECOVERY_REQUIRED",
+                        f"Corrupt journal file '{jf.name}': root must be a dict",
+                    )
+                status = jdata.get("status", "unknown")
+                journals_by_status[status] = journals_by_status.get(status, 0) + 1
+                if status in ("in_progress", "unknown_remote_outcome", "recovery_required"):
+                    in_progress_plans.append(jdata)
+            except (json.JSONDecodeError, OSError) as exc:
+                raise CalendarWriteError(
+                    "RECOVERY_REQUIRED",
+                    f"Corrupt journal file '{jf.name}': {exc}",
+                ) from exc
 
     reg_file = ws_path / "memory" / "evidence" / "calendar" / "calendars.json"
     register_stats: dict[str, Any] = {"present": reg_file.is_file()}
@@ -627,27 +835,97 @@ def recover_workspace(
     journal_dir = ws_path / "data" / "calendar-desk" / "journal"
     recovered_count = 0
 
-    if journal_dir.is_dir():
-        for jf in journal_dir.glob("*.json"):
-            try:
-                jdata = json.loads(jf.read_text(encoding="utf-8"))
-                if isinstance(jdata, dict) and jdata.get("status") == "in_progress":
-                    new_status = "recovered"
-                    if caldav_client:
-                        res_url = jdata.get("resource_url")
-                        try:
-                            if res_url:
-                                caldav_client.get_event(res_url)
-                                new_status = "recovered_applied"
-                        except Exception:
-                            new_status = "recovered_aborted"
+    if not journal_dir.is_dir():
+        return {
+            "status": "recovered",
+            "recovered_count": 0,
+        }
 
-                    jdata["status"] = new_status
-                    jdata["recovered_at"] = datetime.now(timezone.utc).isoformat()
-                    jf.write_text(json.dumps(jdata, indent=2), encoding="utf-8")
-                    recovered_count += 1
-            except (json.JSONDecodeError, OSError):
-                pass
+    pending_journals: list[tuple[Path, dict[str, Any]]] = []
+    for jf in journal_dir.glob("*.json"):
+        try:
+            content = jf.read_text(encoding="utf-8")
+            jdata = json.loads(content)
+            if not isinstance(jdata, dict):
+                raise CalendarWriteError(
+                    "RECOVERY_REQUIRED",
+                    f"Corrupt journal file '{jf.name}': root must be a dict",
+                )
+            if jdata.get("status") in ("in_progress", "unknown_remote_outcome", "recovery_required"):
+                pending_journals.append((jf, jdata))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Corrupt journal file '{jf.name}': {exc}",
+            ) from exc
+
+    if not pending_journals:
+        return {
+            "status": "recovered",
+            "recovered_count": 0,
+        }
+
+    if caldav_client is None:
+        raise CalendarWriteError(
+            "RECOVERY_REQUIRED",
+            "Cannot recover workspace without active caldav_client to verify remote postconditions",
+        )
+
+    for jf, jdata in pending_journals:
+        action = jdata.get("action")
+        res_url = jdata.get("resource_url")
+        precondition = jdata.get("precondition") or {}
+        pre_state = jdata.get("pre_state") or {}
+        if_match_etag = precondition.get("if_match_etag") or pre_state.get("etag")
+
+        fetched: dict[str, Any] | None = None
+        try:
+            if res_url:
+                fetched = caldav_client.get_event(res_url)
+        except CalDAVProtocolError as exc:
+            if exc.code == "CALDAV_NOT_FOUND" or getattr(exc, "status_code", None) == 404:
+                fetched = None
+            elif exc.code == "CALDAV_NETWORK_ERROR" or "network" in str(exc).lower():
+                raise CalendarWriteError(
+                    "RECOVERY_REQUIRED",
+                    f"Server unreachable during recovery of '{res_url}': {exc}",
+                ) from exc
+            else:
+                raise
+        except (TimeoutError, OSError) as exc:
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Server unreachable during recovery of '{res_url}': {exc}",
+            ) from exc
+
+        if action == "delete-event":
+            if fetched is None:
+                new_status = "recovered_applied"
+            else:
+                new_status = "recovered_aborted"
+        elif action in ("update-event", "cancel-event"):
+            if fetched is None:
+                new_status = "recovered_aborted"
+            else:
+                remote_etag = fetched.get("etag")
+                if if_match_etag and remote_etag and remote_etag != if_match_etag:
+                    new_status = "recovered_applied"
+                elif not if_match_etag:
+                    new_status = "recovered_applied"
+                else:
+                    new_status = "recovered_aborted"
+        elif action == "create-event":
+            if fetched is not None:
+                new_status = "recovered_applied"
+            else:
+                new_status = "recovered_aborted"
+        else:
+            new_status = "recovered_aborted"
+
+        jdata["status"] = new_status
+        jdata["recovered_at"] = datetime.now(timezone.utc).isoformat()
+        _atomic_write_text(jf, json.dumps(jdata, indent=2))
+        recovered_count += 1
 
     return {
         "status": "recovered",
