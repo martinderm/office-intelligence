@@ -22,6 +22,7 @@ LOADERS = {
     "mail": "skills/mail-desk/scripts/core/quarantine/attachment_fetch.py",
     "diagnostics": "skills/mail-desk/scripts/core/diagnostics.py",
     "project": "skills/project-catalog-entry/scripts/migrate_project_wps.py",
+    "calendar": "skills/calendar-desk/scripts/calendar_desk_client.py",
 }
 WORKER = r'''
 import importlib, importlib.util, json, os, pickle, sys, types
