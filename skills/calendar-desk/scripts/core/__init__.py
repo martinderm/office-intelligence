@@ -1,11 +1,28 @@
 """Core package for skills/calendar-desk.
 
 Provides RFC-5545 iCalendar codec, timezone resolution, recurrence expansion,
-and untrusted calendar content fencing without external dependencies.
+untrusted calendar content fencing, backend config loader, CalDAV client transport,
+and Free/Busy / slot finding engine without external dependencies.
 """
 
 from __future__ import annotations
 
+from core.backend_config import (
+    AccountCredentials,
+    CalDAVConfigError,
+    load_backend_config,
+    resolve_account_credentials,
+    resolve_calendar_target,
+)
+from core.caldav_client import (
+    CalDAVClient,
+    CalDAVProtocolError,
+    parse_dav_xml,
+)
+from core.freebusy import (
+    compute_freebusy,
+    find_free_slots,
+)
 from core.ical_codec import (
     ICalCodecError,
     WINDOWS_TZ_ALIASES,
@@ -52,4 +69,14 @@ __all__ = [
     "fence_calendar_text",
     "sanitize_fence_collisions",
     "scan_calendar_text",
+    "AccountCredentials",
+    "CalDAVConfigError",
+    "load_backend_config",
+    "resolve_account_credentials",
+    "resolve_calendar_target",
+    "CalDAVClient",
+    "CalDAVProtocolError",
+    "parse_dav_xml",
+    "compute_freebusy",
+    "find_free_slots",
 ]
