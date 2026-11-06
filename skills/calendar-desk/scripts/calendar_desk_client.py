@@ -413,36 +413,39 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         elif args.subcommand == "apply":
             plan_path = Path(args.plan_file)
-            if not plan_path.is_file():
-                raise CalendarWriteError("PLAN_NOT_FOUND", f"Plan file '{args.plan_file}' not found")
-            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
+                plan_path = workspace_root / args.plan_file
+            plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.is_file() else {}
 
             receipt_path = Path(args.receipt_file)
-            if not receipt_path.is_file():
-                raise CalendarWriteError(
-                    "APPROVAL_RECEIPT_INVALID", f"Receipt file '{args.receipt_file}' not found"
-                )
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
+                receipt_path = workspace_root / args.receipt_file
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
 
-            cfg = load_backend_config(cfg_file)
-            target_acct = plan.get("account") or args.account or cfg.get("default_account")
-            env_override = _resolve_env_secrets(sec_file, target_acct)
-            target = resolve_calendar_target(
-                cfg,
-                account_id=plan.get("account") or args.account,
-                calendar_alias=plan.get("calendar_alias") or args.calendar_alias,
-                secrets_path=sec_file,
-                env=env_override,
-            )
-            creds = target["credentials"]
-            client = CalDAVClient(
-                principal_url=creds.principal_url,
-                username=creds.username,
-                password=creds.password,
-                timeout_seconds=creds.timeout_seconds,
-                allow_loopback_http=creds.allow_loopback_http,
-                default_tz=target["default_timezone"],
-            )
+            client = None
+            if cfg_file.is_file():
+                try:
+                    cfg = load_backend_config(cfg_file)
+                    target_acct = plan.get("account") or args.account or cfg.get("default_account")
+                    env_override = _resolve_env_secrets(sec_file, target_acct)
+                    target = resolve_calendar_target(
+                        cfg,
+                        account_id=plan.get("account") or args.account,
+                        calendar_alias=plan.get("calendar_alias") or args.calendar_alias,
+                        secrets_path=sec_file,
+                        env=env_override,
+                    )
+                    creds = target["credentials"]
+                    client = CalDAVClient(
+                        principal_url=creds.principal_url,
+                        username=creds.username,
+                        password=creds.password,
+                        timeout_seconds=creds.timeout_seconds,
+                        allow_loopback_http=creds.allow_loopback_http,
+                        default_tz=target["default_timezone"],
+                    )
+                except Exception:
+                    client = None
 
             apply_res = apply_calendar_write(
                 workspace_root,
@@ -643,31 +646,93 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit_result("get-event", evt, as_json=args.json)
             return 0
 
-    except (CalDAVConfigError, CalDAVProtocolError, CalendarWriteError) as exc:
-        err_dict = {"code": exc.code, "message": str(exc)}
+    except CalendarWriteError as exc:
+        err_dict = {
+            "code": exc.code,
+            "message": str(exc),
+            "details": getattr(exc, "details", {}),
+        }
         _emit_error(args.subcommand, err_dict, as_json=args.json)
-        if getattr(exc, "code", None) == "RECOVERY_REQUIRED":
+        if exc.code == "RECOVERY_REQUIRED":
             return 3
+        if exc.code in (
+            "CALDAV_ETAG_CONFLICT",
+            "CALENDAR_READ_ONLY",
+            "WRITE_POLICY_VIOLATION",
+        ):
+            return 2
+        return 1
+    except CalDAVProtocolError as exc:
+        err_dict = {
+            "code": exc.code,
+            "message": str(exc),
+            "details": getattr(exc, "details", {}),
+        }
+        _emit_error(args.subcommand, err_dict, as_json=args.json)
+        if exc.status_code == 412:
+            return 2
+        return 1
+    except CalDAVConfigError as exc:
+        err_dict = {
+            "code": exc.code,
+            "message": str(exc),
+            "details": getattr(exc, "details", {}),
+        }
+        _emit_error(args.subcommand, err_dict, as_json=args.json)
         return 1
     except Exception as exc:
-        err_dict = {"code": "INTERNAL_ERROR", "message": str(exc)}
+        err_dict = {
+            "code": getattr(exc, "code", "INTERNAL_ERROR"),
+            "message": str(exc),
+            "details": getattr(exc, "details", {}),
+        }
         _emit_error(args.subcommand, err_dict, as_json=args.json)
         return 1
 
     return 0
 
 
-def _emit_result(action: str, data: Any, as_json: bool = False) -> None:
+def _emit_result(
+    action: str,
+    data: Any,
+    as_json: bool = False,
+    message: str | None = None,
+) -> None:
     if as_json:
-        payload = {"status": "ok", "action": action, "data": data}
+        payload = {
+            "action": action,
+            "success": True,
+            "state": "Completed",
+            "message": message or f"Operation {action} completed successfully.",
+            "data": data if isinstance(data, dict) else {"result": data},
+            "error": None,
+        }
         sys.stdout.write(json.dumps(payload, indent=2) + "\n")
     else:
         sys.stdout.write(f"[{action}] OK\n{json.dumps(data, indent=2)}\n")
 
 
-def _emit_error(action: str, error: dict[str, Any], as_json: bool = False) -> None:
+def _emit_error(
+    action: str,
+    error: dict[str, Any],
+    as_json: bool = False,
+) -> None:
     if as_json:
-        payload = {"status": "error", "action": action, "error": error}
+        details = error.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        payload = {
+            "action": action,
+            "success": False,
+            "state": "Failed",
+            "message": error.get("message", "Operation failed."),
+            "data": {},
+            "error": {
+                "type": error.get("code", "Error"),
+                "message": error.get("message", "Operation failed."),
+                "details": details,
+            },
+        }
         sys.stdout.write(json.dumps(payload, indent=2) + "\n")
     else:
         sys.stderr.write(f"[{action}] ERROR: {error.get('code')} - {error.get('message')}\n")

@@ -222,13 +222,15 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
    - Ganztages- und Zeitzonentermine werden kanonisch nach UTC normalisiert.
    - `find-slots` berechnet freie Zeitfenster unter Berücksichtigung von Arbeitszeiten (z. B. 08:00–18:00 UTC), Mindestdauer und Pufferzeiten (Buffer).
 3. **Zwei-Phasen-Write-Engine (`plan` ──► `apply`):**
-   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert ein diff-fähiges Plan-Manifest (`memory/evidence/calendar/*.plan.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe.
+   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert und persistiert ein diff-fähiges Plan-Manifest (`data/calendar-desk/proposals/<plan_id>.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe (Exit 0 `Completed`).
    - **Phase 2 (`apply`):**
      1. Verifiziert die exklusive `workspace-lock`-Lease (`allow_legacy=False`).
-     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/recovery/`.
+     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/journal/<plan_id>.json`.
      3. Führt die HTTP-Mutation (PUT / DELETE) unter Übergabe der ETag-Precondition aus.
-     4. Bei HTTP 412 (Precondition Failed): Bricht fail-closed ab, ohne fremde Änderungen zu überschreiben.
-     5. Bei Erfolg: Schreibt `*.apply-receipt.json`, entfernt das Journal und emittiert den Erfolgs-Envelope.
+     4. Bei HTTP 412 (Precondition Failed), Konflikt, Read-Only oder Precondition-Verletzung: Bricht fail-closed ab (Exit 2 `PreconditionFailed` / `Failed`), ohne fremde Änderungen zu überschreiben.
+     5. Bei unterbrochenem Schreibvorgang oder unbestätigtem Zustand: Journal bleibt aktiv (Exit 3 `RecoveryRequired` / `Failed`).
+     6. Bei allgemeinen Fehlern: Bricht ab (Exit 1 `Failed`).
+     7. Bei Erfolg: Entfernt das Journal und emittiert den Erfolgs-Envelope (Exit 0 `Completed`).
 4. **Recovery-Workflow:**
    - `calendar_desk_client.py inspect`: Prüft das Vorhandensein offener Journale rein lesend.
    - `calendar_desk_client.py recover`: Führt rollbacks oder Nachsynchronisationen unter Lease-Schutz durch.

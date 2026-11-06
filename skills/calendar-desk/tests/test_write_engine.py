@@ -39,6 +39,7 @@ SCRIPTS_DIR = CALENDAR_DESK_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from core.backend_config import CalDAVConfigError  # noqa: E402
 from core.caldav_client import CalDAVClient, CalDAVProtocolError  # noqa: E402
 from core.write_engine import (  # noqa: E402
     ENV_LOCK_ROOT,
@@ -1220,8 +1221,12 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
             ])
         self.assertEqual(ret, 0)
         output = json.loads(stdout_buf.getvalue())
-        self.assertEqual(output.get("status"), "ok")
-        self.assertEqual(output.get("action"), "plan")
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertTrue(output["success"])
+        self.assertEqual(output["state"], "Completed")
+        self.assertEqual(output["action"], "plan")
+        self.assertIsInstance(output["message"], str)
+        self.assertIsNone(output["error"])
         self.assertIn("plan_id", output.get("data", {}))
         self.assertIn("plan_sha256", output.get("data", {}))
 
@@ -1236,8 +1241,12 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
             ])
         self.assertEqual(ret, 0)
         output = json.loads(stdout_buf.getvalue())
-        self.assertEqual(output.get("status"), "ok")
-        self.assertEqual(output.get("action"), "inspect")
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertTrue(output["success"])
+        self.assertEqual(output["state"], "Completed")
+        self.assertEqual(output["action"], "inspect")
+        self.assertIsInstance(output["message"], str)
+        self.assertIsNone(output["error"])
         self.assertIn("proposals_count", output.get("data", {}))
 
     def test_cli_respond_invitation_phase_2_error(self) -> None:
@@ -1256,9 +1265,147 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
             ])
         self.assertEqual(ret, 1)
         output = json.loads(stdout_buf.getvalue())
-        self.assertEqual(output.get("status"), "error")
-        self.assertEqual(output.get("action"), "respond-invitation")
-        self.assertEqual(output.get("error", {}).get("code"), "NOT_IMPLEMENTED_PHASE_2")
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertFalse(output["success"])
+        self.assertEqual(output["state"], "Failed")
+        self.assertEqual(output["action"], "respond-invitation")
+        self.assertIsInstance(output["message"], str)
+        self.assertEqual(output["data"], {})
+        self.assertIsNotNone(output["error"])
+        self.assertIsInstance(output["error"], dict)
+        self.assertEqual(set(output["error"].keys()), {"type", "message", "details"})
+        self.assertEqual(output["error"]["type"], "NOT_IMPLEMENTED_PHASE_2")
+
+    def test_cli_exit_code_0_success_state_completed(self) -> None:
+        """PR #82 Review #26: Successful execution yields exit code 0 and state Completed."""
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            ret = calendar_desk_client.main([
+                "--workspace", str(self.ws),
+                "--json",
+                "inspect",
+            ])
+        self.assertEqual(ret, 0)
+        output = json.loads(stdout_buf.getvalue())
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertTrue(output["success"])
+        self.assertEqual(output["state"], "Completed")
+        self.assertIsNone(output["error"])
+
+    def test_cli_exit_code_1_configuration_error(self) -> None:
+        """PR #82 Review #26: Configuration or input error yields exit code 1 and state Failed."""
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            mock_apply.side_effect = CalDAVConfigError("CONFIG_ERROR", "Invalid config file")
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "dummy-plan.json",
+                    "--receipt-file", "dummy-receipt.json",
+                    "--lease-id", "lease-1",
+                ])
+            self.assertEqual(ret, 1)
+            output = json.loads(stdout_buf.getvalue())
+            self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(output["success"])
+            self.assertEqual(output["state"], "Failed")
+            self.assertEqual(output["data"], {})
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "CONFIG_ERROR")
+
+    def test_cli_exit_code_2_write_policy_violation(self) -> None:
+        """PR #82 Review #26: Precondition / write-policy violation yields exit code 2 and state Failed."""
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            mock_apply.side_effect = CalendarWriteError("WRITE_POLICY_VIOLATION", "Write policy violation")
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "dummy-plan.json",
+                    "--receipt-file", "dummy-receipt.json",
+                    "--lease-id", "lease-1",
+                ])
+            self.assertEqual(ret, 2)
+            output = json.loads(stdout_buf.getvalue())
+            self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(output["success"])
+            self.assertEqual(output["state"], "Failed")
+            self.assertEqual(output["data"], {})
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "WRITE_POLICY_VIOLATION")
+
+    def test_cli_exit_code_2_calendar_read_only(self) -> None:
+        """PR #82 Review #26: Read-only calendar yields exit code 2 and state Failed."""
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            mock_apply.side_effect = CalendarWriteError("CALENDAR_READ_ONLY", "Calendar is read-only")
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "dummy-plan.json",
+                    "--receipt-file", "dummy-receipt.json",
+                    "--lease-id", "lease-1",
+                ])
+            self.assertEqual(ret, 2)
+            output = json.loads(stdout_buf.getvalue())
+            self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(output["success"])
+            self.assertEqual(output["state"], "Failed")
+            self.assertEqual(output["data"], {})
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "CALENDAR_READ_ONLY")
+
+    def test_cli_exit_code_2_caldav_etag_conflict(self) -> None:
+        """PR #82 Review #26: CalDAV ETag conflict (412) yields exit code 2 and state Failed."""
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            mock_apply.side_effect = CalendarWriteError("CALDAV_ETAG_CONFLICT", "Precondition Failed (412)")
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "dummy-plan.json",
+                    "--receipt-file", "dummy-receipt.json",
+                    "--lease-id", "lease-1",
+                ])
+            self.assertEqual(ret, 2)
+            output = json.loads(stdout_buf.getvalue())
+            self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(output["success"])
+            self.assertEqual(output["state"], "Failed")
+            self.assertEqual(output["data"], {})
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "CALDAV_ETAG_CONFLICT")
+
+    def test_cli_exit_code_3_recovery_required(self) -> None:
+        """PR #82 Review #26: Recovery-required yields exit code 3 and state Failed."""
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            mock_apply.side_effect = CalendarWriteError("RECOVERY_REQUIRED", "In-progress journal requires recovery")
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "dummy-plan.json",
+                    "--receipt-file", "dummy-receipt.json",
+                    "--lease-id", "lease-1",
+                ])
+            self.assertEqual(ret, 3)
+            output = json.loads(stdout_buf.getvalue())
+            self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(output["success"])
+            self.assertEqual(output["state"], "Failed")
+            self.assertEqual(output["data"], {})
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "RECOVERY_REQUIRED")
 
 
 class TestWritePolicyAndTargetValidation(unittest.TestCase):
@@ -1450,6 +1597,14 @@ class TestUnknownRemoteOutcomeAndExitCode(unittest.TestCase):
                     "--lock-root", str(self.guard_dir),
                 ])
         self.assertEqual(exit_code, 3)
+        output = json.loads(stdout_buf.getvalue())
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertFalse(output["success"])
+        self.assertEqual(output["state"], "Failed")
+        self.assertEqual(output["action"], "apply")
+        self.assertEqual(output["data"], {})
+        self.assertIsNotNone(output["error"])
+        self.assertEqual(output["error"]["type"], "RECOVERY_REQUIRED")
 
 
 class TestCrashContractAndDuplicateApply(unittest.TestCase):
@@ -1846,6 +2001,10 @@ class TestPlanUpdateEventDataPropagation(unittest.TestCase):
             ])
         self.assertEqual(ret, 0)
         output = json.loads(stdout_buf.getvalue())
+        self.assertEqual(set(output.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertTrue(output["success"])
+        self.assertEqual(output["state"], "Completed")
+        self.assertIsNone(output["error"])
         data = output.get("data", {})
         self.assertIn("SUMMARY:CLI Updated Meeting", data.get("staged_ics", ""))
         self.assertIn("20261103", data.get("staged_ics", ""))

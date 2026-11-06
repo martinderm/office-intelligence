@@ -580,9 +580,14 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "ok")
-            self.assertEqual(parsed.get("action"), "freebusy")
-            self.assertIn("busy_intervals", parsed.get("data", {}))
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertTrue(parsed["success"])
+            self.assertEqual(parsed["state"], "Completed")
+            self.assertEqual(parsed["action"], "freebusy")
+            self.assertIsInstance(parsed["message"], str)
+            self.assertIsInstance(parsed["data"], dict)
+            self.assertIsNone(parsed["error"])
+            self.assertIn("busy_intervals", parsed["data"])
         finally:
             Path(records_path).unlink(missing_ok=True)
 
@@ -603,9 +608,14 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "ok")
-            self.assertEqual(parsed.get("action"), "find-slots")
-            self.assertIn("termino_slots", parsed.get("data", {}))
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertTrue(parsed["success"])
+            self.assertEqual(parsed["state"], "Completed")
+            self.assertEqual(parsed["action"], "find-slots")
+            self.assertIsInstance(parsed["message"], str)
+            self.assertIsInstance(parsed["data"], dict)
+            self.assertIsNone(parsed["error"])
+            self.assertIn("termino_slots", parsed["data"])
         finally:
             Path(records_path).unlink(missing_ok=True)
 
@@ -624,7 +634,15 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 1, f"Expected exit code 1 for missing records-file, got {code}")
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "error")
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(parsed["success"])
+            self.assertEqual(parsed["state"], "Failed")
+            self.assertEqual(parsed["action"], "freebusy")
+            self.assertIsInstance(parsed["message"], str)
+            self.assertEqual(parsed["data"], {})
+            self.assertIsNotNone(parsed["error"])
+            self.assertIsInstance(parsed["error"], dict)
+            self.assertEqual(set(parsed["error"].keys()), {"type", "message", "details"})
 
     def test_cli_freebusy_no_source_in_empty_workspace_fails_closed(self) -> None:
         """PR #82 Review #15: freebusy in empty workspace without backend config and without records-file must fail closed."""
@@ -640,7 +658,12 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 1, f"Expected exit code 1 for empty workspace without config, got {code}")
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "error")
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(parsed["success"])
+            self.assertEqual(parsed["state"], "Failed")
+            self.assertEqual(parsed["action"], "freebusy")
+            self.assertEqual(parsed["data"], {})
+            self.assertIsNotNone(parsed["error"])
 
     def test_cli_find_slots_missing_records_file_fails_closed(self) -> None:
         """PR #82 Review #15: find-slots with non-existent --records-file must fail closed with exit code 1."""
@@ -657,7 +680,12 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 1, f"Expected exit code 1 for missing records-file, got {code}")
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "error")
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(parsed["success"])
+            self.assertEqual(parsed["state"], "Failed")
+            self.assertEqual(parsed["action"], "find-slots")
+            self.assertEqual(parsed["data"], {})
+            self.assertIsNotNone(parsed["error"])
 
     def test_cli_find_slots_no_source_in_empty_workspace_fails_closed(self) -> None:
         """PR #82 Review #15: find-slots in empty workspace without backend config and without records-file must fail closed."""
@@ -673,7 +701,12 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 1, f"Expected exit code 1 for empty workspace without config, got {code}")
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "error")
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertFalse(parsed["success"])
+            self.assertEqual(parsed["state"], "Failed")
+            self.assertEqual(parsed["action"], "find-slots")
+            self.assertEqual(parsed["data"], {})
+            self.assertIsNotNone(parsed["error"])
 
     def test_cli_find_slots_options_slot_minutes_max_slots_and_format_termino(self) -> None:
         """PR #82 Review #16: Test find-slots CLI supports --slot-minutes, --max-slots, and --format termino."""
@@ -697,7 +730,10 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 ])
             self.assertEqual(code, 0)
             parsed = json.loads(out.getvalue())
-            self.assertEqual(parsed.get("status"), "ok")
+            self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+            self.assertTrue(parsed["success"])
+            self.assertEqual(parsed["state"], "Completed")
+            self.assertIsNone(parsed["error"])
             slots = parsed.get("data", {}).get("slots", [])
             self.assertEqual(len(slots), 2)
             self.assertIn("termino_slots", parsed.get("data", {}))
@@ -879,7 +915,11 @@ class TestCalendarDeskClientCLI(unittest.TestCase):
                 as_json=True,
             )
         parsed = json.loads(out.getvalue())
+        self.assertEqual(set(parsed.keys()), {"action", "success", "state", "message", "data", "error"})
+        self.assertTrue(parsed["success"])
+        self.assertEqual(parsed["state"], "Completed")
         self.assertEqual(parsed.get("action"), "agenda")
+        self.assertIsNone(parsed["error"])
         self.assertIn("fenced_records", parsed.get("data", {}))
         self.assertEqual(len(parsed["data"]["fenced_records"]), 1)
 
