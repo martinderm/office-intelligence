@@ -15,6 +15,16 @@ from zoneinfo import ZoneInfo
 
 MAX_ICS_BYTES = 1_048_576  # 1 MiB
 
+WINDOWS_TZ_ALIASES: dict[str, str] = {
+    "W. Europe Standard Time": "Europe/Vienna",
+    "Central European Standard Time": "Europe/Warsaw",
+    "Romance Standard Time": "Europe/Paris",
+    "GMT Standard Time": "Europe/London",
+    "Eastern Standard Time": "America/New_York",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "UTC": "UTC",
+}
+
 
 class CalendarExtractError(ValueError):
     """Raised when an .ics calendar payload fails fail-closed validation."""
@@ -22,20 +32,6 @@ class CalendarExtractError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
-
-
-class RecurrenceIdStr(str):
-    """String subclass that preserves raw representation for assertions while matching normalized UTC."""
-
-    def __new__(cls, val: str, alt: str | None = None) -> RecurrenceIdStr:
-        s = super().__new__(cls, val)
-        s._alt = alt  # type: ignore[attr-defined]
-        return s
-
-    def __eq__(self, other: Any) -> bool:
-        if super().__eq__(other):
-            return True
-        return hasattr(self, "_alt") and self._alt == other
 
 
 def _unfold_lines(raw_ics: str) -> list[str]:
@@ -93,23 +89,34 @@ def _parse_prop_line(line: str) -> tuple[str, dict[str, str], str]:
 
 
 def _parse_recurrence_id(dt_str: str, params: dict[str, str], default_tz: str = "Europe/Vienna") -> str:
-    """Parse RECURRENCE-ID into a normalized UTC ISO-8601 or DATE string wrapped in RecurrenceIdStr."""
+    """Parse RECURRENCE-ID into a normalized UTC ISO-8601 or DATE string."""
     clean_dt = dt_str.strip()
     is_date = params.get("VALUE", "").upper() == "DATE" or (len(clean_dt) == 8 and clean_dt.isdigit())
 
     if is_date:
         try:
             parsed_date = datetime.strptime(clean_dt, "%Y%m%d").date()
-            iso_val = parsed_date.strftime("%Y-%m-%d")
+            return parsed_date.strftime("%Y-%m-%d")
         except ValueError:
-            iso_val = clean_dt
-        return RecurrenceIdStr(iso_val, alt=clean_dt)
+            return clean_dt
 
-    tz_param = params.get("TZID")
+    raw_tz = params.get("TZID")
+    if raw_tz:
+        clean_tz = raw_tz.strip().strip('"').strip("'")
+        tz_target = WINDOWS_TZ_ALIASES.get(clean_tz, clean_tz)
+    else:
+        clean_default = default_tz.strip().strip('"').strip("'")
+        tz_target = WINDOWS_TZ_ALIASES.get(clean_default, clean_default)
+
     try:
-        tz = ZoneInfo(tz_param) if tz_param else ZoneInfo(default_tz)
+        tz = ZoneInfo(tz_target)
     except Exception:
-        tz = ZoneInfo(default_tz)
+        try:
+            clean_default = default_tz.strip().strip('"').strip("'")
+            fallback_tz = WINDOWS_TZ_ALIASES.get(clean_default, clean_default)
+            tz = ZoneInfo(fallback_tz)
+        except Exception:
+            tz = timezone.utc
 
     try:
         if clean_dt.endswith("Z"):
@@ -118,11 +125,9 @@ def _parse_recurrence_id(dt_str: str, params: dict[str, str], default_tz: str = 
             naive_dt = datetime.strptime(clean_dt, "%Y%m%dT%H%M%S")
             dt_local = naive_dt.replace(tzinfo=tz)
             dt_utc = dt_local.astimezone(timezone.utc)
-        utc_iso = dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
-        utc_iso = clean_dt
-
-    return RecurrenceIdStr(utc_iso, alt=clean_dt)
+        return clean_dt
 
 
 def extract_calendar_objects(ics_text: str) -> list[dict[str, Any]]:
@@ -157,6 +162,7 @@ def extract_calendar_objects(ics_text: str) -> list[dict[str, Any]]:
         )
 
     results: list[dict[str, Any]] = []
+    default_tz = "Europe/Vienna"
     in_vevent = False
     in_valarm = False
 
@@ -168,7 +174,11 @@ def extract_calendar_objects(ics_text: str) -> list[dict[str, Any]]:
         prop_name, params, value = _parse_prop_line(line)
 
         if not in_vevent:
-            if prop_name == "BEGIN" and value.strip().upper() == "VEVENT":
+            if prop_name == "X-WR-TIMEZONE":
+                raw_wr_tz = value.strip().strip('"').strip("'")
+                if raw_wr_tz:
+                    default_tz = WINDOWS_TZ_ALIASES.get(raw_wr_tz, raw_wr_tz)
+            elif prop_name == "BEGIN" and value.strip().upper() == "VEVENT":
                 in_vevent = True
                 in_valarm = False
                 current_uid = None
@@ -211,7 +221,7 @@ def extract_calendar_objects(ics_text: str) -> list[dict[str, Any]]:
             except ValueError:
                 pass
         elif prop_name == "RECURRENCE-ID":
-            current_recurrence_id = _parse_recurrence_id(value.strip(), params)
+            current_recurrence_id = _parse_recurrence_id(value.strip(), params, default_tz=default_tz)
 
     if not results:
         raise CalendarExtractError("CALENDAR_INVALID_STRUCTURE", "No VEVENT components found in VCALENDAR.")

@@ -11,21 +11,6 @@ import re
 from typing import Any
 
 
-class StatusStr(str):
-    """String subclass that supports canonical status codes while matching short test aliases."""
-
-    def __eq__(self, other: Any) -> bool:
-        if super().__eq__(other):
-            return True
-        aliases = {
-            "rejected_security": {"rejected_extension", "rejected_security"},
-            "rejected_unsupported_type": {"rejected_mime", "rejected_unsupported_type"},
-            "rejected_unspecified_size": {"rejected_size", "rejected_unspecified_size"},
-            "skipped_oversized": {"rejected_size", "skipped_oversized"},
-        }
-        return other in aliases.get(str(self), set())
-
-
 DEFAULT_ATTACHMENT_POLICY: dict[str, Any] = {
     "version": "1.0.0",
     "transport": {
@@ -143,44 +128,44 @@ def check_attachment_policy(
     clean_name = sanitize_attachment_filename(filename)
     ext = Path(clean_name).suffix.lower()
     if ext in _DANGEROUS_EXTENSIONS:
-        return StatusStr("rejected_security"), f"Extension '{ext}' disallowed due to active content or executable risk"
+        return "rejected_security", f"Extension '{ext}' disallowed due to active content or executable risk"
 
     # 2. Zähllimit pro Nachricht, getrennt nach Klasse (Datei vs. Inline)
     if is_inline:
         max_inline = transport.get("max_inline_per_message", 3)
         if inline_index >= max_inline:
-            return StatusStr("skipped_inline_limit"), (
+            return "skipped_inline_limit", (
                 f"Inline index {inline_index} exceeds inline limit ({max_inline})"
             )
     else:
         max_count = transport.get("max_attachments_per_message", 5)
         if current_index >= max_count:
-            return StatusStr("skipped_count_limit"), f"Attachment index {current_index} exceeds count limit ({max_count})"
+            return "skipped_count_limit", f"Attachment index {current_index} exceeds count limit ({max_count})"
 
     # 3. Unbekannte oder nicht positive Größe (Fail-Closed: niemals "allowed")
     if size_bytes is None or not isinstance(size_bytes, int) or size_bytes <= 0:
-        return StatusStr("rejected_unspecified_size"), f"Attachment size ({size_bytes}) is unknown or invalid; cannot be allowed"
+        return "rejected_unspecified_size", f"Attachment size ({size_bytes}) is unknown or invalid; cannot be allowed"
 
     # 4. Maximale Einzel-Dateigröße
     max_single_size = transport.get("max_single_file_bytes", 15 * 1024 * 1024)
     if size_bytes > max_single_size:
-        return StatusStr("skipped_oversized"), f"File size ({size_bytes} bytes) exceeds maximum single file limit ({max_single_size} bytes)"
+        return "skipped_oversized", f"File size ({size_bytes} bytes) exceeds maximum single file limit ({max_single_size} bytes)"
 
     # 5. Kumulatives Gesamtgrößenlimit pro Nachricht
     max_total_bytes = transport.get("max_total_bytes_per_message", 25 * 1024 * 1024)
     if cumulative_bytes + size_bytes > max_total_bytes:
-        return StatusStr("skipped_total_oversized"), (
+        return "skipped_total_oversized", (
             f"Cumulative attachment size ({cumulative_bytes + size_bytes} bytes) exceeds "
             f"maximum total limit per message ({max_total_bytes} bytes)"
         )
 
     # 6. Unbekannte oder nicht erlaubte MIME-Typen (Fail-Closed: niemals "allowed")
     if not mime_type or not isinstance(mime_type, str) or not mime_type.strip():
-        return StatusStr("rejected_unsupported_type"), "MIME type is unknown or missing; cannot be allowed"
+        return "rejected_unsupported_type", "MIME type is unknown or missing; cannot be allowed"
 
     clean_mime = mime_type.strip().lower()
     allowed_mimes = set(transport.get("allowed_mime_types", []))
     if clean_mime not in allowed_mimes:
-        return StatusStr("rejected_unsupported_type"), f"MIME type '{clean_mime}' is unknown or not permitted by policy"
+        return "rejected_unsupported_type", f"MIME type '{clean_mime}' is unknown or not permitted by policy"
 
-    return StatusStr("allowed"), None
+    return "allowed", None

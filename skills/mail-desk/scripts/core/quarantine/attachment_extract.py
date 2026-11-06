@@ -929,9 +929,6 @@ def _extract_content_internal(
             except UnicodeDecodeError:
                 continue
 
-        if "\r\r\n" in decoded_str:
-            decoded_str = decoded_str.replace("\r\r\n", "\r\n")
-
         source_character_count = len(decoded_str)
         if len(decoded_str) > max_chars:
             extracted_text = decoded_str[:max_chars]

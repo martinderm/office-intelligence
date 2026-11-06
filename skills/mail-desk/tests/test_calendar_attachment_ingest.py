@@ -122,6 +122,37 @@ SAMPLE_OVERRIDE_ICS = (
     "END:VCALENDAR\r\n"
 )
 
+SAMPLE_WINDOWS_TZ_OVERRIDE_ICS = (
+    "BEGIN:VCALENDAR\r\n"
+    "VERSION:2.0\r\n"
+    "PRODID:-//mail-desk//test//EN\r\n"
+    "BEGIN:VEVENT\r\n"
+    "UID:weekly-standup@office-intelligence.test\r\n"
+    "RECURRENCE-ID;TZID=Eastern Standard Time:20261102T100000\r\n"
+    "SEQUENCE:2\r\n"
+    "DTSTART:20261102T100000\r\n"
+    "DTEND:20261102T110000\r\n"
+    "SUMMARY:Weekly Standup (EST Override)\r\n"
+    "END:VEVENT\r\n"
+    "END:VCALENDAR\r\n"
+)
+
+SAMPLE_X_WR_TIMEZONE_ICS = (
+    "BEGIN:VCALENDAR\r\n"
+    "VERSION:2.0\r\n"
+    "PRODID:-//mail-desk//test//EN\r\n"
+    "X-WR-TIMEZONE:America/New_York\r\n"
+    "BEGIN:VEVENT\r\n"
+    "UID:weekly-standup@office-intelligence.test\r\n"
+    "RECURRENCE-ID:20261102T100000\r\n"
+    "SEQUENCE:2\r\n"
+    "DTSTART:20261102T100000\r\n"
+    "DTEND:20261102T110000\r\n"
+    "SUMMARY:Weekly Standup (X-WR-TIMEZONE Override)\r\n"
+    "END:VEVENT\r\n"
+    "END:VCALENDAR\r\n"
+)
+
 SAMPLE_FOLDED_ICS = (
     "BEGIN:VCALENDAR\r\n"
     "VERSION:2.0\r\n"
@@ -215,7 +246,7 @@ class TestCalendarAttachmentPolicy(unittest.TestCase):
             mime_type="text/html",
             size_bytes=1024,
         )
-        self.assertEqual(status, "rejected_mime")
+        self.assertEqual(status, "rejected_unsupported_type")
         self.assertIsNotNone(reason)
 
         # application/x-msdownload
@@ -224,7 +255,7 @@ class TestCalendarAttachmentPolicy(unittest.TestCase):
             mime_type="application/x-msdownload",
             size_bytes=1024,
         )
-        self.assertEqual(status, "rejected_mime")
+        self.assertEqual(status, "rejected_unsupported_type")
 
     def test_check_attachment_policy_rejects_dangerous_extensions_with_calendar_mime(self) -> None:
         # .exe extension with spoofed text/calendar MIME
@@ -233,7 +264,7 @@ class TestCalendarAttachmentPolicy(unittest.TestCase):
             mime_type="text/calendar",
             size_bytes=1024,
         )
-        self.assertEqual(status, "rejected_extension")
+        self.assertEqual(status, "rejected_security")
         self.assertIn("disallowed", str(reason).lower())
 
         # .ps1 extension with application/ics MIME
@@ -242,25 +273,25 @@ class TestCalendarAttachmentPolicy(unittest.TestCase):
             mime_type="application/ics",
             size_bytes=1024,
         )
-        self.assertEqual(status, "rejected_extension")
+        self.assertEqual(status, "rejected_security")
 
     def test_check_attachment_policy_fail_closed_on_size_and_mime(self) -> None:
         # Missing size
         status, _ = check_attachment_policy("invite.ics", mime_type="text/calendar", size_bytes=None)
-        self.assertEqual(status, "rejected_size")
+        self.assertEqual(status, "rejected_unspecified_size")
 
         # Negative size
         status, _ = check_attachment_policy("invite.ics", mime_type="text/calendar", size_bytes=-10)
-        self.assertEqual(status, "rejected_size")
+        self.assertEqual(status, "rejected_unspecified_size")
 
         # Exceeding single file limit (15 MB)
         oversized = 16 * 1024 * 1024
         status, _ = check_attachment_policy("invite.ics", mime_type="text/calendar", size_bytes=oversized)
-        self.assertEqual(status, "rejected_size")
+        self.assertEqual(status, "skipped_oversized")
 
         # Missing MIME
         status, _ = check_attachment_policy("invite.ics", mime_type=None, size_bytes=1024)
-        self.assertEqual(status, "rejected_mime")
+        self.assertEqual(status, "rejected_unsupported_type")
 
 
 class TestCalendarAttachmentExtraction(unittest.TestCase):
@@ -278,7 +309,7 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
 
     def test_extract_text_calendar_utf8(self) -> None:
         ics_file = self.run_dir / "meeting.ics"
-        ics_file.write_text(SAMPLE_TIMED_ICS, encoding="utf-8")
+        ics_file.write_bytes(SAMPLE_TIMED_ICS.encode("utf-8"))
         file_sha = hashlib.sha256(SAMPLE_TIMED_ICS.encode("utf-8")).hexdigest()
 
         result = _extract_content_internal(
@@ -301,7 +332,7 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
 
     def test_extract_application_ics(self) -> None:
         ics_file = self.run_dir / "invite.ics"
-        ics_file.write_text(SAMPLE_ALL_DAY_ICS, encoding="utf-8")
+        ics_file.write_bytes(SAMPLE_ALL_DAY_ICS.encode("utf-8"))
         file_sha = hashlib.sha256(SAMPLE_ALL_DAY_ICS.encode("utf-8")).hexdigest()
 
         result = _extract_content_internal(
@@ -334,7 +365,7 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
             "END:VCALENDAR\r\n"
         )
         ics_file = self.run_dir / "large.ics"
-        ics_file.write_text(large_ics, encoding="utf-8")
+        ics_file.write_bytes(large_ics.encode("utf-8"))
         file_sha = hashlib.sha256(large_ics.encode("utf-8")).hexdigest()
 
         result = _extract_content_internal(
@@ -449,8 +480,27 @@ class TestCalendarExtractModule(unittest.TestCase):
         obj = objects[0]
         self.assertEqual(obj["uid"], "weekly-standup@office-intelligence.test")
         self.assertEqual(obj["sequence"], 2)
-        # RECURRENCE-ID value stripped of parameters
-        self.assertEqual(obj["recurrence_id"], "20261109T090000")
+        # RECURRENCE-ID value normalized to UTC string
+        self.assertIs(type(obj["recurrence_id"]), str)
+        self.assertEqual(obj["recurrence_id"], "2026-11-09T08:00:00Z")
+
+    def test_extract_recurrence_override_with_windows_tzid(self) -> None:
+        objects = extract_calendar_objects(SAMPLE_WINDOWS_TZ_OVERRIDE_ICS)
+        self.assertEqual(len(objects), 1)
+        obj = objects[0]
+        self.assertEqual(obj["uid"], "weekly-standup@office-intelligence.test")
+        self.assertEqual(obj["sequence"], 2)
+        self.assertIs(type(obj["recurrence_id"]), str)
+        self.assertEqual(obj["recurrence_id"], "2026-11-02T15:00:00Z")
+
+    def test_extract_recurrence_override_with_x_wr_timezone(self) -> None:
+        objects = extract_calendar_objects(SAMPLE_X_WR_TIMEZONE_ICS)
+        self.assertEqual(len(objects), 1)
+        obj = objects[0]
+        self.assertEqual(obj["uid"], "weekly-standup@office-intelligence.test")
+        self.assertEqual(obj["sequence"], 2)
+        self.assertIs(type(obj["recurrence_id"]), str)
+        self.assertEqual(obj["recurrence_id"], "2026-11-02T15:00:00Z")
 
     def test_extract_folded_lines(self) -> None:
         objects = extract_calendar_objects(SAMPLE_FOLDED_ICS)
@@ -474,7 +524,7 @@ class TestCalendarExtractModule(unittest.TestCase):
         self.assertEqual(objects[0]["sequence"], 1)
 
         self.assertEqual(objects[1]["uid"], "multi-master@office-intelligence.test")
-        self.assertEqual(objects[1]["recurrence_id"], "20261104T080000Z")
+        self.assertEqual(objects[1]["recurrence_id"], "2026-11-04T08:00:00Z")
         self.assertEqual(objects[1]["sequence"], 2)
 
 
@@ -523,6 +573,28 @@ class TestCalendarExtractParityWithCalendarDesk(unittest.TestCase):
         self.assertEqual(mail_objs[0]["uid"], cal_desk_ref["uid"])
         self.assertEqual(mail_objs[0]["sequence"], cal_desk_ref["sequence"])
         self.assertEqual(mail_objs[0]["recurrence_id"], cal_desk_ref["recurrence_id"])
+        self.assertEqual(mail_objs[0]["content_sha256"], cal_desk_ref["content_sha256"])
+
+    def test_parity_recurrence_override_windows_tzid(self) -> None:
+        mail_objs = extract_calendar_objects(SAMPLE_WINDOWS_TZ_OVERRIDE_ICS)
+        cal_desk_ref = ical_codec_parity.extract_calendar_object_ref(SAMPLE_WINDOWS_TZ_OVERRIDE_ICS)
+
+        self.assertEqual(len(mail_objs), 1)
+        self.assertEqual(mail_objs[0]["uid"], cal_desk_ref["uid"])
+        self.assertEqual(mail_objs[0]["sequence"], cal_desk_ref["sequence"])
+        self.assertEqual(mail_objs[0]["recurrence_id"], cal_desk_ref["recurrence_id"])
+        self.assertEqual(mail_objs[0]["recurrence_id"], "2026-11-02T15:00:00Z")
+        self.assertEqual(mail_objs[0]["content_sha256"], cal_desk_ref["content_sha256"])
+
+    def test_parity_recurrence_override_x_wr_timezone(self) -> None:
+        mail_objs = extract_calendar_objects(SAMPLE_X_WR_TIMEZONE_ICS)
+        cal_desk_ref = ical_codec_parity.extract_calendar_object_ref(SAMPLE_X_WR_TIMEZONE_ICS)
+
+        self.assertEqual(len(mail_objs), 1)
+        self.assertEqual(mail_objs[0]["uid"], cal_desk_ref["uid"])
+        self.assertEqual(mail_objs[0]["sequence"], cal_desk_ref["sequence"])
+        self.assertEqual(mail_objs[0]["recurrence_id"], cal_desk_ref["recurrence_id"])
+        self.assertEqual(mail_objs[0]["recurrence_id"], "2026-11-02T15:00:00Z")
         self.assertEqual(mail_objs[0]["content_sha256"], cal_desk_ref["content_sha256"])
 
     def test_parity_folded_lines(self) -> None:
