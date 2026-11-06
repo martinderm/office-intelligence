@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 import sys
+import threading
 import unittest
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -967,6 +968,288 @@ class TestSerializationAndLosslessUpdate(unittest.TestCase):
         self.assertIn("DTEND;TZID=Europe/Vienna:20261112T153000\r\n", updated)
         self.assertIn("RRULE:FREQ=WEEKLY;COUNT=5\r\n", updated)
         self.assertIn("LOCATION:Boardroom\r\n", updated)
+
+
+class TestCodecSecurityAndRfcRemediation(unittest.TestCase):
+    """PR #82 Review Remediation tests: Codec & Serialization Security (REV-2)."""
+
+    def setUp(self) -> None:
+        self.base_record = {
+            "schema": "calendar-record/1",
+            "uid": "rev2-test-001@office-intelligence.local",
+            "sequence": 0,
+            "status": "CONFIRMED",
+            "transp": "OPAQUE",
+            "classification": "PUBLIC",
+            "start": {
+                "utc": "2026-11-10T09:00:00Z",
+                "local": "2026-11-10T10:00:00+01:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+                "date": "2026-11-10",
+            },
+            "end": {
+                "utc": "2026-11-10T10:00:00Z",
+                "local": "2026-11-10T11:00:00+01:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+                "date": "2026-11-10",
+            },
+            "summary": "Codec Security Review Meeting",
+            "location": "Room 101",
+            "duration_minutes": 60,
+        }
+
+    def test_serializer_rejects_crlf_property_injection(self) -> None:
+        """Verify build_vevent_ics rejects CR/LF injection and escape_ics_text normalizes isolated CR."""
+        # 1. build_vevent_ics must reject \r and \n in unescaped properties
+        injection_fields = [
+            ("uid", "legit-uid\r\nSTATUS:CANCELLED"),
+            ("uid", "legit-uid\nINJECTED:TRUE"),
+            ("status", "CONFIRMED\r\nSUMMARY:Injected"),
+            ("transp", "OPAQUE\nUID:fake-uid"),
+            ("classification", "PUBLIC\rX-INJECT:true"),
+            ("rrule", "FREQ=DAILY\r\nATTENDEE:mailto:evil@example.com"),
+        ]
+        for field, evil_value in injection_fields:
+            bad_record = copy.deepcopy(self.base_record)
+            bad_record[field] = evil_value
+            with self.assertRaises(ICalCodecError, msg=f"Should reject injection in {field}") as ctx:
+                build_vevent_ics(bad_record)
+            self.assertIn(
+                ctx.exception.code,
+                ("ICAL_INJECTION_DETECTED", "ICAL_CONTROL_CHAR"),
+                f"Expected injection error code for field {field}, got {ctx.exception.code}",
+            )
+
+        # 2. escape_ics_text must normalize isolated \r so unfold_ics_lines sees a single line
+        isolated_cr_text = "Line1\rLine2\rLine3"
+        escaped = escape_ics_text(isolated_cr_text)
+        self.assertNotIn("\r", escaped, "escape_ics_text must not leave raw isolated \\r in escaped output")
+        self.assertIn(r"\n", escaped)
+        raw_ics_line = f"SUMMARY:{escaped}\r\n"
+        unfolded = unfold_ics_lines(raw_ics_line)
+        self.assertEqual(len(unfolded), 1, "Unfolding text with isolated CR must not split into multiple lines")
+
+    def test_serializer_quotes_cn_parameters_with_dquote(self) -> None:
+        """Verify build_vevent_ics encloses parameter values containing colons/semicolons/commas in DQUOTEs."""
+        record = copy.deepcopy(self.base_record)
+        record["organizer"] = {
+            "cn": "Smith: John, Jr.",
+            "cal_address": "mailto:jsmith@example.com",
+        }
+        record["attendees"] = [
+            {
+                "cn": "Doe, Jane; Dr.",
+                "cal_address": "mailto:jdoe@example.com",
+                "partstat": "ACCEPTED",
+            }
+        ]
+        ics = build_vevent_ics(record)
+        # Check ORGANIZER line has CN in DQUOTEs per RFC 5545 §3.1
+        self.assertIn(
+            'ORGANIZER;CN="Smith: John, Jr.":mailto:jsmith@example.com',
+            ics,
+            "Organizer CN with colon/comma must be enclosed in DQUOTEs",
+        )
+        # Check ATTENDEE line has CN in DQUOTEs
+        self.assertIn(
+            'CN="Doe, Jane; Dr."',
+            ics,
+            "Attendee CN with semicolon/comma must be enclosed in DQUOTEs",
+        )
+
+        # Roundtrip parse test: ensure quotes are stripped and original CN restored cleanly
+        parsed = parse_ics_to_records(ics)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["organizer"]["cn"], "Smith: John, Jr.")
+        self.assertEqual(parsed[0]["attendees"][0]["cn"], "Doe, Jane; Dr.")
+
+    def test_build_vevent_emits_dtstamp_and_rejects_inverted_dates(self) -> None:
+        """Verify build_vevent_ics emits mandatory RFC-5545 DTSTAMP and rejects end < start."""
+        # 1. Must emit DTSTAMP
+        ics = build_vevent_ics(self.base_record)
+        self.assertRegex(
+            ics,
+            r"DTSTAMP:\d{8}T\d{6}Z\r\n",
+            "build_vevent_ics must emit RFC-5545 mandatory DTSTAMP timestamp",
+        )
+
+        # 2. end < start for timed events must fail closed
+        bad_timed = copy.deepcopy(self.base_record)
+        bad_timed["start"]["utc"] = "2026-11-10T12:00:00Z"
+        bad_timed["start"]["local"] = "2026-11-10T13:00:00+01:00"
+        bad_timed["end"]["utc"] = "2026-11-10T10:00:00Z"
+        bad_timed["end"]["local"] = "2026-11-10T11:00:00+01:00"
+        with self.assertRaises(ICalCodecError) as ctx:
+            build_vevent_ics(bad_timed)
+        self.assertEqual(ctx.exception.code, "ICAL_INVALID_DATETIME")
+
+        # 3. end < start for all-day events must fail closed
+        bad_all_day = copy.deepcopy(self.base_record)
+        bad_all_day["start"] = {
+            "all_day": True,
+            "date": "2026-11-15",
+            "utc": None,
+            "local": None,
+            "tzid": None,
+        }
+        bad_all_day["end"] = {
+            "all_day": True,
+            "date": "2026-11-10",
+            "utc": None,
+            "local": None,
+            "tzid": None,
+        }
+        with self.assertRaises(ICalCodecError) as ctx_allday:
+            build_vevent_ics(bad_all_day)
+        self.assertEqual(ctx_allday.exception.code, "ICAL_INVALID_DATETIME")
+
+    def test_update_vevent_updates_last_modified_and_targets_recurrence_id(self) -> None:
+        """Verify update_vevent_ics maintains LAST-MODIFIED and supports recurrence_id instance targeting."""
+        multi_vevent_ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//office-intelligence//test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-override-001\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261102T080000Z\r\n"
+            "DTEND:20261102T090000Z\r\n"
+            "SUMMARY:Master Recurring Event\r\n"
+            "RRULE:FREQ=WEEKLY\r\n"
+            "END:VEVENT\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-override-001\r\n"
+            "RECURRENCE-ID:20261109T080000Z\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261109T100000Z\r\n"
+            "DTEND:20261109T110000Z\r\n"
+            "SUMMARY:Original Override Exception\r\n"
+            "LAST-MODIFIED:20261101T000000Z\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+
+        # 1. Update the master event: LAST-MODIFIED must be present/updated
+        updated_master = update_vevent_ics(
+            multi_vevent_ics,
+            {"summary": "Updated Master Event"},
+            increment_sequence=True,
+        )
+        self.assertIn("SUMMARY:Updated Master Event\r\n", updated_master)
+        self.assertIn("SUMMARY:Original Override Exception\r\n", updated_master)
+        self.assertRegex(
+            updated_master,
+            r"LAST-MODIFIED:\d{8}T\d{6}Z",
+            "update_vevent_ics must add or update LAST-MODIFIED timestamp",
+        )
+
+        # 2. Targeted update for specific RECURRENCE-ID instance
+        updated_instance = update_vevent_ics(
+            multi_vevent_ics,
+            {"summary": "Rescheduled Exception Meeting"},
+            recurrence_id="2026-11-09T08:00:00Z",
+            increment_sequence=True,
+        )
+        # Master must stay untouched
+        self.assertIn("SUMMARY:Master Recurring Event\r\n", updated_instance)
+        # Targeted instance must have new summary
+        self.assertIn("SUMMARY:Rescheduled Exception Meeting\r\n", updated_instance)
+        self.assertNotIn("SUMMARY:Original Override Exception\r\n", updated_instance)
+
+    def test_rrule_byday_ordinal_bounds_and_infinite_loop_prevention(self) -> None:
+        """Verify out-of-bound BYDAY ordinals fail-closed without hanging recurrence expansion."""
+        def run_with_timeout(func, timeout_sec: float = 1.0):
+            result = []
+            exc = []
+            def target():
+                try:
+                    result.append(func())
+                except Exception as e:
+                    exc.append(e)
+            t = threading.Thread(target=target, daemon=True)
+            t.start()
+            t.join(timeout_sec)
+            if t.is_alive():
+                raise AssertionError("Infinite loop detected: recurrence expansion timed out")
+            if exc:
+                raise exc[0]
+            return result[0]
+
+        bad_byday_cases = [
+            ("FREQ=MONTHLY;BYDAY=6MO", "Monthly BYDAY ordinal 6 out of range (max 5)"),
+            ("FREQ=MONTHLY;BYDAY=-6FR", "Monthly BYDAY ordinal -6 out of range (min -5)"),
+            ("FREQ=YEARLY;BYDAY=0MO", "Yearly BYDAY ordinal 0 is invalid"),
+            ("FREQ=WEEKLY;BYDAY=1MO", "Weekly BYDAY must not specify numeric ordinal prefix"),
+        ]
+
+        for rrule_str, desc in bad_byday_cases:
+            rec = copy.deepcopy(self.base_record)
+            rec["rrule"] = rrule_str
+            with self.assertRaises(ICalCodecError, msg=f"Should reject {desc}") as ctx:
+                run_with_timeout(
+                    lambda: expand_record_occurrences(
+                        rec,
+                        window_start_utc="2026-11-01T00:00:00Z",
+                        window_end_utc="2026-11-30T00:00:00Z",
+                    ),
+                    timeout_sec=1.0,
+                )
+            self.assertEqual(
+                ctx.exception.code,
+                "ICAL_INVALID_RRULE",
+                f"Expected ICAL_INVALID_RRULE for {desc}, got {ctx.exception.code}",
+            )
+
+    def test_rrule_unhandled_parts_fail_closed_and_daily_weekdays(self) -> None:
+        """Verify unhandled RRULE parts raise ICAL_UNSUPPORTED_RRULE and FREQ=DAILY;BYDAY expands weekdays only."""
+        # 1. Unhandled RRULE parts must fail-closed with ICAL_UNSUPPORTED_RRULE
+        unsupported_rrules = [
+            "FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1",
+            "FREQ=MONTHLY;BYMONTHDAY=2,16",
+            "FREQ=YEARLY;BYWEEKNO=20",
+            "FREQ=DAILY;BYHOUR=9,17",
+        ]
+        for rrule_str in unsupported_rrules:
+            rec = copy.deepcopy(self.base_record)
+            rec["rrule"] = rrule_str
+            with self.assertRaises(ICalCodecError, msg=f"Should raise for unsupported part in {rrule_str}") as ctx:
+                expand_record_occurrences(
+                    rec,
+                    window_start_utc="2026-11-01T00:00:00Z",
+                    window_end_utc="2026-11-30T00:00:00Z",
+                )
+            self.assertEqual(
+                ctx.exception.code,
+                "ICAL_UNSUPPORTED_RRULE",
+                f"Expected ICAL_UNSUPPORTED_RRULE for {rrule_str}, got {ctx.exception.code}",
+            )
+
+        # 2. FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR must only expand weekdays
+        weekday_rec = copy.deepcopy(self.base_record)
+        # Friday 2026-11-06
+        weekday_rec["start"]["utc"] = "2026-11-06T09:00:00Z"
+        weekday_rec["start"]["local"] = "2026-11-06T10:00:00+01:00"
+        weekday_rec["start"]["date"] = "2026-11-06"
+        weekday_rec["end"]["utc"] = "2026-11-06T10:00:00Z"
+        weekday_rec["end"]["local"] = "2026-11-06T11:00:00+01:00"
+        weekday_rec["end"]["date"] = "2026-11-06"
+        weekday_rec["rrule"] = "FREQ=DAILY;BYDAY=MO,TU,WE,TH,FR"
+
+        occs = expand_record_occurrences(
+            weekday_rec,
+            window_start_utc="2026-11-06T00:00:00Z",
+            window_end_utc="2026-11-14T00:00:00Z",
+        )
+        occ_dates = [occ["start"]["date"] for occ in occs]
+        # Should include Nov 6 (Fri), Nov 9 (Mon), Nov 10 (Tue), Nov 11 (Wed), Nov 12 (Thu), Nov 13 (Fri)
+        self.assertNotIn("2026-11-07", occ_dates, "Saturday must not be generated for DAILY;BYDAY=MO..FR")
+        self.assertNotIn("2026-11-08", occ_dates, "Sunday must not be generated for DAILY;BYDAY=MO..FR")
+        self.assertEqual(
+            occ_dates,
+            ["2026-11-06", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"],
+        )
 
 
 if __name__ == "__main__":

@@ -100,12 +100,20 @@ def fold_ics_line(line: str, max_octets: int = 75) -> str:
     return "\r\n ".join(chunks)
 
 
+def _format_param_value(val: str) -> str:
+    """Format parameter value per RFC 5545 §3.1: quote with DQUOTE if containing :, ;, or ,."""
+    if any(ch in val for ch in (":", ";", ",")):
+        return f'"{val}"'
+    return val
+
+
 def escape_ics_text(value: str) -> str:
     """Escape text per RFC 5545 §3.3.11."""
-    out = value.replace("\\", "\\\\")
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    out = normalized.replace("\\", "\\\\")
     out = out.replace(";", r"\;")
     out = out.replace(",", r"\,")
-    out = out.replace("\r\n", r"\n").replace("\n", r"\n")
+    out = out.replace("\n", r"\n")
     return out
 
 
@@ -584,6 +592,11 @@ def expand_record_occurrences(
             k, v = part.split("=", 1)
             rrule_parts[k.strip().upper()] = v.strip().upper()
 
+    supported_rrule_keys = {"FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY", "WKST"}
+    for k in rrule_parts:
+        if k not in supported_rrule_keys:
+            raise ICalCodecError("ICAL_UNSUPPORTED_RRULE", f"Unhandled RRULE rule part: {k}")
+
     freq = rrule_parts.get("FREQ")
     if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
         raise ICalCodecError("ICAL_INVALID_RRULE", f"Unsupported or missing FREQ in RRULE: {rrule_str}")
@@ -625,8 +638,22 @@ def expand_record_occurrences(
     bydays = [b.strip() for b in byday_str.split(",") if b.strip()]
     if bydays:
         for b in bydays:
-            if not _BYDAY_RE.match(b):
+            m = _BYDAY_RE.match(b)
+            if not m:
                 raise ICalCodecError("ICAL_INVALID_RRULE", f"Invalid BYDAY code: {b}")
+            ordinal_str = m.group(1)
+            if ordinal_str is not None:
+                ordinal = int(ordinal_str)
+                if ordinal == 0:
+                    raise ICalCodecError("ICAL_INVALID_RRULE", "BYDAY ordinal cannot be zero.")
+                if freq in ("WEEKLY", "DAILY"):
+                    raise ICalCodecError("ICAL_INVALID_RRULE", f"BYDAY ordinal not allowed with FREQ={freq}: {b}")
+                elif freq == "MONTHLY":
+                    if ordinal < -5 or ordinal > 5:
+                        raise ICalCodecError("ICAL_INVALID_RRULE", f"Monthly BYDAY ordinal out of range (-5..5): {ordinal}")
+                elif freq == "YEARLY":
+                    if ordinal < -53 or ordinal > 53:
+                        raise ICalCodecError("ICAL_INVALID_RRULE", f"Yearly BYDAY ordinal out of range (-53..53): {ordinal}")
 
     exdates = set(record.get("exdates", []))
     override_by_id: dict[str, dict[str, Any]] = {}
@@ -736,21 +763,38 @@ def expand_record_occurrences(
 
         return False
 
+    loop_iterations = 0
     if freq == "DAILY":
+        target_wd_nums = set(_WD_MAP[b[-2:]] for b in bydays) if bydays else None
         curr_date = start_local_date
         while True:
+            loop_iterations += 1
+            if loop_iterations > 10000:
+                raise ICalCodecError("ICAL_INVALID_RRULE", "Infinite loop detected: recurrence expansion timed out")
             if count is not None and generated_count >= count:
                 break
             if len(occurrences) >= max_instances:
                 break
-            if _process_candidate(curr_date):
-                break
+            if target_wd_nums is None or curr_date.weekday() in target_wd_nums:
+                if _process_candidate(curr_date):
+                    break
+            else:
+                cand_dt = (
+                    datetime(curr_date.year, curr_date.month, curr_date.day, tzinfo=timezone.utc)
+                    if is_all_day
+                    else datetime.combine(curr_date, start_time, tzinfo=tz).astimezone(timezone.utc)
+                )
+                if cand_dt >= stop_horizon_utc:
+                    break
             curr_date += timedelta(days=interval)
 
     elif freq == "WEEKLY":
         target_wd_nums = [_WD_MAP[b[-2:]] for b in bydays] if bydays else [start_local_date.weekday()]
         current_week_monday = start_local_date - timedelta(days=start_local_date.weekday())
         while True:
+            loop_iterations += 1
+            if loop_iterations > 10000:
+                raise ICalCodecError("ICAL_INVALID_RRULE", "Infinite loop detected: recurrence expansion timed out")
             if count is not None and generated_count >= count:
                 break
             if len(occurrences) >= max_instances:
@@ -771,9 +815,17 @@ def expand_record_occurrences(
         curr_year = start_local_date.year
         curr_month = start_local_date.month
         while True:
+            loop_iterations += 1
+            if loop_iterations > 10000:
+                raise ICalCodecError("ICAL_INVALID_RRULE", "Infinite loop detected: recurrence expansion timed out")
             if count is not None and generated_count >= count:
                 break
             if len(occurrences) >= max_instances:
+                break
+            first_of_month_utc = datetime(curr_year, curr_month, 1, tzinfo=timezone.utc)
+            if first_of_month_utc >= stop_horizon_utc:
+                break
+            if until_dt and first_of_month_utc > until_dt:
                 break
             stop = False
             if bydays:
@@ -806,9 +858,17 @@ def expand_record_occurrences(
     elif freq == "YEARLY":
         curr_year = start_local_date.year
         while True:
+            loop_iterations += 1
+            if loop_iterations > 10000:
+                raise ICalCodecError("ICAL_INVALID_RRULE", "Infinite loop detected: recurrence expansion timed out")
             if count is not None and generated_count >= count:
                 break
             if len(occurrences) >= max_instances:
+                break
+            first_of_year_utc = datetime(curr_year, 1, 1, tzinfo=timezone.utc)
+            if first_of_year_utc >= stop_horizon_utc:
+                break
+            if until_dt and first_of_year_utc > until_dt:
                 break
             stop = False
             if bydays:
@@ -844,6 +904,51 @@ def expand_record_occurrences(
 
 def build_vevent_ics(record: Mapping[str, Any]) -> str:
     """Serialize a calendar-record/1 dictionary into a standards-compliant VCALENDAR payload."""
+    guard_fields = ("uid", "status", "transp", "classification", "rrule", "method", "recurrence_id")
+    for f in guard_fields:
+        val = record.get(f)
+        if val is not None and isinstance(val, str):
+            if "\r" in val or "\n" in val:
+                raise ICalCodecError("ICAL_INJECTION_DETECTED", f"Newline in property value: {f}")
+    seq = record.get("sequence")
+    if seq is not None and isinstance(seq, str) and ("\r" in seq or "\n" in seq):
+        raise ICalCodecError("ICAL_INJECTION_DETECTED", "Newline in property value: sequence")
+
+    start = record["start"]
+    end = record["end"]
+
+    # Validate end >= start (end cannot precede start)
+    if start.get("all_day") or end.get("all_day"):
+        st_date_str = start.get("date")
+        end_date_str = end.get("date")
+        if st_date_str and end_date_str:
+            try:
+                st_d = datetime.strptime(st_date_str, "%Y-%m-%d").date()
+                end_d = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+                if end_d < st_d:
+                    raise ICalCodecError("ICAL_INVALID_DATETIME", "DTEND cannot precede DTSTART.")
+            except ValueError as exc:
+                raise ICalCodecError("ICAL_INVALID_DATETIME", f"Invalid date: {exc}") from exc
+    else:
+        st_utc_str = start.get("utc")
+        end_utc_str = end.get("utc")
+        if st_utc_str and end_utc_str:
+            try:
+                st_dt = datetime.fromisoformat(st_utc_str.replace("Z", "+00:00"))
+                end_dt = datetime.fromisoformat(end_utc_str.replace("Z", "+00:00"))
+                if end_dt < st_dt:
+                    raise ICalCodecError("ICAL_INVALID_DATETIME", "DTEND cannot precede DTSTART.")
+            except ValueError as exc:
+                raise ICalCodecError("ICAL_INVALID_DATETIME", f"Invalid datetime: {exc}") from exc
+        elif start.get("local") and end.get("local"):
+            try:
+                st_dt = datetime.fromisoformat(start["local"])
+                end_dt = datetime.fromisoformat(end["local"])
+                if end_dt < st_dt:
+                    raise ICalCodecError("ICAL_INVALID_DATETIME", "DTEND cannot precede DTSTART.")
+            except ValueError as exc:
+                raise ICalCodecError("ICAL_INVALID_DATETIME", f"Invalid datetime: {exc}") from exc
+
     lines: list[str] = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
@@ -855,6 +960,16 @@ def build_vevent_ics(record: Mapping[str, Any]) -> str:
 
     lines.append("BEGIN:VEVENT")
     lines.append(f"UID:{record['uid']}")
+
+    dtstamp_val = record.get("dtstamp")
+    if dtstamp_val:
+        dtstamp_clean = dtstamp_val.replace("-", "").replace(":", "")
+        if not dtstamp_clean.endswith("Z"):
+            dtstamp_clean += "Z"
+        lines.append(f"DTSTAMP:{dtstamp_clean}")
+    else:
+        lines.append(f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
+
     lines.append(f"SEQUENCE:{record.get('sequence', 0)}")
     lines.append(f"STATUS:{record.get('status', 'CONFIRMED')}")
     lines.append(f"TRANSP:{record.get('transp', 'OPAQUE')}")
@@ -866,9 +981,6 @@ def build_vevent_ics(record: Mapping[str, Any]) -> str:
         lines.append(f"DESCRIPTION:{escape_ics_text(record['description'])}")
     if record.get("location"):
         lines.append(f"LOCATION:{escape_ics_text(record['location'])}")
-
-    start = record["start"]
-    end = record["end"]
 
     if start.get("all_day"):
         st_date = start["date"].replace("-", "")
@@ -893,26 +1005,35 @@ def build_vevent_ics(record: Mapping[str, Any]) -> str:
 
     org = record.get("organizer")
     if isinstance(org, dict):
+        for k in ("cn", "cal_address"):
+            v = org.get(k)
+            if v and isinstance(v, str) and ("\r" in v or "\n" in v):
+                raise ICalCodecError("ICAL_INJECTION_DETECTED", f"Newline in property value: organizer.{k}")
         cn = org.get("cn", "")
         cal_addr = org.get("cal_address", "")
         if cn:
-            lines.append(f"ORGANIZER;CN={escape_ics_text(cn)}:{cal_addr}")
+            lines.append(f"ORGANIZER;CN={_format_param_value(cn)}:{cal_addr}")
         else:
             lines.append(f"ORGANIZER:{cal_addr}")
 
     attendees = record.get("attendees", [])
     for att in attendees:
+        if isinstance(att, dict):
+            for k in ("cn", "cal_address", "cutype", "role", "partstat"):
+                v = att.get(k)
+                if v and isinstance(v, str) and ("\r" in v or "\n" in v):
+                    raise ICalCodecError("ICAL_INJECTION_DETECTED", f"Newline in property value: attendee.{k}")
         params_list: list[str] = []
         if att.get("cutype"):
-            params_list.append(f"CUTYPE={att['cutype']}")
+            params_list.append(f"CUTYPE={_format_param_value(att['cutype'])}")
         if att.get("role"):
-            params_list.append(f"ROLE={att['role']}")
+            params_list.append(f"ROLE={_format_param_value(att['role'])}")
         if att.get("partstat"):
-            params_list.append(f"PARTSTAT={att['partstat']}")
+            params_list.append(f"PARTSTAT={_format_param_value(att['partstat'])}")
         if "rsvp" in att:
             params_list.append(f"RSVP={'TRUE' if att['rsvp'] else 'FALSE'}")
         if att.get("cn"):
-            params_list.append(f"CN={escape_ics_text(att['cn'])}")
+            params_list.append(f"CN={_format_param_value(att['cn'])}")
         param_str = ";" + ";".join(params_list) if params_list else ""
         lines.append(f"ATTENDEE{param_str}:{att.get('cal_address', '')}")
 
@@ -945,52 +1066,125 @@ def update_vevent_ics(
     raw_ics: str,
     updates: Mapping[str, Any],
     *,
+    recurrence_id: Optional[str] = None,
     increment_sequence: bool = True,
 ) -> str:
     """Update primary VEVENT in raw_ics, incrementing SEQUENCE and preserving X-* and VALARM."""
     unfolded = unfold_ics_lines(raw_ics)
-    out_lines: list[str] = []
-    in_vevent = False
-    in_valarm = False
-    vevent_processed = False
-    seq_updated = False
-    handled_keys: set[str] = set()
+
+    blocks: list[dict[str, Any]] = []
+    current_vevent_lines: Optional[list[str]] = None
+    current_raw_lines: list[str] = []
 
     for line in unfolded:
         stripped = line.strip()
         if not stripped:
             continue
-        if stripped == "BEGIN:VEVENT" and not vevent_processed:
-            in_vevent = True
-            out_lines.append(line)
+        if stripped == "BEGIN:VEVENT" and current_vevent_lines is None:
+            if current_raw_lines:
+                blocks.append({"type": "raw", "lines": current_raw_lines})
+                current_raw_lines = []
+            current_vevent_lines = [line]
+        elif stripped == "END:VEVENT" and current_vevent_lines is not None:
+            current_vevent_lines.append(line)
+            blocks.append({"type": "vevent", "lines": current_vevent_lines})
+            current_vevent_lines = None
+        else:
+            if current_vevent_lines is not None:
+                current_vevent_lines.append(line)
+            else:
+                current_raw_lines.append(line)
+
+    if current_raw_lines:
+        blocks.append({"type": "raw", "lines": current_raw_lines})
+
+    vevent_blocks = [b for b in blocks if b["type"] == "vevent"]
+    for block in vevent_blocks:
+        rec_id_val = None
+        rec_id_params = {}
+        for l in block["lines"]:
+            p_name, p_params, p_val = _parse_property_line(l)
+            if p_name == "RECURRENCE-ID":
+                rec_id_val = p_val.strip()
+                rec_id_params = p_params
+                break
+        block["rec_id_raw"] = rec_id_val
+        block["rec_id_params"] = rec_id_params
+        block["is_master"] = (rec_id_val is None)
+
+    target_block = None
+    if recurrence_id is None:
+        for b in vevent_blocks:
+            if b["is_master"]:
+                target_block = b
+                break
+        if target_block is None and vevent_blocks:
+            target_block = vevent_blocks[0]
+    else:
+        target_norm = recurrence_id.strip()
+        target_clean = target_norm.replace("-", "").replace(":", "").replace("Z", "")
+        for b in vevent_blocks:
+            raw_v = b["rec_id_raw"]
+            if not raw_v:
+                continue
+            raw_clean = raw_v.replace("-", "").replace(":", "").replace("Z", "")
+            if target_clean == raw_clean:
+                target_block = b
+                break
+            try:
+                ep = _parse_datetime_endpoint(raw_v, b["rec_id_params"], default_tz="Europe/Vienna")
+                if target_norm in (ep.get("utc"), ep.get("local"), ep.get("date")):
+                    target_block = b
+                    break
+            except Exception:
+                pass
+        if target_block is None and vevent_blocks:
+            target_block = vevent_blocks[0]
+
+    utc_now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out_lines: list[str] = []
+
+    for block in blocks:
+        if block is not target_block:
+            out_lines.extend(block["lines"])
             continue
-        if stripped == "END:VEVENT" and in_vevent:
-            # Append any missing updated fields
-            if "location" in updates and "LOCATION" not in handled_keys:
-                out_lines.append(f"LOCATION:{escape_ics_text(str(updates['location']))}")
-            if "summary" in updates and "SUMMARY" not in handled_keys:
-                out_lines.append(f"SUMMARY:{escape_ics_text(str(updates['summary']))}")
-            if "description" in updates and "DESCRIPTION" not in handled_keys:
-                out_lines.append(f"DESCRIPTION:{escape_ics_text(str(updates['description']))}")
-            if "status" in updates and "STATUS" not in handled_keys:
-                out_lines.append(f"STATUS:{str(updates['status']).upper()}")
-            if "transp" in updates and "TRANSP" not in handled_keys:
-                out_lines.append(f"TRANSP:{str(updates['transp']).upper()}")
-            if "classification" in updates and "CLASS" not in handled_keys:
-                out_lines.append(f"CLASS:{str(updates['classification']).upper()}")
-            if "start" in updates and "START" not in handled_keys:
-                out_lines.append(_format_endpoint_line("DTSTART", updates["start"]))
-            if "end" in updates and "END" not in handled_keys:
-                out_lines.append(_format_endpoint_line("DTEND", updates["end"]))
-            if "rrule" in updates and "RRULE" not in handled_keys:
-                out_lines.append(f"RRULE:{updates['rrule']}")
-            if increment_sequence and not seq_updated:
-                out_lines.append("SEQUENCE:1")
-            in_vevent = False
-            vevent_processed = True
-            out_lines.append(line)
-            continue
-        if in_vevent:
+
+        in_valarm = False
+        seq_updated = False
+        last_mod_updated = False
+        handled_keys: set[str] = set()
+
+        for line in block["lines"]:
+            stripped = line.strip()
+            if stripped == "BEGIN:VEVENT":
+                out_lines.append(line)
+                continue
+            if stripped == "END:VEVENT":
+                if "location" in updates and "LOCATION" not in handled_keys:
+                    out_lines.append(f"LOCATION:{escape_ics_text(str(updates['location']))}")
+                if "summary" in updates and "SUMMARY" not in handled_keys:
+                    out_lines.append(f"SUMMARY:{escape_ics_text(str(updates['summary']))}")
+                if "description" in updates and "DESCRIPTION" not in handled_keys:
+                    out_lines.append(f"DESCRIPTION:{escape_ics_text(str(updates['description']))}")
+                if "status" in updates and "STATUS" not in handled_keys:
+                    out_lines.append(f"STATUS:{str(updates['status']).upper()}")
+                if "transp" in updates and "TRANSP" not in handled_keys:
+                    out_lines.append(f"TRANSP:{str(updates['transp']).upper()}")
+                if "classification" in updates and "CLASS" not in handled_keys:
+                    out_lines.append(f"CLASS:{str(updates['classification']).upper()}")
+                if "start" in updates and "START" not in handled_keys:
+                    out_lines.append(_format_endpoint_line("DTSTART", updates["start"]))
+                if "end" in updates and "END" not in handled_keys:
+                    out_lines.append(_format_endpoint_line("DTEND", updates["end"]))
+                if "rrule" in updates and "RRULE" not in handled_keys:
+                    out_lines.append(f"RRULE:{updates['rrule']}")
+                if increment_sequence and not seq_updated:
+                    out_lines.append("SEQUENCE:1")
+                if not last_mod_updated:
+                    out_lines.append(f"LAST-MODIFIED:{utc_now}")
+                out_lines.append(line)
+                continue
+
             if stripped == "BEGIN:VALARM":
                 in_valarm = True
                 out_lines.append(line)
@@ -1003,7 +1197,6 @@ def update_vevent_ics(
                 out_lines.append(line)
                 continue
 
-            # Within VEVENT
             prop_name = line.split(":", 1)[0].split(";", 1)[0].upper().strip()
             if prop_name == "SEQUENCE":
                 if increment_sequence:
@@ -1015,6 +1208,10 @@ def update_vevent_ics(
                     seq_updated = True
                 else:
                     out_lines.append(line)
+                continue
+            if prop_name == "LAST-MODIFIED":
+                out_lines.append(f"LAST-MODIFIED:{utc_now}")
+                last_mod_updated = True
                 continue
             if prop_name == "SUMMARY" and "summary" in updates:
                 out_lines.append(f"SUMMARY:{escape_ics_text(str(updates['summary']))}")
@@ -1053,8 +1250,6 @@ def update_vevent_ics(
                 handled_keys.add("RRULE")
                 continue
 
-            out_lines.append(line)
-        else:
             out_lines.append(line)
 
     folded_lines = [fold_ics_line(l) for l in out_lines]
