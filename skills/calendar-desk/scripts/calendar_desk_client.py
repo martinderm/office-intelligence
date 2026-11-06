@@ -40,6 +40,53 @@ from core.write_engine import (  # noqa: E402
 )
 
 
+def load_guard(trusted_root: str | Path | None = None) -> Any:
+    """Public helper exposing the verified workspace lock guard module."""
+    import importlib.util
+
+    if trusted_root is not None:
+        root = Path(trusted_root)
+    else:
+        env_val = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
+        if env_val:
+            root = Path(env_val)
+        else:
+            here = Path(__file__).resolve()
+            found = None
+            for cand in (
+                here.parents[4] / "workspace-lock",
+                here.parents[3] / "skills" / "workspace-lock",
+                here.parents[3] / "workspace-lock",
+                here.parents[2] / "workspace-lock",
+            ):
+                if (cand / "scripts" / "workspace_lock_guard.py").is_file():
+                    found = cand
+                    break
+            root = found if found is not None else (here.parents[3] / "workspace-lock")
+
+    path = root.resolve() / "scripts" / "workspace_lock_guard.py"
+    if not path.is_file():
+        raise RuntimeError(
+            "Install workspace-lock and set WORKSPACE_LOCK_ROOT "
+            "to its trusted installation; see README.md"
+        )
+
+    spec = importlib.util.spec_from_file_location("_calendar_desk_workspace_lock_guard", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("canonical workspace-lock guard is unavailable")
+    guard_mod = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(spec.name)
+    sys.modules[spec.name] = guard_mod
+    try:
+        spec.loader.exec_module(guard_mod)
+    finally:
+        if previous is None:
+            sys.modules.pop(spec.name, None)
+        else:
+            sys.modules[spec.name] = previous
+    return guard_mod
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="calendar_desk_client.py",

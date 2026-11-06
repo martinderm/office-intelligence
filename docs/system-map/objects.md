@@ -22,12 +22,14 @@ Das Skill-Bundle mutiert keine eigenen Daten im Bundle-Verzeichnis, sondern erze
 │   │   ├── topics/<id>/meetings/     (topic-gebundene Protokolle & Transkripte)
 │   │   ├── */events/<slug>/meetings/ (event-gebundene Protokolle & Transkripte)
 │   │   ├── mail/            (Verifizierte Mail-Dossiers & Intake-Logs)
+│   │   └── calendar/        (Kalender-Evidenz: Plan-Manifests, Receipts, Snapshots)
 │   └── cloud/               ◄── Lokale Spiegel und Konvertierungs-Derivate
 │       ├── projects/        (Cloud-Atlas Projekt-Mirrors & Derivate)
 │       └── topics/          (Cloud-Atlas Topic-Mirrors & Derivate)
 └── data/                    ◄── Flüchtige / maschinengenerierte Laufzeit- & Betriebsdaten
     ├── mail-desk/           (Quarantäne-Dateien, Quarantäne-Indizes)
-    └── meeting-desk/        (Ingest-Journal, Staging-Bytes, Ownership-Record)
+    ├── meeting-desk/        (Ingest-Journal, Staging-Bytes, Ownership-Record)
+    └── calendar-desk/       (Recovery-Journal, Staging-Bytes, Session-Locks)
 ```
 
 ---
@@ -281,3 +283,14 @@ und [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting
 * **`filemap-curation.json`**: Kuratierungs-Overlay zur manuellen Steuerung von Konvertierungsregeln.
 * **Markdown-Derivate**: Konvertierte Office-Dokumente und OCR-Ergebnisse.
 * **`files[<quelle>].form_fields`** (Issue #20): additiver, begrenzter Statusvertrag der optionalen AcroForm-Formularfelder-Extraktion (`status` ∈ `complete`/`no_fields`/`partial`/`dependency_missing`/`error`, `count`, `tool`/`tool_version`, bounded `warnings`, `source_sha256`, `extracted_before_ocr`). Reserviertes **generated Feld** (nicht per Curation-Overlay setzbar/überschreibbar) und nur bei unverändertem Quell-Hash weitergereicht. Er bleibt **außerhalb** des kanonischen Mirror-Frontmatters.
+
+### 4.3 Calendar-Desk-Objekte (Paket CD-1 bis CD-4a) → [`../../skills/calendar-desk/docs/system-map/README.md`](../../skills/calendar-desk/docs/system-map/README.md)
+* **`memory/evidence/calendar/`**: Auditsichere Kalender-Evidenz:
+  - `*.plan.json`: Deterministische Zwei-Phasen-Schreibpläne mit Plan-ID, Ziel-URL, ETag-Precondition und simuliertem Diff.
+  - `*.apply-receipt.json`: Unveränderliche Ausführungsquittungen mit Ausführungszeitstempel, neuem ETag und Journal-Digest.
+  - `*.calendar-snapshot.json`: Exportierte Kalenderschnappschüsse mit ETag-Metadaten.
+* **`data/calendar-desk/`**: Flüchtige und transaktionale Laufzeitdaten:
+  - `data/calendar-desk/recovery/`: Transaktionales Recovery-Journal (`calendar-journal.json`, Schema `calendar-desk-journal/1`), Step-Hashes, Pre-/Poststate-Tracking und Resumability.
+  - `data/calendar-desk/staging/`: Temporäre Payload-Staging-Dateien vor atomarem PUT.
+* **`calendar_object_ref`**: Kanonisches 4-Key-Objekt `{"uid", "sequence", "recurrence_id", "content_sha256"}` mit Bit-Identität zwischen `calendar-desk` und `mail-desk` (`event_dossier.py`).
+* **`backend-config`**: `.agents/calendar-desk-backend.json` mit Account-Definitionen, CalDAV-Endpunkten, `read_only`-Policies und Default-Kalendern.

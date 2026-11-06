@@ -16,6 +16,7 @@ Workspace-Control-Plane oder Agent-Lifecycle-Verwaltung mit.
 | --- | --- | --- |
 | 🗂 [cloud-atlas](skills/cloud-atlas/SKILL.md) | Projekt- und Topic-Cloudspeicher, Konvertierung, Filemaps und lokale Markdown-Mirrors | Projekt-/Topic-Katalogeinträge |
 | 📮 [mail-desk](skills/mail-desk/SKILL.md) | Fachliche Bearbeitung einzelner Mails sowie Batch-/Stapelverarbeitung (`draft→execute→verify`): Routing, Reply-/Todo-Entscheidungen, Anhang-Bewertung und leichte Mail-Logs | Mailbox-Transport und vollständige Aufgaben-Triage |
+| 📅 [calendar-desk](skills/calendar-desk/SKILL.md) | CalDAV-Kalenderabfragen, Terminplanung, Slot-Suche, Einladungs-Responses und ETag-Preconditions | Dokumentation eines gesamten Events |
 | 🎥 [meeting-desk](skills/meeting-desk/SKILL.md) | Intake, Klassifikation, Evidenz und Nachbereitung einzelner Meetings, Konferenzschaltungen und Vorträge | Dokumentation eines gesamten größeren Events |
 | 📰 [event-documentation](skills/event-documentation/SKILL.md) | Konferenzen, Tagungen und Seminare mit Programm, Aufzeichnungen und Action-Item-Triage | allgemeiner Meeting-Intake außerhalb eines Events |
 | ✅ [task-desk](skills/task-desk/SKILL.md) | Action-Item-Extraktion, Priorisierung, Deduplizierung und Vorbereitung der Aufgaben-Synchronisation | Mailbox-Routing oder Pflege von Katalogstrukturen |
@@ -35,7 +36,7 @@ Workspace-Control-Plane oder Agent-Lifecycle-Verwaltung mit.
 ## 🚀 Installation und Nutzung
 
 Installiere oder verlinke den vollständigen Ordner `office-intelligence/` einschließlich
-aller sieben Ordner unter `skills/`. Öffne zunächst den Root-[`SKILL.md`](SKILL.md) und
+aller acht Ordner unter `skills/`. Öffne zunächst den Root-[`SKILL.md`](SKILL.md) und
 danach nur den für die konkrete Aufgabe passenden Sub-Skill. Konsumierende Workspaces
 stellen ihre eigenen Kataloge, Evidenz- und Datenpfade bereit; die dort geltenden
 Workspace-Regeln bleiben maßgeblich.
@@ -95,7 +96,7 @@ Regeln für Beiträge und Tests stehen in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## 🔌 Adapter und Nachbar-Skills
 
-Die sieben oben aufgeführten Ordner sind die Mitglieder dieses Bundles. Technische
+Die acht oben aufgeführten Ordner sind die Mitglieder dieses Bundles. Technische
 Adapter gehören nicht dazu und werden bei Bedarf separat eingebunden:
 
 | Zweck | Adapter (separat einzubinden) |
@@ -121,9 +122,10 @@ vollständige, föderierte System Map nach ICM Form 6:
 
 | Ebene | Karte | Inhalt |
 | --- | --- | --- |
-| L1 | [Paket System Map](docs/system-map/README.md) | Router, Zusammenspiel der 7 Desks, Data Zones, Bundle-Invarianten |
+| L1 | [Paket System Map](docs/system-map/README.md) | Router, Zusammenspiel der 8 Desks, Data Zones, Bundle-Invarianten |
 | L2 | [Mail-Desk System Map](skills/mail-desk/docs/system-map/README.md) | Quarantäne-Engine, Himalaya-Adapter, Batch-Runner/-Verträge, Dossier-Modi |
 | L2 | [Cloud-Atlas System Map](skills/cloud-atlas/docs/system-map/README.md) | Filemap-Generierung, Dokumentkonvertierung, OCR-Verzweigung |
+| L2 | [Calendar-Desk System Map](skills/calendar-desk/docs/system-map/README.md) | CalDAV-Client, RFC-5545-Codec, Free/Busy-Engine, Zwei-Phasen-Write (plan/apply), ETag-Preconditions, Journal |
 
 ---
 

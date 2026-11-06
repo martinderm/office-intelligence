@@ -93,6 +93,22 @@ journalbewusste Leser behauptet.
 
 ---
 
+### 3.5 Calendar-Writer: Zwei-Phasen-Write, ETag-Preconditions & Recovery-Journal (Paket CD-3)
+
+- **`read_only`-Schutz:** Kalender, die in `.agents/calendar-desk-backend.json` mit `read_only: true` konfiguriert sind, verweigern jede schreibende Planung oder Ausführung fail-closed mit Stopcode `CALENDAR_READ_ONLY`.
+- **Zwei-Phasen-Write (`plan` -> `apply`):**
+  - Kein unautorisierter Direkt-Write: Jede Mutation muss zuerst als Plan manifestiert werden (`memory/evidence/calendar/*.plan.json`).
+  - Erst der `apply`-Schritt führt HTTP-Mutationen (PUT/DELETE) aus.
+- **ETag-Preconditions & 412-Konflikterkennung:**
+  - Erstellung erzwingt `If-None-Match: *`. Existiert bereits eine Ressource am Zielpfad, liefert der Server HTTP 412 und der Writer bricht ohne Überschreiben fremder Ereignisse ab.
+  - Updates/Löschungen erzwingen `If-Match: "<etag>"`. Weicht der Server-Zustand ab, verhindert HTTP 412 das unbemerkte Überschreiben konkurrierender Änderungen.
+- **Workspace-Lock-Erzwingung:**
+  - Der `apply`-Schritt verifiziert die Lock-Ownership zwingend via `require_workspace_lock(allow_legacy=False)`. Ohne aktive Lease stoppt der Schreibprozess vor jedem Netzwerkaufruf.
+- **Untrusted Calendar Content Fencing:**
+  - Kalenderinhalte aus fremdem Ingress (SUMMARY, DESCRIPTION, LOCATION, ATTENDEE) werden deterministisch mit `<untrusted_calendar_content>` eingezäunt, um Prompt-Injections in nachgelagerten LLM-Kontexten zu neutralisieren.
+
+---
+
 ## 4. Externe Subprozesse & Adapter-Grenzen
 
 Das Bundle steuert bei Bedarf externe CLI-Tools an, kapselt diese jedoch strikt:
@@ -115,3 +131,5 @@ Vertiefende systemspezifische Schutz- und Isolationseffekte sind in den L2-Effek
   *(Windows Reparse-Point-Blockade 0x400, Symlink-Bann, Filterung verbotener Inhalte in Metadaten/Receipts, Inventory-Lock, Monotone Discard-Recovery-Integrität, Fail-Closed Drift-Abbruch, additive Draft-Integration mit genau einem `attachment_evaluation` je Item und content-addressed `classifier_revision` FR-15/MD-E2-T01, fail-closed-Härtung mit kanonischer Handoff-Revalidierung, `still_ambiguous`-Erhalt und deterministischer `already_fetched`-Idempotenz FR-15/MD-E2-T02, opt-in `inspect`-`manifest_proposal` ohne neuen Schreibpfad und mit `manifest_file`-Grenze FR-15/MD-E2-T03, MD-E2-Paketabnahme mit hermetischem Real-Pfad-Nachweis bis zum persistierten Projekt-`DraftManifest` FR-15/MD-E2-T04, gebundene Draft-Diagnose Issue #19 mit festem Kindfilter, begrenztem fail-closed Parser, einem einzigen Prozess und Secret-freier additiver Evidenz; lokale Injection-Barrier Issue #62: deterministisches Fencing/Scan vor dem Agent-Context, Quarantäne-Evidence unter `data/mail-desk/injection-quarantine/`, hash-gebundenes `injection_quarantine_present`-Gate, L2 §39)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/effects.md`](../../skills/cloud-atlas/docs/system-map/effects.md)  
   *(Schutz signierter PDFs vor In-Place-Mutation, Differenzierung `enrich_source` vs. `local_derivative`, Tool-Timeouts, optionale AcroForm-Formularfelder-Extraktion mit robusten Widget-/Iterator-/Dokument-Guards, begrenztem Status-/Warnungs-Vertrag und reserviertem generated Feld Issue #20)*
+* **Calendar-Desk Deep Dive:** [`../../skills/calendar-desk/docs/system-map/README.md`](../../skills/calendar-desk/docs/system-map/README.md)  
+  *(CalDAV-Client, RFC-5545-Codec, Free/Busy-Engine, ETag-Preconditions, Recovery-Journal, Injection-Fencing)*

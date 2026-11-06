@@ -18,6 +18,8 @@ Die Sub-Skills arbeiten nach dem Prinzip modularer Stufenübergänge:
 [Meeting / Adapter] ──► (meeting-desk) ───────────┤
 [Event / Adapter]   ──► (event-documentation) ───┘
                                                   │
+[CalDAV Server]     ──► (calendar-desk) ──────────┤──► [memory/evidence/calendar/ & data/]
+                                                  │
                                                   ▼
                                       (project-catalog-entry)
                                       (topic-catalog-entry)
@@ -206,3 +208,31 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
   hash-gebundenem `injection_quarantine_present`-Gate, L2 §39)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, optionale AcroForm-Formularfelder-Extraktion mit Capture-vor-OCR-Reihenfolge Issue #20, Mirror-Sync)*
+
+---
+
+## 6. Calendar-Desk CalDAV & Zwei-Phasen-Write-Lifecycle (Paket CD-1 bis CD-4a)
+
+1. **CalDAV Discovery & Agenda-Abfrage:**
+   - Der Client ermittelt über `.well-known/caldav` oder konfigurierte Basis-URLs die Principal-URL (`current-user-principal`) und die Kalender-Home-Sammlung (`calendar-home-set`).
+   - Mittels `PROPFIND` werden verfügbare Kalendersammlungen, Anzeigenamen, ETag-Merkmale und Zugriffsrechte (`resourcetype`, `displayname`, `read_only`) aufgelöst.
+   - `REPORT` mit `calendar-query` und `time-range` filtert Ereignisse serverseitig in einem definierten Zeitfenster.
+2. **Free/Busy-Berechnung & Slot-Suche:**
+   - Termine aus allen aktiven Kalendern werden aggregiert und nach Startzeit sortiert.
+   - Ganztages- und Zeitzonentermine werden kanonisch nach UTC normalisiert.
+   - `find-slots` berechnet freie Zeitfenster unter Berücksichtigung von Arbeitszeiten (z. B. 08:00–18:00 UTC), Mindestdauer und Pufferzeiten (Buffer).
+3. **Zwei-Phasen-Write-Engine (`plan` ──► `apply`):**
+   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert ein diff-fähiges Plan-Manifest (`memory/evidence/calendar/*.plan.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe.
+   - **Phase 2 (`apply`):**
+     1. Verifiziert die exklusive `workspace-lock`-Lease (`allow_legacy=False`).
+     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/recovery/`.
+     3. Führt die HTTP-Mutation (PUT / DELETE) unter Übergabe der ETag-Precondition aus.
+     4. Bei HTTP 412 (Precondition Failed): Bricht fail-closed ab, ohne fremde Änderungen zu überschreiben.
+     5. Bei Erfolg: Schreibt `*.apply-receipt.json`, entfernt das Journal und emittiert den Erfolgs-Envelope.
+4. **Recovery-Workflow:**
+   - `calendar_desk_client.py inspect`: Prüft das Vorhandensein offener Journale rein lesend.
+   - `calendar_desk_client.py recover`: Führt rollbacks oder Nachsynchronisationen unter Lease-Schutz durch.
+5. **mail-desk .ics Bridge:**
+   - Eingehende `.ics`-Anhänge werden in `mail-desk` über `core.calendar_extract.extract_calendar_objects` extrahiert.
+   - Die Objekte folgen bit-identisch dem 4-Key-Schema von `event_dossier.py` (`{"uid", "sequence", "recurrence_id", "content_sha256"}`).
+
