@@ -915,8 +915,12 @@ def _extract_content_internal(
         "sheets": None,
     }
 
-    # 1. Plain Text / CSV / Markdown / Log / JSON
-    if ext in [".txt", ".csv", ".tsv", ".md", ".log", ".json"] or eff_mime.startswith("text/"):
+    # 1. Plain Text / CSV / Markdown / Log / JSON / Calendar
+    if (
+        ext in [".txt", ".csv", ".tsv", ".md", ".log", ".json", ".ics"]
+        or eff_mime.startswith("text/")
+        or eff_mime == "application/ics"
+    ):
         decoded_str = ""
         for enc in ["utf-8", "cp1252", "latin1"]:
             try:
@@ -925,10 +929,16 @@ def _extract_content_internal(
             except UnicodeDecodeError:
                 continue
 
+        if "\r\r\n" in decoded_str:
+            decoded_str = decoded_str.replace("\r\r\n", "\r\n")
+
         source_character_count = len(decoded_str)
         if len(decoded_str) > max_chars:
-            extracted_text = decoded_str[:max_chars]
             truncation_reason = "max_chars_exceeded"
+            extracted_text = (
+                decoded_str[:max_chars]
+                + f"\n\n[TRUNCATED: Content exceeded {truncation_reason} limit]"
+            )
         else:
             extracted_text = decoded_str
         method = "native"
@@ -1496,6 +1506,7 @@ def _extract_content_internal(
         "character_count": len(extracted_text),
         "source_character_count": source_character_count,
         "text": extracted_text,
+        "extracted_text": extracted_text,
         "error": None,
     }
 
