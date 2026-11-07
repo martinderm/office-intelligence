@@ -2710,5 +2710,76 @@ class TestETagReadback(unittest.TestCase):
         self.assertEqual(matching[0].get("etag"), result["new_etag"])
 
 
+class TestDocumentationAndSystemMapSync(unittest.TestCase):
+    """Assert L1/L2 system map, SKILL.md, references, and CONTRIBUTING.md match code truth."""
+
+    def test_l1_l2_system_map_and_skill_docs_match_code_truth(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+
+        # 1. skills/calendar-desk/docs/system-map/README.md
+        l2_readme_path = repo_root / "skills" / "calendar-desk" / "docs" / "system-map" / "README.md"
+        self.assertTrue(l2_readme_path.is_file(), f"File missing: {l2_readme_path}")
+        l2_readme = l2_readme_path.read_text(encoding="utf-8")
+
+        for stale in ("caldav_url", "auth_type", "CALENDAR_READ_ONLY", "*.apply-receipt.json", "Close & Remove Journal", "199+"):
+            self.assertNotIn(stale, l2_readme, f"Stale identifier '{stale}' found in {l2_readme_path.as_posix()}")
+
+        for required in ("principal_url", "write_policy", "dry_run_and_approval", "CALENDAR_WRITE_FORBIDDEN", "calendar-desk-register/1", "RECOVERY_REQUIRED", "237 Testmethoden"):
+            self.assertIn(required, l2_readme, f"Required identifier '{required}' missing from {l2_readme_path.as_posix()}")
+
+        # 2. skills/calendar-desk/SKILL.md and skills/calendar-desk/references/data-model.md
+        skill_path = repo_root / "skills" / "calendar-desk" / "SKILL.md"
+        data_model_path = repo_root / "skills" / "calendar-desk" / "references" / "data-model.md"
+        self.assertTrue(skill_path.is_file(), f"File missing: {skill_path}")
+        self.assertTrue(data_model_path.is_file(), f"File missing: {data_model_path}")
+        skill_text = skill_path.read_text(encoding="utf-8")
+        data_model_text = data_model_path.read_text(encoding="utf-8")
+
+        for forbidden in ("project-topic-management", "CALENDAR_DESK_PASSWORD", "CALENDAR_DESK_TOKEN"):
+            self.assertNotIn(forbidden, skill_text, f"Forbidden identifier '{forbidden}' found in {skill_path.as_posix()}")
+            self.assertNotIn(forbidden, data_model_text, f"Forbidden identifier '{forbidden}' found in {data_model_path.as_posix()}")
+
+        for required in ("CALDAV_USERNAME_", "CALDAV_PASSWORD_", "project-catalog-entry", "topic-catalog-entry", "CD-5", "proposals"):
+            self.assertIn(required, skill_text, f"Required identifier '{required}' missing from {skill_path.as_posix()}")
+
+        for subcmd in ("discover", "agenda", "freebusy", "find-slots", "plan", "apply", "inspect", "recover"):
+            self.assertIn(subcmd, skill_text, f"CLI subcommand '{subcmd}' missing from {skill_path.as_posix()}")
+
+        # 3. L1 system map (docs/system-map/objects.md, docs/system-map/processes.md, docs/system-map/effects.md)
+        objects_path = repo_root / "docs" / "system-map" / "objects.md"
+        processes_path = repo_root / "docs" / "system-map" / "processes.md"
+        effects_path = repo_root / "docs" / "system-map" / "effects.md"
+        self.assertTrue(objects_path.is_file(), f"File missing: {objects_path}")
+        self.assertTrue(processes_path.is_file(), f"File missing: {processes_path}")
+        self.assertTrue(effects_path.is_file(), f"File missing: {effects_path}")
+
+        objects_text = objects_path.read_text(encoding="utf-8")
+        self.assertNotIn("*.apply-receipt.json", objects_text)
+        self.assertNotIn("data/calendar-desk/staging/", objects_text)
+        self.assertIn("calendar-desk-register/1", objects_text)
+        self.assertIn("write_policy", objects_text)
+
+        processes_text = processes_path.read_text(encoding="utf-8")
+        self.assertNotIn(".well-known/caldav", processes_text)
+        self.assertNotIn("Entfernt das Journal", processes_text)
+
+        effects_text = effects_path.read_text(encoding="utf-8")
+        self.assertNotIn("CALENDAR_READ_ONLY", effects_text)
+        self.assertIn("CALENDAR_WRITE_FORBIDDEN", effects_text)
+
+        # 4. L1 README (docs/system-map/README.md)
+        l1_readme_path = repo_root / "docs" / "system-map" / "README.md"
+        self.assertTrue(l1_readme_path.is_file(), f"File missing: {l1_readme_path}")
+        l1_readme = l1_readme_path.read_text(encoding="utf-8")
+        self.assertIn("237 Tests", l1_readme, f"Required test count '237 Tests' missing from {l1_readme_path.as_posix()}")
+
+        # 5. CONTRIBUTING.md
+        contrib_path = repo_root / "CONTRIBUTING.md"
+        self.assertTrue(contrib_path.is_file(), f"File missing: {contrib_path}")
+        contrib_text = contrib_path.read_text(encoding="utf-8")
+        self.assertNotIn("seven desks", contrib_text)
+        self.assertIn("eight desks", contrib_text)
+
+
 if __name__ == "__main__":
     unittest.main()

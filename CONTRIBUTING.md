@@ -29,7 +29,7 @@ the consuming host workspace.
 - CLI tools support structured JSON envelopes via `--json`. Use atomic writes
   (`tempfile` plus `os.replace`) and preserve existing data on parse/schema errors.
 - Synchronize affected contracts and L1/L2 system maps in the same change.
-- Keep all seven desks and their relative resource paths together. An installed
+- Keep all eight desks and their relative resource paths together. An installed
   bundle is a runtime library, never a consumer's output/state directory.
 - Run desk suites with `python -B -m unittest discover -s skills/<desk>/tests`.
   Real-guard tests need the trusted `workspace-lock` installation documented in

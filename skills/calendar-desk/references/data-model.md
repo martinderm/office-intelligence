@@ -187,7 +187,7 @@ Wenn Anomalien oder Injections gefunden werden, enthält `findings`:
 
 ## 6. Handoff-Objekt: `calendar_objects`
 
-Für Querverweise zwischen Skills (`mail-desk`, `event-documentation`, `project-topic-management`) wird ein minimaler Referenz-Deskriptor verwendet:
+Für Querverweise zwischen Skills (`mail-desk`, `event-documentation`, `project-catalog-entry`, `topic-catalog-entry`) wird ein minimaler Referenz-Deskriptor verwendet:
 
 ```json
 {

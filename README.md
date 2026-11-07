@@ -16,7 +16,7 @@ Workspace-Control-Plane oder Agent-Lifecycle-Verwaltung mit.
 | --- | --- | --- |
 | 🗂 [cloud-atlas](skills/cloud-atlas/SKILL.md) | Projekt- und Topic-Cloudspeicher, Konvertierung, Filemaps und lokale Markdown-Mirrors | Projekt-/Topic-Katalogeinträge |
 | 📮 [mail-desk](skills/mail-desk/SKILL.md) | Fachliche Bearbeitung einzelner Mails sowie Batch-/Stapelverarbeitung (`draft→execute→verify`): Routing, Reply-/Todo-Entscheidungen, Anhang-Bewertung und leichte Mail-Logs | Mailbox-Transport und vollständige Aufgaben-Triage |
-| 📅 [calendar-desk](skills/calendar-desk/SKILL.md) | CalDAV-Kalenderabfragen, Terminplanung, Slot-Suche, Einladungs-Responses und ETag-Preconditions | Dokumentation eines gesamten Events |
+| 📅 [calendar-desk](skills/calendar-desk/SKILL.md) | CalDAV-Kalenderabfragen, Terminplanung, Slot-Suche, ETag-Preconditions und Zwei-Phasen-Write (Einladungs-Responses als CD-5 vorbereitet) | Dokumentation eines gesamten Events |
 | 🎥 [meeting-desk](skills/meeting-desk/SKILL.md) | Intake, Klassifikation, Evidenz und Nachbereitung einzelner Meetings, Konferenzschaltungen und Vorträge | Dokumentation eines gesamten größeren Events |
 | 📰 [event-documentation](skills/event-documentation/SKILL.md) | Konferenzen, Tagungen und Seminare mit Programm, Aufzeichnungen und Action-Item-Triage | allgemeiner Meeting-Intake außerhalb eines Events |
 | ✅ [task-desk](skills/task-desk/SKILL.md) | Action-Item-Extraktion, Priorisierung, Deduplizierung und Vorbereitung der Aufgaben-Synchronisation | Mailbox-Routing oder Pflege von Katalogstrukturen |

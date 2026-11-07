@@ -286,12 +286,10 @@ und [`../../skills/meeting-desk/docs/system-map/README.md`](../../skills/meeting
 
 ### 4.3 Calendar-Desk-Objekte (Paket CD-1 bis CD-4a) → [`../../skills/calendar-desk/docs/system-map/README.md`](../../skills/calendar-desk/docs/system-map/README.md)
 * **`memory/evidence/calendar/`**: Auditsichere Kalender-Evidenz:
-  - `calendars.json`: Kalender-Discovery-Evidenzschnappschuss.
+  - `calendars.json`: Evidenzregister nach Schema `calendar-desk-register/1` (`schema_version`, `updated_at`, `events[]` Register von angewandten und wiederhergestellten Terminen).
   - `raw/<account>/<calendar_alias>/<uid>.ics`: Auditsichere Roh-iCalendar-Evidenzdateien.
-  - `*.apply-receipt.json`: Unveränderliche Ausführungsquittungen mit Ausführungszeitstempel, neuem ETag und Journal-Digest.
 * **`data/calendar-desk/`**: Flüchtige und transaktionale Laufzeitdaten:
   - `data/calendar-desk/proposals/`: Persistierte Zwei-Phasen-Schreibpläne (`<plan_id>.json`).
-  - `data/calendar-desk/journal/`: Transaktionales Recovery-Journal (`<plan_id>.json`, Schema `calendar-desk-journal/1`), Step-Hashes, Pre-/Poststate-Tracking und Resumability.
-  - `data/calendar-desk/staging/`: Temporäre Payload-Staging-Dateien vor atomarem PUT.
+  - `data/calendar-desk/journal/`: Transaktionales Recovery-Journal (`<plan_id>.json`, Schema `calendar-desk-journal/1`), Step-Hashes, Pre-/Poststate-Tracking und Resumability (Phasen: `intent` -> `in_flight` -> `completed`).
 * **`calendar_object_ref`**: Kanonisches 4-Key-Objekt `{"uid", "sequence", "recurrence_id", "content_sha256"}` mit Bit-Identität zwischen `calendar-desk` und `mail-desk` (`calendar_extract.py`), vorbereitet für CD-4.
-* **`backend-config`**: `.agents/calendar-desk-backend.json` mit Account-Definitionen, CalDAV-Endpunkten, `read_only`-Policies und Default-Kalendern.
+* **`backend-config`**: `.agents/calendar-desk-backend.json` mit Account-Definitionen (`principal_url`), Kalendersammlungen (`collection_url`) und `write_policy` (`read_only` | `dry_run_and_approval`).

@@ -33,7 +33,7 @@ zuständigen Sub-Skill.
 | --- | --- |
 | projekt- oder topicbezogene Cloud-Verzeichnisse kartiert, konvertiert oder als Filemaps und lokale Mirrors synchronisiert | [cloud-atlas](skills/cloud-atlas/SKILL.md) |
 | eine einzelne Mail fachlich beurteilt, routet, auf Antwortbedarf und Todos prüft oder leicht protokolliert | [mail-desk](skills/mail-desk/SKILL.md) |
-| Kalender abfragt, Freizeiten/Slots sucht, Termine plant/anlegt oder Einladungen beantwortet | [calendar-desk](skills/calendar-desk/SKILL.md) |
+| Kalender abfragt, Freizeiten/Slots sucht oder Termine plant/anlegt (Einladungsbeantwortung via iTIP als CD-5-Seam vorbereitet) | [calendar-desk](skills/calendar-desk/SKILL.md) |
 | Meetings, Konferenzschaltungen oder Vorträge aus einem Adapter oder Upload in Workspace-Evidenz überführt | [meeting-desk](skills/meeting-desk/SKILL.md) |
 | eine größere Konferenz, Tagung oder ein Seminar als Event mit Programm, Aufzeichnungen und Folgeaufgaben dokumentiert | [event-documentation](skills/event-documentation/SKILL.md) |
 | konkrete Action Items aus Mail, Meeting, Event oder Chat priorisiert, dedupliziert und zur Aufgaben-Synchronisation vorbereitet | [task-desk](skills/task-desk/SKILL.md) |
@@ -42,8 +42,9 @@ zuständigen Sub-Skill.
 
 Abgrenzung: `mail-desk` bearbeitet Mailfälle, `task-desk` entscheidet über
 nachverfolgbare Aufgaben, und die Katalog-Desks pflegen strukturierte Projekt- bzw.
-Topic-Daten. `calendar-desk` verwaltet Termine, Freizeiten und Einladungen via CalDAV
-mit striktem Zwei-Phasen-Write (`plan` -> `apply`). `meeting-desk` behandelt einzelne
+Topic-Daten. `calendar-desk` verwaltet Termine und Freizeiten via CalDAV mit striktem
+Zwei-Phasen-Write (`plan` -> `apply`); Einladungsbeantwortung (`respond-invitation` / iTIP)
+ist als vorbereiteter Phase-2-Seam (`CD-5`) deklariert. `meeting-desk` behandelt einzelne
 Meetings; `event-documentation` die umfassende Dokumentation größerer Veranstaltungen.
 `cloud-atlas` ist für Cloud-Speicher und deren lokale Spiegel zuständig, nicht für die
 Katalogpflege selbst.

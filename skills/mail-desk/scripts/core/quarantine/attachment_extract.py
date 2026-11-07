@@ -1500,7 +1500,6 @@ def _extract_content_internal(
         "character_count": len(extracted_text),
         "source_character_count": source_character_count,
         "text": extracted_text,
-        "extracted_text": extracted_text,
         "error": None,
     }
 

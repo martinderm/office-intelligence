@@ -214,23 +214,22 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
 ## 6. Calendar-Desk CalDAV & Zwei-Phasen-Write-Lifecycle (Paket CD-1 bis CD-4a)
 
 1. **CalDAV Discovery & Agenda-Abfrage:**
-   - Der Client ermittelt über `.well-known/caldav` oder konfigurierte Basis-URLs die Principal-URL (`current-user-principal`) und die Kalender-Home-Sammlung (`calendar-home-set`).
-   - Mittels `PROPFIND` werden verfügbare Kalendersammlungen, Anzeigenamen, ETag-Merkmale und Zugriffsrechte (`resourcetype`, `displayname`, `read_only`) aufgelöst.
+   - Der Client führt `PROPFIND Depth: 1` auf der konfigurierten `principal_url` aus, um verfügbare Kalendersammlungen (`collection_url`), Anzeigenamen und Eigenschaften aufzulösen.
    - `REPORT` mit `calendar-query` und `time-range` filtert Ereignisse serverseitig in einem definierten Zeitfenster.
 2. **Free/Busy-Berechnung & Slot-Suche:**
    - Termine aus allen aktiven Kalendern werden aggregiert und nach Startzeit sortiert.
    - Ganztages- und Zeitzonentermine werden kanonisch nach UTC normalisiert.
-   - `find-slots` berechnet freie Zeitfenster unter Berücksichtigung von Arbeitszeiten (z. B. 08:00–18:00 UTC), Mindestdauer und Pufferzeiten (Buffer).
+   - `find-slots` berechnet freie Zeitfenster unter Berücksichtigung von Arbeitszeiten (z. B. 08:00–18:00 UTC), Mindestdauer und Pufferzeiten (Buffer). Bei unvollständigen Daten (`skipped[]` nicht leer oder `truncated: true`) brechen `compute_freebusy` und `find-slots` fail-closed mit `CALDAV_INCOMPLETE_FREEBUSY` (Exit 1) ab.
 3. **Zwei-Phasen-Write-Engine (`plan` ──► `apply`):**
-   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert und persistiert ein diff-fähiges Plan-Manifest (`data/calendar-desk/proposals/<plan_id>.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe (Exit 0 `Completed`).
+   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert und persistiert ein diff-fähiges Plan-Manifest (`data/calendar-desk/proposals/<plan_id>.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe (Exit 0 `Completed`, kein Lock erforderlich).
    - **Phase 2 (`apply`):**
-     1. Verifiziert die exklusive `workspace-lock`-Lease (`allow_legacy=False`).
-     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/journal/<plan_id>.json`.
+     1. Verifiziert die exklusive `workspace-lock`-Lease (`allow_legacy=False`) sowie `write_policy == "dry_run_and_approval"`.
+     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/journal/<plan_id>.json` (`intent` -> `in_flight`).
      3. Führt die HTTP-Mutation (PUT / DELETE) unter Übergabe der ETag-Precondition aus.
-     4. Bei HTTP 412 (Precondition Failed), Konflikt, Read-Only oder Precondition-Verletzung: Bricht fail-closed ab (Exit 2 `PreconditionFailed` / `Failed`), ohne fremde Änderungen zu überschreiben.
-     5. Bei unterbrochenem Schreibvorgang oder unbestätigtem Zustand: Journal bleibt aktiv (Exit 3 `RecoveryRequired` / `Failed`).
+     4. Bei HTTP 412 (Precondition Failed), Konflikt, `CALENDAR_WRITE_FORBIDDEN` oder Precondition-Verletzung: Bricht fail-closed ab (Exit 2 `PreconditionFailed` / `Failed`), ohne fremde Änderungen zu überschreiben.
+     5. Bei unterbrochenem Schreibvorgang, HTTP 5xx/408/429 oder Netzwerkfehler: Mappt auf `unknown_remote_outcome` und das Journal bleibt aktiv (Exit 3 `RecoveryRequired` / `Failed`).
      6. Bei allgemeinen Fehlern: Bricht ab (Exit 1 `Failed`).
-     7. Bei Erfolg: Entfernt das Journal und emittiert den Erfolgs-Envelope (Exit 0 `Completed`).
+     7. Bei Erfolg: Aktualisiert das Evidenzregister (calendars.json & raw/) und setzt das Journal auf completed (Exit 0 `Completed`).
 4. **Recovery-Workflow:**
    - `calendar_desk_client.py inspect`: Prüft das Vorhandensein offener Journale rein lesend.
    - `calendar_desk_client.py recover`: Führt rollbacks oder Nachsynchronisationen unter Lease-Schutz durch.

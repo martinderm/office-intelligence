@@ -95,11 +95,11 @@ journalbewusste Leser behauptet.
 
 ### 3.5 Calendar-Writer: Zwei-Phasen-Write, ETag-Preconditions & Recovery-Journal (Paket CD-3)
 
-- **`read_only`-Schutz:** Kalender, die in `.agents/calendar-desk-backend.json` mit `read_only: true` konfiguriert sind, verweigern jede schreibende Planung oder Ausführung fail-closed mit Stopcode `CALENDAR_READ_ONLY` (Exit-Code 2).
+- **`write_policy`-Schutz:** Kalender, die in `.agents/calendar-desk-backend.json` mit `write_policy: "read_only"` konfiguriert sind, verweigern jede schreibende Planung oder Ausführung fail-closed mit Stopcode `CALENDAR_WRITE_FORBIDDEN` (Exit-Code 2).
 - **Zwei-Phasen-Write (`plan` -> `apply`):**
   - Kein unautorisierter Direkt-Write: Jede Mutation muss zuerst als Plan unter `data/calendar-desk/proposals/<plan_id>.json` manifestiert werden.
   - Erst der `apply`-Schritt führt HTTP-Mutationen (PUT/DELETE) unter Schutz des Recovery-Journals `data/calendar-desk/journal/<plan_id>.json` aus.
-  - Deterministische Exit-Codes: 0 (Completed), 1 (Failed/Error), 2 (PreconditionFailed/Conflict/412/Read-Only), 3 (RecoveryRequired).
+  - Deterministische Exit-Codes: 0 (Completed), 1 (Failed/Error), 2 (PreconditionFailed/Conflict/412/WriteForbidden), 3 (RecoveryRequired).
 - **ETag-Preconditions & 412-Konflikterkennung:**
   - Erstellung erzwingt `If-None-Match: *`. Existiert bereits eine Ressource am Zielpfad, liefert der Server HTTP 412 und der Writer bricht ohne Überschreiben fremder Ereignisse ab (Exit-Code 2).
   - Updates/Löschungen erzwingen `If-Match: "<etag>"`. Weicht der Server-Zustand ab, verhindert HTTP 412 das unbemerkte Überschreiben konkurrierender Änderungen (Exit-Code 2).

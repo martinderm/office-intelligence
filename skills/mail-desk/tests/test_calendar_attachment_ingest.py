@@ -327,7 +327,8 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
         self.assertEqual(result["status"], "extracted")
         self.assertEqual(result["method"], "native")
         self.assertEqual(result["tool"], "built_in")
-        self.assertEqual(result["extracted_text"], SAMPLE_TIMED_ICS)
+        self.assertEqual(result["text"], SAMPLE_TIMED_ICS)
+        self.assertNotIn("extracted_text", result)
         self.assertIsNone(result["truncation_reason"])
 
     def test_extract_application_ics(self) -> None:
@@ -350,7 +351,8 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
         self.assertEqual(result["status"], "extracted")
         self.assertEqual(result["method"], "native")
         self.assertEqual(result["tool"], "built_in")
-        self.assertEqual(result["extracted_text"], SAMPLE_ALL_DAY_ICS)
+        self.assertEqual(result["text"], SAMPLE_ALL_DAY_ICS)
+        self.assertNotIn("extracted_text", result)
 
     def test_extract_calendar_character_budget_truncation(self) -> None:
         # Create an ICS payload exceeding max_chars_per_attachment
@@ -383,8 +385,9 @@ class TestCalendarAttachmentExtraction(unittest.TestCase):
         self.assertEqual(result["status"], "extracted")
         self.assertEqual(result["truncation_reason"], "max_chars_exceeded")
         max_chars = self.limits["max_chars_per_attachment"]
-        self.assertEqual(len(result["extracted_text"]), max_chars)
-        self.assertEqual(result["extracted_text"], large_ics[:max_chars])
+        self.assertEqual(len(result["text"]), max_chars)
+        self.assertEqual(result["text"], large_ics[:max_chars])
+        self.assertNotIn("extracted_text", result)
 
 
 class TestCalendarExtractModule(unittest.TestCase):
