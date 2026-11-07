@@ -239,6 +239,164 @@ class MockCalDAVHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(data)
                 return
 
+            if "orphan-allday" in self.path:
+                allday_ics = (
+                    "BEGIN:VCALENDAR\r\n"
+                    "VERSION:2.0\r\n"
+                    "PRODID:-//office-intelligence//calendar-desk//EN\r\n"
+                    "BEGIN:VEVENT\r\n"
+                    "UID:orphan-allday@office-intelligence.test\r\n"
+                    "RECURRENCE-ID;VALUE=DATE:20261105\r\n"
+                    "DTSTAMP:20261101T080000Z\r\n"
+                    "DTSTART;VALUE=DATE:20261105\r\n"
+                    "DTEND;VALUE=DATE:20261106\r\n"
+                    "SUMMARY:All-Day Orphan Override\r\n"
+                    "STATUS:CONFIRMED\r\n"
+                    "END:VEVENT\r\n"
+                    "END:VCALENDAR\r\n"
+                )
+                escaped_ics = allday_ics.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                xml_resp = (
+                    '<?xml version="1.0" encoding="utf-8" ?>\n'
+                    '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/orphan-allday.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop>\n'
+                    '        <D:getetag>"etag-allday-1"</D:getetag>\n'
+                    f'        <C:calendar-data>{escaped_ics}</C:calendar-data>\n'
+                    '      </D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '</D:multistatus>'
+                )
+                data = xml_resp.encode("utf-8")
+                self.send_response(207)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            if "orphan-window" in self.path:
+                in_window_ics = (
+                    "BEGIN:VCALENDAR\r\n"
+                    "VERSION:2.0\r\n"
+                    "PRODID:-//office-intelligence//calendar-desk//EN\r\n"
+                    "BEGIN:VEVENT\r\n"
+                    "UID:orphan-window-in@office-intelligence.test\r\n"
+                    "RECURRENCE-ID:20261105T100000Z\r\n"
+                    "DTSTAMP:20261101T080000Z\r\n"
+                    "DTSTART:20261105T100000Z\r\n"
+                    "DTEND:20261105T110000Z\r\n"
+                    "SUMMARY:Orphan In Window\r\n"
+                    "STATUS:CONFIRMED\r\n"
+                    "END:VEVENT\r\n"
+                    "END:VCALENDAR\r\n"
+                )
+                out_window_ics = (
+                    "BEGIN:VCALENDAR\r\n"
+                    "VERSION:2.0\r\n"
+                    "PRODID:-//office-intelligence//calendar-desk//EN\r\n"
+                    "BEGIN:VEVENT\r\n"
+                    "UID:orphan-window-out@office-intelligence.test\r\n"
+                    "RECURRENCE-ID:20261220T100000Z\r\n"
+                    "DTSTAMP:20261101T080000Z\r\n"
+                    "DTSTART:20261220T100000Z\r\n"
+                    "DTEND:20261220T110000Z\r\n"
+                    "SUMMARY:Orphan Out of Window\r\n"
+                    "STATUS:CONFIRMED\r\n"
+                    "END:VEVENT\r\n"
+                    "END:VCALENDAR\r\n"
+                )
+                cancelled_ics = (
+                    "BEGIN:VCALENDAR\r\n"
+                    "VERSION:2.0\r\n"
+                    "PRODID:-//office-intelligence//calendar-desk//EN\r\n"
+                    "BEGIN:VEVENT\r\n"
+                    "UID:orphan-cancelled@office-intelligence.test\r\n"
+                    "RECURRENCE-ID:20261106T100000Z\r\n"
+                    "DTSTAMP:20261101T080000Z\r\n"
+                    "DTSTART:20261106T100000Z\r\n"
+                    "DTEND:20261106T110000Z\r\n"
+                    "SUMMARY:Orphan Cancelled\r\n"
+                    "STATUS:CANCELLED\r\n"
+                    "END:VEVENT\r\n"
+                    "END:VCALENDAR\r\n"
+                )
+                xml_resp = (
+                    '<?xml version="1.0" encoding="utf-8" ?>\n'
+                    '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/orphan-in.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e-in"</D:getetag><C:calendar-data>' + in_window_ics.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/orphan-out.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e-out"</D:getetag><C:calendar-data>' + out_window_ics.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/orphan-cancelled.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e-canc"</D:getetag><C:calendar-data>' + cancelled_ics.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '</D:multistatus>'
+                )
+                data = xml_resp.encode("utf-8")
+                self.send_response(207)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
+            if "multi-events" in self.path:
+                evt1 = SAMPLE_ICS_PAYLOAD.replace("event-123@office-intelligence.test", "event-1@office-intelligence.test")
+                evt2 = SAMPLE_ICS_PAYLOAD.replace("event-123@office-intelligence.test", "event-2@office-intelligence.test")
+                evt3 = SAMPLE_ICS_PAYLOAD.replace("event-123@office-intelligence.test", "event-3@office-intelligence.test")
+                xml_resp = (
+                    '<?xml version="1.0" encoding="utf-8" ?>\n'
+                    '<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav">\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/event-1.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e1"</D:getetag><C:calendar-data>' + evt1.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/event-2.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e2"</D:getetag><C:calendar-data>' + evt2.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '  <D:response>\n'
+                    '    <D:href>/dav/calendars/users/testuser/work/event-3.ics</D:href>\n'
+                    '    <D:propstat>\n'
+                    '      <D:prop><D:getetag>"e3"</D:getetag><C:calendar-data>' + evt3.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</C:calendar-data></D:prop>\n'
+                    '      <D:status>HTTP/1.1 200 OK</D:status>\n'
+                    '    </D:propstat>\n'
+                    '  </D:response>\n'
+                    '</D:multistatus>'
+                )
+                data = xml_resp.encode("utf-8")
+                self.send_response(207)
+                self.send_header("Content-Type", "application/xml; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+
             escaped_ics = SAMPLE_ICS_PAYLOAD.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             xml_resp = (
                 '<?xml version="1.0" encoding="utf-8" ?>\n'
@@ -640,6 +798,9 @@ class TestCalDAVClient(unittest.TestCase):
         # Corrupt event is skipped/isolated, while the valid event is returned
         self.assertEqual(len(result["records"]), 1)
         self.assertEqual(result["records"][0]["uid"], "event-123@office-intelligence.test")
+        self.assertEqual(len(result["skipped"]), 1)
+        self.assertEqual(result["skipped"][0]["href"], "/dav/calendars/users/testuser/work/corrupt-event.ics")
+        self.assertFalse(result["truncated"])
 
     def test_query_events_preserves_standalone_override_without_master(self) -> None:
         client = self.get_client()
@@ -653,7 +814,53 @@ class TestCalDAVClient(unittest.TestCase):
         self.assertIn("records", result)
         self.assertEqual(len(result["records"]), 1)
         self.assertEqual(result["records"][0]["summary"], "Standalone Override Meeting")
-        self.assertEqual(result["records"][0]["recurrence_id"], "20261102T090000Z")
+        self.assertEqual(result["records"][0]["recurrence_id"], "2026-11-02T09:00:00Z")
+        self.assertEqual(result["skipped"], [])
+        self.assertFalse(result["truncated"])
+
+    def test_query_events_reports_truncated_when_max_items_exceeded(self) -> None:
+        client = self.get_client()
+        multi_url = f"{self.base_url}/dav/calendars/users/testuser/multi-events/"
+        result = client.query_events(
+            multi_url,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T00:00:00Z",
+            max_items=2,
+        )
+        self.assertEqual(len(result["records"]), 2)
+        self.assertTrue(result["truncated"])
+        self.assertEqual(result["skipped"], [])
+
+    def test_query_events_orphan_override_preserves_iso8601_recurrence_id_and_filters_window(self) -> None:
+        client = self.get_client()
+        orphan_window_url = f"{self.base_url}/dav/calendars/users/testuser/orphan-window/"
+        result = client.query_events(
+            orphan_window_url,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T00:00:00Z",
+            expand_recurrences=True,
+        )
+        self.assertEqual(len(result["records"]), 1)
+        self.assertEqual(result["records"][0]["summary"], "Orphan In Window")
+        self.assertEqual(result["records"][0]["recurrence_id"], "2026-11-05T10:00:00Z")
+        self.assertEqual(result["skipped"], [])
+        self.assertFalse(result["truncated"])
+
+    def test_query_events_orphan_override_all_day_preserves_recurrence_id_and_not_skipped(self) -> None:
+        client = self.get_client()
+        orphan_allday_url = f"{self.base_url}/dav/calendars/users/testuser/orphan-allday/"
+        result = client.query_events(
+            orphan_allday_url,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T00:00:00Z",
+            expand_recurrences=True,
+        )
+        self.assertEqual(len(result["records"]), 1)
+        self.assertEqual(result["records"][0]["summary"], "All-Day Orphan Override")
+        self.assertEqual(result["records"][0]["recurrence_id"], "2026-11-05")
+        self.assertTrue(result["records"][0]["start"]["all_day"])
+        self.assertEqual(result["skipped"], [])
+        self.assertFalse(result["truncated"])
 
     def test_make_fenced_record_fences_organizer_and_attendees_cn(self) -> None:
         raw_rec = {

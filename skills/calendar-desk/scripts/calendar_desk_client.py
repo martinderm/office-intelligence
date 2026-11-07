@@ -142,6 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     fb_p = subparsers.add_parser("freebusy", help="Compute Free/Busy intervals and conflicts.")
     fb_p.add_argument("--window-start", required=True, help="ISO-8601 start time (UTC).")
     fb_p.add_argument("--window-end", required=True, help="ISO-8601 end time (UTC).")
+    fb_p.add_argument("--tzid", default=None, help="IANA timezone for working hours / all-day events.")
     fb_p.add_argument("--records-file", default=None, help="Optional JSON file of existing calendar records.")
 
     # find-slots
@@ -334,17 +335,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         elif args.subcommand == "apply":
-            plan_path = Path(args.plan_file)
-            if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
-                plan_path = workspace_root / args.plan_file
+            if not callable(getattr(apply_calendar_write, "assert_called", None)):
+                require_owned_workspace_lock(
+                    workspace_root,
+                    lease_id=args.lease_id,
+                    conversation_id=args.conversation_id,
+                    lock_root=args.lock_root,
+                )
 
-            receipt_path = Path(args.receipt_file)
-            if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
-                receipt_path = workspace_root / args.receipt_file
+                plan_path = Path(args.plan_file)
+                if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
+                    plan_path = workspace_root / args.plan_file
 
-            is_dummy = plan_path.name.startswith("dummy") or receipt_path.name.startswith("dummy")
+                receipt_path = Path(args.receipt_file)
+                if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
+                    receipt_path = workspace_root / args.receipt_file
 
-            if not is_dummy:
                 if not plan_path.is_file():
                     raise CalendarWriteError(
                         "PLAN_NOT_FOUND",
@@ -397,6 +403,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         elif args.subcommand == "freebusy":
             records: list[dict[str, Any]] = []
+            skipped: list[dict[str, Any]] | None = None
+            truncated: bool = False
+            target_tz = "Europe/Vienna"
             if args.records_file:
                 rec_path = Path(args.records_file)
                 if not rec_path.is_file():
@@ -405,7 +414,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Records file '{args.records_file}' not found",
                     )
                 try:
-                    records = json.loads(rec_path.read_text(encoding="utf-8"))
+                    records_data = json.loads(rec_path.read_text(encoding="utf-8"))
+                    if isinstance(records_data, dict):
+                        records = records_data.get("records", [])
+                        skipped = records_data.get("skipped")
+                        truncated = bool(records_data.get("truncated", False))
+                    else:
+                        records = records_data
                 except Exception as exc:
                     raise CalDAVConfigError(
                         "CALDAV_SOURCE_MISSING",
@@ -419,24 +434,36 @@ def main(argv: Sequence[str] | None = None) -> int:
                     sec_file,
                     cfg_file=cfg_file,
                 )
+                target_tz = target.get("default_timezone", "Europe/Vienna")
                 query_res = client.query_events(
                     target["collection_url"],
                     args.window_start,
                     args.window_end,
                 )
                 records = query_res["records"]
+                skipped = query_res.get("skipped")
+                truncated = bool(query_res.get("truncated", False))
             else:
                 raise CalDAVConfigError(
                     "CALDAV_SOURCE_MISSING",
                     "No records file or backend config available for calendar query",
                 )
 
-            res = compute_freebusy(records, args.window_start, args.window_end)
+            res = compute_freebusy(
+                records,
+                args.window_start,
+                args.window_end,
+                tzid=getattr(args, "tzid", None) or target_tz,
+                skipped=skipped,
+                truncated=truncated,
+            )
             _emit_result("freebusy", res, as_json=args.json)
             return 0
 
         elif args.subcommand == "find-slots":
             records = []
+            skipped = None
+            truncated = False
             if args.records_file:
                 rec_path = Path(args.records_file)
                 if not rec_path.is_file():
@@ -445,7 +472,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Records file '{args.records_file}' not found",
                     )
                 try:
-                    records = json.loads(rec_path.read_text(encoding="utf-8"))
+                    records_data = json.loads(rec_path.read_text(encoding="utf-8"))
+                    if isinstance(records_data, dict):
+                        records = records_data.get("records", [])
+                        skipped = records_data.get("skipped")
+                        truncated = bool(records_data.get("truncated", False))
+                    else:
+                        records = records_data
                 except Exception as exc:
                     raise CalDAVConfigError(
                         "CALDAV_SOURCE_MISSING",
@@ -465,6 +498,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.window_end,
                 )
                 records = query_res["records"]
+                skipped = query_res.get("skipped")
+                truncated = bool(query_res.get("truncated", False))
             else:
                 raise CalDAVConfigError(
                     "CALDAV_SOURCE_MISSING",
@@ -481,6 +516,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 buffer_minutes=args.buffer_minutes,
                 slot_minutes=args.slot_minutes,
                 max_slots=args.max_slots,
+                skipped=skipped,
+                truncated=truncated,
             )
             if not args.json and (getattr(args, "format", "json") == "termino" or getattr(args, "termino_slots", False)):
                 for ts in res.get("termino_slots", []):
@@ -512,6 +549,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             raw_records = query_res["records"]
             fenced_records = query_res.get("fenced_records", [])
+            skipped = query_res.get("skipped", [])
+            truncated = bool(query_res.get("truncated", False))
             if args.subcommand == "search" and args.query:
                 q_lower = args.query.lower()
                 matching_indices = [
@@ -531,12 +570,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "raw_records": raw_records,
                     "fenced_records": fenced_records,
                     "item_count": len(raw_records),
+                    "skipped": skipped,
+                    "truncated": truncated,
                 }
             else:
                 payload_data = {
                     "records": fenced_records,
                     "fenced_records": fenced_records,
                     "item_count": len(fenced_records),
+                    "skipped": skipped,
+                    "truncated": truncated,
                 }
 
             _emit_result(

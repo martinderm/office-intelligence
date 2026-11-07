@@ -16,13 +16,14 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import xml.parsers.expat
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
 from core.ical_codec import (
     MAX_ICS_BYTES,
     expand_record_occurrences,
     parse_ics_to_records,
+    resolve_tzid,
 )
 from core.injection_fence import fence_calendar_record
 
@@ -514,13 +515,22 @@ class CalDAVClient:
 
         all_records: list[dict[str, Any]] = []
         all_fenced: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
+        truncated: bool = False
+
+        win_start_dt = datetime.fromisoformat(window_start_utc.replace("Z", "+00:00"))
+        if win_start_dt.tzinfo is None:
+            win_start_dt = win_start_dt.replace(tzinfo=timezone.utc)
+        win_end_dt = datetime.fromisoformat(window_end_utc.replace("Z", "+00:00"))
+        if win_end_dt.tzinfo is None:
+            win_end_dt = win_end_dt.replace(tzinfo=timezone.utc)
 
         for resp_node in root.iter():
             if not resp_node.tag.endswith("response"):
                 continue
 
+            href = _find_text(resp_node, ".//{DAV:}href", ".//href")
             try:
-                href = _find_text(resp_node, ".//{DAV:}href", ".//href")
                 etag = _find_text(resp_node, ".//{DAV:}getetag", ".//getetag")
                 data_node = _find_elem(
                     resp_node,
@@ -552,35 +562,75 @@ class CalDAVClient:
                             window_start_utc,
                             window_end_utc,
                             override_records=overrides,
-                            max_instances=max_items,
+                            max_instances=max_items + 1,
                         )
+                        if len(expanded) > max_items:
+                            truncated = True
+                            expanded = expanded[:max_items]
                         for rec in expanded:
                             all_records.append(rec)
                             all_fenced.append(_make_fenced_record(rec))
 
                     if not masters and overrides:
                         for rec in overrides:
+                            if rec.get("status") == "CANCELLED":
+                                continue
                             rec_copy = copy.deepcopy(rec)
-                            m_rec = re.search(
-                                r"^RECURRENCE-ID[^:\r\n]*:([^\r\n]+)",
-                                raw_ics,
-                                re.MULTILINE,
-                            )
-                            if m_rec:
-                                rec_copy["recurrence_id"] = m_rec.group(1).strip()
-                            all_records.append(rec_copy)
-                            all_fenced.append(_make_fenced_record(rec_copy))
+                            st_info = rec.get("start", {})
+                            end_info = rec.get("end", {})
+                            if st_info.get("all_day"):
+                                st_date_str = st_info.get("date")
+                                if not st_date_str:
+                                    continue
+                                st_d = date.fromisoformat(st_date_str)
+                                end_date_str = end_info.get("date") or st_date_str
+                                end_d = date.fromisoformat(end_date_str)
+                                if end_d <= st_d:
+                                    end_d = st_d + timedelta(days=1)
+                                rec_tz = resolve_tzid(st_info.get("tzid") or self.default_tz)
+                                st_ovr = datetime(
+                                    st_d.year, st_d.month, st_d.day, 0, 0, 0, tzinfo=rec_tz
+                                ).astimezone(timezone.utc)
+                                end_ovr = datetime(
+                                    end_d.year, end_d.month, end_d.day, 0, 0, 0, tzinfo=rec_tz
+                                ).astimezone(timezone.utc)
+                            else:
+                                st_utc = st_info.get("utc")
+                                end_utc = end_info.get("utc")
+                                if not st_utc or not end_utc:
+                                    continue
+                                st_ovr = datetime.fromisoformat(st_utc.replace("Z", "+00:00"))
+                                end_ovr = datetime.fromisoformat(end_utc.replace("Z", "+00:00"))
+                                if st_ovr.tzinfo is None:
+                                    st_ovr = st_ovr.replace(tzinfo=timezone.utc)
+                                if end_ovr.tzinfo is None:
+                                    end_ovr = end_ovr.replace(tzinfo=timezone.utc)
+
+                            if end_ovr > win_start_dt and st_ovr < win_end_dt:
+                                all_records.append(rec_copy)
+                                all_fenced.append(_make_fenced_record(rec_copy))
                 else:
                     for rec in parsed_records:
                         all_records.append(rec)
                         all_fenced.append(_make_fenced_record(rec))
-            except Exception:
-                continue
+            except Exception as exc:
+                skipped.append(
+                    {
+                        "href": str(href or ""),
+                        "code": str(getattr(exc, "code", "PARSE_ERROR")),
+                        "message": str(exc),
+                    }
+                )
+
+        if len(all_records) > max_items:
+            truncated = True
 
         return {
             "records": all_records[:max_items],
             "fenced_records": all_fenced[:max_items],
             "item_count": len(all_records[:max_items]),
+            "skipped": skipped,
+            "truncated": truncated,
             "window_start_utc": window_start_utc,
             "window_end_utc": window_end_utc,
         }
@@ -616,38 +666,49 @@ class CalDAVClient:
 
         records: list[dict[str, Any]] = []
         fenced_records: list[dict[str, Any]] = []
+        skipped: list[dict[str, str]] = []
 
         for resp_node in root.iter():
             if not resp_node.tag.endswith("response"):
                 continue
 
             href = _find_text(resp_node, ".//{DAV:}href", ".//href")
-            etag = _find_text(resp_node, ".//{DAV:}getetag", ".//getetag")
-            data_node = _find_elem(
-                resp_node,
-                ".//{urn:ietf:params:xml:ns:caldav}calendar-data",
-                ".//calendar-data",
-            )
-            if data_node is None or not data_node.text:
-                continue
+            try:
+                etag = _find_text(resp_node, ".//{DAV:}getetag", ".//getetag")
+                data_node = _find_elem(
+                    resp_node,
+                    ".//{urn:ietf:params:xml:ns:caldav}calendar-data",
+                    ".//calendar-data",
+                )
+                if data_node is None or not data_node.text:
+                    continue
 
-            raw_ics = data_node.text.strip()
-            parsed = parse_ics_to_records(
-                raw_ics,
-                account=account,
-                calendar_alias=calendar_alias,
-                etag=etag,
-                href=href,
-                default_tz=self.default_tz,
-            )
-            for rec in parsed:
-                records.append(rec)
-                fenced_records.append(_make_fenced_record(rec))
+                raw_ics = data_node.text.strip()
+                parsed = parse_ics_to_records(
+                    raw_ics,
+                    account=account,
+                    calendar_alias=calendar_alias,
+                    etag=etag,
+                    href=href,
+                    default_tz=self.default_tz,
+                )
+                for rec in parsed:
+                    records.append(rec)
+                    fenced_records.append(_make_fenced_record(rec))
+            except Exception as exc:
+                skipped.append(
+                    {
+                        "href": str(href or ""),
+                        "code": str(getattr(exc, "code", "PARSE_ERROR")),
+                        "message": str(exc),
+                    }
+                )
 
         return {
             "records": records,
             "fenced_records": fenced_records,
             "item_count": len(records),
+            "skipped": skipped,
         }
 
     def get_event(

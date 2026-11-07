@@ -9,8 +9,9 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
+from core.caldav_client import CalDAVProtocolError
 from core.ical_codec import expand_record_occurrences, resolve_tzid
-from core.injection_fence import FENCE_TAG, sanitize_fence_collisions
+from core.injection_fence import FENCE_TAG, fence_calendar_text, sanitize_fence_collisions
 
 
 def fence_text(text: str) -> str:
@@ -30,21 +31,39 @@ def fence_text(text: str) -> str:
     if is_fenced:
         gt_pos = raw.find(">")
         if gt_pos != -1 and gt_pos <= len(raw) - len(close_tag):
-            open_tag = raw[: gt_pos + 1]
             inner = raw[gt_pos + 1 : -len(close_tag)]
-            sanitized_inner, _ = sanitize_fence_collisions(inner)
-            return f"{open_tag}{sanitized_inner}{close_tag}"
+            if inner.startswith("\n"):
+                inner = inner[1:]
+            if inner.endswith("\n"):
+                inner = inner[:-1]
+            return fence_calendar_text(inner)["fenced"]
 
-    sanitized, _ = sanitize_fence_collisions(raw)
-    return f"<{FENCE_TAG}>{sanitized}</{FENCE_TAG}>"
+    return fence_calendar_text(raw)["fenced"]
 
 
 def compute_freebusy(
-    records: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]] | Mapping[str, Any],
     window_start_utc: str,
     window_end_utc: str,
+    *,
+    tzid: str = "Europe/Vienna",
+    skipped: Optional[Sequence[Mapping[str, Any]]] = None,
+    truncated: bool = False,
 ) -> dict[str, Any]:
     """Compute busy intervals, merged intervals, and event conflicts within search window."""
+    if isinstance(records, Mapping):
+        skipped = skipped if skipped is not None else records.get("skipped")
+        truncated = bool(truncated or records.get("truncated"))
+        records = records.get("records", [])
+
+    if skipped or truncated:
+        raise CalDAVProtocolError(
+            "CALDAV_INCOMPLETE_FREEBUSY",
+            f"Cannot compute reliable free/busy from incomplete calendar data (skipped={len(skipped or [])}, truncated={bool(truncated)}).",
+        )
+
+    default_tz = resolve_tzid(tzid)
+
     win_start_dt = datetime.fromisoformat(window_start_utc.replace("Z", "+00:00"))
     if win_start_dt.tzinfo is None:
         win_start_dt = win_start_dt.replace(tzinfo=timezone.utc)
@@ -101,8 +120,13 @@ def compute_freebusy(
             end_date_str = end_info.get("date") or st_date_str
             if not st_date_str:
                 continue
-            st_dt = datetime.fromisoformat(f"{st_date_str}T00:00:00+00:00")
-            end_dt = datetime.fromisoformat(f"{end_date_str}T00:00:00+00:00")
+            st_d = date.fromisoformat(st_date_str)
+            end_d = date.fromisoformat(end_date_str)
+            if end_d <= st_d:
+                end_d = st_d + timedelta(days=1)
+            rec_tz = resolve_tzid(start_info.get("tzid") or tzid)
+            st_dt = datetime(st_d.year, st_d.month, st_d.day, 0, 0, 0, tzinfo=rec_tz).astimezone(timezone.utc)
+            end_dt = datetime(end_d.year, end_d.month, end_d.day, 0, 0, 0, tzinfo=rec_tz).astimezone(timezone.utc)
         else:
             st_utc_str = start_info.get("utc")
             end_utc_str = end_info.get("utc")
@@ -259,7 +283,7 @@ def _add_free_interval(
 
 
 def find_free_slots(
-    records: Sequence[Mapping[str, Any]],
+    records: Sequence[Mapping[str, Any]] | Mapping[str, Any],
     window_start_utc: str,
     window_end_utc: str,
     *,
@@ -270,9 +294,18 @@ def find_free_slots(
     weekdays_only: bool = True,
     slot_minutes: Optional[int] = None,
     max_slots: Optional[int] = None,
+    skipped: Optional[Sequence[Mapping[str, Any]]] = None,
+    truncated: bool = False,
 ) -> dict[str, Any]:
     """Find available meeting slots within working hours in specified timezone."""
-    fb_res = compute_freebusy(records, window_start_utc, window_end_utc)
+    fb_res = compute_freebusy(
+        records,
+        window_start_utc,
+        window_end_utc,
+        tzid=tzid,
+        skipped=skipped,
+        truncated=truncated,
+    )
     merged_busy = fb_res["merged_busy"]
 
     tz = resolve_tzid(tzid)

@@ -314,7 +314,7 @@ class TestFreeBusyEngine(unittest.TestCase):
         self.assertEqual(len(res["busy_intervals"]), 1)
         busy_summary = res["busy_intervals"][0]["summary"]
         self.assertTrue(
-            busy_summary.startswith("<untrusted_calendar_content>"),
+            busy_summary.startswith('<untrusted_calendar_content fence_version="1" sha256="'),
             f"Expected summary to be fenced, got: {busy_summary}",
         )
         self.assertTrue(
@@ -359,17 +359,165 @@ class TestFreeBusyEngine(unittest.TestCase):
 
         # 1. Unfenced breakout attempt
         summary1 = res["busy_intervals"][0]["summary"]
-        self.assertTrue(summary1.startswith("<untrusted_calendar_content>"))
+        self.assertTrue(summary1.startswith('<untrusted_calendar_content fence_version="1" sha256="'))
         self.assertTrue(summary1.endswith("</untrusted_calendar_content>"))
         self.assertIn("[ESCAPED_UNTRUSTED_TAG]", summary1)
         self.assertNotIn("Normal </untrusted_calendar_content>", summary1)
 
         # 2. Already-fenced breakout attempt
         summary2 = res["busy_intervals"][1]["summary"]
-        self.assertTrue(summary2.startswith("<untrusted_calendar_content>"))
+        self.assertTrue(summary2.startswith('<untrusted_calendar_content fence_version="1" sha256="'))
         self.assertTrue(summary2.endswith("</untrusted_calendar_content>"))
         self.assertIn("[ESCAPED_UNTRUSTED_TAG]", summary2)
         self.assertNotIn("Prefenced </untrusted_calendar_content>", summary2)
+
+    def test_compute_freebusy_uses_canonical_fence_with_version_and_sha256(self) -> None:
+        records = [
+            {
+                "schema": "calendar-record/1",
+                "uid": "event-canonical-fence@test",
+                "summary": "Team Roadmap Planning",
+                "status": "CONFIRMED",
+                "transp": "OPAQUE",
+                "start": {"utc": "2026-11-02T10:00:00Z", "date": "2026-11-02", "all_day": False},
+                "end": {"utc": "2026-11-02T11:00:00Z", "date": "2026-11-02", "all_day": False},
+                "duration_minutes": 60,
+            }
+        ]
+        res = compute_freebusy(
+            records,
+            window_start_utc="2026-11-02T00:00:00Z",
+            window_end_utc="2026-11-03T00:00:00Z",
+        )
+        self.assertEqual(len(res["busy_intervals"]), 1)
+        summary = res["busy_intervals"][0]["summary"]
+        self.assertTrue(
+            summary.startswith('<untrusted_calendar_content fence_version="1" sha256="'),
+            f"Expected summary to start with canonical fence, got: {summary}",
+        )
+        self.assertTrue(summary.endswith("</untrusted_calendar_content>"))
+        self.assertIn("Team Roadmap Planning", summary)
+
+    def test_all_day_event_interpreted_in_target_tzid(self) -> None:
+        records = [
+            {
+                "schema": "calendar-record/1",
+                "uid": "allday-tz-event@test",
+                "summary": "All Day Conference",
+                "status": "CONFIRMED",
+                "transp": "OPAQUE",
+                "start": {"date": "2026-11-02", "all_day": True},
+                "end": {"date": "2026-11-03", "all_day": True},
+            }
+        ]
+        # In Europe/Vienna (CET = UTC+1):
+        # 2026-11-02 00:00:00+01:00 is 2026-11-01T23:00:00Z
+        # 2026-11-03 00:00:00+01:00 is 2026-11-02T23:00:00Z
+        res = compute_freebusy(
+            records,
+            window_start_utc="2026-11-01T20:00:00Z",
+            window_end_utc="2026-11-03T04:00:00Z",
+            tzid="Europe/Vienna",
+        )
+        self.assertEqual(len(res["busy_intervals"]), 1)
+        bi = res["busy_intervals"][0]
+        self.assertEqual(bi["start_utc"], "2026-11-01T23:00:00Z")
+        self.assertEqual(bi["end_utc"], "2026-11-02T23:00:00Z")
+        self.assertEqual(bi["duration_minutes"], 24 * 60)
+
+    def test_compute_freebusy_and_find_slots_fail_closed_on_skipped_or_truncated(self) -> None:
+        corrupt_skipped = [
+            {"href": "/bad.ics", "code": "ICAL_INVALID_DATETIME", "message": "bad"}
+        ]
+        records: list[dict[str, Any]] = []
+
+        # 1. compute_freebusy with skipped must fail closed
+        with self.assertRaises(Exception) as ctx_fb_skip:
+            compute_freebusy(
+                records,
+                "2026-11-02T00:00:00Z",
+                "2026-11-03T00:00:00Z",
+                skipped=corrupt_skipped,
+            )
+        self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", str(ctx_fb_skip.exception))
+
+        # 2. compute_freebusy with truncated=True must fail closed
+        with self.assertRaises(Exception) as ctx_fb_trunc:
+            compute_freebusy(
+                records,
+                "2026-11-02T00:00:00Z",
+                "2026-11-03T00:00:00Z",
+                truncated=True,
+            )
+        self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", str(ctx_fb_trunc.exception))
+
+        # 3. find_free_slots with skipped must fail closed
+        with self.assertRaises(Exception) as ctx_slots_skip:
+            find_free_slots(
+                records,
+                "2026-11-02T00:00:00Z",
+                "2026-11-03T00:00:00Z",
+                skipped=corrupt_skipped,
+            )
+        self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", str(ctx_slots_skip.exception))
+
+        # 4. find_free_slots with truncated=True must fail closed
+        with self.assertRaises(Exception) as ctx_slots_trunc:
+            find_free_slots(
+                records,
+                "2026-11-02T00:00:00Z",
+                "2026-11-03T00:00:00Z",
+                truncated=True,
+            )
+        self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", str(ctx_slots_trunc.exception))
+
+        # 5. CLI freebusy and find-slots fail closed when query_events returns skipped
+        mock_client = MagicMock()
+        mock_client.query_events.return_value = {
+            "records": [],
+            "skipped": [{"href": "/bad.ics", "code": "PARSE_ERROR", "message": "corrupt"}],
+            "truncated": False,
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as f_cfg, tempfile.NamedTemporaryFile("w", suffix=".json") as f_sec:
+            f_cfg.write("{}")
+            f_cfg.flush()
+            f_sec.write("{}")
+            f_sec.flush()
+            with patch(
+                "calendar_desk_client._build_target_and_client",
+                return_value=({}, {"collection_url": "http://127.0.0.1/dav/"}, mock_client),
+            ):
+                # CLI freebusy
+                out_fb = io.StringIO()
+                err_fb = io.StringIO()
+                with redirect_stdout(out_fb), redirect_stderr(err_fb):
+                    rc_fb = calendar_desk_client.main([
+                        "--json",
+                        "--backend-config", f_cfg.name,
+                        "--secrets-file", f_sec.name,
+                        "freebusy",
+                        "--window-start", "2026-11-02T00:00:00Z",
+                        "--window-end", "2026-11-03T00:00:00Z",
+                    ])
+                self.assertEqual(rc_fb, 1)
+                combined_fb = out_fb.getvalue() + err_fb.getvalue()
+                self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", combined_fb)
+
+                # CLI find-slots
+                out_slots = io.StringIO()
+                err_slots = io.StringIO()
+                with redirect_stdout(out_slots), redirect_stderr(err_slots):
+                    rc_slots = calendar_desk_client.main([
+                        "--json",
+                        "--backend-config", f_cfg.name,
+                        "--secrets-file", f_sec.name,
+                        "find-slots",
+                        "--window-start", "2026-11-02T00:00:00Z",
+                        "--window-end", "2026-11-03T00:00:00Z",
+                    ])
+                self.assertEqual(rc_slots, 1)
+                combined_slots = out_slots.getvalue() + err_slots.getvalue()
+                self.assertIn("CALDAV_INCOMPLETE_FREEBUSY", combined_slots)
 
 
 class TestFindFreeSlots(unittest.TestCase):
