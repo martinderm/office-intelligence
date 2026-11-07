@@ -175,6 +175,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_p.add_argument("--timezone", default=None, help="IANA timezone.")
     plan_p.add_argument("--etag", default=None, help="Expected ETag for update/cancel/delete.")
     plan_p.add_argument("--raw-ics-file", default=None, help="Path to existing raw ICS file.")
+    plan_p.add_argument("--recurrence-id", default=None, help="Recurrence ID of instance to update.")
     plan_p.add_argument("--no-persist", action="store_true", help="Do not persist proposal to disk.")
 
     # apply
@@ -327,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_etag=args.etag,
                 existing_raw_ics=existing_raw_ics,
                 persist=not args.no_persist,
+                recurrence_id=getattr(args, "recurrence_id", None),
             )
             _emit_result("plan", plan_res, as_json=args.json)
             return 0

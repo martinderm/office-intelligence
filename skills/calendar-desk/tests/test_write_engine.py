@@ -2474,6 +2474,74 @@ class TestPlanUpdateEventDataPropagation(unittest.TestCase):
         self.assertIn("SUMMARY:CLI Updated Meeting", data.get("staged_ics", ""))
         self.assertIn("20261103", data.get("staged_ics", ""))
 
+    def test_plan_and_cli_support_recurrence_id_for_instance_update(self) -> None:
+        """Verify plan_calendar_write and CLI plan accept recurrence_id to update specific recurring instance."""
+        multi_ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//office-intelligence//test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-override-plan@test\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261101T100000Z\r\n"
+            "DTEND:20261101T110000Z\r\n"
+            "SUMMARY:Original Master Summary\r\n"
+            "RRULE:FREQ=WEEKLY\r\n"
+            "END:VEVENT\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-override-plan@test\r\n"
+            "RECURRENCE-ID:20261105T100000Z\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261105T100000Z\r\n"
+            "DTEND:20261105T110000Z\r\n"
+            "SUMMARY:Original Override Summary\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        # 1. API: plan_calendar_write with recurrence_id
+        plan = plan_calendar_write(
+            self.ws,
+            action="update-event",
+            account="primary-account",
+            calendar_alias="primary",
+            collection_url="/dav/calendars/user/primary/",
+            write_policy="dry_run_and_approval",
+            uid="series-override-plan@test",
+            expected_etag='"etag-series-1"',
+            existing_raw_ics=multi_ics,
+            recurrence_id="2026-11-05T10:00:00Z",
+            updates={"summary": "Override Updated via Plan"},
+            persist=True,
+        )
+        self.assertIn("SUMMARY:Original Master Summary", plan["staged_ics"])
+        self.assertIn("SUMMARY:Override Updated via Plan", plan["staged_ics"])
+        self.assertNotIn("SUMMARY:Original Override Summary", plan["staged_ics"])
+
+        # 2. CLI: plan --action update-event --recurrence-id
+        raw_file = self.ws / "multi_series.ics"
+        raw_file.write_text(multi_ics, encoding="utf-8")
+
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            ret = calendar_desk_client.main([
+                "--workspace", str(self.ws),
+                "--json",
+                "plan",
+                "--action", "update-event",
+                "--uid", "series-override-plan@test",
+                "--etag", '"etag-series-1"',
+                "--raw-ics-file", str(raw_file),
+                "--recurrence-id", "2026-11-05T10:00:00Z",
+                "--summary", "Override Updated via CLI",
+            ])
+        self.assertEqual(ret, 0)
+        cli_out = json.loads(stdout_buf.getvalue())
+        self.assertTrue(cli_out["success"])
+        staged_ics = cli_out.get("data", {}).get("staged_ics", "")
+        self.assertIn("SUMMARY:Original Master Summary", staged_ics)
+        self.assertIn("SUMMARY:Override Updated via CLI", staged_ics)
+        self.assertNotIn("SUMMARY:Original Override Summary", staged_ics)
+
 
 class TestRegisterIntegrityAndDeduplication(unittest.TestCase):
     """Test #25: calendars.json fails closed on corruption and deduplicates across calendar/account."""

@@ -8,6 +8,7 @@ updating, and fail-closed error handling without any external dependencies.
 from __future__ import annotations
 
 import copy
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import sys
@@ -1250,6 +1251,400 @@ class TestCodecSecurityAndRfcRemediation(unittest.TestCase):
             occ_dates,
             ["2026-11-06", "2026-11-09", "2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13"],
         )
+
+
+class TestRev8CodecRemediations(unittest.TestCase):
+    """PR #82 Review Remediation tests: Codec & Serialization Hardening (REV-8)."""
+
+    def setUp(self) -> None:
+        self.base_record = {
+            "schema": "calendar-record/1",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "uid": "rev8-test-001@office-intelligence.local",
+            "sequence": 0,
+            "status": "CONFIRMED",
+            "transp": "OPAQUE",
+            "classification": "PUBLIC",
+            "start": {
+                "utc": "2026-11-10T09:00:00Z",
+                "local": "2026-11-10T10:00:00+01:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+                "date": "2026-11-10",
+            },
+            "end": {
+                "utc": "2026-11-10T10:00:00Z",
+                "local": "2026-11-10T11:00:00+01:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+                "date": "2026-11-10",
+            },
+            "summary": "REV-8 Test Meeting",
+            "location": "Conference Room A",
+            "duration_minutes": 60,
+        }
+
+    def test_update_vevent_ics_missing_recurrence_id_raises(self) -> None:
+        """Verify update_vevent_ics raises ICAL_INSTANCE_NOT_FOUND when recurrence_id is missing,
+        and matches ISO-8601 recurrence_id against compact RECURRENCE-ID."""
+        raw_ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//office-intelligence//test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-1\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261101T100000Z\r\n"
+            "DTEND:20261101T110000Z\r\n"
+            "SUMMARY:Master Series Meeting\r\n"
+            "RRULE:FREQ=WEEKLY\r\n"
+            "END:VEVENT\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-1\r\n"
+            "RECURRENCE-ID:20261105T100000Z\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261105T100000Z\r\n"
+            "DTEND:20261105T110000Z\r\n"
+            "SUMMARY:Existing Override Meeting\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        # Non-existent ISO-8601 recurrence_id must raise ICAL_INSTANCE_NOT_FOUND
+        with self.assertRaises(ICalCodecError) as ctx_iso:
+            update_vevent_ics(
+                raw_ics,
+                {"summary": "Nope"},
+                recurrence_id="2026-11-12T10:00:00Z",
+            )
+        self.assertEqual(ctx_iso.exception.code, "ICAL_INSTANCE_NOT_FOUND")
+
+        # Non-existent compact recurrence_id must raise ICAL_INSTANCE_NOT_FOUND
+        with self.assertRaises(ICalCodecError) as ctx_compact:
+            update_vevent_ics(
+                raw_ics,
+                {"summary": "Nope"},
+                recurrence_id="20261112T100000Z",
+            )
+        self.assertEqual(ctx_compact.exception.code, "ICAL_INSTANCE_NOT_FOUND")
+
+        # Matching ISO-8601 recurrence_id must update ONLY the override VEVENT
+        updated = update_vevent_ics(
+            raw_ics,
+            {"summary": "Updated Override Meeting"},
+            recurrence_id="2026-11-05T10:00:00Z",
+        )
+        self.assertIn("SUMMARY:Master Series Meeting\r\n", updated)
+        self.assertIn("SUMMARY:Updated Override Meeting\r\n", updated)
+        self.assertNotIn("SUMMARY:Existing Override Meeting\r\n", updated)
+
+    def test_cancel_master_vevent_cascades_to_overrides(self) -> None:
+        """Verify cancelling the master event cascades STATUS:CANCELLED to all override VEVENTs."""
+        raw_ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//office-intelligence//test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-cascade-1\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261101T100000Z\r\n"
+            "DTEND:20261101T110000Z\r\n"
+            "SUMMARY:Master Series Meeting\r\n"
+            "STATUS:CONFIRMED\r\n"
+            "RRULE:FREQ=WEEKLY\r\n"
+            "END:VEVENT\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:series-cascade-1\r\n"
+            "RECURRENCE-ID:20261105T100000Z\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261105T100000Z\r\n"
+            "DTEND:20261105T110000Z\r\n"
+            "SUMMARY:Override Meeting\r\n"
+            "STATUS:CONFIRMED\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        updated = update_vevent_ics(
+            raw_ics,
+            {"status": "CANCELLED"},
+            recurrence_id=None,
+        )
+        self.assertNotIn("STATUS:CONFIRMED", updated)
+        self.assertEqual(
+            updated.count("STATUS:CANCELLED"),
+            2,
+            "Both master and override VEVENTs must have STATUS:CANCELLED",
+        )
+
+    def test_expand_rrule_fast_forwards_old_series_beyond_10k_days(self) -> None:
+        """Verify daily recurring series started >10,000 days ago fast-forwards into modern window."""
+        old_record = {
+            "schema": "calendar-record/1",
+            "account": "acc-1",
+            "calendar_alias": "cal-1",
+            "uid": "daily-since-1990",
+            "summary": "Daily Standup Since 1990",
+            "all_day": False,
+            "start": {
+                "utc": "1990-01-01T09:00:00Z",
+                "local": "1990-01-01T09:00:00",
+                "tzid": "UTC",
+                "date": "1990-01-01",
+            },
+            "end": {
+                "utc": "1990-01-01T09:30:00Z",
+                "local": "1990-01-01T09:30:00",
+                "tzid": "UTC",
+                "date": "1990-01-01",
+            },
+            "duration_minutes": 30,
+            "rrule": "FREQ=DAILY",
+        }
+        occs = expand_record_occurrences(
+            old_record,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-05T23:59:59Z",
+        )
+        self.assertEqual(len(occs), 5, "Must return 5 daily occurrences for Nov 1-5, 2026")
+        occ_dates = [occ["start"]["date"] for occ in occs]
+        self.assertEqual(
+            occ_dates,
+            ["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05"],
+        )
+
+    def test_expand_rrule_date_only_until_includes_last_day(self) -> None:
+        """Verify date-only UNTIL (e.g. UNTIL=20261103) includes occurrences through end of that day."""
+        record = {
+            "schema": "calendar-record/1",
+            "account": "acc-1",
+            "calendar_alias": "cal-1",
+            "uid": "daily-until-date-only",
+            "summary": "Daily with Date-Only UNTIL",
+            "all_day": False,
+            "start": {
+                "utc": "2026-11-01T10:00:00Z",
+                "local": "2026-11-01T10:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-01",
+            },
+            "end": {
+                "utc": "2026-11-01T11:00:00Z",
+                "local": "2026-11-01T11:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-01",
+            },
+            "duration_minutes": 60,
+            "rrule": "FREQ=DAILY;UNTIL=20261103",
+        }
+        occs = expand_record_occurrences(
+            record,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T23:59:59Z",
+        )
+        occ_dates = [occ["start"]["date"] for occ in occs]
+        self.assertEqual(
+            occ_dates,
+            ["2026-11-01", "2026-11-02", "2026-11-03"],
+            "Date-only UNTIL=20261103 must include the 2026-11-03 occurrence",
+        )
+        self.assertEqual(len(occs), 3)
+
+    def test_expand_rrule_monthly_unordinaled_byday_returns_all_mondays(self) -> None:
+        """Verify FREQ=MONTHLY;BYDAY=MO without numeric ordinal expands all Mondays of the month."""
+        record = {
+            "schema": "calendar-record/1",
+            "account": "acc-1",
+            "calendar_alias": "cal-1",
+            "uid": "monthly-all-mondays",
+            "summary": "Every Monday of Month",
+            "all_day": False,
+            "start": {
+                "utc": "2026-11-02T09:00:00Z",
+                "local": "2026-11-02T09:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-02",
+            },
+            "end": {
+                "utc": "2026-11-02T10:00:00Z",
+                "local": "2026-11-02T10:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-02",
+            },
+            "duration_minutes": 60,
+            "rrule": "FREQ=MONTHLY;BYDAY=MO",
+        }
+        occs = expand_record_occurrences(
+            record,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T23:59:59Z",
+        )
+        occ_dates = [occ["start"]["date"] for occ in occs]
+        self.assertEqual(
+            occ_dates,
+            ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-30"],
+            "FREQ=MONTHLY;BYDAY=MO must expand all 5 Mondays in November 2026",
+        )
+        self.assertEqual(len(occs), 5)
+
+    def test_expand_rrule_yearly_bymonth_unordinaled_byday(self) -> None:
+        """Verify FREQ=YEARLY;BYMONTH=11;BYDAY=MO without numeric ordinal expands all Mondays in November."""
+        record = {
+            "schema": "calendar-record/1",
+            "account": "acc-1",
+            "calendar_alias": "cal-1",
+            "uid": "yearly-bymonth-all-mondays",
+            "summary": "Every Monday in November Yearly",
+            "all_day": False,
+            "start": {
+                "utc": "2026-11-02T09:00:00Z",
+                "local": "2026-11-02T09:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-02",
+            },
+            "end": {
+                "utc": "2026-11-02T10:00:00Z",
+                "local": "2026-11-02T10:00:00",
+                "tzid": "UTC",
+                "date": "2026-11-02",
+            },
+            "duration_minutes": 60,
+            "rrule": "FREQ=YEARLY;BYMONTH=11;BYDAY=MO",
+        }
+        occs = expand_record_occurrences(
+            record,
+            window_start_utc="2026-11-01T00:00:00Z",
+            window_end_utc="2026-11-30T23:59:59Z",
+        )
+        occ_dates = [occ["start"]["date"] for occ in occs]
+        self.assertEqual(
+            occ_dates,
+            ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23", "2026-11-30"],
+            "FREQ=YEARLY;BYMONTH=11;BYDAY=MO must expand all 5 Mondays in November 2026",
+        )
+        self.assertEqual(len(occs), 5)
+
+    def test_build_vevent_ics_emits_vtimezone_for_non_utc(self) -> None:
+        """Calling build_vevent_ics for non-UTC timezone must include BEGIN:VTIMEZONE,
+        TZID:Europe/Vienna, and END:VTIMEZONE before BEGIN:VEVENT."""
+        rec = {
+            "schema": "calendar-record/1",
+            "uid": "tz-test-1",
+            "summary": "Vienna Call",
+            "start": {
+                "local": "2026-11-02T10:00:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+            },
+            "end": {
+                "local": "2026-11-02T11:00:00",
+                "tzid": "Europe/Vienna",
+                "all_day": False,
+            },
+        }
+        ics = build_vevent_ics(rec)
+        self.assertIn("BEGIN:VTIMEZONE\r\n", ics)
+        self.assertIn("TZID:Europe/Vienna\r\n", ics)
+        self.assertIn("END:VTIMEZONE\r\n", ics)
+        self.assertLess(ics.index("BEGIN:VTIMEZONE"), ics.index("BEGIN:VEVENT"))
+
+        try:
+            ics_kw = build_vevent_ics(
+                uid="tz-test-1",
+                summary="Vienna Call",
+                dtstart="2026-11-02T10:00:00",
+                dtend="2026-11-02T11:00:00",
+                timezone="Europe/Vienna",
+            )
+            self.assertIn("BEGIN:VTIMEZONE\r\n", ics_kw)
+            self.assertIn("TZID:Europe/Vienna\r\n", ics_kw)
+            self.assertIn("END:VTIMEZONE\r\n", ics_kw)
+            self.assertLess(ics_kw.index("BEGIN:VTIMEZONE"), ics_kw.index("BEGIN:VEVENT"))
+        except TypeError:
+            pass
+
+    def test_update_vevent_ics_rejects_crlf_and_control_chars(self) -> None:
+        """Verify update_vevent_ics rejects CR/LF and control characters across all string update parameters."""
+        raw_ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//office-intelligence//test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:evt-crlf-1\r\n"
+            "SEQUENCE:1\r\n"
+            "DTSTART:20261101T100000Z\r\n"
+            "DTEND:20261101T110000Z\r\n"
+            "SUMMARY:Standard Event\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        bad_values = ["INJECTED\r\nFOO:BAR", "BAD\nVALUE", "NUL\x00BYTE", "BELL\x07CHAR"]
+        fields = ["status", "transp", "classification", "rrule", "dtstart", "dtend", "summary"]
+
+        for f in fields:
+            for bad_val in bad_values:
+                with self.assertRaises(ICalCodecError, msg=f"Field {f} with value {bad_val!r} must raise ICalCodecError") as ctx:
+                    update_vevent_ics(raw_ics, {f: bad_val})
+                self.assertIn(
+                    ctx.exception.code,
+                    {"ICAL_INVALID_PROPERTY", "ICAL_CONTROL_CHAR_FORBIDDEN", "ICAL_INJECTION_DETECTED", "ICAL_CONTROL_CHAR"},
+                    f"Expected injection/control char code for field {f}, got {ctx.exception.code}",
+                )
+
+    def test_expanded_occurrences_use_iso8601_recurrence_id(self) -> None:
+        """Verify expanded occurrences emit canonical ISO-8601 UTC recurrence_id (or YYYY-MM-DD for all-day)."""
+        # 1. Timed recurring event
+        timed_rec = copy.deepcopy(self.base_record)
+        timed_rec["rrule"] = "FREQ=DAILY;COUNT=3"
+        timed_occs = expand_record_occurrences(
+            timed_rec,
+            window_start_utc="2026-11-10T00:00:00Z",
+            window_end_utc="2026-11-15T00:00:00Z",
+        )
+        self.assertGreaterEqual(len(timed_occs), 1)
+        for occ in timed_occs:
+            rec_id = occ.get("recurrence_id")
+            self.assertIsNotNone(rec_id, "Occurrence must have recurrence_id")
+            self.assertRegex(
+                rec_id,
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+                f"Timed occurrence recurrence_id must be ISO-8601 UTC (YYYY-MM-DDTHH:MM:SSZ), got: {rec_id}",
+            )
+        self.assertEqual(timed_occs[0]["recurrence_id"], "2026-11-10T09:00:00Z")
+
+        # 2. All-day recurring event
+        allday_rec = copy.deepcopy(self.base_record)
+        allday_rec["all_day"] = True
+        allday_rec["start"] = {
+            "all_day": True,
+            "date": "2026-11-10",
+            "utc": None,
+            "local": None,
+            "tzid": None,
+        }
+        allday_rec["end"] = {
+            "all_day": True,
+            "date": "2026-11-11",
+            "utc": None,
+            "local": None,
+            "tzid": None,
+        }
+        allday_rec["duration_minutes"] = 1440
+        allday_rec["rrule"] = "FREQ=DAILY;COUNT=3"
+        allday_occs = expand_record_occurrences(
+            allday_rec,
+            window_start_utc="2026-11-10T00:00:00Z",
+            window_end_utc="2026-11-15T00:00:00Z",
+        )
+        self.assertGreaterEqual(len(allday_occs), 1)
+        for occ in allday_occs:
+            rec_id = occ.get("recurrence_id")
+            self.assertIsNotNone(rec_id, "All-day occurrence must have recurrence_id")
+            self.assertRegex(
+                rec_id,
+                r"^\d{4}-\d{2}-\d{2}$",
+                f"All-day occurrence recurrence_id must be YYYY-MM-DD, got: {rec_id}",
+            )
+        self.assertEqual(allday_occs[0]["recurrence_id"], "2026-11-10")
 
 
 if __name__ == "__main__":

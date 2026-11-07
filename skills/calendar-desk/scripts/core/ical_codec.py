@@ -11,6 +11,7 @@ import calendar
 import copy
 import hashlib
 import re
+import uuid
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 from zoneinfo import ZoneInfo
@@ -553,6 +554,23 @@ def _nth_weekday_of_month(year: int, month: int, weekday_num: int, n: int) -> Op
         return days[idx] if 0 <= idx < len(days) else None
 
 
+def _all_weekdays_of_month(year: int, month: int, weekday: int) -> list[int]:
+    """Return all day-of-month integers (1..max_day) whose weekday matches."""
+    max_day = calendar.monthrange(year, month)[1]
+    return [d for d in range(1, max_day + 1) if date(year, month, d).weekday() == weekday]
+
+
+def _normalize_recurrence_key(val: str) -> str:
+    """Normalize a recurrence ID string to canonical ISO-8601 UTC or YYYY-MM-DD."""
+    val = val.strip()
+    if len(val) == 8 and val.isdigit():
+        return f"{val[:4]}-{val[4:6]}-{val[6:8]}"
+    m = re.match(r"^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$", val)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}T{m.group(4)}:{m.group(5)}:{m.group(6)}Z"
+    return val
+
+
 def expand_record_occurrences(
     record: dict[str, Any],
     window_start_utc: str,
@@ -592,7 +610,7 @@ def expand_record_occurrences(
             k, v = part.split("=", 1)
             rrule_parts[k.strip().upper()] = v.strip().upper()
 
-    supported_rrule_keys = {"FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY", "WKST"}
+    supported_rrule_keys = {"FREQ", "INTERVAL", "COUNT", "UNTIL", "BYDAY", "BYMONTH", "WKST"}
     for k in rrule_parts:
         if k not in supported_rrule_keys:
             raise ICalCodecError("ICAL_UNSUPPORTED_RRULE", f"Unhandled RRULE rule part: {k}")
@@ -628,11 +646,28 @@ def expand_record_occurrences(
             if until_val.endswith("Z"):
                 until_dt = datetime.strptime(until_val, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
             elif len(until_val) == 8 and until_val.isdigit():
-                until_dt = datetime.strptime(until_val, "%Y%m%d").replace(tzinfo=timezone.utc)
+                until_dt = datetime.strptime(until_val, "%Y%m%d").replace(
+                    hour=23, minute=59, second=59, tzinfo=timezone.utc
+                )
             else:
                 until_dt = datetime.strptime(until_val, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
         except ValueError as exc:
             raise ICalCodecError("ICAL_INVALID_RRULE", f"Invalid UNTIL date in RRULE: {until_val}") from exc
+
+    bymonths: list[int] = []
+    if "BYMONTH" in rrule_parts:
+        bymonth_str = rrule_parts["BYMONTH"]
+        for m_str in bymonth_str.split(","):
+            m_str = m_str.strip()
+            if not m_str:
+                continue
+            try:
+                m_int = int(m_str)
+                if not (1 <= m_int <= 12):
+                    raise ValueError()
+                bymonths.append(m_int)
+            except ValueError as exc:
+                raise ICalCodecError("ICAL_INVALID_RRULE", f"Invalid BYMONTH value in RRULE: {m_str}") from exc
 
     byday_str = rrule_parts.get("BYDAY", "")
     bydays = [b.strip() for b in byday_str.split(",") if b.strip()]
@@ -655,12 +690,18 @@ def expand_record_occurrences(
                     if ordinal < -53 or ordinal > 53:
                         raise ICalCodecError("ICAL_INVALID_RRULE", f"Yearly BYDAY ordinal out of range (-53..53): {ordinal}")
 
-    exdates = set(record.get("exdates", []))
+    exdates: set[str] = set()
+    for ex in record.get("exdates", []):
+        if isinstance(ex, str):
+            exdates.add(ex.strip())
+            exdates.add(_normalize_recurrence_key(ex))
+
     override_by_id: dict[str, dict[str, Any]] = {}
     for ovr in override_records:
         r_id = ovr.get("recurrence_id")
-        if r_id:
-            override_by_id[r_id] = ovr
+        if r_id and isinstance(r_id, str):
+            override_by_id[r_id.strip()] = ovr
+            override_by_id[_normalize_recurrence_key(r_id)] = ovr
 
     dur_minutes = record.get("duration_minutes", 0)
 
@@ -693,6 +734,36 @@ def expand_record_occurrences(
             except Exception:
                 pass
 
+    min_target_date: Optional[date] = None
+    if count is None:
+        win_start_local_date = (
+            win_start_dt.date()
+            if is_all_day
+            else win_start_dt.astimezone(tz).date()
+        ) - timedelta(days=max(2, (dur_minutes // 1440) + 2))
+        min_target_date = win_start_local_date
+        for ovr in override_records:
+            r_id = ovr.get("recurrence_id")
+            if r_id and isinstance(r_id, str):
+                try:
+                    if "T" in r_id:
+                        clean_id = r_id.replace("Z", "+00:00")
+                        if "-" in clean_id:
+                            dt_ovr = datetime.fromisoformat(clean_id)
+                        else:
+                            dt_ovr = datetime.strptime(r_id[:15], "%Y%m%dT%H%M%S")
+                        d_ovr = dt_ovr.date()
+                    elif "-" in r_id:
+                        d_ovr = date.fromisoformat(r_id)
+                    elif len(r_id) == 8 and r_id.isdigit():
+                        d_ovr = datetime.strptime(r_id, "%Y%m%d").date()
+                    else:
+                        d_ovr = None
+                    if d_ovr and d_ovr < min_target_date:
+                        min_target_date = d_ovr
+                except Exception:
+                    pass
+
     occurrences: list[dict[str, Any]] = []
     generated_count = 0
 
@@ -711,6 +782,7 @@ def expand_record_occurrences(
             cand_local = None
             utc_key = cand_date.strftime("%Y-%m-%d")
             date_key = utc_key
+            compact_key = cand_date.strftime("%Y%m%d")
         else:
             cand_local = datetime.combine(cand_date, start_time, tzinfo=tz)
             cand_start_utc = cand_local.astimezone(timezone.utc)
@@ -718,6 +790,7 @@ def expand_record_occurrences(
             cand_end_utc = cand_end_local.astimezone(timezone.utc)
             utc_key = cand_start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
             date_key = cand_date.strftime("%Y-%m-%d")
+            compact_key = cand_start_utc.strftime("%Y%m%dT%H%M%SZ")
 
         if until_dt and cand_start_utc > until_dt:
             return True
@@ -726,11 +799,11 @@ def expand_record_occurrences(
         if count is not None and generated_count > count:
             return True
 
-        if utc_key in exdates or date_key in exdates:
+        if utc_key in exdates or date_key in exdates or compact_key in exdates:
             return cand_start_utc >= stop_horizon_utc
 
-        if utc_key in override_by_id or date_key in override_by_id:
-            ovr = override_by_id.get(utc_key) or override_by_id[date_key]
+        if utc_key in override_by_id or date_key in override_by_id or compact_key in override_by_id:
+            ovr = override_by_id.get(utc_key) or override_by_id.get(date_key) or override_by_id[compact_key]
             if ovr.get("status") == "CANCELLED":
                 return cand_start_utc >= stop_horizon_utc
             if ovr["start"].get("all_day"):
@@ -751,7 +824,7 @@ def expand_record_occurrences(
                 if is_all_day:
                     occ["recurrence_id"] = cand_date.strftime("%Y-%m-%d")
                 else:
-                    occ["recurrence_id"] = cand_start_utc.strftime("%Y%m%dT%H%M%SZ")
+                    occ["recurrence_id"] = cand_start_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
             if is_all_day:
                 occ["start"]["date"] = cand_date.strftime("%Y-%m-%d")
                 end_date = cand_date + timedelta(days=max(1, dur_minutes // 1440))
@@ -774,6 +847,11 @@ def expand_record_occurrences(
     if freq == "DAILY":
         target_wd_nums = set(_WD_MAP[b[-2:]] for b in bydays) if bydays else None
         curr_date = start_local_date
+        if count is None and min_target_date and min_target_date > start_local_date:
+            days_diff = (min_target_date - start_local_date).days
+            if days_diff > interval:
+                skip_steps = (days_diff // interval) - 1
+                curr_date = start_local_date + timedelta(days=skip_steps * interval)
         while True:
             loop_iterations += 1
             if loop_iterations > 10000:
@@ -798,6 +876,11 @@ def expand_record_occurrences(
     elif freq == "WEEKLY":
         target_wd_nums = [_WD_MAP[b[-2:]] for b in bydays] if bydays else [start_local_date.weekday()]
         current_week_monday = start_local_date - timedelta(days=start_local_date.weekday())
+        if count is None and min_target_date and min_target_date > current_week_monday:
+            days_diff = (min_target_date - current_week_monday).days
+            if days_diff > 7 * interval:
+                skip_steps = (days_diff // (7 * interval)) - 1
+                current_week_monday = current_week_monday + timedelta(weeks=skip_steps * interval)
         while True:
             loop_iterations += 1
             if loop_iterations > 10000:
@@ -821,6 +904,13 @@ def expand_record_occurrences(
     elif freq == "MONTHLY":
         curr_year = start_local_date.year
         curr_month = start_local_date.month
+        if count is None and min_target_date and (min_target_date.year > curr_year or (min_target_date.year == curr_year and min_target_date.month > curr_month)):
+            months_diff = (min_target_date.year - curr_year) * 12 + (min_target_date.month - curr_month)
+            if months_diff > interval:
+                skip_steps = (months_diff // interval) - 1
+                total_m = (curr_month - 1) + skip_steps * interval
+                curr_year += total_m // 12
+                curr_month = (total_m % 12) + 1
         while True:
             loop_iterations += 1
             if loop_iterations > 10000:
@@ -834,6 +924,12 @@ def expand_record_occurrences(
                 break
             if until_dt and first_of_month_utc > until_dt:
                 break
+            if bymonths and curr_month not in bymonths:
+                curr_month += interval
+                while curr_month > 12:
+                    curr_month -= 12
+                    curr_year += 1
+                continue
             stop = False
             if bydays:
                 month_dates: list[date] = []
@@ -841,10 +937,14 @@ def expand_record_occurrences(
                     code = bday[-2:]
                     wd_num = _WD_MAP[code]
                     prefix_str = bday[:-2]
-                    n = int(prefix_str) if prefix_str else 1
-                    day_num = _nth_weekday_of_month(curr_year, curr_month, wd_num, n)
-                    if day_num is not None:
-                        month_dates.append(date(curr_year, curr_month, day_num))
+                    if not prefix_str:
+                        for d in _all_weekdays_of_month(curr_year, curr_month, wd_num):
+                            month_dates.append(date(curr_year, curr_month, d))
+                    else:
+                        n = int(prefix_str)
+                        day_num = _nth_weekday_of_month(curr_year, curr_month, wd_num, n)
+                        if day_num is not None:
+                            month_dates.append(date(curr_year, curr_month, day_num))
                 for c_date in sorted(set(month_dates)):
                     if _process_candidate(c_date):
                         stop = True
@@ -864,6 +964,12 @@ def expand_record_occurrences(
 
     elif freq == "YEARLY":
         curr_year = start_local_date.year
+        if count is None and min_target_date and min_target_date.year > curr_year:
+            years_diff = min_target_date.year - curr_year
+            if years_diff > interval:
+                skip_steps = (years_diff // interval) - 1
+                curr_year += skip_steps * interval
+        target_months = sorted(set(bymonths)) if bymonths else [start_local_date.month]
         while True:
             loop_iterations += 1
             if loop_iterations > 10000:
@@ -880,24 +986,33 @@ def expand_record_occurrences(
             stop = False
             if bydays:
                 year_dates: list[date] = []
-                for bday in bydays:
-                    code = bday[-2:]
-                    wd_num = _WD_MAP[code]
-                    prefix_str = bday[:-2]
-                    n = int(prefix_str) if prefix_str else 1
-                    day_num = _nth_weekday_of_month(curr_year, start_local_date.month, wd_num, n)
-                    if day_num is not None:
-                        year_dates.append(date(curr_year, start_local_date.month, day_num))
+                for m_num in target_months:
+                    for bday in bydays:
+                        code = bday[-2:]
+                        wd_num = _WD_MAP[code]
+                        prefix_str = bday[:-2]
+                        if not prefix_str:
+                            for d in _all_weekdays_of_month(curr_year, m_num, wd_num):
+                                year_dates.append(date(curr_year, m_num, d))
+                        else:
+                            n = int(prefix_str)
+                            day_num = _nth_weekday_of_month(curr_year, m_num, wd_num, n)
+                            if day_num is not None:
+                                year_dates.append(date(curr_year, m_num, day_num))
                 for c_date in sorted(set(year_dates)):
                     if _process_candidate(c_date):
                         stop = True
                         break
             else:
-                max_day = calendar.monthrange(curr_year, start_local_date.month)[1]
-                if start_local_date.day <= max_day:
-                    c_date = date(curr_year, start_local_date.month, start_local_date.day)
+                year_dates = []
+                for m_num in target_months:
+                    max_day = calendar.monthrange(curr_year, m_num)[1]
+                    if start_local_date.day <= max_day:
+                        year_dates.append(date(curr_year, m_num, start_local_date.day))
+                for c_date in sorted(set(year_dates)):
                     if _process_candidate(c_date):
                         stop = True
+                        break
             if stop:
                 break
             curr_year += interval
@@ -909,8 +1024,109 @@ def expand_record_occurrences(
     return occurrences[:max_instances]
 
 
-def build_vevent_ics(record: Mapping[str, Any]) -> str:
+def _format_utc_offset(td: Optional[timedelta]) -> str:
+    if td is None:
+        return "+0000"
+    total_sec = int(td.total_seconds())
+    sign = "+" if total_sec >= 0 else "-"
+    total_sec = abs(total_sec)
+    hours = total_sec // 3600
+    minutes = (total_sec % 3600) // 60
+    return f"{sign}{hours:02d}{minutes:02d}"
+
+
+def _build_vtimezone_lines(tzid: str, ref_local_str: Optional[str] = None) -> list[str]:
+    """Emit a deterministic RFC-5545 VTIMEZONE component for a given IANA timezone."""
+    tz_obj = resolve_tzid(tzid)
+    ref_year = 2026
+    if ref_local_str:
+        try:
+            ref_year = datetime.fromisoformat(ref_local_str.replace("Z", "+00:00")).year
+        except Exception:
+            pass
+
+    dt_winter = datetime(ref_year, 1, 15, 0, 0, 0, tzinfo=tz_obj)
+    dt_summer = datetime(ref_year, 7, 15, 0, 0, 0, tzinfo=tz_obj)
+
+    winter_offset = dt_winter.utcoffset()
+    summer_offset = dt_summer.utcoffset()
+
+    winter_tzname = dt_winter.tzname() or "STANDARD"
+    summer_tzname = dt_summer.tzname() or "DAYLIGHT"
+
+    winter_str = _format_utc_offset(winter_offset)
+    summer_str = _format_utc_offset(summer_offset)
+
+    lines = [
+        "BEGIN:VTIMEZONE",
+        f"TZID:{tzid}",
+    ]
+
+    if winter_offset == summer_offset:
+        lines.extend([
+            "BEGIN:STANDARD",
+            "DTSTART:19700101T000000",
+            f"TZOFFSETFROM:{winter_str}",
+            f"TZOFFSETTO:{winter_str}",
+            f"TZNAME:{winter_tzname}",
+            "END:STANDARD",
+        ])
+    else:
+        lines.extend([
+            "BEGIN:STANDARD",
+            "DTSTART:19700101T000000",
+            f"TZOFFSETFROM:{summer_str}",
+            f"TZOFFSETTO:{winter_str}",
+            f"TZNAME:{winter_tzname}",
+            "END:STANDARD",
+            "BEGIN:DAYLIGHT",
+            "DTSTART:19700101T000000",
+            f"TZOFFSETFROM:{winter_str}",
+            f"TZOFFSETTO:{summer_str}",
+            f"TZNAME:{summer_tzname}",
+            "END:DAYLIGHT",
+        ])
+
+    lines.append("END:VTIMEZONE")
+    return lines
+
+
+def build_vevent_ics(record: Mapping[str, Any] | None = None, **kwargs: Any) -> str:
     """Serialize a calendar-record/1 dictionary into a standards-compliant VCALENDAR payload."""
+    if record is None:
+        rec_dict: dict[str, Any] = {
+            "schema": "calendar-record/1",
+            "uid": kwargs.get("uid", f"evt-{uuid.uuid4().hex[:16]}"),
+            "summary": kwargs.get("summary", ""),
+            "description": kwargs.get("description", ""),
+            "location": kwargs.get("location", ""),
+            "status": kwargs.get("status", "CONFIRMED"),
+            "transp": kwargs.get("transp", "OPAQUE"),
+            "classification": kwargs.get("classification", "PUBLIC"),
+            "rrule": kwargs.get("rrule"),
+        }
+        tz = kwargs.get("timezone", "Europe/Vienna")
+        dtstart = kwargs.get("dtstart") or kwargs.get("start")
+        dtend = kwargs.get("dtend") or kwargs.get("end")
+        if dtstart:
+            if isinstance(dtstart, dict):
+                rec_dict["start"] = dtstart
+            else:
+                rec_dict["start"] = {
+                    "local": dtstart,
+                    "tzid": tz,
+                    "all_day": False,
+                }
+        if dtend:
+            if isinstance(dtend, dict):
+                rec_dict["end"] = dtend
+            else:
+                rec_dict["end"] = {
+                    "local": dtend,
+                    "tzid": tz,
+                    "all_day": False,
+                }
+        record = rec_dict
     guard_fields = ("uid", "status", "transp", "classification", "rrule", "method", "recurrence_id")
     for f in guard_fields:
         val = record.get(f)
@@ -964,6 +1180,12 @@ def build_vevent_ics(record: Mapping[str, Any]) -> str:
     ]
     if record.get("method"):
         lines.append(f"METHOD:{record['method']}")
+
+    if not start.get("all_day"):
+        tz = start.get("tzid")
+        if tz and tz not in ("UTC", "Z", "GMT", "Etc/UTC"):
+            vtz_lines = _build_vtimezone_lines(tz, start.get("local"))
+            lines.extend(vtz_lines)
 
     lines.append("BEGIN:VEVENT")
     lines.append(f"UID:{record['uid']}")
@@ -1069,6 +1291,137 @@ def _format_endpoint_line(prop: str, val: Any) -> str:
     return f"{prop}:{val_str}"
 
 
+def _check_string_for_injection_and_control_chars(val: str, field_name: str) -> None:
+    if not isinstance(val, str):
+        return
+    if "\r" in val or "\n" in val:
+        raise ICalCodecError("ICAL_INJECTION_DETECTED", f"Newline/CRLF forbidden in {field_name}: {val!r}")
+    is_text = field_name.lower() in ("summary", "description", "location")
+    for ch in val:
+        cp = ord(ch)
+        if is_text:
+            if cp < 0x20 and ch != "\t":
+                raise ICalCodecError("ICAL_CONTROL_CHAR_FORBIDDEN", f"Control char {ch!r} forbidden in {field_name}")
+            if cp == 0x7f:
+                raise ICalCodecError("ICAL_CONTROL_CHAR_FORBIDDEN", f"DEL char forbidden in {field_name}")
+        else:
+            if cp < 0x20 or cp == 0x7f:
+                raise ICalCodecError("ICAL_CONTROL_CHAR_FORBIDDEN", f"Control char {ch!r} forbidden in {field_name}")
+
+
+def _update_single_vevent_block(
+    block_lines: list[str],
+    block_updates: Mapping[str, Any],
+    increment_sequence: bool,
+    utc_now: str,
+) -> list[str]:
+    in_valarm = False
+    seq_updated = False
+    last_mod_updated = False
+    handled_keys: set[str] = set()
+    res_lines: list[str] = []
+
+    for line in block_lines:
+        stripped = line.strip()
+        if stripped == "BEGIN:VEVENT":
+            res_lines.append(line)
+            continue
+        if stripped == "END:VEVENT":
+            if "location" in block_updates and "LOCATION" not in handled_keys:
+                res_lines.append(f"LOCATION:{escape_ics_text(str(block_updates['location']))}")
+            if "summary" in block_updates and "SUMMARY" not in handled_keys:
+                res_lines.append(f"SUMMARY:{escape_ics_text(str(block_updates['summary']))}")
+            if "description" in block_updates and "DESCRIPTION" not in handled_keys:
+                res_lines.append(f"DESCRIPTION:{escape_ics_text(str(block_updates['description']))}")
+            if "status" in block_updates and "STATUS" not in handled_keys:
+                res_lines.append(f"STATUS:{str(block_updates['status']).upper()}")
+            if "transp" in block_updates and "TRANSP" not in handled_keys:
+                res_lines.append(f"TRANSP:{str(block_updates['transp']).upper()}")
+            if "classification" in block_updates and "CLASS" not in handled_keys:
+                res_lines.append(f"CLASS:{str(block_updates['classification']).upper()}")
+            if "start" in block_updates and "START" not in handled_keys:
+                res_lines.append(_format_endpoint_line("DTSTART", block_updates["start"]))
+            if "end" in block_updates and "END" not in handled_keys:
+                res_lines.append(_format_endpoint_line("DTEND", block_updates["end"]))
+            if "rrule" in block_updates and "RRULE" not in handled_keys:
+                res_lines.append(f"RRULE:{block_updates['rrule']}")
+            if increment_sequence and not seq_updated:
+                res_lines.append("SEQUENCE:1")
+            if not last_mod_updated:
+                res_lines.append(f"LAST-MODIFIED:{utc_now}")
+            res_lines.append(line)
+            continue
+
+        if stripped == "BEGIN:VALARM":
+            in_valarm = True
+            res_lines.append(line)
+            continue
+        if stripped == "END:VALARM":
+            in_valarm = False
+            res_lines.append(line)
+            continue
+        if in_valarm:
+            res_lines.append(line)
+            continue
+
+        prop_name = line.split(":", 1)[0].split(";", 1)[0].upper().strip()
+        if prop_name == "SEQUENCE":
+            if increment_sequence:
+                try:
+                    old_seq = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    old_seq = 0
+                res_lines.append(f"SEQUENCE:{old_seq + 1}")
+                seq_updated = True
+            else:
+                res_lines.append(line)
+            continue
+        if prop_name == "LAST-MODIFIED":
+            res_lines.append(f"LAST-MODIFIED:{utc_now}")
+            last_mod_updated = True
+            continue
+        if prop_name == "SUMMARY" and "summary" in block_updates:
+            res_lines.append(f"SUMMARY:{escape_ics_text(str(block_updates['summary']))}")
+            handled_keys.add("SUMMARY")
+            continue
+        if prop_name == "DESCRIPTION" and "description" in block_updates:
+            res_lines.append(f"DESCRIPTION:{escape_ics_text(str(block_updates['description']))}")
+            handled_keys.add("DESCRIPTION")
+            continue
+        if prop_name == "LOCATION" and "location" in block_updates:
+            res_lines.append(f"LOCATION:{escape_ics_text(str(block_updates['location']))}")
+            handled_keys.add("LOCATION")
+            continue
+        if prop_name == "STATUS" and "status" in block_updates:
+            res_lines.append(f"STATUS:{str(block_updates['status']).upper()}")
+            handled_keys.add("STATUS")
+            continue
+        if prop_name == "TRANSP" and "transp" in block_updates:
+            res_lines.append(f"TRANSP:{str(block_updates['transp']).upper()}")
+            handled_keys.add("TRANSP")
+            continue
+        if prop_name == "CLASS" and "classification" in block_updates:
+            res_lines.append(f"CLASS:{str(block_updates['classification']).upper()}")
+            handled_keys.add("CLASS")
+            continue
+        if prop_name == "DTSTART" and "start" in block_updates:
+            res_lines.append(_format_endpoint_line("DTSTART", block_updates["start"]))
+            handled_keys.add("START")
+            continue
+        if prop_name == "DTEND" and "end" in block_updates:
+            res_lines.append(_format_endpoint_line("DTEND", block_updates["end"]))
+            handled_keys.add("END")
+            continue
+        if prop_name == "RRULE" and "rrule" in block_updates:
+            res_lines.append(f"RRULE:{block_updates['rrule']}")
+            handled_keys.add("RRULE")
+            continue
+
+        res_lines.append(line)
+
+    return res_lines
+
+
 def update_vevent_ics(
     raw_ics: str,
     updates: Mapping[str, Any],
@@ -1077,6 +1430,27 @@ def update_vevent_ics(
     increment_sequence: bool = True,
 ) -> str:
     """Update primary VEVENT in raw_ics, incrementing SEQUENCE and preserving X-* and VALARM."""
+    if recurrence_id is not None:
+        _check_string_for_injection_and_control_chars(recurrence_id, "recurrence_id")
+
+    for k, v in updates.items():
+        if isinstance(v, str):
+            _check_string_for_injection_and_control_chars(v, k)
+        elif isinstance(v, dict):
+            for sub_k, sub_v in v.items():
+                if isinstance(sub_v, str):
+                    _check_string_for_injection_and_control_chars(sub_v, f"{k}.{sub_k}")
+
+    norm_updates = dict(updates)
+    if "dtstart" in norm_updates:
+        val = norm_updates.pop("dtstart")
+        if "start" not in norm_updates:
+            norm_updates["start"] = val
+    if "dtend" in norm_updates:
+        val = norm_updates.pop("dtend")
+        if "end" not in norm_updates:
+            norm_updates["end"] = val
+
     unfolded = unfold_ics_lines(raw_ics)
 
     blocks: list[dict[str, Any]] = []
@@ -1145,119 +1519,30 @@ def update_vevent_ics(
                     break
             except Exception:
                 pass
-        if target_block is None and vevent_blocks:
-            target_block = vevent_blocks[0]
+        if target_block is None:
+            raise ICalCodecError(
+                "ICAL_INSTANCE_NOT_FOUND",
+                f"No VEVENT matching recurrence_id '{recurrence_id}' found in resource.",
+            )
+
+    cascade_cancel = (recurrence_id is None and str(norm_updates.get("status", "")).upper() == "CANCELLED")
 
     utc_now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_lines: list[str] = []
 
     for block in blocks:
-        if block is not target_block:
+        if block is target_block:
+            updated_block = _update_single_vevent_block(
+                block["lines"], norm_updates, increment_sequence, utc_now
+            )
+            out_lines.extend(updated_block)
+        elif cascade_cancel and block["type"] == "vevent":
+            updated_block = _update_single_vevent_block(
+                block["lines"], {"status": "CANCELLED"}, increment_sequence, utc_now
+            )
+            out_lines.extend(updated_block)
+        else:
             out_lines.extend(block["lines"])
-            continue
-
-        in_valarm = False
-        seq_updated = False
-        last_mod_updated = False
-        handled_keys: set[str] = set()
-
-        for line in block["lines"]:
-            stripped = line.strip()
-            if stripped == "BEGIN:VEVENT":
-                out_lines.append(line)
-                continue
-            if stripped == "END:VEVENT":
-                if "location" in updates and "LOCATION" not in handled_keys:
-                    out_lines.append(f"LOCATION:{escape_ics_text(str(updates['location']))}")
-                if "summary" in updates and "SUMMARY" not in handled_keys:
-                    out_lines.append(f"SUMMARY:{escape_ics_text(str(updates['summary']))}")
-                if "description" in updates and "DESCRIPTION" not in handled_keys:
-                    out_lines.append(f"DESCRIPTION:{escape_ics_text(str(updates['description']))}")
-                if "status" in updates and "STATUS" not in handled_keys:
-                    out_lines.append(f"STATUS:{str(updates['status']).upper()}")
-                if "transp" in updates and "TRANSP" not in handled_keys:
-                    out_lines.append(f"TRANSP:{str(updates['transp']).upper()}")
-                if "classification" in updates and "CLASS" not in handled_keys:
-                    out_lines.append(f"CLASS:{str(updates['classification']).upper()}")
-                if "start" in updates and "START" not in handled_keys:
-                    out_lines.append(_format_endpoint_line("DTSTART", updates["start"]))
-                if "end" in updates and "END" not in handled_keys:
-                    out_lines.append(_format_endpoint_line("DTEND", updates["end"]))
-                if "rrule" in updates and "RRULE" not in handled_keys:
-                    out_lines.append(f"RRULE:{updates['rrule']}")
-                if increment_sequence and not seq_updated:
-                    out_lines.append("SEQUENCE:1")
-                if not last_mod_updated:
-                    out_lines.append(f"LAST-MODIFIED:{utc_now}")
-                out_lines.append(line)
-                continue
-
-            if stripped == "BEGIN:VALARM":
-                in_valarm = True
-                out_lines.append(line)
-                continue
-            if stripped == "END:VALARM":
-                in_valarm = False
-                out_lines.append(line)
-                continue
-            if in_valarm:
-                out_lines.append(line)
-                continue
-
-            prop_name = line.split(":", 1)[0].split(";", 1)[0].upper().strip()
-            if prop_name == "SEQUENCE":
-                if increment_sequence:
-                    try:
-                        old_seq = int(line.split(":", 1)[1].strip())
-                    except ValueError:
-                        old_seq = 0
-                    out_lines.append(f"SEQUENCE:{old_seq + 1}")
-                    seq_updated = True
-                else:
-                    out_lines.append(line)
-                continue
-            if prop_name == "LAST-MODIFIED":
-                out_lines.append(f"LAST-MODIFIED:{utc_now}")
-                last_mod_updated = True
-                continue
-            if prop_name == "SUMMARY" and "summary" in updates:
-                out_lines.append(f"SUMMARY:{escape_ics_text(str(updates['summary']))}")
-                handled_keys.add("SUMMARY")
-                continue
-            if prop_name == "DESCRIPTION" and "description" in updates:
-                out_lines.append(f"DESCRIPTION:{escape_ics_text(str(updates['description']))}")
-                handled_keys.add("DESCRIPTION")
-                continue
-            if prop_name == "LOCATION" and "location" in updates:
-                out_lines.append(f"LOCATION:{escape_ics_text(str(updates['location']))}")
-                handled_keys.add("LOCATION")
-                continue
-            if prop_name == "STATUS" and "status" in updates:
-                out_lines.append(f"STATUS:{str(updates['status']).upper()}")
-                handled_keys.add("STATUS")
-                continue
-            if prop_name == "TRANSP" and "transp" in updates:
-                out_lines.append(f"TRANSP:{str(updates['transp']).upper()}")
-                handled_keys.add("TRANSP")
-                continue
-            if prop_name == "CLASS" and "classification" in updates:
-                out_lines.append(f"CLASS:{str(updates['classification']).upper()}")
-                handled_keys.add("CLASS")
-                continue
-            if prop_name == "DTSTART" and "start" in updates:
-                out_lines.append(_format_endpoint_line("DTSTART", updates["start"]))
-                handled_keys.add("START")
-                continue
-            if prop_name == "DTEND" and "end" in updates:
-                out_lines.append(_format_endpoint_line("DTEND", updates["end"]))
-                handled_keys.add("END")
-                continue
-            if prop_name == "RRULE" and "rrule" in updates:
-                out_lines.append(f"RRULE:{updates['rrule']}")
-                handled_keys.add("RRULE")
-                continue
-
-            out_lines.append(line)
 
     folded_lines = [fold_ics_line(l) for l in out_lines]
     return "\r\n".join(folded_lines) + "\r\n"

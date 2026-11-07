@@ -243,7 +243,12 @@ def canonical_json_sha256(payload: Any) -> str:
 
 def compute_plan_sha256(plan: Mapping[str, Any]) -> str:
     """Compute plan_sha256 over canonical plan dictionary excluding plan_sha256 and approval_template."""
-    cleaned = {k: v for k, v in plan.items() if k not in ("plan_sha256", "approval_template")}
+    cleaned = {
+        k: v
+        for k, v in plan.items()
+        if k not in ("plan_sha256", "approval_template")
+        and not (k == "recurrence_id" and v is None)
+    }
     return canonical_json_sha256(cleaned)
 
 
@@ -338,9 +343,16 @@ def plan_calendar_write(
     resource_url: str | None = None,
     persist: bool = True,
     caldav_client: Any = None,
+    recurrence_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute dry-run planning without requiring a workspace lock."""
     ws_path = Path(workspace_root).resolve()
+
+    eff_recurrence_id = (
+        recurrence_id
+        or (event_spec.get("recurrence_id") if isinstance(event_spec, dict) else None)
+        or (updates.get("recurrence_id") if isinstance(updates, dict) else None)
+    )
 
     _validate_safe_identifier(account, "account")
     _validate_safe_identifier(calendar_alias, "calendar_alias")
@@ -450,7 +462,10 @@ def plan_calendar_write(
 
         if action == "cancel-event":
             staged_ics = update_vevent_ics(
-                existing_raw_ics, {"status": "CANCELLED"}, increment_sequence=True
+                existing_raw_ics,
+                {"status": "CANCELLED"},
+                recurrence_id=eff_recurrence_id,
+                increment_sequence=True,
             )
             diff_summary = f"Cancel event (UID: {uid}, ETag: {expected_etag})"
         else:
@@ -473,7 +488,10 @@ def plan_calendar_write(
                 update_dict["end"] = _normalize_spec_endpoint(update_dict["end"], "Europe/Vienna")
 
             staged_ics = update_vevent_ics(
-                existing_raw_ics, update_dict, increment_sequence=True
+                existing_raw_ics,
+                update_dict,
+                recurrence_id=eff_recurrence_id,
+                increment_sequence=True,
             )
             diff_summary = f"Update event (UID: {uid}, ETag: {expected_etag})"
 
@@ -509,6 +527,8 @@ def plan_calendar_write(
             "raw_ics": existing_raw_ics,
         },
     }
+    if eff_recurrence_id:
+        plan["recurrence_id"] = eff_recurrence_id
 
     plan_sha256 = compute_plan_sha256(plan)
     plan["plan_sha256"] = plan_sha256
