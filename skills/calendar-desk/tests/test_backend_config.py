@@ -229,6 +229,24 @@ class TestBackendConfig(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.code, "CALDAV_SECRET_MISSING")
 
+    def test_corrupt_secrets_json_fails_closed(self) -> None:
+        backend_cfg = {
+            "schema": "calendar-desk-backend/1",
+            "default_account": "work",
+            "accounts": {"work": {"principal_url": "https://cal.example.com/dav/"}},
+        }
+        corrupt_secrets = self.dir_path / "secrets.json"
+        corrupt_secrets.write_text("{corrupt", encoding="utf-8")
+        mock_env = {
+            "CALDAV_USERNAME_WORK": "valid_user",
+            "CALDAV_PASSWORD_WORK": "valid_pass",
+        }
+        with self.assertRaises(CalDAVConfigError) as ctx:
+            resolve_account_credentials(
+                "work", backend_cfg, secrets_path=corrupt_secrets, env=mock_env
+            )
+        self.assertEqual(ctx.exception.code, "CALDAV_CONFIG_INVALID")
+
     def test_resolve_account_credentials_account_not_found(self) -> None:
         backend_cfg = {
             "schema": "calendar-desk-backend/1",

@@ -149,24 +149,32 @@ def resolve_account_credentials(
     s_path = Path(secrets_path) if secrets_path else Path(".agents/secrets.json")
     if s_path.is_file():
         try:
-            secrets_raw = json.loads(s_path.read_text(encoding="utf-8"))
-            caldav_secrets = (
-                secrets_raw.get("integrations", {})
-                .get("caldav", {})
-                .get("accounts", {})
-                .get(account_id, {})
+            data = json.loads(s_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CalDAVConfigError(
+                "CALDAV_CONFIG_INVALID",
+                f"Invalid secrets file '{s_path}': {exc}",
+            ) from exc
+        if not isinstance(data, dict):
+            raise CalDAVConfigError(
+                "CALDAV_CONFIG_INVALID",
+                f"Secrets file '{s_path}' root must be a JSON object.",
             )
-            if isinstance(caldav_secrets, dict):
-                if not principal_url and caldav_secrets.get("principal_url"):
-                    principal_url = caldav_secrets["principal_url"]
-                if caldav_secrets.get("username"):
-                    username = caldav_secrets["username"]
-                if caldav_secrets.get("password"):
-                    password = caldav_secrets["password"]
-                elif caldav_secrets.get("app_password"):
-                    password = caldav_secrets["app_password"]
-        except Exception:
-            pass
+        caldav_secrets = (
+            data.get("integrations", {})
+            .get("caldav", {})
+            .get("accounts", {})
+            .get(account_id, {})
+        )
+        if isinstance(caldav_secrets, dict):
+            if not principal_url and caldav_secrets.get("principal_url"):
+                principal_url = caldav_secrets["principal_url"]
+            if caldav_secrets.get("username"):
+                username = caldav_secrets["username"]
+            if caldav_secrets.get("password"):
+                password = caldav_secrets["password"]
+            elif caldav_secrets.get("app_password"):
+                password = caldav_secrets["app_password"]
 
     # 2. Try environment fallback
     environment = env if env is not None else os.environ
@@ -234,15 +242,39 @@ def resolve_calendar_target(
     calendar_alias: str | None = None,
     secrets_path: Path | str | None = None,
     env: Mapping[str, str] | None = None,
+    require_credentials: bool = True,
 ) -> dict[str, Any]:
     """Resolve full calendar target details, combining collection URL and credentials."""
     target_account = account_id or backend_cfg["default_account"]
-    credentials = resolve_account_credentials(
-        target_account, backend_cfg, secrets_path=secrets_path, env=env
-    )
-
     accounts = backend_cfg.get("accounts", {})
+    if target_account not in accounts:
+        raise CalDAVConfigError(
+            "CALDAV_ACCOUNT_NOT_FOUND",
+            f"CalDAV account '{target_account}' is not defined in backend config",
+        )
     acct_meta = accounts[target_account] or {}
+
+    if require_credentials:
+        credentials = resolve_account_credentials(
+            target_account, backend_cfg, secrets_path=secrets_path, env=env
+        )
+    else:
+        try:
+            credentials = resolve_account_credentials(
+                target_account, backend_cfg, secrets_path=secrets_path, env=env
+            )
+        except CalDAVConfigError as exc:
+            if exc.code == "CALDAV_SECRET_MISSING":
+                credentials = AccountCredentials(
+                    account_id=target_account,
+                    principal_url=str(acct_meta.get("principal_url", "")),
+                    username="",
+                    password="",
+                    allow_loopback_http=bool(acct_meta.get("allow_loopback_http", False)),
+                    timeout_seconds=float(acct_meta.get("timeout_seconds", 15.0)),
+                )
+            else:
+                raise
     calendars = acct_meta.get("calendars", {})
 
     target_alias = calendar_alias or "primary"

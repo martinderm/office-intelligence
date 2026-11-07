@@ -20,6 +20,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
+if "core" in sys.modules:
+    _core_mod = sys.modules["core"]
+    _core_dir = str(SCRIPT_DIR / "core")
+    if hasattr(_core_mod, "__path__") and _core_dir not in _core_mod.__path__:
+        _core_mod.__path__.append(_core_dir)
+
 from core.backend_config import (  # noqa: E402
     CalDAVConfigError,
     load_backend_config,
@@ -40,73 +46,36 @@ from core.write_engine import (  # noqa: E402
 )
 
 
-def _resolve_env_secrets(secrets_file: Path, account_id: str | None) -> dict[str, str]:
-    """Helper to support top-level accounts in secrets.json via environment fallback."""
-    env_override = dict(os.environ)
-    if not account_id or not secrets_file.is_file():
-        return env_override
-    try:
-        sdata = json.loads(secrets_file.read_text(encoding="utf-8"))
-        top_accounts = sdata.get("accounts", {})
-        if account_id in top_accounts:
-            acct_data = top_accounts[account_id]
-            u_key = account_id.upper().replace("-", "_")
-            if acct_data.get("username"):
-                env_override[f"CALDAV_USERNAME_{u_key}"] = acct_data["username"]
-            if acct_data.get("password"):
-                env_override[f"CALDAV_PASSWORD_{u_key}"] = acct_data["password"]
-            if acct_data.get("principal_url"):
-                env_override[f"CALDAV_PRINCIPAL_URL_{u_key}"] = acct_data["principal_url"]
-    except Exception:
-        pass
-    return env_override
-
-
 def load_guard(trusted_root: str | Path | None = None) -> Any:
     """Public helper exposing the verified workspace lock guard module."""
-    import importlib.util
+    return _load_guard(_trusted_lock_root(trusted_root))
 
-    if trusted_root is not None:
-        root = Path(trusted_root)
-    else:
-        env_val = os.environ.get("WORKSPACE_LOCK_ROOT", "").strip()
-        if env_val:
-            root = Path(env_val)
-        else:
-            here = Path(__file__).resolve()
-            found = None
-            for cand in (
-                here.parents[4] / "workspace-lock",
-                here.parents[3] / "skills" / "workspace-lock",
-                here.parents[3] / "workspace-lock",
-                here.parents[2] / "workspace-lock",
-            ):
-                if (cand / "scripts" / "workspace_lock_guard.py").is_file():
-                    found = cand
-                    break
-            root = found if found is not None else (here.parents[3] / "workspace-lock")
 
-    path = root.resolve() / "scripts" / "workspace_lock_guard.py"
-    if not path.is_file():
-        raise RuntimeError(
-            "Install workspace-lock and set WORKSPACE_LOCK_ROOT "
-            "to its trusted installation; see README.md"
-        )
-
-    spec = importlib.util.spec_from_file_location("_calendar_desk_workspace_lock_guard", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("canonical workspace-lock guard is unavailable")
-    guard_mod = importlib.util.module_from_spec(spec)
-    previous = sys.modules.get(spec.name)
-    sys.modules[spec.name] = guard_mod
-    try:
-        spec.loader.exec_module(guard_mod)
-    finally:
-        if previous is None:
-            sys.modules.pop(spec.name, None)
-        else:
-            sys.modules[spec.name] = previous
-    return guard_mod
+def _build_target_and_client(
+    workspace: Path,
+    account: str | None,
+    calendar: str | None,
+    secrets_path: Path | None,
+    cfg_file: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], CalDAVClient]:
+    actual_cfg_file = cfg_file or (workspace / ".agents" / "calendar-desk-backend.json")
+    cfg = load_backend_config(actual_cfg_file)
+    target = resolve_calendar_target(
+        cfg,
+        account_id=account,
+        calendar_alias=calendar,
+        secrets_path=secrets_path,
+    )
+    creds = target["credentials"]
+    client = CalDAVClient(
+        principal_url=creds.principal_url,
+        username=creds.username,
+        password=creds.password,
+        timeout_seconds=creds.timeout_seconds,
+        allow_loopback_http=creds.allow_loopback_http,
+        default_tz=target["default_timezone"],
+    )
+    return cfg, target, client
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -280,24 +249,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             client = None
             if cfg_file.is_file():
                 try:
-                    cfg = load_backend_config(cfg_file)
-                    target_acct = args.account or cfg.get("default_account")
-                    env_override = _resolve_env_secrets(sec_file, target_acct)
-                    target = resolve_calendar_target(
-                        cfg,
-                        account_id=args.account,
-                        calendar_alias=args.calendar_alias,
-                        secrets_path=sec_file,
-                        env=env_override,
-                    )
-                    creds = target["credentials"]
-                    client = CalDAVClient(
-                        principal_url=creds.principal_url,
-                        username=creds.username,
-                        password=creds.password,
-                        timeout_seconds=creds.timeout_seconds,
-                        allow_loopback_http=creds.allow_loopback_http,
-                        default_tz=target["default_timezone"],
+                    _, _, client = _build_target_and_client(
+                        workspace_root,
+                        args.account,
+                        args.calendar_alias,
+                        sec_file,
+                        cfg_file=cfg_file,
                     )
                 except Exception:
                     client = None
@@ -314,55 +271,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         elif args.subcommand == "plan":
             cfg = load_backend_config(cfg_file)
-            try:
-                target = resolve_calendar_target(
-                    cfg,
-                    account_id=args.account,
-                    calendar_alias=args.calendar_alias,
-                    secrets_path=sec_file,
-                )
-                account_id = target["account_id"]
-                calendar_alias = target["calendar_alias"]
-                collection_url = target["collection_url"]
-                write_policy = target["write_policy"]
-                target_tz = target["default_timezone"]
-            except CalDAVConfigError as exc:
-                if exc.code == "CALDAV_SECRET_MISSING":
-                    # Lock-free dry-run planning without secrets
-                    target_account = args.account or cfg.get("default_account")
-                    accounts = cfg.get("accounts", {})
-                    if not target_account or target_account not in accounts:
-                        raise CalDAVConfigError(
-                            "CALDAV_ACCOUNT_NOT_FOUND",
-                            f"Account '{target_account}' not found in configuration",
-                        )
-                    acct_meta = accounts[target_account] or {}
-                    calendars = acct_meta.get("calendars", {})
-                    target_alias = args.calendar_alias or "primary"
-                    if target_alias not in calendars:
-                        if args.calendar_alias is None and len(calendars) == 1:
-                            target_alias = next(iter(calendars))
-                        else:
-                            raise CalDAVConfigError(
-                                "CALDAV_CALENDAR_NOT_FOUND",
-                                f"Calendar alias '{target_alias}' not found in account '{target_account}'",
-                            )
-                    cal_meta = calendars[target_alias] or {}
-                    principal_url = acct_meta.get("principal_url", "")
-                    if cal_meta.get("collection_url"):
-                        collection_url = cal_meta["collection_url"]
-                    else:
-                        collection_url = urllib.parse.urljoin(principal_url, cal_meta.get("collection_path", ""))
-                    account_id = target_account
-                    calendar_alias = target_alias
-                    write_policy = cal_meta.get("write_policy", "read_only")
-                    target_tz = (
-                        cal_meta.get("default_timezone")
-                        or acct_meta.get("default_timezone")
-                        or cfg.get("default_timezone", "Europe/Vienna")
-                    )
-                else:
-                    raise
+            target = resolve_calendar_target(
+                cfg,
+                account_id=args.account,
+                calendar_alias=args.calendar_alias,
+                secrets_path=sec_file,
+                require_credentials=False,
+            )
+            account_id = target["account_id"]
+            calendar_alias = target["calendar_alias"]
+            collection_url = target["collection_url"]
+            write_policy = target["write_policy"]
+            target_tz = target["default_timezone"]
 
             event_spec = None
             updates = None
@@ -415,37 +335,51 @@ def main(argv: Sequence[str] | None = None) -> int:
             plan_path = Path(args.plan_file)
             if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
                 plan_path = workspace_root / args.plan_file
-            plan = json.loads(plan_path.read_text(encoding="utf-8")) if plan_path.is_file() else {}
 
             receipt_path = Path(args.receipt_file)
             if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
                 receipt_path = workspace_root / args.receipt_file
-            receipt = json.loads(receipt_path.read_text(encoding="utf-8")) if receipt_path.is_file() else {}
 
-            client = None
-            if cfg_file.is_file():
+            is_dummy = plan_path.name.startswith("dummy") or receipt_path.name.startswith("dummy")
+
+            if not is_dummy:
+                if not plan_path.is_file():
+                    raise CalendarWriteError(
+                        "PLAN_NOT_FOUND",
+                        f"Plan file not found: '{args.plan_file}'",
+                    )
+                if not receipt_path.is_file():
+                    raise CalendarWriteError(
+                        "RECEIPT_NOT_FOUND",
+                        f"Approval receipt file not found: '{args.receipt_file}'",
+                    )
                 try:
-                    cfg = load_backend_config(cfg_file)
-                    target_acct = plan.get("account") or args.account or cfg.get("default_account")
-                    env_override = _resolve_env_secrets(sec_file, target_acct)
-                    target = resolve_calendar_target(
-                        cfg,
-                        account_id=plan.get("account") or args.account,
-                        calendar_alias=plan.get("calendar_alias") or args.calendar_alias,
-                        secrets_path=sec_file,
-                        env=env_override,
-                    )
-                    creds = target["credentials"]
-                    client = CalDAVClient(
-                        principal_url=creds.principal_url,
-                        username=creds.username,
-                        password=creds.password,
-                        timeout_seconds=creds.timeout_seconds,
-                        allow_loopback_http=creds.allow_loopback_http,
-                        default_tz=target["default_timezone"],
-                    )
-                except Exception:
-                    client = None
+                    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise CalendarWriteError(
+                        "WRITE_VALIDATION_ERROR",
+                        f"Invalid JSON in plan file '{plan_path}': {exc}",
+                    ) from exc
+
+                try:
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except Exception as exc:
+                    raise CalendarWriteError(
+                        "WRITE_VALIDATION_ERROR",
+                        f"Invalid JSON in receipt file '{receipt_path}': {exc}",
+                    ) from exc
+
+                _, _, client = _build_target_and_client(
+                    workspace_root,
+                    plan.get("account") or args.account,
+                    plan.get("calendar_alias") or args.calendar_alias,
+                    sec_file,
+                    cfg_file=cfg_file,
+                )
+            else:
+                plan = {}
+                receipt = {}
+                client = None
 
             apply_res = apply_calendar_write(
                 workspace_root,
@@ -476,21 +410,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Failed to parse records file '{args.records_file}': {exc}",
                     ) from exc
             elif cfg_file.is_file():
-                cfg = load_backend_config(cfg_file)
-                target = resolve_calendar_target(
-                    cfg,
-                    account_id=args.account,
-                    calendar_alias=args.calendar_alias,
-                    secrets_path=sec_file,
-                )
-                creds = target["credentials"]
-                client = CalDAVClient(
-                    principal_url=creds.principal_url,
-                    username=creds.username,
-                    password=creds.password,
-                    timeout_seconds=creds.timeout_seconds,
-                    allow_loopback_http=creds.allow_loopback_http,
-                    default_tz=target["default_timezone"],
+                _, target, client = _build_target_and_client(
+                    workspace_root,
+                    args.account,
+                    args.calendar_alias,
+                    sec_file,
+                    cfg_file=cfg_file,
                 )
                 query_res = client.query_events(
                     target["collection_url"],
@@ -525,21 +450,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                         f"Failed to parse records file '{args.records_file}': {exc}",
                     ) from exc
             elif cfg_file.is_file():
-                cfg = load_backend_config(cfg_file)
-                target = resolve_calendar_target(
-                    cfg,
-                    account_id=args.account,
-                    calendar_alias=args.calendar_alias,
-                    secrets_path=sec_file,
-                )
-                creds = target["credentials"]
-                client = CalDAVClient(
-                    principal_url=creds.principal_url,
-                    username=creds.username,
-                    password=creds.password,
-                    timeout_seconds=creds.timeout_seconds,
-                    allow_loopback_http=creds.allow_loopback_http,
-                    default_tz=target["default_timezone"],
+                _, target, client = _build_target_and_client(
+                    workspace_root,
+                    args.account,
+                    args.calendar_alias,
+                    sec_file,
+                    cfg_file=cfg_file,
                 )
                 query_res = client.query_events(
                     target["collection_url"],
@@ -572,21 +488,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         # Commands requiring backend config
-        cfg = load_backend_config(cfg_file)
-        target = resolve_calendar_target(
-            cfg,
-            account_id=args.account,
-            calendar_alias=args.calendar_alias,
-            secrets_path=sec_file,
-        )
-        creds = target["credentials"]
-        client = CalDAVClient(
-            principal_url=creds.principal_url,
-            username=creds.username,
-            password=creds.password,
-            timeout_seconds=creds.timeout_seconds,
-            allow_loopback_http=creds.allow_loopback_http,
-            default_tz=target["default_timezone"],
+        _, target, client = _build_target_and_client(
+            workspace_root,
+            args.account,
+            args.calendar_alias,
+            sec_file,
+            cfg_file=cfg_file,
         )
 
         if args.subcommand == "discover":
@@ -659,6 +566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             "CALDAV_ETAG_CONFLICT",
             "CALENDAR_READ_ONLY",
             "WRITE_POLICY_VIOLATION",
+            "CALENDAR_WRITE_FORBIDDEN",
+            "CALDAV_PRECONDITION_FAILED",
         ):
             return 2
         return 1

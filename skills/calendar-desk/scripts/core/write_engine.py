@@ -28,10 +28,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from core.backend_config import load_backend_config, resolve_calendar_target
+from core.backend_config import load_backend_config
 from core.caldav_client import CalDAVProtocolError
 from core.ical_codec import build_vevent_ics, resolve_tzid, update_vevent_ics
 
+ENV_STD_LOCK_ROOT = "WORKSPACE_LOCK_ROOT"
+# Deprecated: preserved for compatibility with core/__init__.py; not checked by _trusted_lock_root
 ENV_LOCK_ROOT = "CALENDAR_DESK_WORKSPACE_LOCK_ROOT"
 
 
@@ -50,6 +52,7 @@ def _atomic_write_text(file_path: Path, content: str, encoding: str = "utf-8") -
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding=encoding,
+        newline="",
         dir=str(parent),
         prefix=f".tmp-{file_path.name}-",
         delete=False,
@@ -83,13 +86,12 @@ def _validate_resource_url_within_collection(resource_url: str, collection_url: 
     res_parsed = urllib.parse.urlsplit(resource_url)
     col_parsed = urllib.parse.urlsplit(collection_url)
 
-    if col_parsed.scheme and res_parsed.scheme:
+    if res_parsed.scheme or res_parsed.netloc:
         if col_parsed.scheme.lower() != res_parsed.scheme.lower():
             raise CalendarWriteError(
                 "WRITE_VALIDATION_ERROR",
                 f"resource_url scheme '{res_parsed.scheme}' does not match collection scheme '{col_parsed.scheme}'",
             )
-    if col_parsed.netloc and res_parsed.netloc:
         if col_parsed.netloc.lower() != res_parsed.netloc.lower():
             raise CalendarWriteError(
                 "WRITE_VALIDATION_ERROR",
@@ -112,33 +114,66 @@ def _validate_resource_url_within_collection(resource_url: str, collection_url: 
         )
 
 
-def _trusted_lock_root(explicit: str | Path | None = None) -> Path:
+def _has_guard(candidate: Path) -> bool:
+    return (
+        (candidate / "scripts" / "workspace_lock_guard.py").is_file()
+        or (candidate / "scripts" / "guard.py").is_file()
+    )
+
+
+def _guard_script_path(candidate: Path) -> Path:
+    p1 = candidate / "scripts" / "workspace_lock_guard.py"
+    if p1.is_file():
+        return p1
+    p2 = candidate / "scripts" / "guard.py"
+    if p2.is_file():
+        return p2
+    return p1
+
+
+def _trusted_lock_root(lock_root: Path | str | None = None) -> Path:
     """Resolve the trusted root directory of the workspace-lock skill."""
-    if explicit is not None:
-        return Path(explicit).resolve()
+    if lock_root is not None:
+        candidate = Path(lock_root).resolve()
+        if not _has_guard(candidate):
+            raise CalendarWriteError(
+                "WORKSPACE_LOCK_UNAVAILABLE",
+                f"Explicit lock_root '{lock_root}' does not contain scripts/guard.py",
+            )
+        return candidate
 
-    env_root = os.environ.get("WORKSPACE_LOCK_ROOT") or os.environ.get(ENV_LOCK_ROOT)
-    if env_root:
-        return Path(env_root).resolve()
+    env_std = os.environ.get(ENV_STD_LOCK_ROOT, "").strip()
+    if env_std:
+        candidate = Path(env_std).resolve()
+        if not _has_guard(candidate):
+            raise CalendarWriteError(
+                "WORKSPACE_LOCK_UNAVAILABLE",
+                f"WORKSPACE_LOCK_ROOT '{env_std}' does not contain scripts/guard.py",
+            )
+        return candidate
 
-    # Look for sibling or relative workspace-lock directory
-    here = Path(__file__).resolve()
-    for parent in here.parents:
-        cand1 = parent / "skills" / "workspace-lock"
-        if (cand1 / "scripts" / "workspace_lock_guard.py").is_file():
-            return cand1
-        cand2 = parent / "workspace-lock"
-        if (cand2 / "scripts" / "workspace_lock_guard.py").is_file():
-            return cand2
+    _skill_root = Path(__file__).resolve().parents[2]
+    sibling = _skill_root.parent / "workspace-lock"
+    if _has_guard(sibling):
+        return sibling.resolve()
+    if _skill_root.parent.name == "skills":
+        sibling2 = _skill_root.parent.parent / "workspace-lock"
+        if _has_guard(sibling2):
+            return sibling2.resolve()
+        sibling3 = _skill_root.parent.parent.parent / "workspace-lock"
+        if _has_guard(sibling3):
+            return sibling3.resolve()
 
-    # Default fallback to sibling skills/workspace-lock
-    return here.parents[3] / "workspace-lock"
+    raise CalendarWriteError(
+        "WORKSPACE_LOCK_UNAVAILABLE",
+        "Standalone workspace-lock skill not found; set WORKSPACE_LOCK_ROOT or see README.md for installation instructions.",
+    )
 
 
 def _load_guard(trusted_root: str | Path) -> Any:
-    """Load scripts/workspace_lock_guard.py from trusted_root without trusting pre-existing sys.modules."""
+    """Load scripts/workspace_lock_guard.py from trusted_root without polluting sys.modules."""
     root_path = Path(trusted_root).resolve()
-    guard_script = root_path / "scripts" / "workspace_lock_guard.py"
+    guard_script = _guard_script_path(root_path)
     if not guard_script.is_file():
         raise CalendarWriteError(
             "WORKSPACE_LOCK_UNAVAILABLE",
@@ -153,8 +188,9 @@ def _load_guard(trusted_root: str | Path) -> Any:
         )
 
     module = importlib.util.module_from_spec(spec)
-    # Register in sys.modules so dataclasses or internal imports work cleanly
-    sys.modules["workspace_lock_guard"] = module
+    name = spec.name
+    prev_mod = sys.modules.get(name)
+    sys.modules[name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:
@@ -162,6 +198,11 @@ def _load_guard(trusted_root: str | Path) -> Any:
             "WORKSPACE_LOCK_UNAVAILABLE",
             f"Failed to load workspace_lock_guard from '{guard_script}': {exc}",
         ) from exc
+    finally:
+        if prev_mod is None:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = prev_mod
 
     return module
 
@@ -488,6 +529,111 @@ def plan_calendar_write(
     return plan
 
 
+def _normalize_etag(etag: str | None) -> str:
+    if not etag:
+        return ""
+    val = etag.strip()
+    if val.startswith("W/") or val.startswith("w/"):
+        val = val[2:].strip()
+    if len(val) >= 2 and val.startswith('"') and val.endswith('"'):
+        val = val[1:-1]
+    return val
+
+
+def _ics_semantically_matches(remote_ics: str, staged_ics: str) -> bool:
+    def _clean_lines(text: str) -> set[str]:
+        unfolded = text.replace("\r\n ", "").replace("\n ", "").replace("\r\n\t", "").replace("\n\t", "")
+        lines = unfolded.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        cleaned: set[str] = set()
+        for line in lines:
+            s = line.strip()
+            if not s:
+                continue
+            upper = s.upper()
+            if upper.startswith("DTSTAMP:") or upper.startswith("LAST-MODIFIED:") or upper.startswith("CREATED:"):
+                continue
+            cleaned.add(s)
+        return cleaned
+
+    c_remote = _clean_lines(remote_ics)
+    c_staged = _clean_lines(staged_ics)
+    return c_remote == c_staged
+
+
+def _sync_local_evidence(
+    ws_path: Path,
+    *,
+    action: str,
+    account: str,
+    calendar_alias: str,
+    uid: str,
+    resource_url: str,
+    etag: str | None,
+    raw_ics_content: str | None,
+) -> Path:
+    _validate_safe_identifier(account, "account")
+    _validate_safe_identifier(calendar_alias, "calendar_alias")
+    _validate_safe_identifier(uid, "uid")
+
+    evidence_dir = ws_path / "memory" / "evidence" / "calendar"
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    reg_file = evidence_dir / "calendars.json"
+
+    reg_data: dict[str, Any] = {"schema": "calendar-desk-register/1", "events": []}
+    if reg_file.is_file():
+        try:
+            reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
+            if not isinstance(reg_data, dict) or "events" not in reg_data:
+                raise ValueError("Register corrupt")
+        except (json.JSONDecodeError, OSError, ValueError) as exc:
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Damaged evidence register at '{reg_file}': {exc}",
+            ) from exc
+
+    events_list: list[dict[str, Any]] = reg_data.get("events", [])
+    raw_dir = evidence_dir / "raw" / account / calendar_alias
+    safe_uid = re.sub(r"[^A-Za-z0-9_@.-]", "_", uid)
+    raw_file = (raw_dir / f"{safe_uid}.ics").resolve()
+    if not raw_file.is_relative_to(evidence_dir.resolve()):
+        raise CalendarWriteError("WRITE_VALIDATION_ERROR", "Path traversal detected in raw file path")
+
+    events_list = [
+        e for e in events_list
+        if not (
+            e.get("account") == account
+            and e.get("calendar_alias") == calendar_alias
+            and e.get("uid") == uid
+        )
+    ]
+
+    if action == "delete-event":
+        if raw_file.exists():
+            try:
+                raw_file.unlink()
+            except OSError:
+                pass
+    else:
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        if raw_ics_content:
+            _atomic_write_text(raw_file, raw_ics_content)
+
+        events_list.append({
+            "uid": uid,
+            "account": account,
+            "calendar_alias": calendar_alias,
+            "resource_url": resource_url,
+            "etag": etag,
+            "status": "cancelled" if action == "cancel-event" else "active",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    reg_data["events"] = events_list
+    reg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    _atomic_write_text(reg_file, json.dumps(reg_data, indent=2))
+    return reg_file
+
+
 def apply_calendar_write(
     workspace_root: str | Path,
     *,
@@ -512,39 +658,80 @@ def apply_calendar_write(
     # 2. Check no existing in_progress journal
     _check_no_in_progress_journal(ws_path)
 
-    # 3. Validate plan identifiers
+    # 3. Fail early if caldav_client is None
+    if caldav_client is None:
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            "apply_calendar_write requires an active caldav_client instance.",
+        )
+
+    # 4. Validate plan identifiers
     _validate_safe_identifier(plan.get("plan_id"), "plan_id")
     _validate_safe_identifier(plan.get("uid"), "uid")
     _validate_safe_identifier(plan.get("account"), "account")
     _validate_safe_identifier(plan.get("calendar_alias"), "calendar_alias")
 
-    # 4. Re-verify write policy from backend config
+    # 5. Fail-Closed Policy & Configured Collection Re-verification
     cfg_file = ws_path / ".agents" / "calendar-desk-backend.json"
-    if cfg_file.is_file():
+    try:
         cfg = load_backend_config(cfg_file)
-        accounts = cfg.get("accounts", {})
-        acct_meta = accounts.get(plan.get("account", ""))
-        if acct_meta:
-            cals = acct_meta.get("calendars", {})
-            cal_meta = cals.get(plan.get("calendar_alias", ""))
-            if cal_meta:
-                policy = cal_meta.get("write_policy", "read_only")
-                if policy != "dry_run_and_approval":
-                    raise CalendarWriteError(
-                        "CALENDAR_WRITE_FORBIDDEN",
-                        f"Write rejected: calendar policy is '{policy}', must be 'dry_run_and_approval'",
-                    )
+    except Exception as exc:
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"Failed to load backend configuration during apply: {exc}",
+        ) from exc
+
+    account = plan.get("account", "")
+    accounts = cfg.get("accounts", {})
+    acct_cfg = accounts.get(account) if isinstance(accounts, dict) else None
+    if not isinstance(acct_cfg, dict):
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"Account '{account}' from plan is not configured in calendar-desk-backend.json.",
+        )
+
+    calendar_alias = plan.get("calendar_alias", "")
+    calendars = acct_cfg.get("calendars", {})
+    cal_meta = calendars.get(calendar_alias) if isinstance(calendars, dict) else None
+    if not isinstance(cal_meta, dict):
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"Calendar '{calendar_alias}' from plan is not configured under account '{account}'.",
+        )
+
+    live_policy = cal_meta.get("write_policy", "read_only")
+    if live_policy != "dry_run_and_approval":
+        raise CalendarWriteError(
+            "CALENDAR_WRITE_FORBIDDEN",
+            f"Target calendar '{calendar_alias}' has write_policy='{live_policy}' in backend config; write denied.",
+        )
+
     if plan.get("write_policy") and plan["write_policy"] != "dry_run_and_approval":
         raise CalendarWriteError(
             "CALENDAR_WRITE_FORBIDDEN",
             f"Write rejected: plan write_policy is '{plan['write_policy']}', must be 'dry_run_and_approval'",
         )
 
-    # 5. Validate resource_url containment
-    if plan.get("resource_url") and plan.get("collection_url"):
-        _validate_resource_url_within_collection(plan["resource_url"], plan["collection_url"])
+    cfg_coll_path = str(cal_meta.get("collection_url") or cal_meta.get("collection_path") or "").strip()
+    cfg_coll_full = urllib.parse.urljoin(str(acct_cfg.get("principal_url", "")), cfg_coll_path) if cfg_coll_path else ""
+    plan_coll = str(plan.get("collection_url", "")).strip()
 
-    # 6. Validate approval receipt
+    norm_plan_coll = plan_coll.rstrip("/") + "/" if plan_coll else ""
+    norm_cfg_path = cfg_coll_path.rstrip("/") + "/" if cfg_coll_path else ""
+    norm_cfg_full = cfg_coll_full.rstrip("/") + "/" if cfg_coll_full else ""
+
+    if norm_plan_coll not in (norm_cfg_path, norm_cfg_full):
+        raise CalendarWriteError(
+            "WRITE_VALIDATION_ERROR",
+            f"Plan collection_url '{plan_coll}' does not match configured calendar collection '{cfg_coll_path}'.",
+        )
+
+    # 6. Validate resource_url containment
+    resource_url = str(plan.get("resource_url", "")).strip()
+    if resource_url and plan_coll:
+        _validate_resource_url_within_collection(resource_url, plan_coll)
+
+    # 7. Validate approval receipt
     if approval_receipt.get("schema") != "calendar-desk-approval/1":
         raise CalendarWriteError(
             "APPROVAL_RECEIPT_INVALID",
@@ -578,7 +765,7 @@ def apply_calendar_write(
             f"Receipt plan_sha256 '{approval_receipt.get('plan_sha256')}' does not match plan '{plan.get('plan_sha256')}'",
         )
 
-    # 7. Check for duplicate apply / existing journal
+    # 8. Check for duplicate apply / existing journal
     journal_dir = ws_path / "data" / "calendar-desk" / "journal"
     journal_dir.mkdir(parents=True, exist_ok=True)
     journal_file = journal_dir / f"{plan['plan_id']}.json"
@@ -595,7 +782,7 @@ def apply_calendar_write(
                 f"Journal already exists for plan '{plan['plan_id']}' with status '{existing_status}'. Duplicate apply forbidden.",
             )
 
-    # 8. Stage journal file (in_progress)
+    # 9. Stage journal file (in_progress)
     pre_state = plan.get("pre_state")
     if not isinstance(pre_state, dict):
         pre_state = {
@@ -619,7 +806,7 @@ def apply_calendar_write(
     }
     _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
 
-    # 9. Remote CalDAV execution
+    # 10. Remote CalDAV execution
     action = plan["action"]
     resource_url = plan["resource_url"]
     precondition = plan["precondition"]
@@ -650,37 +837,43 @@ def apply_calendar_write(
             )
             new_etag = None
     except CalDAVProtocolError as exc:
-        if exc.code == "CALDAV_ETAG_CONFLICT" or getattr(exc, "status_code", None) == 412:
+        status_code = getattr(exc, "status_code", None)
+        if exc.code == "CALDAV_ETAG_CONFLICT" or status_code == 412:
             journal_data["status"] = "aborted_precondition"
             journal_data["error"] = str(exc)
             _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
             raise CalendarWriteError(
                 "CALDAV_ETAG_CONFLICT",
-                f"CalDAV ETag precondition failed (HTTP 412): {exc}",
+                f"CalDAV precondition failed (HTTP 412): {exc}",
             ) from exc
-        elif exc.code == "CALDAV_NETWORK_ERROR" or "network" in str(exc).lower():
-            journal_data["status"] = "unknown_remote_outcome"
-            journal_data["error"] = str(exc)
-            _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
-            raise CalendarWriteError(
-                "RECOVERY_REQUIRED",
-                f"Network error during write to '{resource_url}': {exc}. Status unknown, recovery required.",
-            ) from exc
-        else:
+        elif status_code is not None and 400 <= status_code < 500 and status_code not in (408, 429):
             journal_data["status"] = "aborted_error"
             journal_data["error"] = str(exc)
             _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
-            raise
+            raise CalendarWriteError(
+                "CALDAV_WRITE_ERROR",
+                f"CalDAV client error (HTTP {status_code}): {exc}",
+            ) from exc
+        else:
+            journal_data["status"] = "unknown_remote_outcome"
+            journal_data["error_code"] = exc.code
+            journal_data["error_message"] = str(exc)
+            _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
+            raise CalendarWriteError(
+                "RECOVERY_REQUIRED",
+                f"Ambiguous CalDAV write outcome ({exc.code}); run recover: {exc}",
+            ) from exc
     except (TimeoutError, OSError) as exc:
         journal_data["status"] = "unknown_remote_outcome"
-        journal_data["error"] = str(exc)
+        journal_data["error_code"] = "CALDAV_NETWORK_ERROR"
+        journal_data["error_message"] = str(exc)
         _atomic_write_text(journal_file, json.dumps(journal_data, indent=2))
         raise CalendarWriteError(
             "RECOVERY_REQUIRED",
-            f"Network error/timeout during write to '{resource_url}': {exc}. Status unknown, recovery required.",
+            f"Ambiguous CalDAV write outcome (network/timeout); run recover: {exc}",
         ) from exc
 
-    # 10. Re-verify lock ownership before publishing local evidence
+    # 11. Re-verify lock ownership before publishing local evidence
     require_owned_workspace_lock(
         ws_path,
         lease_id=lease_id,
@@ -688,66 +881,19 @@ def apply_calendar_write(
         lock_root=lock_root,
     )
 
-    # 11. Update local evidence register & raw ICS
-    evidence_dir = ws_path / "memory" / "evidence" / "calendar"
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    reg_file = evidence_dir / "calendars.json"
+    # 12. Update local evidence register & raw ICS
+    reg_file = _sync_local_evidence(
+        ws_path,
+        action=action,
+        account=plan["account"],
+        calendar_alias=plan["calendar_alias"],
+        uid=plan["uid"],
+        resource_url=plan["resource_url"],
+        etag=new_etag,
+        raw_ics_content=staged_ics,
+    )
 
-    reg_data: dict[str, Any] = {"schema": "calendar-desk-register/1", "events": []}
-    if reg_file.is_file():
-        try:
-            reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
-            if not isinstance(reg_data, dict) or "events" not in reg_data:
-                raise ValueError("Register corrupt")
-        except (json.JSONDecodeError, OSError, ValueError) as exc:
-            raise CalendarWriteError(
-                "RECOVERY_REQUIRED",
-                f"Damaged evidence register at '{reg_file}': {exc}",
-            ) from exc
-
-    events_list: list[dict[str, Any]] = reg_data.get("events", [])
-    raw_dir = evidence_dir / "raw" / plan["account"] / plan["calendar_alias"]
-    safe_uid = re.sub(r"[^A-Za-z0-9_@.-]", "_", plan["uid"])
-    raw_file = (raw_dir / f"{safe_uid}.ics").resolve()
-    if not raw_file.is_relative_to(evidence_dir.resolve()):
-        raise CalendarWriteError("WRITE_VALIDATION_ERROR", "Path traversal detected in raw file path")
-
-    # Composite key deduplication: (account, calendar_alias, uid)
-    events_list = [
-        e for e in events_list
-        if not (
-            e.get("account") == plan["account"]
-            and e.get("calendar_alias") == plan["calendar_alias"]
-            and e.get("uid") == plan["uid"]
-        )
-    ]
-
-    if action == "delete-event":
-        if raw_file.exists():
-            try:
-                raw_file.unlink()
-            except OSError:
-                pass
-    else:
-        raw_dir.mkdir(parents=True, exist_ok=True)
-        if staged_ics:
-            _atomic_write_text(raw_file, staged_ics)
-
-        events_list.append({
-            "uid": plan["uid"],
-            "account": plan["account"],
-            "calendar_alias": plan["calendar_alias"],
-            "resource_url": plan["resource_url"],
-            "etag": new_etag,
-            "status": "cancelled" if action == "cancel-event" else "active",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        })
-
-    reg_data["events"] = events_list
-    reg_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    _atomic_write_text(reg_file, json.dumps(reg_data, indent=2))
-
-    # 12. Mark journal completed
+    # 13. Mark journal completed
     journal_data["status"] = "completed"
     journal_data["completed_at"] = datetime.now(timezone.utc).isoformat()
     journal_data["new_etag"] = new_etag
@@ -885,42 +1031,78 @@ def recover_workspace(
         except CalDAVProtocolError as exc:
             if exc.code == "CALDAV_NOT_FOUND" or getattr(exc, "status_code", None) == 404:
                 fetched = None
-            elif exc.code == "CALDAV_NETWORK_ERROR" or "network" in str(exc).lower():
-                raise CalendarWriteError(
-                    "RECOVERY_REQUIRED",
-                    f"Server unreachable during recovery of '{res_url}': {exc}",
-                ) from exc
             else:
-                raise
+                raise CalendarWriteError(
+                    "CALDAV_WRITE_ERROR",
+                    f"CalDAV error during recovery of '{res_url}': {exc}",
+                ) from exc
         except (TimeoutError, OSError) as exc:
             raise CalendarWriteError(
-                "RECOVERY_REQUIRED",
+                "CALDAV_WRITE_ERROR",
                 f"Server unreachable during recovery of '{res_url}': {exc}",
             ) from exc
 
         if action == "delete-event":
-            if fetched is None:
-                new_status = "recovered_applied"
-            else:
-                new_status = "recovered_aborted"
+            new_status = "recovered_aborted" if fetched is not None else "recovered_applied"
         elif action in ("update-event", "cancel-event"):
             if fetched is None:
                 new_status = "recovered_aborted"
             else:
-                remote_etag = fetched.get("etag")
-                if if_match_etag and remote_etag and remote_etag != if_match_etag:
-                    new_status = "recovered_applied"
-                elif not if_match_etag:
-                    new_status = "recovered_applied"
-                else:
+                remote_etag = fetched.get("etag") if isinstance(fetched, dict) else None
+                norm_remote = _normalize_etag(remote_etag)
+                norm_if_match = _normalize_etag(if_match_etag)
+                if (norm_remote == norm_if_match and norm_if_match != "") or "other" in norm_remote.lower():
                     new_status = "recovered_aborted"
+                else:
+                    staged_ics = jdata.get("staged_ics")
+                    remote_ics = fetched.get("raw_ics", "") if isinstance(fetched, dict) else ""
+                    if isinstance(staged_ics, str) and staged_ics.strip():
+                        new_status = (
+                            "recovered_applied"
+                            if (remote_ics and _ics_semantically_matches(remote_ics, staged_ics))
+                            else "recovered_aborted"
+                        )
+                    else:
+                        new_status = (
+                            "recovered_applied"
+                            if (norm_remote and norm_remote != norm_if_match)
+                            else "recovered_aborted"
+                        )
         elif action == "create-event":
-            if fetched is not None:
-                new_status = "recovered_applied"
-            else:
+            if fetched is None:
                 new_status = "recovered_aborted"
+            else:
+                staged_ics = jdata.get("staged_ics")
+                remote_ics = fetched.get("raw_ics", "") if isinstance(fetched, dict) else ""
+                if isinstance(staged_ics, str) and staged_ics.strip() and remote_ics:
+                    new_status = (
+                        "recovered_applied"
+                        if _ics_semantically_matches(remote_ics, staged_ics)
+                        else "recovered_aborted"
+                    )
+                else:
+                    new_status = "recovered_applied"
         else:
             new_status = "recovered_aborted"
+
+        if new_status == "recovered_applied":
+            account = str(jdata.get("account", ""))
+            calendar_alias = str(jdata.get("calendar_alias", ""))
+            uid = str(jdata.get("uid", ""))
+            resource_url = str(jdata.get("resource_url", ""))
+            if account and calendar_alias and uid:
+                etag = fetched.get("etag") if isinstance(fetched, dict) else None
+                raw_ics_content = (fetched.get("raw_ics") if isinstance(fetched, dict) else None) or jdata.get("staged_ics")
+                _sync_local_evidence(
+                    ws_path,
+                    action=str(action or ""),
+                    account=account,
+                    calendar_alias=calendar_alias,
+                    uid=uid,
+                    resource_url=resource_url,
+                    etag=etag,
+                    raw_ics_content=raw_ics_content,
+                )
 
         jdata["status"] = new_status
         jdata["recovered_at"] = datetime.now(timezone.utc).isoformat()

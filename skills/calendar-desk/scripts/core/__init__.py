@@ -7,6 +7,10 @@ Free/Busy / slot finding engine, and two-phase write engine without external dep
 
 from __future__ import annotations
 
+import pkgutil
+
+__path__ = pkgutil.extend_path(__path__, __name__)
+
 from core.backend_config import (
     AccountCredentials,
     CalDAVConfigError,
@@ -49,6 +53,7 @@ from core.injection_fence import (
 )
 from core.write_engine import (
     ENV_LOCK_ROOT,
+    ENV_STD_LOCK_ROOT,
     CalendarWriteError,
     _load_guard,
     _trusted_lock_root,
@@ -94,6 +99,7 @@ __all__ = [
     "compute_freebusy",
     "find_free_slots",
     "ENV_LOCK_ROOT",
+    "ENV_STD_LOCK_ROOT",
     "CalendarWriteError",
     "_load_guard",
     "_trusted_lock_root",

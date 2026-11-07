@@ -42,11 +42,12 @@ if str(SCRIPTS_DIR) not in sys.path:
 from core.backend_config import CalDAVConfigError  # noqa: E402
 from core.caldav_client import CalDAVClient, CalDAVProtocolError  # noqa: E402
 from core.write_engine import (  # noqa: E402
-    ENV_LOCK_ROOT,
+    ENV_STD_LOCK_ROOT,
     CalendarWriteError,
     _check_no_in_progress_journal,
     _load_guard,
     _trusted_lock_root,
+    _validate_resource_url_within_collection,
     apply_calendar_write,
     canonical_json_sha256,
     compute_plan_sha256,
@@ -112,7 +113,12 @@ def require_workspace_lock(
     return guard_root
 
 
-def make_backend_config_file(ws: Path, write_policy: str = "dry_run_and_approval") -> Path:
+def make_backend_config_file(
+    ws: Path,
+    write_policy: str = "dry_run_and_approval",
+    principal_url: str = "https://cal.example.com/dav/principals/",
+    collection_path: str = "/dav/calendars/user/primary/",
+) -> Path:
     """Creates a valid .agents/calendar-desk-backend.json configuration."""
     cfg = {
         "schema": "calendar-desk-backend/1",
@@ -120,12 +126,12 @@ def make_backend_config_file(ws: Path, write_policy: str = "dry_run_and_approval
         "default_timezone": "Europe/Vienna",
         "accounts": {
             "primary-account": {
-                "principal_url": "https://cal.example.com/dav/principals/",
+                "principal_url": principal_url,
                 "allow_loopback_http": True,
                 "timeout_seconds": 10.0,
                 "calendars": {
                     "primary": {
-                        "collection_path": "/dav/calendars/user/primary/",
+                        "collection_path": collection_path,
                         "display_name": "Primary Calendar",
                         "role": "primary",
                         "write_policy": write_policy,
@@ -243,7 +249,7 @@ class TestWriteEngineSeams(unittest.TestCase):
     """Test constant declarations and error class behavior."""
 
     def test_env_lock_root_constant(self) -> None:
-        self.assertEqual(ENV_LOCK_ROOT, "CALENDAR_DESK_WORKSPACE_LOCK_ROOT")
+        self.assertEqual(ENV_STD_LOCK_ROOT, "WORKSPACE_LOCK_ROOT")
 
     def test_calendar_write_error_properties(self) -> None:
         err = CalendarWriteError("CALENDAR_WRITE_FORBIDDEN", "Write policy is read_only")
@@ -302,7 +308,7 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
             if old_env2 is not None:
                 os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = old_env2
 
-    def test_trusted_lock_root_env_calendar_desk_lock_root(self) -> None:
+    def test_trusted_lock_root_env_calendar_desk_lock_root_ignored(self) -> None:
         guard_dir = make_mock_guard_dir(self.base_path)
         old_env1 = os.environ.get("WORKSPACE_LOCK_ROOT")
         old_env2 = os.environ.get("CALENDAR_DESK_WORKSPACE_LOCK_ROOT")
@@ -310,7 +316,7 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
             os.environ.pop("WORKSPACE_LOCK_ROOT", None)
             os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = str(guard_dir)
             resolved = _trusted_lock_root()
-            self.assertEqual(resolved.resolve(), guard_dir.resolve())
+            self.assertNotEqual(resolved.resolve(), guard_dir.resolve())
         finally:
             if old_env1 is not None:
                 os.environ["WORKSPACE_LOCK_ROOT"] = old_env1
@@ -318,6 +324,78 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
                 os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = old_env2
             else:
                 os.environ.pop("CALENDAR_DESK_WORKSPACE_LOCK_ROOT", None)
+
+    def test_trusted_lock_root_candidate_hierarchy(self) -> None:
+        from core import write_engine
+        old_env = os.environ.pop("WORKSPACE_LOCK_ROOT", None)
+        try:
+            fake_file = Path("/mock/bundle/skills/calendar-desk/scripts/core/write_engine.py").resolve()
+            skill_root = fake_file.parents[2]
+            cand1 = (skill_root.parent / "workspace-lock").resolve()
+            cand2 = (skill_root.parent.parent / "workspace-lock").resolve()
+            cand3 = (skill_root.parent.parent.parent / "workspace-lock").resolve()
+
+            with mock.patch("core.write_engine._has_guard", side_effect=lambda p: p.resolve() == cand1):
+                with mock.patch.object(write_engine, "__file__", str(fake_file)):
+                    res = _trusted_lock_root()
+                    self.assertEqual(res, cand1)
+
+            with mock.patch("core.write_engine._has_guard", side_effect=lambda p: p.resolve() == cand2):
+                with mock.patch.object(write_engine, "__file__", str(fake_file)):
+                    res = _trusted_lock_root()
+                    self.assertEqual(res, cand2)
+
+            with mock.patch("core.write_engine._has_guard", side_effect=lambda p: p.resolve() == cand3):
+                with mock.patch.object(write_engine, "__file__", str(fake_file)):
+                    res = _trusted_lock_root()
+                    self.assertEqual(res, cand3)
+        finally:
+            if old_env is not None:
+                os.environ["WORKSPACE_LOCK_ROOT"] = old_env
+
+    def test_validate_resource_url_within_collection_harden(self) -> None:
+        with self.assertRaises(CalendarWriteError) as ctx:
+            _validate_resource_url_within_collection(
+                "https://evil.example/dav/calendars/user/primary/evt.ics",
+                "/dav/calendars/user/primary/",
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+        self.assertIn("scheme", str(ctx.exception))
+
+        with self.assertRaises(CalendarWriteError) as ctx:
+            _validate_resource_url_within_collection(
+                "//evil.example/dav/calendars/user/primary/evt.ics",
+                "/dav/calendars/user/primary/",
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+        self.assertIn("host", str(ctx.exception))
+
+        with self.assertRaises(CalendarWriteError) as ctx:
+            _validate_resource_url_within_collection(
+                "http://example.com/dav/calendars/user/primary/evt.ics",
+                "https://example.com/dav/calendars/user/primary/",
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+
+        with self.assertRaises(CalendarWriteError) as ctx:
+            _validate_resource_url_within_collection(
+                "https://evil.example/dav/calendars/user/primary/evt.ics",
+                "https://example.com/dav/calendars/user/primary/",
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+
+        _validate_resource_url_within_collection(
+            "https://example.com/dav/calendars/user/primary/evt.ics",
+            "https://example.com/dav/calendars/user/primary/",
+        )
+        _validate_resource_url_within_collection(
+            "/dav/calendars/user/primary/evt.ics",
+            "/dav/calendars/user/primary/",
+        )
+
+    def test_no_path_read_text_monkey_patch(self) -> None:
+        self.assertFalse(hasattr(sys.modules["core.write_engine"], "_compat_path_read_text"))
+        self.assertFalse(hasattr(sys.modules["core.write_engine"], "_orig_path_read_text"))
 
     def test_load_guard_missing_raises_lock_unavailable(self) -> None:
         empty_dir = self.base_path / "empty-dir"
@@ -339,6 +417,16 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
                 sys.modules["workspace_lock_guard"] = old_module
             else:
                 sys.modules.pop("workspace_lock_guard", None)
+
+    def test_load_guard_does_not_pollute_sys_modules(self) -> None:
+        guard_dir = make_mock_guard_dir(self.base_path)
+        sys.modules.pop("workspace_lock_guard", None)
+        try:
+            guard_mod = _load_guard(guard_dir)
+            self.assertTrue(hasattr(guard_mod, "require_workspace_lock"))
+            self.assertNotIn("workspace_lock_guard", sys.modules)
+        finally:
+            sys.modules.pop("workspace_lock_guard", None)
 
     def test_require_owned_workspace_lock_active_owned(self) -> None:
         guard_dir = make_mock_guard_dir(self.base_path, lock_state="Active", owner_lease="lease-xyz")
@@ -673,6 +761,22 @@ class TestApplyEngine(unittest.TestCase):
                 lock_root=self.guard_dir,
             )
         self.assertEqual(ctx.exception.code, "WORKSPACE_LOCK_REQUIRED")
+
+    def test_apply_calendar_write_none_client_rejected_before_journal(self) -> None:
+        plan, receipt = self._make_plan_and_receipt()
+        with self.assertRaises(CalendarWriteError) as ctx:
+            apply_calendar_write(
+                self.ws,
+                plan=plan,
+                approval_receipt=receipt,
+                caldav_client=None,
+                lease_id="lease-ok-1",
+                lock_root=self.guard_dir,
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+        journal_dir = self.ws / "data" / "calendar-desk" / "journal"
+        created_journals = list(journal_dir.glob("*.json")) if journal_dir.is_dir() else []
+        self.assertEqual(len(created_journals), 0, "No journal file should be created when caldav_client is None")
 
     def test_apply_calendar_write_unresolved_journal_blocks(self) -> None:
         plan, receipt = self._make_plan_and_receipt()
@@ -1111,7 +1215,12 @@ class TestLoopbackCalDAVWriteIntegration(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.ws = Path(self.temp_dir.name)
-        make_backend_config_file(self.ws, write_policy="dry_run_and_approval")
+        make_backend_config_file(
+            self.ws,
+            write_policy="dry_run_and_approval",
+            principal_url=f"{self.base_url}/dav/principals",
+            collection_path="/dav/calendars/testuser/primary/",
+        )
         self.guard_dir = make_mock_guard_dir(self.ws, lock_state="Active", owner_lease="lease-lb-1")
         self.client = CalDAVClient(
             principal_url=f"{self.base_url}/dav/principals",
@@ -1407,6 +1516,110 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
             self.assertIsNotNone(output["error"])
             self.assertEqual(output["error"]["type"], "RECOVERY_REQUIRED")
 
+    def test_cli_apply_missing_secrets_fails_without_creating_journal(self) -> None:
+        plan = {
+            "schema": "calendar-desk-plan/1",
+            "plan_id": "plan-no-sec-1",
+            "action": "create-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "collection_url": "/dav/calendars/user/primary/",
+            "resource_url": "/dav/calendars/user/primary/evt-nosec.ics",
+            "uid": "evt-nosec",
+            "precondition": {"if_none_match_star": True, "if_match_etag": None},
+            "staged_ics": SAMPLE_VEVENT_ICS,
+            "canonical_ics_sha256": hashlib.sha256(SAMPLE_VEVENT_ICS.encode("utf-8")).hexdigest(),
+            "diff_summary": "CLI missing secrets apply",
+        }
+        plan["plan_sha256"] = compute_plan_sha256(plan)
+        proposal_file = self.ws / "proposal.json"
+        proposal_file.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+        receipt = {
+            "schema": "calendar-desk-approval/1",
+            "plan_id": plan["plan_id"],
+            "plan_sha256": plan["plan_sha256"],
+            "approved": True,
+            "approved_by": "operator@test",
+        }
+        receipt_file = self.ws / "receipt.json"
+        receipt_file.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+
+        # Ensure no secrets.json exists
+        sec_file = self.ws / ".agents" / "secrets.json"
+        if sec_file.exists():
+            sec_file.unlink()
+
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            ret = calendar_desk_client.main([
+                "--workspace", str(self.ws),
+                "--json",
+                "apply",
+                "--plan-file", str(proposal_file),
+                "--receipt-file", str(receipt_file),
+                "--lease-id", "lease-cli-1",
+                "--lock-root", str(self.guard_dir),
+            ])
+        self.assertEqual(ret, 1)
+        output = json.loads(stdout_buf.getvalue())
+        self.assertFalse(output["success"])
+        err = output.get("error") or {}
+        err_type = err.get("type") or err.get("code")
+        self.assertEqual(err_type, "CALDAV_SECRET_MISSING")
+        self.assertEqual(inspect_workspace(self.ws)["active_in_progress_count"], 0)
+
+    def test_cli_apply_missing_plan_file_reports_clear_error(self) -> None:
+        receipt_file = self.ws / "receipt.json"
+        receipt_file.write_text(json.dumps({
+            "schema": "calendar-desk-approval/1",
+            "plan_id": "non-existent",
+            "plan_sha256": "fake",
+            "approved": True,
+            "approved_by": "operator@test",
+        }), encoding="utf-8")
+
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            ret = calendar_desk_client.main([
+                "--workspace", str(self.ws),
+                "--json",
+                "apply",
+                "--plan-file", "non_existent.json",
+                "--receipt-file", str(receipt_file),
+                "--lease-id", "lease-cli-1",
+                "--lock-root", str(self.guard_dir),
+            ])
+        self.assertEqual(ret, 1)
+        output = json.loads(stdout_buf.getvalue())
+        self.assertFalse(output["success"])
+        err = output.get("error") or {}
+        err_type = err.get("type") or err.get("code")
+        self.assertIn(err_type, ("PLAN_NOT_FOUND", "WRITE_VALIDATION_ERROR"))
+        self.assertIn("non_existent.json", err.get("message", ""))
+        self.assertNotIn("plan_id must be a non-empty string", err.get("message", ""))
+
+    def test_cli_plan_on_read_only_calendar_exits_code_2(self) -> None:
+        make_backend_config_file(self.ws, write_policy="read_only")
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            ret = calendar_desk_client.main([
+                "--workspace", str(self.ws),
+                "--json",
+                "plan",
+                "--action", "create-event",
+                "--summary", "Read-only calendar plan attempt",
+                "--start", "2026-11-02T10:00:00",
+                "--end", "2026-11-02T11:00:00",
+            ])
+        self.assertEqual(ret, 2)
+        output = json.loads(stdout_buf.getvalue())
+        self.assertFalse(output["success"])
+        self.assertEqual(output["state"], "Failed")
+        err = output.get("error") or {}
+        err_type = err.get("type") or err.get("code")
+        self.assertEqual(err_type, "CALENDAR_WRITE_FORBIDDEN")
+
 
 class TestWritePolicyAndTargetValidation(unittest.TestCase):
     """Test #4: apply_calendar_write validates write_policy and collection_url containment."""
@@ -1490,6 +1703,108 @@ class TestWritePolicyAndTargetValidation(unittest.TestCase):
             )
         self.assertIn(ctx.exception.code, ("CALENDAR_WRITE_FORBIDDEN", "WRITE_VALIDATION_ERROR"))
 
+    def test_apply_missing_backend_config_fails_closed(self) -> None:
+        cfg_file = self.ws / ".agents" / "calendar-desk-backend.json"
+        if cfg_file.exists():
+            cfg_file.unlink()
+        plan = {
+            "schema": "calendar-desk-plan/1",
+            "plan_id": "plan-no-cfg-1",
+            "action": "create-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "collection_url": "https://cal.example.com/dav/calendars/user/primary/",
+            "resource_url": "https://cal.example.com/dav/calendars/user/primary/evt-nocfg.ics",
+            "uid": "evt-nocfg",
+            "precondition": {"if_none_match_star": True, "if_match_etag": None},
+            "staged_ics": SAMPLE_VEVENT_ICS,
+            "canonical_ics_sha256": hashlib.sha256(SAMPLE_VEVENT_ICS.encode("utf-8")).hexdigest(),
+            "diff_summary": "Create event missing config",
+        }
+        plan["plan_sha256"] = compute_plan_sha256(plan)
+        receipt = {
+            "schema": "calendar-desk-approval/1",
+            "plan_id": plan["plan_id"],
+            "plan_sha256": plan["plan_sha256"],
+            "approved": True,
+            "approved_by": "operator@test",
+        }
+        with self.assertRaises(CalendarWriteError) as ctx:
+            apply_calendar_write(
+                self.ws,
+                plan=plan,
+                approval_receipt=receipt,
+                caldav_client=self.client,
+                lease_id="lease-val-1",
+                lock_root=self.guard_dir,
+            )
+        self.assertIn(ctx.exception.code, ("WRITE_VALIDATION_ERROR", "CALENDAR_WRITE_FORBIDDEN"))
+
+    def test_apply_collection_url_spoofing_to_other_calendar_rejected(self) -> None:
+        cfg = {
+            "schema": "calendar-desk-backend/1",
+            "default_account": "primary-account",
+            "default_timezone": "Europe/Vienna",
+            "accounts": {
+                "primary-account": {
+                    "principal_url": "https://cal.example.com/dav/principals/",
+                    "allow_loopback_http": True,
+                    "timeout_seconds": 10.0,
+                    "calendars": {
+                        "primary": {
+                            "collection_path": "/dav/calendars/user/primary/",
+                            "display_name": "Primary Calendar",
+                            "role": "primary",
+                            "write_policy": "dry_run_and_approval",
+                            "default_timezone": "Europe/Vienna",
+                        },
+                        "holidays": {
+                            "collection_path": "/dav/calendars/user/holidays/",
+                            "display_name": "Holidays Calendar",
+                            "role": "subscription",
+                            "write_policy": "read_only",
+                            "default_timezone": "Europe/Vienna",
+                        },
+                    },
+                }
+            },
+        }
+        cfg_file = self.ws / ".agents" / "calendar-desk-backend.json"
+        cfg_file.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+        plan = {
+            "schema": "calendar-desk-plan/1",
+            "plan_id": "plan-spoof-1",
+            "action": "create-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "collection_url": "/dav/calendars/user/holidays/",
+            "resource_url": "/dav/calendars/user/holidays/ev1.ics",
+            "uid": "ev1",
+            "precondition": {"if_none_match_star": True, "if_match_etag": None},
+            "staged_ics": SAMPLE_VEVENT_ICS,
+            "canonical_ics_sha256": hashlib.sha256(SAMPLE_VEVENT_ICS.encode("utf-8")).hexdigest(),
+            "diff_summary": "Spoofed collection URL targeting read-only calendar",
+        }
+        plan["plan_sha256"] = compute_plan_sha256(plan)
+        receipt = {
+            "schema": "calendar-desk-approval/1",
+            "plan_id": plan["plan_id"],
+            "plan_sha256": plan["plan_sha256"],
+            "approved": True,
+            "approved_by": "operator@test",
+        }
+        with self.assertRaises(CalendarWriteError) as ctx:
+            apply_calendar_write(
+                self.ws,
+                plan=plan,
+                approval_receipt=receipt,
+                caldav_client=self.client,
+                lease_id="lease-val-1",
+                lock_root=self.guard_dir,
+            )
+        self.assertEqual(ctx.exception.code, "WRITE_VALIDATION_ERROR")
+
 
 class TestUnknownRemoteOutcomeAndExitCode(unittest.TestCase):
     """Test #5: Network drop during PUT marks journal unknown_remote_outcome and exits code 3."""
@@ -1547,6 +1862,48 @@ class TestUnknownRemoteOutcomeAndExitCode(unittest.TestCase):
             _check_no_in_progress_journal(self.ws)
         self.assertEqual(ctx.exception.code, "RECOVERY_REQUIRED")
 
+    def test_apply_504_gateway_timeout_marks_unknown_remote_outcome(self) -> None:
+        mock_client = mock.MagicMock()
+        mock_client.put_event_ics.side_effect = CalDAVProtocolError(
+            "CALDAV_HTTP_ERROR", "504 Gateway Timeout", status_code=504
+        )
+        plan = {
+            "schema": "calendar-desk-plan/1",
+            "plan_id": "plan-504-timeout",
+            "action": "create-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "collection_url": "/dav/calendars/user/primary/",
+            "resource_url": "/dav/calendars/user/primary/evt-504.ics",
+            "uid": "evt-504",
+            "precondition": {"if_none_match_star": True, "if_match_etag": None},
+            "staged_ics": SAMPLE_VEVENT_ICS,
+            "canonical_ics_sha256": hashlib.sha256(SAMPLE_VEVENT_ICS.encode("utf-8")).hexdigest(),
+            "diff_summary": "Create event 504 test",
+        }
+        plan["plan_sha256"] = compute_plan_sha256(plan)
+        receipt = {
+            "schema": "calendar-desk-approval/1",
+            "plan_id": plan["plan_id"],
+            "plan_sha256": plan["plan_sha256"],
+            "approved": True,
+            "approved_by": "operator@test",
+        }
+        with self.assertRaises(CalendarWriteError) as ctx:
+            apply_calendar_write(
+                self.ws,
+                plan=plan,
+                approval_receipt=receipt,
+                caldav_client=mock_client,
+                lease_id="lease-net-1",
+                lock_root=self.guard_dir,
+            )
+        self.assertEqual(ctx.exception.code, "RECOVERY_REQUIRED")
+        journal_file = self.ws / "data" / "calendar-desk" / "journal" / f"{plan['plan_id']}.json"
+        self.assertTrue(journal_file.exists())
+        jdata = json.loads(journal_file.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["status"], "unknown_remote_outcome")
+
     def test_cli_apply_network_drop_exits_code_3_recovery_required(self) -> None:
         proposal_file = self.ws / "data" / "calendar-desk" / "proposals" / "plan-cli-net.json"
         proposal_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1579,8 +1936,16 @@ class TestUnknownRemoteOutcomeAndExitCode(unittest.TestCase):
 
         secrets_file = self.ws / ".agents" / "secrets.json"
         secrets_file.write_text(json.dumps({
-            "schema": "calendar-desk-secrets/1",
-            "accounts": {"primary-account": {"username": "u", "password": "p"}}
+            "integrations": {
+                "caldav": {
+                    "accounts": {
+                        "primary-account": {
+                            "username": "u",
+                            "password": "p",
+                        }
+                    }
+                }
+            }
         }), encoding="utf-8")
 
         mock_client = MockCalDAVClient(network_error_on_put=True)
@@ -1803,6 +2168,7 @@ class TestRecoveryPostconditions(unittest.TestCase):
     def test_recover_update_event_etag_match_sets_recovered_applied(self) -> None:
         res_url = "/dav/calendars/user/primary/evt-upd-1.ics"
         jfile = self.journal_dir / "plan-upd-1.json"
+        staged_ics = SAMPLE_VEVENT_ICS
         jfile.write_text(json.dumps({
             "status": "in_progress",
             "plan_id": "plan-upd-1",
@@ -1813,10 +2179,11 @@ class TestRecoveryPostconditions(unittest.TestCase):
             "resource_url": res_url,
             "precondition": {"if_match_etag": '"etag-v1"'},
             "pre_state": {"etag": '"etag-v1"'},
+            "staged_ics": staged_ics,
         }), encoding="utf-8")
 
         client = MockCalDAVClient()
-        client.events[res_url] = {"etag": '"etag-v2-new"', "raw_ics": SAMPLE_VEVENT_ICS}
+        client.events[res_url] = {"etag": '"etag-v2-new"', "raw_ics": staged_ics}
 
         recover_workspace(
             self.ws,
@@ -1826,6 +2193,104 @@ class TestRecoveryPostconditions(unittest.TestCase):
         )
         jdata = json.loads(jfile.read_text(encoding="utf-8"))
         self.assertEqual(jdata["status"], "recovered_applied")
+
+    def test_recover_update_unquoted_vs_quoted_same_etag_aborts(self) -> None:
+        res_url = "/dav/calendars/user/primary/evt-upd-quote.ics"
+        jfile = self.journal_dir / "plan-upd-quote.json"
+        old_ics = SAMPLE_VEVENT_ICS
+        updated_ics = SAMPLE_VEVENT_ICS.replace("Meeting", "Updated Meeting")
+        jfile.write_text(json.dumps({
+            "status": "in_progress",
+            "plan_id": "plan-upd-quote",
+            "action": "update-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "uid": "evt-upd-quote",
+            "resource_url": res_url,
+            "precondition": {"if_match_etag": "etag-v1"},
+            "pre_state": {"etag": "etag-v1", "raw_ics": old_ics},
+            "staged_ics": updated_ics,
+        }), encoding="utf-8")
+
+        client = MockCalDAVClient()
+        client.events[res_url] = {"etag": '"etag-v1"', "raw_ics": old_ics}
+
+        recover_workspace(
+            self.ws,
+            lease_id="lease-post-1",
+            lock_root=self.guard_dir,
+            caldav_client=client,
+        )
+        jdata = json.loads(jfile.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["status"], "recovered_aborted")
+
+    def test_recover_update_third_party_change_aborts(self) -> None:
+        res_url = "/dav/calendars/user/primary/evt-upd-third.ics"
+        jfile = self.journal_dir / "plan-upd-third.json"
+        our_staged = SAMPLE_VEVENT_ICS.replace("Meeting", "Our Update")
+        third_party_ics = SAMPLE_VEVENT_ICS.replace("Meeting", "Third Party Change")
+        jfile.write_text(json.dumps({
+            "status": "in_progress",
+            "plan_id": "plan-upd-third",
+            "action": "update-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "uid": "evt-upd-third",
+            "resource_url": res_url,
+            "precondition": {"if_match_etag": '"etag-v1"'},
+            "pre_state": {"etag": '"etag-v1"'},
+            "staged_ics": our_staged,
+        }), encoding="utf-8")
+
+        client = MockCalDAVClient()
+        client.events[res_url] = {"etag": '"etag-v3-other"', "raw_ics": third_party_ics}
+
+        recover_workspace(
+            self.ws,
+            lease_id="lease-post-1",
+            lock_root=self.guard_dir,
+            caldav_client=client,
+        )
+        jdata = json.loads(jfile.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["status"], "recovered_aborted")
+
+    def test_recover_applied_syncs_local_evidence_register(self) -> None:
+        res_url = "/dav/calendars/user/primary/evt-rec-sync.ics"
+        jfile = self.journal_dir / "plan-rec-sync.json"
+        staged_ics = SAMPLE_VEVENT_ICS
+        jfile.write_text(json.dumps({
+            "status": "in_progress",
+            "plan_id": "plan-rec-sync",
+            "action": "create-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "uid": "evt-rec-sync",
+            "resource_url": res_url,
+            "precondition": {"if_none_match_star": True},
+            "staged_ics": staged_ics,
+        }), encoding="utf-8")
+
+        client = MockCalDAVClient()
+        client.events[res_url] = {"etag": '"etag-rec-created"', "raw_ics": staged_ics}
+
+        recover_workspace(
+            self.ws,
+            lease_id="lease-post-1",
+            lock_root=self.guard_dir,
+            caldav_client=client,
+        )
+        jdata = json.loads(jfile.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["status"], "recovered_applied")
+
+        reg_file = self.ws / "memory" / "evidence" / "calendar" / "calendars.json"
+        self.assertTrue(reg_file.is_file(), "calendars.json must exist after recovered_applied")
+        reg_data = json.loads(reg_file.read_text(encoding="utf-8"))
+        event_uids = [e["uid"] for e in reg_data.get("events", [])]
+        self.assertIn("evt-rec-sync", event_uids)
+
+        raw_file = self.ws / "memory" / "evidence" / "calendar" / "raw" / "primary-account" / "primary" / "evt-rec-sync.ics"
+        self.assertTrue(raw_file.is_file(), "Raw ICS file must exist after recovered_applied")
+        self.assertEqual(raw_file.read_bytes().decode("utf-8"), staged_ics)
 
     def test_recover_update_event_old_etag_sets_recovered_aborted(self) -> None:
         res_url = "/dav/calendars/user/primary/evt-upd-2.ics"
