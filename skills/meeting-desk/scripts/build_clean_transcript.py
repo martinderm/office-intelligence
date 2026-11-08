@@ -351,9 +351,14 @@ def _validate_refs(data: dict[str, Any], workspace: Path) -> None:
         for item in data.get(key, []):
             ref = item["ref"].split("#", 1)[0]
             path = (workspace / ref).resolve()
-            if (not ref.startswith("memory/references/") or not path.is_relative_to(workspace / "memory/references")
-                    or not path.is_file()):
-                raise ValueError(f"{key}: ref needs an existing memory/references/ workspace document")
+            if ref.startswith("memory/references/"):
+                if not path.is_relative_to(workspace / "memory/references") or not path.is_file():
+                    raise ValueError(f"{key}: ref needs an existing memory/references/ workspace document")
+            elif ref.startswith("memory/operations/"):
+                if not path.is_relative_to(workspace / "memory/operations") or not path.is_file():
+                    raise ValueError(f"{key}: ref needs an existing memory/operations/ workspace document")
+            else:
+                raise ValueError(f"{key}: ref must be in memory/references/ or memory/operations/ workspace zone")
 
 
 def _atomic_write(path: Path, text: str) -> None:

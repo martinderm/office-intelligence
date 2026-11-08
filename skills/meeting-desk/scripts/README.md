@@ -300,6 +300,16 @@ python skills/meeting-desk/scripts/build_clean_transcript.py \
   --title "..." --date 1792483867000 --date-string "2026-10-20T08:11:07.000Z"
 ```
 
+**Prozesskette (#52 P8).** Die Bereinigung ist der Builder-Lauf oben
+(`--raw --corrections --out`). Danach prüft `--check` ausschließlich die
+byte-identische Reproduzierbarkeit der bestehenden Ausgabedatei mit denselben
+Metadatenoptionen (Exit 0 = reproduzierbar, Exit 1 = Drift); `--check` ersetzt
+den Builder-Lauf nicht. Danach folgt der Summary-Review (manuelle Prüfung, bei
+Korrekturbedarf über `publish_registered_summary()`); den Abschluss bildet der
+**manuelle EVID-Eintrag nach SKILL §4** im Monats-Journal. Pflicht sind die drei
+Schritte Builder-Lauf, `--check` und Summary-Review, auch ohne Korrekturbedarf
+(Skill §2b); keine Wrapper-Pflicht.
+
 **`--date` (#52 P2).** Der Builder-Kopf kennt drei Formen, jeweils ohne externe
 Epoch-Umrechnung:
 
@@ -327,7 +337,8 @@ auflösen. Dateipfade sind relativ zum aktuellen Arbeitsverzeichnis oder absolut
 Absolute Runtime-Parameter sind erlaubt; hartcodierte Hostpfade sind es nicht.
 Alle Eingabe-/Ausgabepfade müssen nach Auflösung von Symlinks in einer der vier
 Datenzonen des Workspace liegen (`memory/references/`, `memory/evidence/`,
-`memory/cloud/`, `data/`). Der Bundle-Baum ist als Laufzeit-Ziel verboten.
+`memory/cloud/`, `data/`). Der Bundle-Baum ist als Laufzeit-Ziel verboten. **Issue #52 P7:**
+`memory/operations/` ist **ausschließlich** als Leseort für Beleg-Referenzen in Korrekturdateien zugelassen; Schreiboperationen bleiben auf die vier Data-Zones beschränkt.
 
 **Delegation statt zweitem Publisher:** Der Builder publiziert ausschließlich
 über `ingest_meeting.publish_registered_transcript()`. `--meeting-id` ist
@@ -373,8 +384,11 @@ Pflichtfelder sind die oben genannten Zeichenketten (bei `pairs`/`regex_pairs`
 ist `note` optional, bei `unklar` ist `guess` optional; `repl` darf leer sein).
 Regel-IDs sind eindeutig, `cat` bleibt freier, nicht leerer Text. Jede Korrektur
 und Regel braucht einen existierenden Workspace-Beleg in `ref` unter
-`memory/references/`, optional mit `#Anker`. Der Builder prüft die Datei, nicht
-die inhaltliche Tragfähigkeit oder den Fragmentanker: Das bleibt Agenten-Review.
+`memory/references/` oder `memory/operations/`, optional mit `#Anker`. Der Builder
+prüft die Datei, nicht die inhaltliche Tragfähigkeit oder den Fragmentanker: Das
+bleibt Agenten-Review. `memory/operations/` ist ausschließlich Leseort; der
+Builder akzeptiert dort weder fehlende Dateien noch Traversals, absolute Pfade
+oder ausbrechende Symlinks.
 „Meeting-intern“ ohne Workspace-Beleg ist kein Ersatz; dann `unklar` verwenden.
 Eine unbekannte Schema-Version wird abgewiesen; keine automatische Migration.
 
