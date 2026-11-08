@@ -12,9 +12,12 @@ nicht als Lease-Fehler. Kein CWD-/Payload-Fallback, keine Suche; Ownership, Guar
 und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-11-08) · 176 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-08) · 187 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
+> **Issue #52 P7:** 11 neue Testmethoden für den operations-Beleg-Leseort in
+> `test_build_clean_transcript.py` (akzeptiert, Grenzfälle abgewiesen,
+> main-`--check`-Pfad).
 >
 > **Typ:** ICM Form 6, L2 des Sub-Skills `meeting-desk`
 > **Gültig für:** `skills/meeting-desk/` (Bundle-relativ)
@@ -59,6 +62,7 @@ Ad-hoc-Exporte bleiben stdout oder `.meeting-export.json` unter `data/`.
 | Ownership | `data/meeting-desk/ownership.json` (`meeting-desk-ownership/1`) | Pfad → Meeting-ID, SHA-256, Größe, Art, Writer-Version, Zeit |
 | Journal | `data/meeting-desk/journal/<id>.journal.json` (`meeting-desk-journal/1`) | Integritätsdigest, Prestate/Poststate, Steps, Stage-Hashes, Workspace-Fingerprint |
 | Staging | `data/meeting-desk/journal/<id>/stage/NNN.bin` | geplante Zielbytes, vor Publikation gehasht |
+| Beleg-Referenz | `ref` in Korrekturdatei (`meeting-corrections/1`) | muss existierendes Dokument unter `memory/references/` oder `memory/operations/` sein (optional mit `#Anker`); **Issue #52 P7:** `memory/operations/` ist explizit dokumentierter Leseort, Schreibzonen bleiben unverändert |
 
 Details: [`references/data-model.md`](../../references/data-model.md).
 
@@ -199,7 +203,7 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
 | `ingest_meeting.publish_registered_transcript(...)` | einzige Builder-Publikationsgrenze |
 | `ingest_meeting.publish_registered_summary(content, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Summary-Ersatzgrenze (#52 P1); gleiche Signatur/Envelopes wie der Transkriptpfad; Zustände `DryRun`/`Unchanged`/`Applied`/`Rejected`/`RecoveryRequired`; Plan-Action `publish_summary`; in `--capabilities` unter `data.actions` als `publish_registered_summary` ausgewiesen (bestehende Namen unverändert) |
 | `ingest_meeting.retitle_registered_meeting(title, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Titelkorrektur-Grenze (#52 P5); gleiche Envelopes/Zustände wie die Publish-Seams; Plan-Action `retitle_meeting` (`title.from/to`, `files[].frontmatter_title`); in `--capabilities` unter `data.actions` als `retitle_registered_meeting` ausgewiesen (bestehende Namen unverändert) |
-| `build_clean_transcript.py` | fachliche Ableitung; `--check` read-only; Publikation delegiert; Kopf-`date` ist `null`, Epoch-Ganzzahl oder quotierter ISO-Kalendertag (`--date YYYY-MM-DD`, ohne erfundene Uhrzeit, `dateString` defaultet auf den Tag; ungültiger Wert → Exit 2 ohne Write, auch `--init-template`; #52 P2) |
+| `build_clean_transcript.py` | fachliche Ableitung; **Bereinigung = Builder-Lauf** (`--raw --corrections --out`), `--check` danach **nur** byte-identische Reproduzierbarkeit (Exit 1 = Drift, kein Ersatz für den Lauf; #52 P8); Publikation delegiert; Kopf-`date` ist `null`, Epoch-Ganzzahl oder quotierter ISO-Kalendertag (`--date YYYY-MM-DD`, ohne erfundene Uhrzeit, `dateString` defaultet auf den Tag; ungültiger Wert → Exit 2 ohne Write, auch `--init-template`; #52 P2) |
 | `verify_meeting_fixtures.py` | read-only Fixture-Digest + Record-Konformität |
 
 Envelope: `action/success/state/message/data/error`; stderr nur begrenzte
@@ -239,7 +243,15 @@ Diagnostik; stdout genau eine Zeile.
 - `tests/test_build_clean_transcript.py`: Korrektur-Engine und
   Delegations-/Fehler-/Exit-Vertrag des Builders; `--date`-Formen (ISO-Tag, Epoch,
   `--date-string`, fehlend), ungültige Tage inkl. `--init-template`, Lock-Root-
-  Diagnose gegenüber Lease-Fehler.
+  Diagnose gegenüber Lease-Fehler. Issue-#52-P7-Grenzen: `memory/operations/` ist
+  Beleg-Leseort für `pairs`/`regex_pairs`/`rules` (mit/ohne `#Anker`, direkte
+  `_validate_refs`-Fälle), während fehlende Dateien, Traversal, absolute Pfade,
+  Symlink-/Junction-Ausbrüche und fremde Zonen in jedem Feld abgewiesen werden;
+  der echte CLI-`--check`-Pfad akzeptiert einen operations-ref ohne Delegation,
+  der Verzeichnis-Ausbruch läuft über einen echten NTFS-Junction, und der
+  Datei-Symlink-Test skippt sichtbar ohne Symlink-Privileg; `_workspace_path`
+  bleibt auf die vier Schreibzonen beschränkt. Issue-#52-P8: die Dokumentation
+  trennt Builder-Lauf, `--check` (nur Reproduzierbarkeit) und Summary-Review.
 - `tests/fixtures/meeting-record-v1.json`: gemeinsames SSOT-Paket mit
   Digest-Manifest; `scripts/verify_meeting_fixtures.py` prüft es read-only.
 - Crash-Tests starten einen echten Kindprozess (`tests/_crash_ingest.py`) und

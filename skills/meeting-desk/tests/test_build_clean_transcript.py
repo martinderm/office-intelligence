@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -421,6 +422,173 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(envelope["state"], "RecoveryRequired")
         self.assertFalse(blocked.exists())
         self.assertEqual(journal.read_text(encoding="utf-8"), "{}")
+
+    # -- Issue #52 P7: memory/operations/ als Beleg-Leseort ----------------------
+    #
+    # Positive evidence is a direct ``_validate_refs`` call that returns without
+    # raising; no delegated/mocked build and no exit code stands in for it.
+
+    REF_FIELDS = ("pairs", "regex_pairs", "rules")
+
+    def data_with_ref(self, key, ref):
+        """Minimal schema-shaped data for one reference-bearing field."""
+        if key == "pairs":
+            return {"pairs": [{"orig": "Ki", "corr": "KI", "cat": "entity", "ref": ref}]}
+        if key == "regex_pairs":
+            return {"regex_pairs": [{"pattern": r"\bKi\b", "corr": "KI",
+                                     "cat": "entity", "ref": ref}]}
+        return {"rules": [{"id": "R1", "pattern": r"\bKi\b", "repl": "KI",
+                           "note": "Schreibweise", "ref": ref}]}
+
+    def ops_ref(self, relative="2026-11/example.md"):
+        target = self.workspace / "memory/operations" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# Operations Beleg\n\n## Anker\n", encoding="utf-8")
+        return f"memory/operations/{relative}"
+
+    def test_operations_ref_accepted(self):
+        """P7.1: operations-ref wird in jedem Feld ohne Exception akzeptiert."""
+        ref = self.ops_ref()
+        for key in self.REF_FIELDS:
+            with self.subTest(field=key):
+                builder._validate_refs(self.data_with_ref(key, ref), self.workspace)
+
+    def test_operations_ref_with_anchor_accepted(self):
+        """P7.1: operations-ref mit Fragmentanker wird akzeptiert (Anker ungeprüft)."""
+        ref = self.ops_ref() + "#Anker"
+        for key in self.REF_FIELDS:
+            with self.subTest(field=key):
+                builder._validate_refs(self.data_with_ref(key, ref), self.workspace)
+
+    def test_references_still_compatible(self):
+        """P7.1: bestehende references-refs bleiben in jedem Feld kompatibel."""
+        for key in self.REF_FIELDS:
+            with self.subTest(field=key):
+                builder._validate_refs(self.data_with_ref(key, self.ref), self.workspace)
+
+    def test_operations_ref_missing_file_rejected(self):
+        """P7.2: fehlende Dateien werden in jedem Feld und beiden Leseorten abgewiesen."""
+        for key in self.REF_FIELDS:
+            for ref, expected in (("memory/operations/2026-11/missing.md", "existing memory/operations/"),
+                                  ("memory/operations/missing.md", "existing memory/operations/"),
+                                  ("memory/references/missing.md", "existing memory/references/")):
+                with self.subTest(field=key, ref=ref):
+                    with self.assertRaisesRegex(ValueError, expected):
+                        builder._validate_refs(self.data_with_ref(key, ref), self.workspace)
+
+    def test_operations_ref_traversal_rejected(self):
+        """P7.2: Traversal bleibt auch mit existierendem Ziel in jedem Feld abgewiesen."""
+        (self.workspace / "outside.md").write_text("# outside\n", encoding="utf-8")
+        refs = ("memory/operations/../../outside.md",
+                "memory/operations/../references/topics/example/index.md")
+        for key in self.REF_FIELDS:
+            for ref in refs:
+                with self.subTest(field=key, ref=ref):
+                    with self.assertRaises(ValueError):
+                        builder._validate_refs(self.data_with_ref(key, ref), self.workspace)
+
+    def test_operations_ref_absolute_path_rejected(self):
+        """P7.2: absolute Pfade werden in jedem Feld abgewiesen."""
+        absolute = (self.workspace / self.ops_ref()).as_posix()
+        for key in self.REF_FIELDS:
+            with self.subTest(field=key):
+                with self.assertRaisesRegex(ValueError, "must be in memory/references/ or memory/operations/"):
+                    builder._validate_refs(self.data_with_ref(key, absolute), self.workspace)
+
+    def linked_directory(self, link, target):
+        """Create a directory symlink, or an NTFS junction where that is unprivileged."""
+        try:
+            link.symlink_to(target, target_is_directory=True)
+            return
+        except OSError:
+            if os.name != "nt":
+                self.skipTest("symlinks/junctions unavailable on this platform")
+        completed = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        if completed.returncode != 0:
+            self.skipTest("symlinks/junctions unavailable on this platform")
+
+    def test_operations_ref_symlink_escape_rejected(self):
+        """P7.2: ein Verzeichnis-Symlink/Junction aus dem Leseort wird abgewiesen."""
+        with tempfile.TemporaryDirectory(prefix="meeting-ref-escape-") as external:
+            outside = Path(external).resolve()
+            (outside / "outside.md").write_text("# outside\n", encoding="utf-8")
+            ops = self.workspace / "memory/operations"
+            ops.mkdir(parents=True, exist_ok=True)
+            self.linked_directory(ops / "escape", outside)
+            for key in self.REF_FIELDS:
+                with self.subTest(field=key, ref="memory/operations/escape/outside.md"):
+                    with self.assertRaisesRegex(ValueError, "memory/operations/"):
+                        builder._validate_refs(
+                            self.data_with_ref(key, "memory/operations/escape/outside.md"),
+                            self.workspace)
+
+            # An operations zone that itself leaves the workspace is refused too.
+            with tempfile.TemporaryDirectory(prefix="meeting-zone-escape-") as other:
+                workspace = Path(other).resolve()
+                (workspace / "memory").mkdir()
+                self.linked_directory(workspace / "memory/operations", outside)
+                with self.assertRaisesRegex(ValueError, "memory/operations/"):
+                    builder._validate_refs({"pairs": [{"ref": "memory/operations/outside.md"}]},
+                                           workspace)
+
+    def test_operations_ref_file_symlink_escape_rejected(self):
+        """P7.2: ein Datei-Symlink aus dem Leseort wird abgewiesen (sichtbarer Skip ohne Privileg)."""
+        with tempfile.TemporaryDirectory(prefix="meeting-file-link-") as external:
+            outside = Path(external).resolve()
+            (outside / "outside.md").write_text("# outside\n", encoding="utf-8")
+            ops = self.workspace / "memory/operations"
+            ops.mkdir(parents=True, exist_ok=True)
+            try:
+                (ops / "outside-link.md").symlink_to(outside / "outside.md")
+            except OSError:
+                self.skipTest("file symlinks unavailable on this platform (Windows privilege)")
+            for key in self.REF_FIELDS:
+                with self.subTest(field=key, ref="memory/operations/outside-link.md"):
+                    with self.assertRaisesRegex(ValueError, "memory/operations/"):
+                        builder._validate_refs(
+                            self.data_with_ref(key, "memory/operations/outside-link.md"),
+                            self.workspace)
+
+    def test_operations_ref_passes_main_check_path(self):
+        """P7.1: operations-ref läuft durch den echten CLI-Check-Pfad, ohne Delegation."""
+        ref = self.ops_ref()
+        self.data["pairs"][0]["ref"] = ref
+        self.save()
+        data, err = builder._load_corrections(self.corr)
+        self.assertIsNone(err, err)
+        raw_text = self.raw.read_text(encoding="utf-8")
+        frontmatter = re.match(r"\A\ufeff?---\n.*?\n---(?:\n|\Z)", raw_text, re.S)
+        new_body, result = builder._apply(data, raw_text[frontmatter.end():] if frontmatter else raw_text)
+        header = builder._header("manual-synthetic", "", "", None,
+                                 self.raw.relative_to(self.workspace).as_posix(), result)
+        self.out.write_text(header + new_body, encoding="utf-8", newline="\n")
+        with patch.object(builder, "_delegate") as delegate:
+            code, envelope = self.call(self.args() + ["--check"])
+        delegate.assert_not_called()
+        self.assertEqual(code, 0, envelope)
+        self.assertEqual(envelope["state"], "Completed")
+        self.assertIs(envelope["data"]["drift"], False)
+
+    def test_invalid_zone_rejected(self):
+        """P7.2: keine Zone, fremde Zone und Nicht-Workspace-Referenzen werden abgewiesen."""
+        for key in self.REF_FIELDS:
+            for ref in ("memory/other/example.md", "data/example.md", "example.md",
+                        "meeting-intern", "memory/operations"):
+                with self.subTest(field=key, ref=ref):
+                    with self.assertRaisesRegex(ValueError,
+                                                "must be in memory/references/ or memory/operations/"):
+                        builder._validate_refs(self.data_with_ref(key, ref), self.workspace)
+
+    def test_workspace_write_zones_stay_the_four_data_zones(self):
+        """P7.2: operations ist nur Leseort; Schreibzonen bleiben unverändert."""
+        for zone in ("memory/references", "memory/evidence", "memory/cloud", "data"):
+            target = self.workspace / zone / "probe.md"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            self.assertEqual(builder._workspace_path(self.workspace, target), target.resolve())
+        with self.assertRaisesRegex(ValueError, "canonical workspace data zone"):
+            builder._workspace_path(self.workspace, self.workspace / "memory/operations/probe.md")
 
 
 if __name__ == "__main__":
