@@ -34,11 +34,13 @@ from __future__ import annotations
 import base64
 import binascii
 import dataclasses
+import datetime
 import hashlib
 import re
 import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
+from email.policy import SMTPUTF8
 from typing import Any
 
 from . import draft_attachments as da
@@ -156,35 +158,78 @@ def _decode_and_normalize(data: Any) -> tuple[str, str]:
 # Header block
 # ---------------------------------------------------------------------------
 
-def _header_invalid(detail: str) -> RawEmlError:
+def _header_invalid(detail: str, *, part: bool = False) -> RawEmlError:
+    if part:
+        return _fail(
+            "raw_eml_part_header_invalid",
+            f"A MIME part header block of the {_LABEL} is invalid ({detail}).",
+        )
     return _fail("raw_eml_header_invalid", f"The {_LABEL} has an invalid header block ({detail}).")
 
 
-def _parse_header_block(lines: list[str]) -> list[tuple[str, str]]:
-    """Return ``[(field name, unfolded value)]`` of the header block or fail closed."""
+def _parse_header_block(lines: list[str], *, part: bool = False) -> tuple[list[tuple[str, str]], int]:
+    """Return ``([(field name, unfolded value)], index of the blank separator line)`` or fail closed.
+
+    The same strict rules apply to the message header block and to every MIME part header block; only
+    the reason code differs (``raw_eml_header_invalid`` / ``raw_eml_part_header_invalid``).
+    """
     fields: list[tuple[str, list[str]]] = []
     block_bytes = 0
-    for line in lines:
+    for index, line in enumerate(lines):
         if line == "":
-            return [(name, "".join(parts)) for name, parts in fields]
+            return [(name, "".join(parts)) for name, parts in fields], index
         block_bytes += len(line.encode("utf-8")) + 2
         if block_bytes > MAX_HEADER_BLOCK_BYTES:
-            raise _header_invalid("header block too large")
+            raise _header_invalid("header block too large", part=part)
         for char in line:
             if char != "\t" and unicodedata.category(char) in ("Cc", "Cs", "Zl", "Zp"):
-                raise _header_invalid("control or separator character")
+                raise _header_invalid("control or separator character", part=part)
         if line[0] in " \t":
             if not fields or not line.strip(" \t"):
-                raise _header_invalid("misplaced or blank continuation line")
+                raise _header_invalid("misplaced or blank continuation line", part=part)
             fields[-1][1].append(line)
             continue
         match = _FIELD_RE.fullmatch(line)
         if match is None:
-            raise _header_invalid("malformed field line")
+            raise _header_invalid("malformed field line", part=part)
         if len(fields) >= MAX_HEADER_FIELDS:
-            raise _header_invalid("too many header fields")
+            raise _header_invalid("too many header fields", part=part)
         fields.append((match.group(1), [match.group(2)]))
-    raise _header_invalid("header/body separator missing")
+    raise _header_invalid("header/body separator missing", part=part)
+
+
+def _split_parts(body_lines: list[str], boundary: str) -> list[list[str]]:
+    """Split the lines after the message header block into the line lists of the MIME parts.
+
+    A delimiter is a line that is exactly ``--boundary`` (``--boundary--`` closes), optionally followed by
+    spaces / tabs; anything before the first delimiter or after the closing one is not part content.
+    """
+    delimiter, closing = "--" + boundary, "--" + boundary + "--"
+    parts: list[list[str]] = []
+    current: list[str] | None = None
+    for line in body_lines:
+        stripped = line.rstrip(" \t")
+        if stripped == closing:
+            if current is not None:
+                parts.append(current)
+            return parts
+        if stripped == delimiter:
+            if current is not None:
+                parts.append(current)
+            current = []
+        elif current is not None:
+            current.append(line)
+    raise _mime_invalid("closing boundary missing")
+
+
+def _check_part_headers(part_blocks: list[list[str]]) -> None:
+    """Strict structural rules for every MIME part header block (fail closed, content-free)."""
+    for block in part_blocks:
+        fields, _ = _parse_header_block(block, part=True)
+        counts = Counter(name.casefold() for name, _ in fields)
+        for name, count in counts.items():
+            if count > 1 and (name.startswith("content-") or name == "mime-version"):
+                raise _header_invalid("a Content-* header occurs more than once", part=True)
 
 
 def _validate_message_id(value: str) -> str:
@@ -197,10 +242,67 @@ def _validate_message_id(value: str) -> str:
     return normalize_message_id(text)
 
 
+def _validate_address_list(value: str) -> None:
+    """``To`` must be a well-formed RFC 5322 address list (mailboxes and groups), ASCII addr-specs."""
+    invalid = _fail("raw_eml_address_invalid", "The 'to' header is not a valid RFC 5322 address list; refusing.")
+    text = value.strip()
+    if text.startswith(",") or text.endswith(",") or re.search(r",\s*,", text):
+        raise invalid
+    try:
+        header = SMTPUTF8.header_factory("To", text)
+        groups = list(header.groups)
+        defects = list(header.defects)
+        addresses = [address for group in groups for address in group.addresses]
+    except Exception:  # noqa: BLE001 - any parser failure is a refusal
+        raise invalid from None
+    if defects or not groups:
+        raise invalid
+    for address in addresses:
+        if not address.username or not address.domain or not address.addr_spec.isascii():
+            raise invalid
+
+
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
+_DATE_RE = re.compile(
+    r"(?:(?P<dow>[A-Za-z]{3}),[ ]?)?(?P<day>\d{1,2}) (?P<mon>[A-Za-z]{3}) (?P<year>\d{4}) "
+    r"(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))? (?P<sign>[+-])(?P<zh>\d{2})(?P<zm>\d{2})"
+    r"(?: \((?:[^()\\]|\\.)*\))?"
+)
+
+
+def _validate_date(value: str) -> None:
+    """``Date`` must be an RFC 5322 date-time: numeric zone, real calendar date, consistent weekday.
+
+    Obsolete forms (two-digit years, ``GMT`` / ``EST`` zones) are refused; the optional trailing
+    comment must be a single unnested parenthesis group.  Years 1900-9999.
+    """
+    invalid = _fail("raw_eml_date_invalid", "The 'date' header is not a valid RFC 5322 date-time; refusing.")
+    match = _DATE_RE.fullmatch(value.strip())
+    if match is None:
+        raise invalid
+    month = _MONTHS.index(match["mon"].lower()) + 1 if match["mon"].lower() in _MONTHS else 0
+    year = int(match["year"])
+    if not month or year < 1900:
+        raise invalid
+    if int(match["hour"]) > 23 or int(match["minute"]) > 59 or int(match["second"] or 0) > 60:
+        raise invalid
+    if int(match["zh"]) > 23 or int(match["zm"]) > 59:
+        raise invalid
+    try:
+        day = datetime.date(year, month, int(match["day"]))
+    except ValueError:
+        raise invalid from None
+    if match["dow"] is not None and (
+        match["dow"].lower() not in _WEEKDAYS or _WEEKDAYS.index(match["dow"].lower()) != day.weekday()
+    ):
+        raise invalid
+
+
 def _check_required_headers(fields: list[tuple[str, str]]) -> dict[str, str]:
     """Singleton / required header rules; returns the squashed value of every singleton present."""
     counts = Counter(name.casefold() for name, _ in fields)
-    for name in sorted(_SINGLETON_HEADERS):
+    for name in sorted(set(_SINGLETON_HEADERS) | {n for n in counts if n.startswith("content-")}):
         if counts[name] > 1:
             raise _fail("raw_eml_header_duplicate", f"The header '{name}' occurs more than once; refusing.")
     values = {name.casefold(): _squash(value) for name, value in fields if name.casefold() in _SINGLETON_HEADERS}
@@ -283,8 +385,19 @@ def _decode_attachment(part: Any, index: int) -> da.DraftAttachment:
     )
 
 
-def _analyse_structure(message: Any, values: dict[str, str]) -> tuple[str, str, tuple[da.DraftAttachment, ...]]:
-    """Return ``(layout, normalized body text, attachments)`` of the profile or fail closed."""
+def _exact_text(value: str) -> str:
+    """Line-ending neutral but otherwise exact text: trailing newlines are part of the body."""
+    return value.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _analyse_structure(
+    message: Any, values: dict[str, str], body_lines: list[str]
+) -> tuple[str, str, tuple[da.DraftAttachment, ...]]:
+    """Return ``(layout, body text, attachments)`` of the profile or fail closed.
+
+    ``body_lines`` are the lines after the message header block; for ``multipart/mixed`` every part
+    header block is parsed strictly from them before the tolerant stdlib parser's view is trusted.
+    """
     version = values.get("mime-version")
     has_content_header = any(str(key).lower().startswith("content-") for key in message.keys())
     if version is not None and version != "1.0":
@@ -298,15 +411,22 @@ def _analyse_structure(message: Any, values: dict[str, str]) -> tuple[str, str, 
         layout = "mixed"
     else:
         raise _unsupported("top-level content type")
+    part_blocks: list[list[str]] = []
+    if layout == "mixed":
+        boundary = message.get_boundary()
+        if not boundary:
+            raise _mime_invalid("multipart boundary missing")
+        part_blocks = _split_parts(body_lines, boundary)
+        _check_part_headers(part_blocks)
     if da._all_defects(message):
         raise _mime_invalid("parser defect")
     if layout == "text":
-        return layout, da._normalize_text(_decode_text_part(message)), ()
+        return layout, _exact_text(_decode_text_part(message)), ()
     if (message.preamble or "").strip() or (message.epilogue or "").strip():
         raise _mime_invalid("text outside the MIME parts")
     parts = message.get_payload()
-    if not isinstance(parts, list) or not parts:
-        raise _mime_invalid("no MIME parts")
+    if not isinstance(parts, list) or not parts or len(parts) != len(part_blocks):
+        raise _mime_invalid("MIME part structure")
     body_part, attachment_parts = parts[0], parts[1:]
     if (
         body_part.is_multipart()
@@ -320,7 +440,7 @@ def _analyse_structure(message: Any, values: dict[str, str]) -> tuple[str, str, 
             "raw_eml_attachment_count_exceeded",
             f"at most {da.MAX_ATTACHMENTS} attachments are allowed.",
         )
-    body = da._normalize_text(_decode_text_part(body_part))
+    body = _exact_text(_decode_text_part(body_part))
     attachments = tuple(_decode_attachment(part, index) for index, part in enumerate(attachment_parts, start=1))
     seen: set[str] = set()
     for index, attachment in enumerate(attachments, start=1):
@@ -346,11 +466,13 @@ def validate_raw_eml(data: Any) -> PreparedRawEml:
     """Validate and normalize ``data`` (the bytes of one ``.eml``); pure, no file system, no mailbox."""
     normalized, form = _decode_and_normalize(data)
     lines = normalized.split("\r\n")[:-1]
-    fields = _parse_header_block(lines)
+    fields, separator = _parse_header_block(lines)
     values = _check_required_headers(fields)
     message_id = _validate_message_id(next(value for name, value in fields if name.casefold() == "message-id"))
+    _validate_address_list(values["to"])
+    _validate_date(values["date"])
     message = da._parse(normalized.encode("utf-8"))
-    layout, body, attachments = _analyse_structure(message, values)
+    layout, body, attachments = _analyse_structure(message, values, lines[separator + 1:])
     if da._all_defects(message):  # defects found while decoding the parts
         raise _mime_invalid("parser defect")
     normalized_bytes = normalized.encode("utf-8")

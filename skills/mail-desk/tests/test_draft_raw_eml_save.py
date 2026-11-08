@@ -379,6 +379,17 @@ class MailboxFailureTests(RawHarness):
                 self.assertEqual(1, len(self.box.save_calls))
                 self.assertEqual("appended_unverified", self.attempts()[MESSAGE_ID]["status"])
 
+    def test_a_stored_copy_with_changed_trailing_newlines_is_never_reported_as_success(self) -> None:  # U5 (finding 3)
+        data = make_eml(body="Text\n", message_id="<tail@example.org>")
+        self.put("data/inbound/tail.eml", data)
+        self.box.mutate_stored = lambda raw: raw + "\r\n\r\n"
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.save_raw("data/inbound/tail.eml")
+        self.assertEqual(drafts.DRAFT_VERIFICATION_FAILED_REASON, raised.exception.reason_code)
+        self.assertIn("body:text", str(raised.exception))
+        self.assertEqual(1, len(self.box.save_calls))
+        self.assertEqual("appended_unverified", self.attempts()["tail@example.org"]["status"])
+
     def test_two_stored_copies_are_never_reported_as_success(self) -> None:  # U6
         self.box.duplicate_on_save = True
         with self.assertRaises(drafts.DraftError) as raised:

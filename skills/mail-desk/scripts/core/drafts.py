@@ -464,14 +464,20 @@ def _append_and_verify(
     verify: Callable[[bytes], list[str]] | None = None,
     extra_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Attachment-mode core: unique-ID check, journaled intent, ONE APPEND, semantic read-back.
+    """Verified-APPEND core: unique-ID check, journaled intent, ONE APPEND, semantic read-back.
+
+    Callers: attachment-mode ``save_draft``, ``replace_draft`` (with an explicit attachment list
+    or a provably text-only old draft; both through ``_finish_replace``) and ``save_raw_draft``
+    (Raw-EML import).  It is deliberately *not* the path of the text-only ``save_draft`` (which
+    keeps its former single APPEND with envelope lookup) nor of the opt-in ``diagnose-draft``
+    (``core.diagnostics`` owns its own bounded APPEND); all of them share the one stdin transport
+    ``himalaya.run_himalaya(..., stdin_bytes=...)``.
 
     Never retries, never reports success without a semantic match of the single stored message and
     never lets backend text (which could echo content) into an exception: causes are not chained and
     only fixed reason codes appear in messages.  ``verify`` replaces the builder-draft comparison by
     another semantic comparison returning content-free problem codes (Raw-EML import: the stored
     message is compared with the prepared one); ``extra_result`` is merged into the success envelope.
-    This single function is the only writer for builder drafts and Raw-EML drafts alike.
     """
     from . import draft_attachments as da
 

@@ -631,8 +631,10 @@ Zurücklesen genau einer gespeicherten Mail wie bei Builder-Entwürfen
 Profil (alles andere fail-closed, `raw_eml_*`): höchstens 10 MiB als Datei und normalisiert, UTF-8,
 Zeilen höchstens 998 Oktette, strikter RFC-5322-Header, genau eine Message-ID `<dot-atom@hostname>`,
 `To`/`Date` Pflicht, flaches `text/plain` oder `multipart/mixed` mit höchstens 5 Base64-Anhängen von je
-höchstens 3 MiB. Fehlende oder doppelte Message-ID, Fremdkodierung, Limitüberschreitung stoppen vor jedem
-Mailbox-Kontakt. Die Mail wird vor dem APPEND zu kanonischem CRLF normalisiert, weil Himalaya 1.2.0 stdin
+höchstens 3 MiB; `To` und `Date` werden gegen die strikte RFC-5322-Grammatik geprüft, der Header-Block
+jedes MIME-Teils strikt zerlegt und doppelte oder widersprüchliche `Content-*` abgewiesen. Fehlende oder
+doppelte Message-ID, Fremdkodierung, Limitüberschreitung, ungültige Adresse oder ungültiges Datum stoppen vor
+jedem Mailbox-Kontakt. Die Mail wird vor dem APPEND zu kanonischem CRLF normalisiert, weil Himalaya 1.2.0 stdin
 zeilenweise liest und mit CRLF neu verbindet; Zeilenende-Form und SHA-256 von Quelle und Normalform stehen
 in Ergebnis und Journal. Der Nachweis ist semantisch (Header-Folge, Text, Anhang-Name/Typ/Größe/SHA-256),
 nicht bytegleich. Kein HTML/Alternative, kein Replace für Rohmails, kein Live-Nachweis (synthetische

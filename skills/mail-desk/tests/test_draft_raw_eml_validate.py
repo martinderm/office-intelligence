@@ -140,10 +140,10 @@ class ProfileAndNormalizationTests(_Base):
         )
         base = join_lines(
             [*headers(), "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8",
-             "Content-Transfer-Encoding: base64", "", b64("Grüße".encode())]
+             "Content-Transfer-Encoding: base64", "", b64("Grüße\n".encode())]
         )
         self.assertEqual(dre.validate_raw_eml(qp).summary["body"], dre.validate_raw_eml(base).summary["body"])
-        self.assertEqual("Grüße", dre.validate_raw_eml(qp).summary["body"])
+        self.assertEqual("Grüße\n", dre.validate_raw_eml(qp).summary["body"])
 
     def test_an_empty_body_is_allowed(self) -> None:  # R4
         self.assertEqual("", dre.validate_raw_eml(join_lines([*headers(), ""])).summary["body"])
@@ -188,7 +188,7 @@ class ByteLevelRefusalTests(_Base):
 
     def test_a_line_longer_than_998_octets_is_refused(self) -> None:  # R6
         self.assertRefused("raw_eml_line_too_long", plain(body=["a" * 999]))
-        self.assertEqual(998, len(dre.validate_raw_eml(plain(body=["a" * 998])).summary["body"]))
+        self.assertEqual("a" * 998 + "\n", dre.validate_raw_eml(plain(body=["a" * 998])).summary["body"])
 
     def test_line_length_counts_octets_not_characters(self) -> None:  # R6
         body = ["ä" * 500]  # 500 characters, 1000 octets
@@ -403,6 +403,189 @@ class StructureTests(_Base):
             trace = "".join(traceback.format_exception(type(raised.exception), raised.exception, raised.exception.__traceback__))
             self.assertNotIn(SECRET, trace)
             self.assertNotIn(b64(SECRET.encode()), trace)
+
+
+def with_header(part: list[str], line: str) -> list[str]:
+    """Insert one more header line into a part (before its blank separator line)."""
+    index = part.index("")
+    return [*part[:index], line, *part[index:]]
+
+
+class PartHeaderTests(_Base):  # review finding 1
+    def test_duplicate_or_conflicting_content_headers_in_a_part_are_refused(self) -> None:  # P1
+        cases = {
+            "conflicting disposition": with_header(attachment_part(), "Content-Disposition: inline"),
+            "same disposition twice": with_header(attachment_part(), 'Content-Disposition: attachment; filename="a.bin"'),
+            "second content type": with_header(attachment_part(), "Content-Type: text/plain"),
+            "second transfer encoding": with_header(attachment_part(), "Content-Transfer-Encoding: 7bit"),
+            "second content id": with_header(with_header(attachment_part(), "Content-ID: <a@x>"), "Content-ID: <b@x>"),
+            "second description": with_header(with_header(attachment_part(), "Content-Description: a"), "Content-Description: b"),
+            "case-insensitive": with_header(attachment_part(), "content-type: text/plain"),
+        }
+        for label, part in cases.items():
+            with self.subTest(label):
+                self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, part]))
+
+    def test_duplicate_content_headers_in_the_body_part_are_refused(self) -> None:  # P1
+        for line in ("Content-Type: text/html", "Content-Transfer-Encoding: base64", "Content-Disposition: attachment"):
+            with self.subTest(line):
+                body = with_header(with_header(BODY_PART, line), line)
+                self.assertRefused("raw_eml_part_header_invalid", mixed([body]))
+        conflicting = with_header(BODY_PART, "Content-Type: application/pdf")
+        self.assertRefused("raw_eml_part_header_invalid", mixed([conflicting]))
+
+    def test_malformed_part_header_lines_are_refused(self) -> None:  # P2
+        cases = {
+            "no colon": "garbage line",
+            "space before colon": "X-Bad : v",
+            "empty field name": ": value",
+            "non-ascii field name": "Bétreff: v",
+            "continuation without field": " continuation",
+        }
+        for label, line in cases.items():
+            with self.subTest(label):
+                part = [line, *attachment_part()]  # first line of the part header block
+                self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, part]))
+        blank_continuation = with_header(with_header(attachment_part(), "X-Folded: a"), " ")
+        self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, blank_continuation]))
+
+    def test_control_and_separator_characters_in_part_headers_are_refused(self) -> None:  # P3
+        for char in ("\x0b", "\x0c", "\x1f", "\x7f", " ", " ", "\x85"):
+            with self.subTest(repr(char)):
+                part = with_header(attachment_part(), f"X-Note: a{char}b")
+                self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, part]))
+                body = with_header(BODY_PART, f"X-Note: a{char}b")
+                self.assertRefused("raw_eml_part_header_invalid", mixed([body]))
+
+    def test_part_header_blocks_are_bounded(self) -> None:  # P2
+        many = [f"X-H{index}: v" for index in range(dre.MAX_HEADER_FIELDS + 1)]
+        part = attachment_part()
+        index = part.index("")
+        self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, [*part[:index], *many, *part[index:]]]))
+
+    def test_a_part_without_a_header_separator_is_refused(self) -> None:  # P2
+        part = ["Content-Type: application/octet-stream", "Content-Transfer-Encoding: base64",
+                'Content-Disposition: attachment; filename="a.bin"']
+        with self.assertRaises(dre.RawEmlError):
+            dre.validate_raw_eml(mixed([BODY_PART, part]))
+
+    def test_error_texts_for_part_headers_carry_no_content(self) -> None:  # P3
+        part = with_header(attachment_part(), f"X-Secret : {SECRET}")
+        exc = self.assertRefused("raw_eml_part_header_invalid", mixed([BODY_PART, part]))
+        self.assertNotIn(SECRET, str(exc))
+
+    def test_well_formed_part_headers_are_still_accepted(self) -> None:  # P4
+        folded = [
+            "Content-Type: application/pdf; name=\"a.pdf\"",
+            "Content-Transfer-Encoding: base64",
+            "Content-Disposition: attachment;",
+            ' filename="a.pdf"',
+            "Content-ID: <part1@example.org>",
+            "Content-Description: Angebot",
+            "X-Note: einmal",
+            "", "AAEC",
+        ]
+        prepared = dre.validate_raw_eml(mixed([BODY_PART, folded]))
+        self.assertEqual("a.pdf", prepared.attachments[0].filename)
+
+    def test_every_duplicated_top_level_content_header_is_refused(self) -> None:  # P5
+        for name in ("Content-Description", "Content-ID", "Content-Language", "Content-Location", "Content-Disposition",
+                     "Content-Type", "Content-Transfer-Encoding"):
+            with self.subTest(name):
+                data = plain(extra_headers=["MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8",
+                                            "Content-Transfer-Encoding: 7bit", f"{name}: x", f"{name}: y"])
+                self.assertRefused("raw_eml_header_duplicate", data)
+
+
+class AddressAndDateGrammarTests(_Base):  # review finding 2
+    def test_not_an_address_is_refused_as_to(self) -> None:  # G1
+        bad = [
+            "not-an-address", "x", "a@", "@example.org", "a b@example.org", "a@@example.org", "<a@example.org",
+            "a@example.org,", "a@example.org, ,b@example.org", "Name <>", "Bob <bob@example.org> extra",
+            "A <a@example.org> <b@example.org>", "Doe, John <j@example.org>", "a@example..org", "ä@example.org",
+            "a@exämple.org", "a@example.org b@example.org",
+        ]
+        for value in bad:
+            with self.subTest(value):
+                self.assertRefused("raw_eml_address_invalid", plain(to=value))
+
+    def test_valid_rfc_5322_to_values_are_accepted(self) -> None:  # G1
+        good = [
+            "a@example.org", "Empfänger <a@example.org>", '"Doe, John" <j@example.org>',
+            "a@example.org, b@example.org", "=?utf-8?q?Empf=C3=A4nger?= <a@example.org>",
+            "undisclosed-recipients:;", "Team: a@example.org, b@example.org;", "a@example.org (Kommentar)",
+        ]
+        for value in good:
+            with self.subTest(value):
+                header = ["MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit"]
+                data = join_lines([*headers(to=value, extra=header), "", "ok"])
+                self.assertEqual(" ".join(value.split()), dre.validate_raw_eml(data).summary["headers"][0][1])
+
+    def test_invalid_dates_are_refused(self) -> None:  # G2
+        bad = [
+            "Sat, 99 Foo 2026 99:99:99 +9999", "not-a-date", "Sat", "", "Sat, 07 Nov 2026 25:00:00 +0100",
+            "Sat, 07 Nov 2026 12:60:00 +0100", "Sat, 07 Nov 2026 12:00:61 +0100", "Sat, 31 Nov 2026 12:00:00 +0100",
+            "Sat, 30 Feb 2026 12:00:00 +0100", "Mon, 07 Nov 2026 12:00:00 +0100", "07 Nov 2026 12:00:00",
+            "Sat, 07 Nov 2026 12:00:00 +0160", "Sat, 07 Nov 2026 12:00:00 +2500", "Sat, 07 Nov 26 12:00:00 +0100",
+            "Sat, 07 Nov 2026 12:00:00 GMT", "Sat, 07 Nov 2026 12:00:00 UT", "Sat, 07 Nov 2026 12:00:00 +0100 x",
+            "Sat, 007 Nov 2026 12:00:00 +0100", "Sat, 07 Nov 2026 1:00:00 +0100", "Sat, 07 Nov 2026 12:00:00 +01:00",
+            "Sat, 00 Nov 2026 12:00:00 +0100", "Sat, 07 Nov 1899 12:00:00 +0100", "Sat, 07 Nov 12026 12:00:00 +0100",
+            "Sat, 07 Nov 2026 12:00:00 +0100 (unclosed",
+        ]
+        for value in bad:
+            with self.subTest(value):
+                self.assertRefused("raw_eml_header_missing" if not value else "raw_eml_date_invalid", plain(date=value))
+
+    def test_valid_rfc_5322_dates_are_accepted(self) -> None:  # G2
+        good = [
+            "Sat, 07 Nov 2026 12:00:00 +0100", "Sat, 7 Nov 2026 12:00:00 +0100", "07 Nov 2026 12:00:00 +0100",
+            "Sat, 07 Nov 2026 12:00 +0100", "Sat, 07 Nov 2026 12:00:00 -0000", "Sat, 07 Nov 2026 23:59:60 +1400",
+            "Sun, 29 Feb 2032 00:00:00 +0000", "Sat, 07 Nov 2026 12:00:00 -1200",
+            "Sat, 07 Nov 2026 12:00:00 +0100 (CET)", "Sat,07 Nov 2026 12:00:00 +0100", "Sat, 07 nov 2026 12:00:00 +0100",
+            "SAT, 07 NOV 2026 12:00:00 +0100",
+        ]
+        for value in good:
+            with self.subTest(value):
+                self.assertEqual(value, dre.validate_raw_eml(plain(date=value)).date)
+
+    def test_the_grammar_errors_carry_no_content(self) -> None:  # G3
+        exc = self.assertRefused("raw_eml_address_invalid", plain(to=SECRET))
+        self.assertNotIn(SECRET, str(exc))
+        exc = self.assertRefused("raw_eml_date_invalid", plain(date=SECRET))
+        self.assertNotIn(SECRET, str(exc))
+
+
+class BodyFidelityTests(_Base):  # review finding 3
+    def test_the_summary_keeps_trailing_newlines_of_the_text(self) -> None:  # B1
+        one = dre.validate_raw_eml(make_eml(body="Text\n"))
+        three = dre.validate_raw_eml(make_eml(body="Text\n\n\n"))
+        self.assertEqual("Text\n", one.summary["body"])
+        self.assertEqual("Text\n\n\n", three.summary["body"])
+        self.assertNotEqual(one.summary, three.summary)
+
+    def test_a_stored_copy_with_other_trailing_newlines_differs(self) -> None:  # B1
+        prepared = dre.validate_raw_eml(make_eml(body="Text\n", message_id="<tn@example.org>"))
+        stored = make_eml(body="Text\n\n\n", message_id="<tn@example.org>")
+        self.assertEqual(["body:text"], dre.compare_stored_raw(stored, prepared))
+
+    def test_crlf_blank_line_counts_differ_in_a_raw_text_message(self) -> None:  # B1
+        a = join_lines([*headers(), "", "Text"])
+        b = join_lines([*headers(), "", "Text", "", ""])
+        self.assertEqual(["body:text"], dre.compare_stored_raw(b, dre.validate_raw_eml(a)))
+        self.assertEqual([], dre.compare_stored_raw(b.replace(b"\r\n", b"\n"), dre.validate_raw_eml(b)))
+
+    def test_trailing_newlines_of_a_multipart_body_part_are_compared(self) -> None:  # B1
+        body_a = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 7bit", "", "Text."]
+        body_b = ["Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 7bit", "", "Text.", "", ""]
+        att = attachment_part()
+        self.assertEqual(
+            ["body:text"],
+            dre.compare_stored_raw(mixed([body_b, att]), dre.validate_raw_eml(mixed([body_a, att]))),
+        )
+
+    def test_line_ending_form_alone_still_does_not_matter(self) -> None:  # B1
+        data = make_eml(body="A\n\nB\n")
+        self.assertEqual([], dre.compare_stored_raw(data.replace(b"\r\n", b"\n"), dre.validate_raw_eml(data)))
 
 
 class SummaryComparisonTests(_Base):

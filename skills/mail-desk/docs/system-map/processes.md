@@ -477,8 +477,13 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    `not_regular_file`, `changed`, `empty`, `too_large`).
 3. **Profilprüfung (`validate_raw_eml`, rein, ohne Dateisystem/Mailbox):** UTF-8 / NUL / einzelnes CR /
    Zeilenlänge, Normalisierung zu CRLF (+ ein abschließendes CRLF) mit erneuter 10-MiB-Prüfung
-   (`raw_eml_message_too_large`), strikter Header-Block, genau eine gültige Message-ID, `To`/`Date`,
-   Singleton-Header, MIME-Version, Struktur `text/plain` | flaches `multipart/mixed`, Parser-Defekte,
+   (`raw_eml_message_too_large`), strikter Header-Block, genau eine gültige Message-ID, `To` als
+   RFC-5322-Adressliste (`raw_eml_address_invalid`), `Date` als RFC-5322-`date-time` (`raw_eml_date_invalid`),
+   Singleton-Header und jedes `Content-*` höchstens einmal, MIME-Version, Struktur `text/plain` | flaches
+   `multipart/mixed`; bei `multipart/mixed` wird der Header-Block **jedes** Teils vor der tolerant
+   parsenden Standardbibliothek strikt zerlegt (`raw_eml_part_header_invalid`: Feldsyntax, Steuerzeichen,
+   Feldgrenzen, doppelte oder widersprüchliche `Content-*`/`MIME-Version`; Teilezahl muss mit dem Parser
+   übereinstimmen), danach Parser-Defekte,
    Anhänge (streng Base64, höchstens 5 mal 3 MiB, gültige eindeutige Namen). Ergebnis
    `PreparedRawEml` (normalisierte Bytes, Message-ID, Datum, Anhänge, Summary, SHA-256 von Quelle
    und Normalform). Jeder Fehler endet **vor** jedem Mailbox-Kontakt und jedem Journal-Eintrag.
@@ -489,7 +494,7 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    `lines()`/CRLF-Join-Normalisierung stellt exakt die normalisierte Mail her.
 6. **Rücklesen:** genau eine Envelope zur Message-ID, `message export`; `compare_stored_raw` validiert die
    gespeicherte Mail mit demselben Profil und vergleicht die Summary (Struktur, Header-Folge je Name,
-   `header_order`, Text, Anhangsanzahl, Name/Typ/Größe/SHA-256); sonst `appended_unverified` und
+   `header_order`, Text samt abschließenden Zeilenumbrüchen, Anhangsanzahl, Name/Typ/Größe/SHA-256); sonst `appended_unverified` und
    `draft_verification_failed`.
 7. **Ende:** `saved_verified` plus Draft-Journal-Item (`action = save_raw_draft`); Ergebnis wie ein
    Builder-Entwurf plus `source`. Kein Replace für Rohmails.

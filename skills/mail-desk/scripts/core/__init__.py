@@ -77,7 +77,9 @@ from .drafts import (
     replace_draft,
     resolve_drafts_folder,
     save_draft,
+    save_raw_draft,
 )
+from .draft_raw_eml import RawEmlError
 from .draft_attachments import (
     MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENTS,

@@ -131,6 +131,20 @@ class ManifestTests(RawClientHarness):
         result = self.run_manifest([{"action": "save_raw_draft"}])
         self.assertFalse(result["all_succeeded"])
 
+    def test_the_account_key_is_part_of_the_closed_schema(self) -> None:  # C4 (finding 4)
+        same = self.run_manifest([{"action": "save_raw_draft", "eml": EML_PATH, "account": "demo"}])
+        self.assertTrue(same["all_succeeded"], same)
+        drift = self.run_manifest([{"action": "save_raw_draft", "eml": EML_PATH, "account": "other"}])
+        self.assertFalse(drift["all_succeeded"])
+        self.assertIn("Account drift", drift["results"][0]["error"])
+        self.assertEqual(1, len(self.box.save_calls), "only the first, drift-free operation reached the mailbox")
+
+    def test_the_unknown_key_error_names_all_accepted_keys(self) -> None:  # C4 (finding 4)
+        result = self.run_manifest([{"action": "save_raw_draft", "eml": EML_PATH, "subject": "S"}])
+        error = result["results"][0]["error"]
+        for key in ("'eml'", "'folder'", "'account'"):
+            self.assertIn(key, error)
+
     def test_composition_keys_are_rejected_in_a_raw_operation(self) -> None:  # C4
         for key, value in (("subject", "S"), ("to", "a@example.org"), ("body", "B"), ("attachments", ["data/report.pdf"]),
                            ("cc", "c@example.org")):

@@ -37,6 +37,7 @@ RAW_EML_CODES = (
     "raw_eml_line_too_long", "raw_eml_header_invalid", "raw_eml_header_missing", "raw_eml_header_duplicate",
     "raw_eml_message_id_invalid", "raw_eml_mime_invalid", "raw_eml_structure_unsupported",
     "raw_eml_attachment_invalid", "raw_eml_attachment_count_exceeded", "raw_eml_attachment_too_large",
+    "raw_eml_part_header_invalid", "raw_eml_address_invalid", "raw_eml_date_invalid",
 )
 
 
@@ -89,6 +90,34 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("Aktueller Frame (Issue #18", self.text("L2 README"))
         self.assertNotIn("`save_raw_draft` ist nicht beschlossen", self.text("L2 README"))
 
+    def test_review_round_one_contract_points_are_documented(self) -> None:  # D1 (findings 1-4)
+        cli = self.text("cli-operations")
+        for needle in ("Teil-Header", "`Content-*`", "Date", "RFC 5322", "Adresse", "Trailing", "'account'"):
+            self.assertIn(needle, cli, f"cli-operations lacks {needle}")
+        skill = self.text("SKILL")
+        for needle in ("Content-*", "Teil-Header", "Adresslisten-Grammatik"):
+            self.assertIn(needle, skill, f"SKILL lacks {needle}")
+        for name in ("L2 README", "L2 processes", "L1 README"):
+            text = self.text(name)
+            for needle in ("Content-*", "raw_eml_part_header_invalid"):
+                if name == "L1 README" and needle == "raw_eml_part_header_invalid":
+                    continue
+                self.assertIn(needle, text, f"{name} lacks {needle}")
+        self.assertIn("raw_eml_date_invalid", self.text("L2 processes"))
+        self.assertIn("raw_eml_address_invalid", self.text("L2 processes"))
+
+    def test_no_stale_uncommitted_wording_remains_in_the_l2_frame(self) -> None:  # D1 (finding 4)
+        readme = self.text("L2 README")
+        self.assertNotIn("ungestagten", readme)
+        self.assertNotIn("mit ungestagten Änderungen", readme)
+        self.assertIn("c6b8d2e", readme)
+
+    def test_the_manifest_schema_in_the_docs_names_account(self) -> None:  # D1 (finding 4)
+        for name in ("cli-operations", "SKILL", "L2 README"):
+            self.assertIn("account", self.text(name))
+        self.assertIn("`eml`/`folder`/`account`", self.text("L2 README"))
+        self.assertIn("`account`", self.text("cli-operations"))
+
     def test_no_machine_specific_absolute_paths_in_the_new_documentation(self) -> None:  # portability
         pattern = re.compile(r"[A-Za-z]:[\\/](?:users|Users)|/home/|/Users/")
         for name in ("SKILL", "cli-operations", "himalaya", "L2 README", "L1 README", "L2 processes", "L2 objects", "L2 effects"):
@@ -96,6 +125,24 @@ class DocumentationContractTests(unittest.TestCase):
             index = section.find("Raw-EML")
             if index >= 0:
                 self.assertIsNone(pattern.search(section[index:]), f"{name} contains a host path after the Raw-EML text")
+
+
+class NamespaceAndDocstringTests(unittest.TestCase):
+    def test_save_raw_draft_is_exported_in_the_core_namespace(self) -> None:  # finding 5
+        import core
+        from core import drafts
+
+        self.assertIs(drafts.save_raw_draft, core.save_raw_draft)
+        self.assertIs(dre.RawEmlError, core.RawEmlError)
+        self.assertNotIn("save_raw_draft", core.__all__, "__all__ stays the frozen compatibility baseline")
+
+    def test_the_append_core_docstring_is_not_broader_than_its_callers(self) -> None:  # finding 5
+        from core import drafts
+
+        doc = drafts._append_and_verify.__doc__ or ""
+        self.assertNotIn("only writer", doc)
+        for needle in ("attachment-mode", "Raw-EML", "replace", "text-only", "diagnos"):
+            self.assertIn(needle, doc, f"docstring lacks {needle}")
 
 
 if __name__ == "__main__":

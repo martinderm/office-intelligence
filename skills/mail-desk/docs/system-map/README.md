@@ -66,8 +66,8 @@ Unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47). Historische
 Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
 **Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum `feat/issue-18-raw-eml`
-mit ungestagten Änderungen auf Basis von `8c2e710`; alle älteren Frames dieser Seite sind
-historisch):** 352 Dateien im Bundle, 215 unter `skills/mail-desk/`, 80 Python-Dateien unter
+auf Basis von `c6b8d2e` (Raw-EML-Lieferung), die Review-Korrekturen eingeschlossen; alle älteren
+Frames dieser Seite sind historisch):** 352 Dateien im Bundle, 215 unter `skills/mail-desk/`, 80 Python-Dateien unter
 `scripts/` (davon 65 unter `scripts/core/`), 111 Testmodule `tests/test_*.py` (`git ls-files --cached
 --others --exclude-standard`, im Lauf frisch erhoben). Raw-EML-Import: §42. Die Anzahl der Testfälle
 wird hier nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
@@ -2241,7 +2241,10 @@ Schreibpfads wurde nicht gebaut. `_append_and_verify` erhielt nur zwei additive 
 **Umfang und Grenzen:** genau eine reguläre `*.eml` aus den vier Zonen (nicht `data/mail-desk/`, nie
 Symlink/Junction), höchstens 10 MiB als Datei **und** nach der Normalisierung, UTF-8 ohne NUL/CR-Einzelzeichen,
 Zeilen höchstens 998 Oktette, strikter RFC-5322-Header (höchstens 100 Felder / 64 KiB), genau eine
-Message-ID `<dot-atom@hostname>`, `To` und `Date` Pflicht, Singleton-Header höchstens einmal, Struktur
+Message-ID `<dot-atom@hostname>`, `To` (strikte RFC-5322-Adresslisten-Grammatik, `raw_eml_address_invalid`) und `Date`
+(strikter RFC-5322-`date-time`, `raw_eml_date_invalid`) Pflicht, Singleton-Header und jedes `Content-*` höchstens einmal,
+Header-Block jedes MIME-Teils strikt zerlegt (`raw_eml_part_header_invalid`; doppelte oder widersprüchliche `Content-*`
+und Steuerzeichen werden abgewiesen), Struktur
 `text/plain` oder flaches `multipart/mixed` (Text zuerst, höchstens 5 streng-Base64-Anhänge von je höchstens
 3 MiB mit gültigem eindeutigem Namen). Nicht unterstützt und fail-closed: HTML/Alternative, verschachtelte oder
 `message/*`-Teile, Preamble/Epilog, Parser-Defekte, fremde Charsets, 8bit-Anhänge, `replace` für Rohmails.
@@ -2257,8 +2260,10 @@ Message-ID `<dot-atom@hostname>`, `To` und `Date` Pflicht, Singleton-Header höc
   `attachment_*` sind unverändert. Es gibt **einen** Leser für Anhänge und Roh-EML.
 - [`scripts/core/drafts.py`](../../scripts/core/drafts.py): `save_raw_draft`, `_append_and_verify(verify=., extra_result=.)`.
 - [`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py): `save-raw-draft --eml PATH
-  [-f FOLDER] [--lease-id] [--conversation-id]`, Manifest `save_raw_draft` (geschlossenes Schema `eml`/`folder`/
-  `account`; keine Lease, kein Betreff/Empfänger/Body/`attachments` aus dem Manifest), `op_save_raw_draft`.
+  [-f FOLDER] [--lease-id] [--conversation-id]`, Manifest `save_raw_draft`
+  (geschlossenes Schema `eml`/`folder`/`account`, `account` muss dem Manifest-Account entsprechen; keine Lease, kein
+  Betreff/Empfänger/Body/`attachments` aus dem Manifest), `op_save_raw_draft`. `core/__init__.py` re-exportiert
+  `save_raw_draft` und `RawEmlError` (`__all__` bleibt die eingefrorene Kompatibilitätsbasis).
 
 **CRLF-/Himalaya-Normalisierung (dokumentiert, getestet):** Himalaya 1.2.0 liest die stdin-Nachricht mit
 `lines()`, entfernt jedes `\r` und verbindet mit CRLF ohne finales Zeilenende. Die Datei wird vor dem APPEND zu
@@ -2266,6 +2271,9 @@ kanonischen CRLF-Zeilen (LF/CRLF/gemischt erlaubt, einzelnes CR nicht), mit höc
 abschließenden CRLF; Leerzeilen am Ende bleiben. Das eine Transport-CRLF des bestehenden Pfads folgt.
 Ergebnis und Journal weisen Zeilenende-Form sowie SHA-256 von Quelle und Normalform aus; ein von der Quelle
 abweichender gespeicherter Bytestrom ist damit erwartet, ein von der Normalform abweichender nicht.
+Der Textvergleich im Rücklesen behält abschließende Zeilenumbrüche (`Text\r\n\r\n\r\n` ≠ `Text\r\n`); nur die Form
+des Zeilenendes (LF/CRLF) ist neutral. Teil-Header-Prüfung und Adress-/Datumsgrammatik sind Teil des Profils, nicht
+des Rücklesens: sie gelten identisch für die Quelle und die gespeicherte Mail (`stored:<reason>`).
 
 **Zustandsautomat:** wie §41 ohne Replace: Bindung → Pfad → Lesen → Profil/Normalisierung → Eindeutigkeit vorab
 → Journal `append_started` → genau ein APPEND → `append_failed` | `append_outcome_unknown` | Rücklesen →

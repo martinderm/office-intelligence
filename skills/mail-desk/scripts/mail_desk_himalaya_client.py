@@ -876,7 +876,10 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
             elif action == "save_raw_draft":
                 # Closed schema: the message is the file; a lease never comes from a manifest.
                 if not set(op) <= {"action", "eml", "folder", "account"}:
-                    raise ValueError("save_raw_draft accepts only 'eml' and 'folder'.")
+                    raise ValueError(
+                        "save_raw_draft accepts only 'eml', 'folder' and 'account' "
+                        "('account' must equal the manifest account)."
+                    )
                 op_account = op.get("account")
                 if op_account is not None and str(op_account).strip() and (
                     not acc or str(op_account).strip() != str(acc).strip()
