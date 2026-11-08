@@ -151,6 +151,16 @@ Details: [`../references/data-model.md`](../references/data-model.md). Kurz:
   relativ zum Bundle. Kein CWD-/Payload-gesteuerter Import, keine Guard-Kopie,
   kein Ersatz-Lock. Die eigene Lease wird vor jedem mkdir/stage/write/rename/
   delete erneut geprüft; Verlust stoppt vor der nächsten Mutation.
+* **Falscher Lock-Root (#52 P3):** Der Root ist immer das Skill-Verzeichnis selbst
+  (Beispiel `.agents/skills/workspace-lock`), nicht dessen Elternverzeichnis
+  `.agents/skills`. Es gibt weder Suche noch Ersatzauflösung. Fehlt unter dem
+  gewählten Root eine der beiden Dateien `<root>/scripts/workspace_lock_guard.py`
+  und `<root>/scripts/invoke_workspace_lock.py`, nennt die Ablehnung (Writer-CLI/-API
+  und Builder, auch `--init-template`) den gewählten Root, beide erwarteten Pfade und
+  dieses Beispiel; es wird nichts geladen oder geschrieben. Das ist ein
+  Installationsfehler und wird nicht als Lease-Fehler gemeldet. Fehlende, fremde
+  oder abgelaufene Lease bleibt unverändert fail-closed („an owned active
+  workspace-lock lease is required“).
 * Ziele liegen ausschließlich in den kanonischen Datenzonen:
   Meeting-Artefakte unter `memory/evidence/`, Journal/Staging/Ownership unter
   `data/meeting-desk/`. Traversal, Symlinks/Junctions/Reparse-Points,
@@ -290,6 +300,28 @@ python skills/meeting-desk/scripts/build_clean_transcript.py \
   --title "..." --date 1792483867000 --date-string "2026-10-20T08:11:07.000Z"
 ```
 
+**`--date` (#52 P2).** Der Builder-Kopf kennt drei Formen, jeweils ohne externe
+Epoch-Umrechnung:
+
+| `--date` | Kopfzeile `date:` | `dateString:` (ohne `--date-string`) |
+| --- | --- | --- |
+| fehlt | `null` | `""` |
+| Ganzzahl (Epoch-Millisekunden, wie bisher) | die Ganzzahl | `""` |
+| strikter ISO-Kalendertag `YYYY-MM-DD` | der Tag als quotierter String, z. B. `"2026-10-27"` | derselbe ISO-Tag |
+
+Ein Kalendertag trägt keine Uhrzeit: Es wird weder ein Mitternachts-Start erfunden
+noch ein Epoch-Wert berechnet. Ein explizit angegebenes `--date-string` bleibt in
+allen Fällen unverändert. Der Tag wird als echter Kalendertag geprüft (Schaltjahr,
+Monat/Tag-Grenzen, nur ASCII-Ziffern); jeder andere Wert wird mit einer
+Fehlermeldung zu `--date` abgewiesen (Exit 2, auch bei `--check` und bei
+`--init-template`), bevor gelesen, veröffentlicht oder geschrieben wird. Eine reine
+Ziffernfolge ist immer Epoch-Millisekunden — auch `20261027`; ein kompakter Tag ist
+keine unterstützte Form. Dieses Kopf-Format gilt nur für den Builder; das Register
+(`meeting_date`, `start`) wird nicht umgeschrieben und es gibt keine neue
+Schemaversion. Für byte-identischen Rebuild und `--check` müssen dieselben
+`--date`/`--date-string`-Optionen erneut angegeben werden; ein anderer Wert ist
+Drift bzw. ein neuer Inhalt.
+
 Aufruf aus dem konsumierenden Workspace; den Skriptpfad über dessen Skill-Link
 auflösen. Dateipfade sind relativ zum aktuellen Arbeitsverzeichnis oder absolut.
 Absolute Runtime-Parameter sind erlaubt; hartcodierte Hostpfade sind es nicht.
@@ -313,7 +345,9 @@ No-Clobber. `--check` bleibt rein lesend.
 * `--init-template PATH` — Schreibt `corrections-template.json` (Startpunkt für
   eine neue Korrekturdatei; Nicht-Meeting-Konfiguration, kein Meeting-Artefakt).
   Ziel muss im `data/`-Zonenzweig liegen; ein offenes Writer-Journal blockiert
-  mit Exit 3. Braucht eine eigene Lease.
+  mit Exit 3. Braucht eine eigene Lease; ein angegebenes ungültiges `--date`
+  bricht vor jedem Write ab, ein falscher Lock-Root meldet die erwarteten
+  Guard-Pfade (siehe oben).
 * Exits: `0` gebaut/unverändert/Check sauber, `1` Check-Drift, `2`
   Eingabe-/Schema-/Laufzeitfehler, `3` `recovery_required`.
 * Der Builder schreibt nur das vom Writer gelieferte Ergebnis; er besitzt

@@ -641,8 +641,13 @@ def _load_guard(trusted_root: str | Path) -> object:
     guard_path = root / "scripts" / "workspace_lock_guard.py"
     cli_path = root / "scripts" / "invoke_workspace_lock.py"
     if not guard_path.is_file() or not cli_path.is_file():
-        raise _Reject("Install workspace-lock and set WORKSPACE_LOCK_ROOT or --workspace-lock-root "
-                      "to its trusted installation; see README.md")
+        raise _Reject(
+            f"workspace-lock installation not found at {root.as_posix()}: expected "
+            f"<root>/scripts/workspace_lock_guard.py and "
+            f"<root>/scripts/invoke_workspace_lock.py. Point --workspace-lock-root, "
+            f"WORKSPACE_LOCK_ROOT or MEETING_DESK_WORKSPACE_LOCK_ROOT at the skill root "
+            f"itself (for example .agents/skills/workspace-lock), not its parent "
+            f".agents/skills; see README.md")
     key = os.path.realpath(guard_path)
     cached = _GUARD_CACHE.get(key)
     if cached is not None:
