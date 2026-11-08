@@ -284,6 +284,11 @@ class BuilderTests(unittest.TestCase):
             ([], ["date: null", 'dateString: ""']),
             (["--date", "2026-10-27", "--date-string", "Montag, 27.10."],
              ['date: "2026-10-27"', 'dateString: "Montag, 27.10."']),
+            (["--date", "2026-10-27", "--date-string", ""],
+             ['date: "2026-10-27"', 'dateString: ""']),
+            (["--date", "1792483867000", "--date-string", ""],
+             ["date: 1792483867000", 'dateString: ""']),
+            (["--date-string", ""], ["date: null", 'dateString: ""']),
         )
         for extra, expected in cases:
             with self.subTest(extra=extra):

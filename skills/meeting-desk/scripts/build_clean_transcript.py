@@ -250,8 +250,10 @@ def _normalize_date(value: str) -> tuple[str, str]:
     return json.dumps(value), value
 
 
-def _header(meeting_id: str, title: str, date: str, datestring: str,
+def _header(meeting_id: str, title: str, date: str, datestring: str | None,
             raw_name: str, result: dict[str, Any]) -> str:
+    # ``datestring=None`` means "not supplied" (defaults to an ISO day); any string,
+    # including an explicit empty one, is kept exactly as given.
     stats = result["stats"]
     tables = result["tables"]
     date_value, default_label = _normalize_date(date)
@@ -260,7 +262,7 @@ def _header(meeting_id: str, title: str, date: str, datestring: str,
         f'meeting_id: {json.dumps(meeting_id, ensure_ascii=False)}',
         f'title: {json.dumps(title, ensure_ascii=False)}',
         f'date: {date_value}',
-        f'dateString: {json.dumps(datestring or default_label, ensure_ascii=False)}',
+        f'dateString: {json.dumps(default_label if datestring is None else datestring, ensure_ascii=False)}',
         f'source_raw: {json.dumps(raw_name, ensure_ascii=False)}',
         f'corrections_count: {stats["corrections_count"]}',
         f'unklar_count: {stats["unklar_count"]}',
@@ -387,7 +389,7 @@ def _run(argv: list[str] | None = None) -> int:
     ap.add_argument("--meeting-id", default="")
     ap.add_argument("--title", default="")
     ap.add_argument("--date", default="")
-    ap.add_argument("--date-string", default="")
+    ap.add_argument("--date-string", default=None)
     ap.add_argument("--check", action="store_true",
                     help="verify-only: rebuild in memory and byte-compare with --out")
     ap.add_argument("--init-template", metavar="PATH",
