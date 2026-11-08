@@ -285,6 +285,46 @@ Entwurf in den Drafts-Ordner legt.
 - **Draft-Journal:** eigene Datei `data/mail-desk/draft-journal.json` (Schema 1,
   Eintrag je Envelope-ID mit `envelope_id`/`folder`/`subject`/`to`/`date`); das
   `batch-recovery-journal.json` des Batch-Pfads bleibt unberührt.
+- **Dateianhänge (Issue #18, erste Lieferung):** `save-draft` und `replace-draft`
+  nehmen Klartext **und** bis zu **5** explizit benannte lokale reguläre Dateien
+  (`--attach PATH`, Manifest `attachments`). Quellen liegen nur in den vier
+  Consumer-Datenzonen `memory/references/`, `memory/evidence/`, `memory/cloud/`,
+  `data/` (nicht in `data/mail-desk/`), je Datei höchstens **3 MiB**; die
+  **vollständig serialisierte** MIME-Mail (Header, Text, Base64 + CRLF, Grenzen)
+  höchstens **10 MiB** — nicht die Dateisumme. Überschreitung wird **vor** dem
+  APPEND abgewiesen, nie gekürzt, geteilt, komprimiert oder verlinkt. Der Pfad ist
+  der bestehende binäre stdin-APPEND (genau ein Versuch, nie wiederholt); Anhänge
+  sind Base64 (`multipart/mixed`, Text zuerst), kein HTML, keine Inline-Bilder,
+  keine Signatur, keine beliebige EML. Der Anhangsmodus verlangt Workspace-Wurzel
+  (aus `MAIL_DESK_DATA_DIR`/`data/mail-desk`), echte Workspace-Lease
+  (`--lease-id`/`--conversation-id` oder `WORKSPACE_LOCK_LEASE_ID`/
+  `WORKSPACE_LOCK_CONVERSATION_ID`; nie aus einem Manifest) und den im Workspace
+  gebundenen Account — jeweils **vor** dem ersten Dateizugriff. Dateien werden
+  begrenzt und ohne Symlink-/Junction-Querung gelesen (das geöffnete Handle wird
+  vor dem ersten Byte gegen die geprüfte Kette abgeglichen) und nur verpackt,
+  nie ausgeführt oder entpackt. Erfolg heißt: genau **eine** gespeicherte Mail
+  wurde zurückgelesen und stimmt semantisch (Header, Text, Anzahl, Dateiname,
+  MIME, dekodierte Bytes per SHA-256); Duplikate, Nichtauffindbarkeit oder
+  Abweichung ergeben `draft_verification_failed` ohne Erfolg und ohne Löschen.
+  Ein unklarer APPEND-Ausgang (`draft_append_outcome_unknown`) wird nie
+  wiederholt; das Journal (`attempts`, je Message-ID) hält `append_started` vor
+  dem APPEND und danach `append_failed`, `append_outcome_unknown`,
+  `appended_unverified` oder `saved_verified` — nur Metadaten, nie Inhalte.
+- **Ersetzen mit Anhängen:** Ohne Anhangsangabe wird ein alter Entwurf **mit**
+  Anhängen nie ersetzt (`draft_replace_would_drop_attachments`, auch Altbestand
+  aus Mailclients); ein nicht lesbarer, MIME-defekter oder mehrdeutiger alter
+  Entwurf ebenso nicht (`draft_old_unreadable`), und ohne Journal gibt es keinen
+  Ersatz. Ein beweisbar reiner Text-Entwurf wird über denselben verifizierten
+  Ablauf ersetzt wie mit Liste (Message-ID-Vorprüfung, semantisches Rücklesen,
+  Journal, Neuauflösung der alten Mail). Die 10-MiB-Grenze der vollständigen Mail
+  gilt für jeden Entwurf. Die Message-ID-Suche liest jeden Header des Ordners (≤ 50
+  Lesungen); ein Drafts-Ordner mit mehr als 49 Nachrichten ist im Anhangsmodus
+  fail-closed. Mit `--attach …` ist die **vollständige** gewünschte
+  Liste maßgeblich, mit `--drop-attachments` (Manifest `"attachments": []`) werden
+  alle bewusst entfernt; beides verlangt `--old-message-id`. Der alte Entwurf wird
+  erst nach vollständig verifizierter neuer Mail und erneuter Auflösung per
+  Message-ID gelöscht; Teilausgänge (`draft_replace_old_not_deleted`) tragen das
+  neue Envelope und stehen im Journal.
 
 Details: [`references/cli-operations.md`](references/cli-operations.md),
 [`references/backends/himalaya.md`](references/backends/himalaya.md).

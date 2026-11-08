@@ -350,6 +350,80 @@ python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -
   `old_envelope_id` und `crash_window`. Das Journal ist bewusst eine eigene Datei
   und **nicht** das `batch-recovery-journal.json` des Batch-Pfads.
 
+### Entwürfe mit Dateianhängen (Issue #18)
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py save-draft -a konto -t a@example.org -s "Betreff" -b "Text" \
+  --attach data/angebot.pdf --attach memory/cloud/notiz.txt --lease-id <lease> --json
+python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -a konto -t a@example.org -s "Betreff" -b "Text" \
+  --attach data/angebot.pdf --old-message-id "<alt@example.org>" --json
+python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -a konto -t a@example.org -s "Betreff" -b "Text" \
+  --drop-attachments --old-message-id "<alt@example.org>" --json
+```
+
+Manifest-Aktionen `save_draft`/`replace_draft` kennen `attachments` (Liste aus
+Pfad-Strings oder Objekten `{"path", "filename", "content_type"}`; `[]` = bewusst
+keine) und `old_message_id`. Eine Lease im Manifest wird nie berücksichtigt.
+
+- **Grenzen (inklusiv, vor dem APPEND geprüft, nichts wird gekürzt):** höchstens 5
+  Anhänge, höchstens 3 MiB (3 × 1.048.576 Byte) je Originaldatei, höchstens
+  10 MiB (10 × 1.048.576 Byte) für die **vollständig serialisierte** MIME-Mail. Der
+  Base64-Aufschlag (4/3 plus CRLF je 76 Zeichen) ist enthalten; das reine
+  Transport-CRLF des stdin-Pfads zählt nicht. Niedrigere Serverlimits bleiben
+  wirksam und enden als `draft_save_failed`.
+- **Pfade und Namen:** Pfad relativ zur Workspace-Wurzel, `/`-getrennt, beginnt
+  exakt mit `memory/references/`, `memory/evidence/`, `memory/cloud/` oder `data/`;
+  `data/mail-desk/` (Journale, Quarantäne, Indizes) ist ausgeschlossen. Kein
+  absoluter Pfad, `..`, `\`, `:`, Steuerzeichen, Gerätename oder Endpunkt/-leerzeichen.
+  Symlinks und Junctions werden auf der ganzen Kette ab der Workspace-Wurzel
+  (Zonenwurzel eingeschlossen) abgewiesen; das geöffnete Handle muss vor dem
+  ersten gelesenen Byte dieselbe reguläre Datei sein wie die geprüfte Kette
+  (`attachment_changed` sonst). Dateiname: höchstens 128 Zeichen / 255 UTF-8-Byte,
+  keine Steuer-/Bidi-Zeichen oder Separatoren, eindeutig je Mail. Content-Type aus
+  einer festen Endungstabelle, sonst `application/octet-stream`; explizit nur
+  klein geschrieben `type/subtype` ohne Parameter, nie `multipart/*`/`message/*`.
+- **Header und Message-ID:** Betreff, An, Cc, Von und Datum dürfen keine Steuer-,
+  Zeilen- oder Absatztrenner-Zeichen enthalten (`draft_header_invalid`); eine
+  vorgegebene Message-ID muss `<lokal@domain>` im einfachen Atom-Format sein
+  (`draft_message_id_invalid`). Fehlertexte nennen Anhänge nur per Index und
+  enthalten nie Dateiinhalt, Aufruferpfade oder Backend-Stderr.
+- **Fehlercodes:** `attachment_*` (Spezifikation, Pfad, Link, Größe, Name, Typ),
+  `message_too_large`, `draft_binding_failed`, `draft_lock_missing`,
+  `draft_message_id_not_unique`, `draft_journal_write_failed`, `draft_save_failed`
+  (eindeutig gescheitert), `draft_append_outcome_unknown` (nie wiederholt),
+  `draft_verification_failed`, `draft_replace_would_drop_attachments`,
+  `draft_old_unreadable`, `draft_old_identity_mismatch`,
+  `draft_replace_old_not_deleted`.
+- **Ersetzen:** Ohne `--attach`/`--drop-attachments` wird ein alter Entwurf mit
+  Anhängen, mit MIME-Parser-Defekten, mit mehrdeutiger Message-ID oder nicht lesbar nie
+  ersetzt (`draft_replace_would_drop_attachments` / `draft_old_unreadable`); ohne Journal
+  (`draft_binding_failed`) auch nicht. Nur ein beweisbar reiner Text-Entwurf wird ersetzt,
+  und zwar über **denselben** verifizierten Ablauf wie mit Liste (kein Header-only-Verify,
+  kein Löschen per veralteter Envelope-ID): Message-ID des alten Entwurfs aus dem
+  gelesenen Entwurf (ein angegebenes `--old-message-id` muss passen) → Neu-Message-ID-
+  Vorprüfung → genau ein APPEND → eindeutiges semantisches Rücklesen → Journal → alte ID
+  per Message-ID neu auflösen → Löschen. Mit expliziter Liste zusätzlich: Bindung/Lease →
+  Dateien → Größen, `--old-message-id` Pflicht.
+- **Größe immer:** Die 10-MiB-Grenze der vollständig serialisierten Mail gilt für jeden
+  Entwurf, auch ohne Anhänge sowie bei `[]`-Save und `[]`-Replace; Überschreitung wird vor
+  dem APPEND abgewiesen (`message_too_large`).
+- **Eindeutigkeit und Ordnergröße:** Die Message-ID-Suche liest den `Message-ID`-Header
+  **jeder** Envelope des Ordners (höchstens 50 Lesungen, vor dem APPEND mit Reserve für die
+  neue Mail). Ein Drafts-Ordner mit mehr als 49 Nachrichten ist im Anhangsmodus und beim
+  Replace daher fail-closed (`draft_message_id_not_unique`), bis er aufgeräumt ist; mehrere
+  `Message-ID`-Header in einer Mail machen die Suche ebenfalls unvollständig.
+- **Rücklesen:** Es werden zusätzlich Parser-Defekte, doppelte Identitäts-/Empfänger-Header,
+  Date, unbeabsichtigte Cc/From, Bcc/Sender/Reply-To/Resent-* und die flache MIME-Struktur
+  geprüft. `From` bleibt im Builder optional; ein gespeichertes, nicht beabsichtigtes `Cc`
+  wird nie stillschweigend akzeptiert.
+- **Grenzen des Nachweises:** Die Tests sind ein Offline-Modell des Backends, kein
+  Live-Nachweis. Unter Windows gibt es kein `O_NOFOLLOW`; ein Austausch zwischen
+  Prüfung und `open` wird vor dem Lesen erkannt (Identitätsvergleich), nicht
+  verhindert. Hardlinks innerhalb einer Zone sind reguläre Dateien und werden nicht
+  erkannt. Der CLI-Export landet vollständig auf der Platte, bevor Python die Datei mit
+  harter Grenze (12 MiB + 1 Byte, ein reguläres Handle, Identitäts-/Wachstumsprüfung)
+  lädt: die Grenze schützt den Python-Speicher, nicht die vorgelagerte Backend-Übertragung.
+
 ## Gebundene Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
 
 Zusätzlich zu den drei Entwurfsoperationen existiert ein **rein diagnostischer**

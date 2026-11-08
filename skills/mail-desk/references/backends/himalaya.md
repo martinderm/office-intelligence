@@ -130,6 +130,31 @@ journal.
   (schema 1: `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, plus
   `old_envelope_id`/`crash_window` on replace). The batch
   `batch-recovery-journal.json` contract stays untouched.
+- **Attachments (Issue #18):** a draft with attachments is the same `multipart/mixed`
+  raw message appended through the same single binary-stdin `message save -o plain`
+  call; there is no second transport. Before the APPEND the backend contract adds two
+  read-only lookups: an exhaustive Message-ID search (`envelope list -s 500`, then the
+  `Message-ID` header of EVERY envelope; no subject shortcut) within a hard budget of 50
+  header reads, leaving room for the new message before the APPEND (so at most 49 existing
+  envelopes); more envelopes, an unreadable header or several `Message-ID` headers in one
+  message mean "not provable" and fail closed. That search must find nothing. For replace
+  (also with an omitted attachment list) the old draft is read with a `message export -F -d`.
+  After the APPEND the same search must find exactly one envelope and its `message export` is
+  compared semantically (no parser defects, no duplicate identity / recipient headers, exact
+  Message-ID / Subject / To / Date, Cc / From only when intended, no Bcc / Sender / Reply-To /
+  Resent-*, flat MIME structure, text, attachments). The CLI writes the whole export to disk
+  first; Python then loads it through one regular-file handle with an identity / size / growth
+  check and a hard bound of 12 MiB + 1 byte — this bounds what Python loads, not what the
+  backend transfers or stores. The `message export` semantics and server-side normalisation are
+  modelled offline only; they are not live-proven. The 10 MiB bound of the fully serialized
+  message applies to every draft, with or without attachments. Server limits
+  stay in force: a refusal is `draft_save_failed`, a lost connection after the payload
+  is `draft_append_outcome_unknown` and never retried. The draft journal gains an
+  additive `attempts` map keyed by normalised Message-ID (`append_started` written
+  before the APPEND, then `append_failed` / `append_outcome_unknown` /
+  `appended_unverified` / `saved_verified` / `replace_old_pending_delete` /
+  `old_delete_failed` / `replaced`, with metadata only: folder, subject, to, size,
+  attachment file name / type / size / SHA-256).
 
 ### Bounded diagnostic draft APPEND (`diagnose-draft`, opt-in, default off)
 

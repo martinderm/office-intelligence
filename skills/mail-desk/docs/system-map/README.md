@@ -65,18 +65,26 @@ wurde gemessen und die Assertions sind in PR #46 an den Produktvertrag gebunden.
 Unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47). Historische
 Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
-**Aktueller Reconcile-Frame #11 × #14, 2026-10-18:** 178 Dateien,
+**Aktueller Frame (Issue #18, erhoben 2026-11-08 im Lane-Arbeitsbaum mit dem Dateisatz des
+Fix-Commits; alle älteren Frames dieser Seite sind historisch):** 325 Dateien im Bundle,
+207 unter `skills/mail-desk/`, 78 Python-Dateien unter `scripts/` (davon 63 unter
+`scripts/core/`), 106 Testmodule `tests/test_*.py` (`git ls-files --cached --others
+--exclude-standard`; Skript im externen Run, nicht im Bundle). Entwürfe mit Dateianhängen:
+§41. Die Anzahl der Testfälle wird hier nicht als Literal geführt; sie steht mit Befehl,
+Dauer und Rohlog im PR/Run.
+
+**Reconcile-Frame #11 × #14, 2026-10-18 (historisch):** 178 Dateien,
 74 Scripts, davon 59 Core-Dateien, 85 Testmodule (`git ls-files`).
 Draft-Transport: §33; menschlich abgenommener Event-Writer unverändert: §32.
 
-**Issue-#62-Frame, 2026-11-04:** 311 Dateien im Bundle, 193 unter
+**Issue-#62-Frame, 2026-11-04 (historisch):** 311 Dateien im Bundle, 193 unter
 `skills/mail-desk/`, 76 Scripts (61 Core-Dateien), 96 Testmodule
 (`git ls-files --cached --others --exclude-standard`). Lokale
 Injection-Barrier: §39. Diese Barrier lässt `classifier.py` und die
 Matching-Module unangetastet; die separate Issue-#63-Regeländerung rotiert
 `classifier_revision` (siehe §8).
 
-**Issue-#64-Frame, 2026-11-04:** 316 Dateien im Bundle, 198 unter
+**Issue-#64-Frame, 2026-11-04 (historisch):** 316 Dateien im Bundle, 198 unter
 `skills/mail-desk/`, 77 Scripts (62 Core-Dateien), 99 Testmodule
 (`git ls-files --cached --others --exclude-standard`). Verbindliche
 Kontext-Konsultation und `references/synthesis.md`: §40. Issue #64 ändert
@@ -110,6 +118,7 @@ Vertragserweiterung und Integrationsgrenzen: §32.
 │  │   + batch_cli + catalog_inspect + sign_manifest                     │
 │  ├─ Core Domain: scripts/core/ (58 getrackte .py-Dateien)              │
 │  │   ├─ drafts.py (Draft-API: save/delete/replace)                     │
+│  │   ├─ draft_attachments.py (Anhänge: Grenzen, sicheres Lesen, §41)   │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
 │  │   ├─ quarantine/ (6 kanonische Quarantäne-Owner + Legacy-Shims)      │
@@ -2017,7 +2026,8 @@ extrahierten Text ist nicht Teil dieses Pakets.
 - Bestehende Desk-Suite inkl. der additiven Draft-Resultfelder in
   [`tests/test_batch_runner_modes.py`](../tests/test_batch_runner_modes.py);
   die `classifier_revision`-Tests bleiben unverändert.
-- Aktueller Frame (2026-11-04, `git ls-files --cached --others
+- Frame (2026-11-04, historisch, nicht mehr aktuell; aktuelle Werte: Kopfzeile dieser Seite;
+  `git ls-files --cached --others
   --exclude-standard`): 311 Dateien im Bundle, 193 unter `skills/mail-desk/`,
   76 unter `scripts/` (61 unter `scripts/core/`), 96 Testmodule unter `tests/`.
 
@@ -2120,8 +2130,90 @@ unverändert.
   (Label-Freiheit, genau eine Herkunftszeile) aufgenommen.
 - Bestehende Verträge (`test_batch_runner_slim.py`, `test_batch_runner_modes.py`,
   `test_batch_runner_mde2_*`, Classifier-Tests) laufen unverändert.
-- Aktueller Frame (2026-11-04, `git ls-files --cached --others
+- Frame (2026-11-04, historisch, nicht mehr aktuell; aktuelle Werte: Kopfzeile dieser Seite;
+  `git ls-files --cached --others
   --exclude-standard`): 316 Dateien im Bundle, 198 unter `skills/mail-desk/`,
   77 unter `scripts/` (62 unter `scripts/core/`), 99 Testmodule unter `tests/`.
 
 L1: [Paket-System-Map §11](../../../../docs/system-map/README.md#11-issue-64-verbindliche-kontext-konsultation).
+
+---
+
+## 41. Issue #18 — Entwürfe mit Dateianhängen (erste Lieferung)
+
+**Ziel:** Die vollständige Mail (Absender, Empfänger, Klartext, normale Dateianhänge) liegt
+ungesendet und versandbereit im serverseitigen Drafts-Ordner. Weder automatischer Versand noch
+ein Zustellbarkeitsnachweis; Offline-Tests sind **kein** Live-Nachweis.
+
+**Umfang:** Klartext plus bis zu 5 explizit benannte reguläre lokale Dateien aus den vier
+Consumer-Datenzonen; kein HTML, keine Inline-Bilder, keine Signatur, keine beliebige EML
+(`save_raw_draft` ist nicht beschlossen), kein Download/Suche/Entpacken, keine Link-/Cloud-
+Automation. Eine zweite Transportimplementierung gibt es nicht.
+
+**Module und Verträge:**
+- [`scripts/core/draft_attachments.py`](../../scripts/core/draft_attachments.py) (neu): Grenzen
+  (`MAX_ATTACHMENTS = 5`, `MAX_ATTACHMENT_BYTES = 3 MiB`, `MAX_MIME_MESSAGE_BYTES = 10 MiB`,
+  `MAX_READBACK_BYTES = 12 MiB`), geschlossene Anhangsangabe, Dateinamen-/Content-Type-/Pfad-
+  Validierung, zonenbegrenztes sicheres Lesen (`load_attachments`), Workspace-/Journal-/Lease-/
+  Account-Bindung (`bind_attachment_mode`), semantisches Rücklesen (`compare_stored_message`).
+- [`scripts/core/drafts.py`](../../scripts/core/drafts.py): `build_draft_message(attachments=…)`
+  (multipart/mixed, Base64 per Standardbibliothek, Header-/Message-ID-Validierung für **alle**
+  Entwürfe), `save_draft`/`replace_draft` mit Anhangsmodus, `DraftJournal.record_attempt`,
+  `DraftPartialError`, `ATTACHMENTS_UNSPECIFIED`.
+- [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py): `fetch_raw_message_eml(max_bytes=…)`
+  (Default unverändert; mit Grenze wird die Export-Datei über **ein** reguläres Handle mit
+  Identitäts-, Größen- und Wachstumsprüfung höchstens `max_bytes + 1` Byte gelesen) und
+  `find_envelopes_by_message_id` (erschöpfende Suche statt erster Treffer, siehe unten).
+  **Ehrliche Trennung:** Himalaya schreibt den Export zuerst vollständig auf die Platte
+  (`message export -d`); die Python-Ladegrenze begrenzt nur, was Python lädt — nicht die
+  vorgelagerte Backend-Übertragung oder Plattengröße. Es gibt keine vorgelagerte
+  Download-Grenze.
+- [`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py):
+  `--attach`, `--drop-attachments`, `--old-message-id`, `--lease-id`, `--conversation-id`;
+  Manifest `attachments`, `old_message_id` (Lease nie aus dem Manifest). Ein bisher still
+  ignorierter `attachments`-Schlüssel eines Manifests wird nun verarbeitet.
+
+**Zustandsautomat (Anhangsmodus):** Bindung → Dateien → Größen → (Replace: alten Entwurf lesen +
+Identität) → Eindeutigkeit vorab → Journal `append_started` → genau ein APPEND →
+`append_failed` | `append_outcome_unknown` | Rücklesen → `appended_unverified` | `saved_verified`
+→ (Replace) `replace_old_pending_delete` → `old_delete_failed` | `replaced`. Der alte Entwurf
+wird erst nach `saved_verified` und erneuter Auflösung per Message-ID gelöscht.
+
+**Datenverlustschutz und gemeinsamer Replace-Pfad:** `replace_draft` ohne Anhangsliste liest den
+alten Entwurf (begrenzt); Anhänge oder Nicht-Body-Teile (auch Altbestand aus Mailclients) →
+`draft_replace_would_drop_attachments`; unlesbar, doppelte `Message-ID`-Header oder jeder MIME-
+Parser-Defekt → `draft_old_unreadable` (Anhangsfreiheit wird nie aus defekter Struktur abgeleitet).
+Der Auslassungs-Pfad nutzt **denselben** Ablauf wie die explizite Liste (`_finish_replace`):
+Neu-Message-ID-Vorprüfung, genau ein APPEND, semantisches Rücklesen genau einer Mail, Journal
+(`attempts` + Item), Neuauflösung der alten Mail per Message-ID, erst dann Löschen. API-Begründung:
+Auslassung benennt keinen Workspace und liest keine Datei, braucht deshalb keine Lease; ohne Journal
+(kein Abgleichspfad für das Append-dann-Löschen-Fenster) wird sie mit `draft_binding_failed`
+abgewiesen. Die Message-ID des alten Entwurfs wird aus dem gelesenen Entwurf übernommen; ein
+angegebenes `old_message_id` muss passen. Mit Liste (auch `[]`) ist sie die vollständige Zielmenge
+(Lease, Konto und `old_message_id` Pflicht; defekte Alt-MIME-Struktur ist dort zulässig, eine
+mehrdeutige Identität nicht). Die 10-MiB-Grenze für die vollständig serialisierte Mail gilt für **jeden**
+Entwurf, auch mit 0 Anhängen, `[]`-Save und `[]`-Replace.
+
+**Eindeutiges Rücklesen:** `find_envelopes_by_message_id` liest die `Message-ID` **jeder** Envelope
+des Ordners (kein Betreff-Shortcut) innerhalb eines harten Budgets von 50 Header-Lesungen; vor dem
+APPEND mit Reserve für die neue Mail (höchstens 49 vorhandene Envelopes). Mehr Envelopes, ein
+nicht lesbarer Header oder mehrere `Message-ID`-Header einer Mail → `complete = false` → fail-closed
+(`draft_message_id_not_unique` bzw. `draft_verification_failed`). Betrieblich heißt das: Ein
+Drafts-Ordner mit mehr als 49 Nachrichten erlaubt im Anhangsmodus (und beim Replace) keinen APPEND,
+bis er aufgeräumt ist; eine serverseitige Header-Suche wäre eine spätere, live zu belegende Option.
+Der semantische Vergleich verlangt zusätzlich: keine MIME-Parser-Defekte, keine doppelten
+Identitäts-/Empfänger-Header, exakt erwartete Message-ID/Subject/To/Date, Cc/From nur wenn
+beabsichtigt (`From` bleibt im Builder optional), kein `Bcc`/`Sender`/`Reply-To`/`Resent-*`, flache
+Struktur (`multipart/mixed` genau bei Anhängen, sonst einteilig).
+
+**Sicherheit:** Fehlertexte nennen nur Indizes/feste Codes; Backend-Ursachen werden nicht verkettet;
+`DraftAttachment.data` fehlt in `repr`; das Journal enthält nur Metadaten. Pfadrennen werden vor dem
+ersten Byte erkannt (Handle-Identität), nicht verhindert: Windows hat kein `O_NOFOLLOW`; Hardlinks
+innerhalb einer Zone sind reguläre Dateien und bleiben unerkannt (dokumentiertes Restrisiko).
+
+**Tests:** `tests/test_draft_attachments_{files,mime,save,replace,client}.py` mit
+`tests/draft_attachment_fixtures.py` (Subprozess-Grenze mit echtem `run_himalaya`, echter
+Workspace-Lock-Guard über `OI_TEST_WORKSPACE_LOCK_ROOT`); `himalaya_fixtures.DraftRunner` kennt
+`message export`.
+
+L1: [Paket-System-Map §12](../../../../docs/system-map/README.md).
