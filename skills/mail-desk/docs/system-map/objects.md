@@ -279,6 +279,23 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
   `MAX_ATTACHMENTS = 5`, `MAX_ATTACHMENT_BYTES = 3 MiB`, `MAX_MIME_MESSAGE_BYTES = 10 MiB`,
   `MAX_READBACK_BYTES = 12 MiB`.
 
+* **Raw-EML (Issue #18, zweite Lieferung):** `draft-journal.json` Schema 1 bleibt; `action = save_raw_draft`
+  nutzt dieselben `items` und `attempts`. Zusätzliche, inhaltsfreie `attempts`-Felder: `source_path`
+  (Zonenpfad der `.eml`), `source_sha256`, `normalized_sha256`, `source_line_endings` (`crlf` | `lf` |
+  `mixed`); die übrigen Felder (`size_bytes` = normalisierte Länge, `attachment_count`, `attachments`)
+  wie beim Anhangs-APPEND. Ältere Journale bleiben gültig.
+* **`PreparedRawEml` (nur im Speicher, [`scripts/core/draft_raw_eml.py`](../../scripts/core/draft_raw_eml.py)):**
+  `data`/`text` (normalisierte Mail, nicht in `repr`), `message_id` (normalisiert), `subject`, `to`, `date`,
+  `attachments` (`DraftAttachment`), `summary` (`structure`, `headers` als Folge `(name, wert)`, `body`,
+  `attachments`), `line_endings`, `source_sha256`, `normalized_sha256`, `size_bytes`, `source_path`.
+  Grenzen `MAX_RAW_EML_BYTES = 10 MiB`, `MAX_LINE_BYTES = 998`, `MAX_HEADER_FIELDS = 100`,
+  `MAX_HEADER_BLOCK_BYTES = 64 KiB`; Fehlerklasse `RawEmlError` (Unterklasse von
+  `DraftAttachmentError`/`DraftError`, Reason-Codes `raw_eml_*`).
+* **Ergebnis von `save_raw_draft`:** Envelope wie ein Anhangs-Entwurf (`envelope_id`, `folder`,
+  `subject`, `to`, `date`, `message_id`, `attachment_count`, `attachments`, `size_bytes`,
+  `verified = "content"`) plus `source` (`path`, `line_endings`, `normalized`, `source_sha256`,
+  `normalized_sha256`).
+
 ### 5.5 Replies-Needed-Log (`replies-needed.jsonl`) — Task-Desk-Eingang (Issue #16, doc-only)
 
 * **Dateipfad:** `data/mail-desk/replies-needed.jsonl` (JSON-Lines; nur `execute` **appendet** je Eintrag, `resolve`/Archivierung entfernt aktive Einträge — **nicht** durchgehend append-only)

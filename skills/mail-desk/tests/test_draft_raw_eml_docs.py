@@ -1,0 +1,102 @@
+"""Raw-EML import (#18) — the operative documentation and both system maps carry the contract.
+
+Evidence mode ``acceptance`` (documentation contract).  Matrix row D1.  The expected phrases are the
+confirmed limits, surface names and bounded reason codes; they are literals, not read back from the code,
+except that every documented reason code must also be a code the implementation can actually raise.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+import unittest
+from pathlib import Path
+
+MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
+BUNDLE_ROOT = MAIL_DESK_ROOT.parents[1]
+sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
+
+from core import draft_raw_eml as dre  # noqa: E402
+
+DOCS = {
+    "SKILL": MAIL_DESK_ROOT / "SKILL.md",
+    "cli-operations": MAIL_DESK_ROOT / "references" / "cli-operations.md",
+    "himalaya": MAIL_DESK_ROOT / "references" / "backends" / "himalaya.md",
+    "L2 README": MAIL_DESK_ROOT / "docs" / "system-map" / "README.md",
+    "L2 processes": MAIL_DESK_ROOT / "docs" / "system-map" / "processes.md",
+    "L2 objects": MAIL_DESK_ROOT / "docs" / "system-map" / "objects.md",
+    "L2 effects": MAIL_DESK_ROOT / "docs" / "system-map" / "effects.md",
+    "L1 README": BUNDLE_ROOT / "docs" / "system-map" / "README.md",
+}
+
+#: The reason codes of the Raw-EML profile (literal list; the operator documentation must name each).
+RAW_EML_CODES = (
+    "raw_eml_path_invalid", "raw_eml_path_forbidden", "raw_eml_extension_invalid", "raw_eml_unreadable",
+    "raw_eml_link_refused", "raw_eml_not_regular_file", "raw_eml_changed", "raw_eml_empty", "raw_eml_too_large",
+    "raw_eml_message_too_large", "raw_eml_invalid", "raw_eml_not_utf8", "raw_eml_nul_byte", "raw_eml_bare_cr",
+    "raw_eml_line_too_long", "raw_eml_header_invalid", "raw_eml_header_missing", "raw_eml_header_duplicate",
+    "raw_eml_message_id_invalid", "raw_eml_mime_invalid", "raw_eml_structure_unsupported",
+    "raw_eml_attachment_invalid", "raw_eml_attachment_count_exceeded", "raw_eml_attachment_too_large",
+)
+
+
+class DocumentationContractTests(unittest.TestCase):
+    def text(self, name: str) -> str:
+        return DOCS[name].read_text(encoding="utf-8")
+
+    def test_operator_surface_is_documented(self) -> None:  # D1
+        cli = self.text("cli-operations")
+        for needle in ("save-raw-draft", "--eml", "save_raw_draft", "10 MiB", "3 MiB", "998", "CRLF", "lines()",
+                       "Message-ID", "Kein zweiter Schreibpfad"):
+            self.assertIn(needle, cli, f"cli-operations lacks {needle}")
+        skill = self.text("SKILL")
+        for needle in ("save-raw-draft", "save_raw_draft", "10 MiB", "CRLF", "keinen zweiten Schreibpfad"):
+            self.assertIn(needle, skill, f"SKILL lacks {needle}")
+
+    def test_every_reason_code_is_documented_and_exists_in_the_implementation(self) -> None:  # D1
+        cli = self.text("cli-operations")
+        source = (MAIL_DESK_ROOT / "scripts" / "core" / "draft_raw_eml.py").read_text(encoding="utf-8")
+        source += (MAIL_DESK_ROOT / "scripts" / "core" / "draft_attachments.py").read_text(encoding="utf-8")
+        for code in RAW_EML_CODES:
+            self.assertIn(code, cli, f"cli-operations lacks {code}")
+            suffix = code[len("raw_eml_"):]
+            self.assertTrue(
+                code in source or f'f"{{prefix}}_{suffix}"' in source or f'"{suffix}"' in source,
+                f"{code} is documented but never raised",
+            )
+
+    def test_limits_are_the_confirmed_literals(self) -> None:  # D1
+        self.assertEqual(10 * 1048576, dre.MAX_RAW_EML_BYTES)
+        self.assertEqual(998, dre.MAX_LINE_BYTES)
+        for name in ("L1 README", "L2 README"):
+            text = self.text(name)
+            for needle in ("10 MiB", "3 MiB", "998", "CRLF"):
+                self.assertIn(needle, text, f"{name} lacks {needle}")
+
+    def test_himalaya_normalization_is_documented(self) -> None:  # D1
+        himalaya = self.text("himalaya")
+        for needle in ("Raw-EML import (Issue #18)", "lines()", "canonical CRLF", "one final CRLF", "not live-proven"):
+            self.assertIn(needle, himalaya)
+
+    def test_both_maps_describe_the_contract(self) -> None:  # D1
+        self.assertIn("## 42. Issue #18", self.text("L2 README"))
+        self.assertIn("## 13. Issue #18", self.text("L1 README"))
+        self.assertIn("6.1b", self.text("L2 processes"))
+        self.assertIn("5.3 Raw-EML-Import", self.text("L2 effects"))
+        objects = self.text("L2 objects")
+        for needle in ("source_sha256", "normalized_sha256", "PreparedRawEml", "save_raw_draft"):
+            self.assertIn(needle, objects)
+        self.assertIn("Aktueller Frame (Issue #18", self.text("L2 README"))
+        self.assertNotIn("`save_raw_draft` ist nicht beschlossen", self.text("L2 README"))
+
+    def test_no_machine_specific_absolute_paths_in_the_new_documentation(self) -> None:  # portability
+        pattern = re.compile(r"[A-Za-z]:[\\/](?:users|Users)|/home/|/Users/")
+        for name in ("SKILL", "cli-operations", "himalaya", "L2 README", "L1 README", "L2 processes", "L2 objects", "L2 effects"):
+            section = self.text(name)
+            index = section.find("Raw-EML")
+            if index >= 0:
+                self.assertIsNone(pattern.search(section[index:]), f"{name} contains a host path after the Raw-EML text")
+
+
+if __name__ == "__main__":
+    unittest.main()

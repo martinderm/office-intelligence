@@ -424,6 +424,84 @@ keine) und `old_message_id`. Eine Lease im Manifest wird nie berücksichtigt.
   harter Grenze (12 MiB + 1 Byte, ein reguläres Handle, Identitäts-/Wachstumsprüfung)
   lädt: die Grenze schützt den Python-Speicher, nicht die vorgelagerte Backend-Übertragung.
 
+### Vorbereitete Rohmail (Raw-EML-Import, Issue #18)
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py save-raw-draft -a konto --eml data/eingang/angebot.eml \
+  --lease-id <lease> --json
+```
+
+Manifest-Aktion `save_raw_draft` mit `{"eml": "data/eingang/angebot.eml", "folder": "Drafts"}`
+(`folder` optional). Das Schema ist geschlossen: `subject`, `to`, `cc`, `body`, `attachments`,
+`lease_id` und jeder weitere Schlüssel werden abgewiesen; die Lease kommt nur aus `--lease-id`/
+`--conversation-id` bzw. der Umgebung. Die Mail ist die Datei - es gibt keine Kompositions-Flags
+und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
+
+- **Kein zweiter Schreibpfad:** Dieselbe Kette wie bei Builder-Entwürfen (`_append_and_verify`):
+  Bindung (Workspace-Wurzel aus `data/mail-desk`, Journal, echte Lease mit `allow_legacy=False`,
+  gebundener Account) **vor** dem ersten Dateizugriff, Datei lesen und prüfen, Message-ID-Vorprüfung
+  (muss im Zielordner fehlen und beweisbar fehlen; Ordner mit mehr als 49 Nachrichten sind
+  fail-closed), Journal `append_started`, **genau ein** binärer stdin-APPEND, niemals wiederholt,
+  semantisches Zurücklesen genau einer gespeicherten Mail. Ein unklarer APPEND-Ausgang
+  (`draft_append_outcome_unknown`) wird journalisiert und nie wiederholt.
+- **Quelle:** genau eine reguläre Datei `*.eml` unterhalb von `memory/references/`,
+  `memory/evidence/`, `memory/cloud/` oder `data/` (nicht `data/mail-desk/`); gleiche Pfadregeln,
+  Link-/Junction-Abweisung und Handle-Identitätsprüfung wie bei Anhängen (ein gemeinsamer begrenzter
+  Leser). Höchstens **10 MiB** als Datei **und** nach der Normalisierung (LF→CRLF kann eine Datei
+  über die Grenze heben: `raw_eml_message_too_large`); die Prüfung geschieht aus `fstat` vor dem Lesen.
+- **Profil (alles andere fail-closed, inhaltsfreie Codes):** gültiges UTF-8
+  (`raw_eml_not_utf8` - der stdin-Transport erlaubt nur UTF-8, es wird nichts umkodiert), kein NUL
+  (`raw_eml_nul_byte`), kein einzelnes CR (`raw_eml_bare_cr`), Zeilen höchstens 998 Oktette
+  (`raw_eml_line_too_long`). Header strikt nach RFC 5322 (`raw_eml_header_invalid`): Feldname aus
+  druckbarem US-ASCII, kein Leerraum vor dem Doppelpunkt, Faltung nur durch führendes Leerzeichen/
+  Tab (kein leeres Fortsetzungsfeld), keine Steuer-/Zeilen-/Absatztrenner-Zeichen außer Tab, höchstens
+  100 Felder und 64 KiB Header, Trennzeile Pflicht. Genau **eine** `Message-ID` der Form
+  `<dot-atom@hostname>` (`raw_eml_header_missing` / `raw_eml_header_duplicate` /
+  `raw_eml_message_id_invalid`; Kommentare, Mehrfach-IDs, Anführungszeichen, Domain-Literale und
+  Nicht-ASCII-Hosts werden abgewiesen); `To` und `Date` nicht leer; `From`, `Sender`, `Reply-To`,
+  `To`, `Cc`, `Bcc`, `Subject`, `Date`, `In-Reply-To`, `References`, `MIME-Version`, `Content-*`
+  höchstens einmal (Groß-/Kleinschreibung egal). Alle Header, auch `Bcc`/`X-Unsent`, bleiben erhalten
+  und werden verglichen; die Datei wird nie verändert außer durch die Zeilenende-Normalisierung.
+- **Struktur:** `text/plain` (Charset UTF-8 oder US-ASCII, Encoding 7bit/8bit/quoted-printable/
+  base64; ohne MIME-Header gilt US-ASCII, ein Text mit Umlauten braucht `MIME-Version: 1.0` und
+  `Content-Type: text/plain; charset=utf-8`) oder flach `multipart/mixed` mit dem Text als erstem Teil
+  und höchstens **5** `attachment`-Teilen, je Base64 (streng, nur das Alphabet), dekodiert 1 Byte bis
+  **3 MiB**, gültiger und eindeutiger Dateiname (Regeln der Anhangsliste), gültiger Content-Type
+  (`raw_eml_attachment_invalid` / `raw_eml_attachment_count_exceeded` / `raw_eml_attachment_too_large`).
+  Nicht unterstützt (`raw_eml_structure_unsupported` / `raw_eml_mime_invalid`): HTML, `multipart/
+  alternative|related`, geschachtelte oder `message/*`-Teile, Preamble/Epilog-Text, `inline`,
+  jeder MIME-Parser-Defekt, fremde Charsets.
+- **CRLF-Normalisierung (Himalaya):** Himalaya 1.2.0 liest die stdin-Nachricht mit Rust `lines()`,
+  entfernt jedes `\r` und verbindet mit CRLF, ohne finales Zeilenende. Die Datei wird deshalb **vor**
+  dem APPEND zu kanonischen CRLF-Zeilen (LF und CRLF gemischt erlaubt, einzelnes CR nicht), mit genau
+  einem abschließenden CRLF falls es fehlt (Leerzeilen am Ende bleiben), und mit dem einen
+  Transport-CRLF des bestehenden Pfads gesendet. Die gespeicherte Mail muss der normalisierten
+  entsprechen. Ergebnis und Journal führen `source` bzw. `source_path`/`source_sha256`/
+  `normalized_sha256`/`source_line_endings` (`crlf`, `lf`, `mixed`).
+- **Nachweis:** Erfolg erst nach `message export` genau einer Envelope zur Message-ID und einem
+  semantischen Vergleich mit der vorbereiteten Mail: Header-Folge (Name und whitespace-normalisierter
+  Wert; zusätzliche, fehlende, geänderte oder umgestellte Header ergeben `header:<name>`/
+  `header_order`), dekodierter Text, Anhangsanzahl und je Anhang Name, Typ, Größe und SHA-256.
+  Abweichung, Duplikat oder Nichtauffindbarkeit: `draft_verification_failed` (`appended_unverified`
+  im Journal), kein Erfolg. Das ist keine Byte-Gleichheit beliebiger Rohmails.
+- **Fehlercodes (neu):** `raw_eml_path_invalid`, `raw_eml_path_forbidden`, `raw_eml_extension_invalid`,
+  `raw_eml_unreadable`, `raw_eml_link_refused`, `raw_eml_not_regular_file`, `raw_eml_changed`,
+  `raw_eml_empty`, `raw_eml_too_large`, `raw_eml_message_too_large`, `raw_eml_invalid`, `raw_eml_not_utf8`,
+  `raw_eml_nul_byte`, `raw_eml_bare_cr`, `raw_eml_line_too_long`, `raw_eml_header_invalid`,
+  `raw_eml_header_missing`, `raw_eml_header_duplicate`, `raw_eml_message_id_invalid`,
+  `raw_eml_mime_invalid`, `raw_eml_structure_unsupported`, `raw_eml_attachment_invalid`,
+  `raw_eml_attachment_count_exceeded`, `raw_eml_attachment_too_large`; dazu die bestehenden
+  `draft_binding_failed`, `draft_lock_missing`, `draft_message_id_not_unique`,
+  `draft_journal_write_failed`, `draft_save_failed`, `draft_append_outcome_unknown`,
+  `draft_verification_failed`. Ein Validierungsfehler führt zu **keinem** Mailbox-Kontakt und keinem
+  Journal-Eintrag; Fehlertexte enthalten nie Dateiinhalt, Aufruferpfade oder Backend-Stderr.
+- **Grenzen des Nachweises:** Offline-Modell des Backends (synthetische Mails, kein echtes
+  Postfach, kein SMTP, keine Cloud), kein Live-Nachweis. Hardlinks innerhalb einer Zone sind
+  reguläre Dateien; unter Windows gibt es kein `O_NOFOLLOW` (Rennen werden erkannt, nicht
+  verhindert). Der CLI-Export landet vor dem begrenzten Python-Laden vollständig auf der Platte.
+  Bytegleiche Übertragung beliebiger Rohmails (8bit-Fremdcharsets, HTML-Alternativen, eingebettete
+  Mails) ist ausdrücklich nicht Teil des Profils.
+
 ## Gebundene Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
 
 Zusätzlich zu den drei Entwurfsoperationen existiert ein **rein diagnostischer**

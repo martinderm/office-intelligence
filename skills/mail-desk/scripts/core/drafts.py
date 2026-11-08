@@ -61,7 +61,7 @@ import unicodedata
 from email.message import EmailMessage
 from email.policy import SMTPUTF8
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from . import himalaya
 from .common import atomic_write_json, normalize_message_id, utc_now_iso
@@ -461,12 +461,17 @@ def _append_and_verify(
     action: str,
     record_item: bool,
     extra_attempt: dict[str, Any] | None = None,
+    verify: Callable[[bytes], list[str]] | None = None,
+    extra_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Attachment-mode core: unique-ID check, journaled intent, ONE APPEND, semantic read-back.
 
     Never retries, never reports success without a semantic match of the single stored message and
     never lets backend text (which could echo content) into an exception: causes are not chained and
-    only fixed reason codes appear in messages.
+    only fixed reason codes appear in messages.  ``verify`` replaces the builder-draft comparison by
+    another semantic comparison returning content-free problem codes (Raw-EML import: the stored
+    message is compared with the prepared one); ``extra_result`` is merged into the success envelope.
+    This single function is the only writer for builder drafts and Raw-EML drafts alike.
     """
     from . import draft_attachments as da
 
@@ -551,17 +556,20 @@ def _append_and_verify(
             stored = himalaya.fetch_raw_message_eml(
                 found[0], folder=folder, account=account, max_bytes=da.MAX_READBACK_BYTES
             )
-            problems = da.compare_stored_message(
-                stored,
-                message_id=normalized_id,
-                subject=subject,
-                to=to,
-                body=body,
-                cc=cc,
-                from_addr=from_addr,
-                date=date_header,
-                attachments=prepared,
-            )
+            if verify is not None:
+                problems = verify(stored)
+            else:
+                problems = da.compare_stored_message(
+                    stored,
+                    message_id=normalized_id,
+                    subject=subject,
+                    to=to,
+                    body=body,
+                    cc=cc,
+                    from_addr=from_addr,
+                    date=date_header,
+                    attachments=prepared,
+                )
             envelope_id = found[0]
     except Exception as exc:  # noqa: BLE001 - only the exception TYPE is reported, never its text
         problems = [f"readback:{type(exc).__name__}"]
@@ -586,6 +594,8 @@ def _append_and_verify(
         "size_bytes": size_bytes,
         "verified": "content",
     }
+    if extra_result:
+        envelope.update(extra_result)
     try:
         journal.record_attempt(normalized_id, status="saved_verified", envelope_id=envelope_id)
         if record_item:
@@ -754,6 +764,78 @@ def save_draft(
             date=date_header,
         )
     return envelope
+
+
+def save_raw_draft(
+    raw_eml: Any,
+    *,
+    folder: str | None = None,
+    account: str | None = None,
+    journal: "DraftJournal | None" = None,
+    folders: Iterable[Any] | None = None,
+    workspace_root: Any = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+    lock_root: Any = None,
+) -> dict[str, Any]:
+    """Append one prepared ``.eml`` (``raw_eml``: workspace-relative zone path) as an unsent draft.
+
+    Raw-EML import (issue #18) on the existing verified stdin APPEND -- there is no second writer:
+    the file is bound like an attachment-mode draft (workspace root, journal, a real workspace lease and
+    the workspace-bound account are checked *before* the file is read), read bounded and link-free,
+    validated against the strict profile of ``core.draft_raw_eml`` (RFC 5322 header block, unique
+    ``Message-ID``, flat text + attachments structure, 10 MiB / 5 x 3 MiB limits) and normalized to
+    canonical CRLF lines.  ``_append_and_verify`` then proves the Message-ID is absent from the target
+    folder, journals the intent, performs exactly ONE ``message save`` (never retried; an uncertain
+    outcome is journaled, not repeated) and succeeds only when the single stored message matches the
+    prepared one semantically (header sequence, text, attachment name / type / size / SHA-256).  The
+    result carries the usual envelope plus ``source`` (path, line-ending form, source / normalized
+    SHA-256) and ``verified = "content"``.
+    """
+    from . import draft_attachments as da
+    from . import draft_raw_eml as dre
+
+    root, bound_account = da.bind_attachment_mode(
+        workspace_root=workspace_root,
+        journal=journal,
+        account=account,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+        lock_root=lock_root,
+    )
+    prepared = dre.load_raw_eml(root, raw_eml)
+    target_folder = folder or resolve_drafts_folder(account=bound_account, folders=folders)
+    source = {
+        "path": prepared.source_path,
+        "line_endings": prepared.line_endings,
+        "normalized": prepared.normalized,
+        "source_sha256": prepared.source_sha256,
+        "normalized_sha256": prepared.normalized_sha256,
+    }
+    return _append_and_verify(
+        raw_message=prepared.text,
+        normalized_id=prepared.message_id,
+        date_header=prepared.date,
+        subject=prepared.subject,
+        to=prepared.to,
+        body="",
+        cc=None,
+        from_addr=None,
+        prepared=prepared.attachments,
+        folder=target_folder,
+        account=bound_account,
+        journal=journal,
+        action="save_raw_draft",
+        record_item=True,
+        extra_attempt={
+            "source_path": prepared.source_path,
+            "source_line_endings": prepared.line_endings,
+            "source_sha256": prepared.source_sha256,
+            "normalized_sha256": prepared.normalized_sha256,
+        },
+        verify=lambda stored: dre.compare_stored_raw(stored, prepared),
+        extra_result={"source": source},
+    )
 
 
 def delete_draft(

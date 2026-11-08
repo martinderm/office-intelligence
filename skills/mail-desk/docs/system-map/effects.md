@@ -195,6 +195,26 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 * **Restgrenzen:** Pfadrennen unter Windows (kein `O_NOFOLLOW`) werden vor dem Lesen erkannt, nicht
   verhindert; Hardlinks in der Zone; Server-Normalisierung und `message export` nur offline modelliert.
 
+### 5.3 Raw-EML-Import (Issue #18, zweite Lieferung)
+
+* **Lesende Wirkung auf den Consumer-Workspace:** genau eine explizit benannte reguläre `*.eml` der
+  vier Zonen (nicht `data/mail-desk/`), begrenzt auf 10 MiB (aus `fstat` vor dem Lesen, +1 Byte
+  Wachstumsprobe), ohne Symlink-/Junction-Querung; die Datei wird nie verändert, ausgeführt,
+  entpackt oder gelöscht. Einzige lokale Schreibwirkung ist das Draft-Journal (`attempts` vor dem
+  APPEND, danach `items`), weiterhin nur Metadaten (Pfad, SHA-256, Zeilenende-Form, Anhangsdaten).
+* **Mailbox-Wirkung:** identisch zu 5.2 ohne Replace: Eindeutigkeitssuche, genau ein
+  `message save`-APPEND über die bestehende binäre stdin-Pipe (nie wiederholt, auch nicht bei
+  transient aussehenden Fehlern), danach dieselbe Suche und `message export` genau einer Envelope.
+  Kein SMTP, kein Löschen, kein `flag`/`expunge`. Die Nutzlast ist die auf kanonisches CRLF
+  normalisierte Mail plus ein Transport-CRLF (Himalaya-1.2.0-`lines()`-Verhalten, offline modelliert).
+* **Fehlerklassen:** Validierungsfehler `raw_eml_*` und Bindungsfehler **vor** jedem Mailbox-Kontakt;
+  danach wie 5.2 `draft_message_id_not_unique`, `draft_journal_write_failed` (vor dem APPEND),
+  `draft_save_failed`, `draft_append_outcome_unknown`, `draft_verification_failed`. Fehlertexte
+  enthalten nie Dateiinhalt, Aufruferpfade oder Backend-Stderr.
+* **Restgrenzen:** wie 5.2 (Windows ohne `O_NOFOLLOW`, Hardlinks, Export zuerst auf der Platte,
+  Server-Normalisierung nur offline modelliert); zusätzlich ist der Nachweis semantisch, nicht
+  bytegleich, und das Profil nimmt bewusst nur UTF-8/US-ASCII-Text plus Base64-Anhänge.
+
 ---
 
 ## 7. Lokale Injection-Barrier (Issue #62)

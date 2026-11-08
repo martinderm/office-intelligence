@@ -460,6 +460,43 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
 10. **Größe:** die 10-MiB-Grenze der vollständig serialisierten Mail gilt immer (auch 0 Anhänge,
     `[]`-Save/-Replace), vor jedem APPEND.
 
+#### 6.1b Raw-EML-Import (Issue #18, zweite Lieferung)
+
+`save_raw_draft` in [`scripts/core/drafts.py`](../../scripts/core/drafts.py), Profil und Dateileser in
+[`scripts/core/draft_raw_eml.py`](../../scripts/core/draft_raw_eml.py) (Leser gemeinsam mit den Anhängen:
+`draft_attachments.read_zone_file`). Kein zweiter Schreibpfad: Schritte 5-7 sind derselbe
+`_append_and_verify`-Kern wie in 6.1a, nur der Vergleich im Rücklesen ist
+`compare_stored_raw`. Eingang CLI `save-raw-draft --eml`, Manifest `save_raw_draft`.
+
+1. **Bindung (vor jedem Dateizugriff):** wie 6.1a Schritt 1 (`bind_attachment_mode`: Workspace-Wurzel,
+   Journal, echte Lease, gebundener Account; `draft_binding_failed` / `draft_lock_missing`).
+2. **Pfad und Lesen (`load_raw_eml`):** `validate_zone_path` (vier Zonen, nicht `data/mail-desk/`),
+   Endung `.eml` (`raw_eml_extension_invalid`), dann `read_zone_file` mit Grenze 10 MiB aus `fstat`
+   (Link-/Junction-Abweisung, Handle-Identität vor dem ersten Byte, Wachstumsprobe,
+   Nachprüfung); Fehler `raw_eml_*` (`path_invalid`, `path_forbidden`, `unreadable`, `link_refused`,
+   `not_regular_file`, `changed`, `empty`, `too_large`).
+3. **Profilprüfung (`validate_raw_eml`, rein, ohne Dateisystem/Mailbox):** UTF-8 / NUL / einzelnes CR /
+   Zeilenlänge, Normalisierung zu CRLF (+ ein abschließendes CRLF) mit erneuter 10-MiB-Prüfung
+   (`raw_eml_message_too_large`), strikter Header-Block, genau eine gültige Message-ID, `To`/`Date`,
+   Singleton-Header, MIME-Version, Struktur `text/plain` | flaches `multipart/mixed`, Parser-Defekte,
+   Anhänge (streng Base64, höchstens 5 mal 3 MiB, gültige eindeutige Namen). Ergebnis
+   `PreparedRawEml` (normalisierte Bytes, Message-ID, Datum, Anhänge, Summary, SHA-256 von Quelle
+   und Normalform). Jeder Fehler endet **vor** jedem Mailbox-Kontakt und jedem Journal-Eintrag.
+4. **Ziel:** Drafts-Ordner (6.1 Schritt 1) oder explizit `--folder`/`folder`.
+5. **Eindeutigkeit vorab, Journal `append_started`, ein APPEND:** wie 6.1a Schritte 5-6; der
+   Journal-Eintrag trägt zusätzlich `source_path`, `source_sha256`, `normalized_sha256`,
+   `source_line_endings`. Nutzlast = normalisierte Mail + das eine Transport-CRLF; Himalayas
+   `lines()`/CRLF-Join-Normalisierung stellt exakt die normalisierte Mail her.
+6. **Rücklesen:** genau eine Envelope zur Message-ID, `message export`; `compare_stored_raw` validiert die
+   gespeicherte Mail mit demselben Profil und vergleicht die Summary (Struktur, Header-Folge je Name,
+   `header_order`, Text, Anhangsanzahl, Name/Typ/Größe/SHA-256); sonst `appended_unverified` und
+   `draft_verification_failed`.
+7. **Ende:** `saved_verified` plus Draft-Journal-Item (`action = save_raw_draft`); Ergebnis wie ein
+   Builder-Entwurf plus `source`. Kein Replace für Rohmails.
+
+Zustandsautomat: wie 6.1a, ohne die Replace-Zustände (`replace_old_pending_delete`, `old_delete_failed`,
+`replaced`).
+
 ### 6.2 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 
 Implementiert in [`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py)

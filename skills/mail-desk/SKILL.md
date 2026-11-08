@@ -295,7 +295,7 @@ Entwurf in den Drafts-Ordner legt.
   APPEND abgewiesen, nie gekürzt, geteilt, komprimiert oder verlinkt. Der Pfad ist
   der bestehende binäre stdin-APPEND (genau ein Versuch, nie wiederholt); Anhänge
   sind Base64 (`multipart/mixed`, Text zuerst), kein HTML, keine Inline-Bilder,
-  keine Signatur, keine beliebige EML. Der Anhangsmodus verlangt Workspace-Wurzel
+  keine Signatur, keine beliebige EML (eine vorbereitete Rohmail hat den eigenen, engen Pfad `save-raw-draft`). Der Anhangsmodus verlangt Workspace-Wurzel
   (aus `MAIL_DESK_DATA_DIR`/`data/mail-desk`), echte Workspace-Lease
   (`--lease-id`/`--conversation-id` oder `WORKSPACE_LOCK_LEASE_ID`/
   `WORKSPACE_LOCK_CONVERSATION_ID`; nie aus einem Manifest) und den im Workspace
@@ -325,6 +325,31 @@ Entwurf in den Drafts-Ordner legt.
   erst nach vollständig verifizierter neuer Mail und erneuter Auflösung per
   Message-ID gelöscht; Teilausgänge (`draft_replace_old_not_deleted`) tragen das
   neue Envelope und stehen im Journal.
+- **Vorbereitete Rohmail (Raw-EML, Issue #18, zweite Lieferung):** `save-raw-draft --eml PATH`
+  (Manifest `save_raw_draft` mit `eml`, optional `folder`; geschlossenes Schema, keine Lease im
+  Manifest) legt **eine** vorbereitete, reguläre `*.eml` aus den vier Datenzonen (nicht
+  `data/mail-desk/`, nie Symlink/Junction) als ungesendeten Entwurf ab - ohne Betreff-/Empfänger-/
+  Body-/`--attach`-Flags; die Mail ist die Datei. Es gibt **keinen zweiten Schreibpfad**: Bindung
+  (Workspace, Journal, echte Lease, gebundener Account **vor** dem Lesen), Message-ID-Vorprüfung,
+  Journal `append_started`, **genau ein** binärer stdin-APPEND (nie wiederholt, unklarer Ausgang
+  `draft_append_outcome_unknown` nur journalisiert) und semantisches Zurücklesen sind derselbe
+  `_append_and_verify`-Kern wie bei Builder-Entwürfen. Profil (alles andere fail-closed mit
+  `raw_eml_*`-Code): höchstens **10 MiB** (Datei und normalisierte Mail), gültiges UTF-8 ohne NUL
+  und ohne einzelnes CR, Zeilen höchstens 998 Oktette; **strikter RFC-5322-Header** (kein Leerraum
+  vor dem Doppelpunkt, Faltung nur per Leerzeichen/Tab, keine Steuerzeichen, Trennzeile Pflicht) mit
+  genau **einer** Message-ID der Form `<dot-atom@hostname>` sowie `To` und `Date`; Singleton-Header
+  (`From`, `To`, `Cc`, `Bcc`, `Subject`, `Date`, `Sender`, `Reply-To`, `In-Reply-To`, `References`,
+  MIME-Header) höchstens einmal; Struktur `text/plain` (UTF-8/US-ASCII) oder flach `multipart/mixed`
+  mit Text zuerst und höchstens **5** Base64-`attachment`-Teilen von je höchstens **3 MiB**
+  (dekodiert) mit gültigem, eindeutigem Dateinamen; kein HTML/Alternative, keine geschachtelten
+  oder `message/*`-Teile, keine Preamble/Epilog, kein Parser-Defekt. Fehlende oder doppelte
+  Message-ID, fremde Kodierung oder ein überschrittenes Limit stoppen **vor** jedem Mailbox-Kontakt
+  und jedem Journal-Eintrag. **CRLF-Normalisierung:** Himalaya 1.2.0 liest stdin zeilenweise, setzt
+  mit CRLF zusammen und entfernt jedes `\r`; deshalb wird die Mail **vor** dem APPEND auf kanonisches
+  CRLF normalisiert (genau ein abschließendes CRLF falls fehlend, Leerzeilen am Ende bleiben) und
+  die Journal-/Ergebnis-Angabe `source` nennt Zeilenende-Form sowie SHA-256 von Quelle und
+  Normalform. Der Nachweis ist semantisch (Header-Folge, Text, Anhang-Name/Typ/Größe/SHA-256),
+  nicht bytegleich. Offline modelliert, kein Live-Nachweis.
 
 Details: [`references/cli-operations.md`](references/cli-operations.md),
 [`references/backends/himalaya.md`](references/backends/himalaya.md).
