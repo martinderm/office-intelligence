@@ -110,6 +110,7 @@ Vertragserweiterung und Integrationsgrenzen: §32.
 │  │   + batch_cli + catalog_inspect + sign_manifest                     │
 │  ├─ Core Domain: scripts/core/ (58 getrackte .py-Dateien)              │
 │  │   ├─ drafts.py (Draft-API: save/delete/replace)                     │
+│  │   ├─ draft_attachments.py (Anhänge: Grenzen, sicheres Lesen, §41)   │
 │  │   ├─ himalaya.py (CLI-Adapter, UNC-Normalisierung, Fail-Fast)       │
 │  │   ├─ classifier.py (Facade + matching/ project, topic, date & amb.) │
 │  │   ├─ quarantine/ (6 kanonische Quarantäne-Owner + Legacy-Shims)      │
@@ -2124,3 +2125,55 @@ unverändert.
   77 unter `scripts/` (62 unter `scripts/core/`), 99 Testmodule unter `tests/`.
 
 L1: [Paket-System-Map §11](../../../../docs/system-map/README.md#11-issue-64-verbindliche-kontext-konsultation).
+
+---
+
+## 41. Issue #18 — Entwürfe mit Dateianhängen (erste Lieferung)
+
+**Ziel:** Die vollständige Mail (Absender, Empfänger, Klartext, normale Dateianhänge) liegt
+ungesendet und versandbereit im serverseitigen Drafts-Ordner. Weder automatischer Versand noch
+ein Zustellbarkeitsnachweis; Offline-Tests sind **kein** Live-Nachweis.
+
+**Umfang:** Klartext plus bis zu 5 explizit benannte reguläre lokale Dateien aus den vier
+Consumer-Datenzonen; kein HTML, keine Inline-Bilder, keine Signatur, keine beliebige EML
+(`save_raw_draft` ist nicht beschlossen), kein Download/Suche/Entpacken, keine Link-/Cloud-
+Automation. Eine zweite Transportimplementierung gibt es nicht.
+
+**Module und Verträge:**
+- [`scripts/core/draft_attachments.py`](../../scripts/core/draft_attachments.py) (neu): Grenzen
+  (`MAX_ATTACHMENTS = 5`, `MAX_ATTACHMENT_BYTES = 3 MiB`, `MAX_MIME_MESSAGE_BYTES = 10 MiB`,
+  `MAX_READBACK_BYTES = 12 MiB`), geschlossene Anhangsangabe, Dateinamen-/Content-Type-/Pfad-
+  Validierung, zonenbegrenztes sicheres Lesen (`load_attachments`), Workspace-/Journal-/Lease-/
+  Account-Bindung (`bind_attachment_mode`), semantisches Rücklesen (`compare_stored_message`).
+- [`scripts/core/drafts.py`](../../scripts/core/drafts.py): `build_draft_message(attachments=…)`
+  (multipart/mixed, Base64 per Standardbibliothek, Header-/Message-ID-Validierung für **alle**
+  Entwürfe), `save_draft`/`replace_draft` mit Anhangsmodus, `DraftJournal.record_attempt`,
+  `DraftPartialError`, `ATTACHMENTS_UNSPECIFIED`.
+- [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py): `fetch_raw_message_eml(max_bytes=…)`
+  (begrenzt, Default unverändert) und `find_envelopes_by_message_id` (eindeutige Suche statt
+  erster Treffer).
+- [`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py):
+  `--attach`, `--drop-attachments`, `--old-message-id`, `--lease-id`, `--conversation-id`;
+  Manifest `attachments`, `old_message_id` (Lease nie aus dem Manifest). Ein bisher still
+  ignorierter `attachments`-Schlüssel eines Manifests wird nun verarbeitet.
+
+**Zustandsautomat (Anhangsmodus):** Bindung → Dateien → Größen → (Replace: alten Entwurf lesen +
+Identität) → Eindeutigkeit vorab → Journal `append_started` → genau ein APPEND →
+`append_failed` | `append_outcome_unknown` | Rücklesen → `appended_unverified` | `saved_verified`
+→ (Replace) `replace_old_pending_delete` → `old_delete_failed` | `replaced`. Der alte Entwurf
+wird erst nach `saved_verified` und erneuter Auflösung per Message-ID gelöscht.
+
+**Datenverlustschutz:** `replace_draft` ohne Anhangsliste liest den alten Entwurf; Anhänge oder
+Nicht-Body-Teile (auch Altbestand aus Mailclients) → `draft_replace_would_drop_attachments`,
+unlesbar → `draft_old_unreadable`. Mit Liste (auch `[]`) ist sie die vollständige Zielmenge.
+
+**Sicherheit:** Fehlertexte nennen nur Indizes/feste Codes; Backend-Ursachen werden nicht verkettet;
+`DraftAttachment.data` fehlt in `repr`; das Journal enthält nur Metadaten. Pfadrennen werden vor dem
+ersten Byte erkannt (Handle-Identität), nicht verhindert (Windows ohne `O_NOFOLLOW`).
+
+**Tests:** `tests/test_draft_attachments_{files,mime,save,replace,client}.py` mit
+`tests/draft_attachment_fixtures.py` (Subprozess-Grenze mit echtem `run_himalaya`, echter
+Workspace-Lock-Guard über `OI_TEST_WORKSPACE_LOCK_ROOT`); `himalaya_fixtures.DraftRunner` kennt
+`message export`.
+
+L1: [Paket-System-Map §12](../../../../docs/system-map/README.md).

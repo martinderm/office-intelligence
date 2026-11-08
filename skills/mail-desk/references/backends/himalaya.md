@@ -130,6 +130,24 @@ journal.
   (schema 1: `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, plus
   `old_envelope_id`/`crash_window` on replace). The batch
   `batch-recovery-journal.json` contract stays untouched.
+- **Attachments (Issue #18):** a draft with attachments is the same `multipart/mixed`
+  raw message appended through the same single binary-stdin `message save -o plain`
+  call; there is no second transport. Before the APPEND the backend contract adds two
+  read-only lookups: an unambiguous Message-ID search (`envelope list -s 500`, header
+  read of every exact-subject candidate plus the three newest envelopes, at most 50
+  header reads; a full window, too many candidates or an unreadable candidate means
+  "not provable" and fails closed) that must find nothing, and, for replace, a bounded
+  `message export -F -d` of the old draft. After the APPEND the same search must find
+  exactly one envelope and `message export` (bounded to 12 MiB by file size before
+  loading) is compared semantically. The `message export` semantics and server-side
+  normalisation are modelled offline only; they are not live-proven. Server limits
+  stay in force: a refusal is `draft_save_failed`, a lost connection after the payload
+  is `draft_append_outcome_unknown` and never retried. The draft journal gains an
+  additive `attempts` map keyed by normalised Message-ID (`append_started` written
+  before the APPEND, then `append_failed` / `append_outcome_unknown` /
+  `appended_unverified` / `saved_verified` / `replace_old_pending_delete` /
+  `old_delete_failed` / `replaced`, with metadata only: folder, subject, to, size,
+  attachment file name / type / size / SHA-256).
 
 ### Bounded diagnostic draft APPEND (`diagnose-draft`, opt-in, default off)
 

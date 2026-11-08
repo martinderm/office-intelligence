@@ -582,8 +582,15 @@ def fetch_raw_message_eml(
     folder: str = "INBOX",
     account: str | None = None,
     timeout: int = 30,
+    max_bytes: int | None = None,
 ) -> bytes:
-    """Fetch raw RFC 822 .eml bytes via himalaya message export -F."""
+    """Fetch raw RFC 822 .eml bytes via himalaya message export -F.
+
+    ``max_bytes`` (default ``None``: unchanged unbounded behaviour) makes the read
+    bounded: an exported file larger than the bound is rejected from its file size
+    before any of it is loaded (``HimalayaInvocationError`` /
+    ``himalaya_export_too_large``).
+    """
     with tempfile.TemporaryDirectory() as tmp_dir:
         dest_eml = Path(tmp_dir) / f"msg_{env_id}.eml"
         args = [
@@ -595,7 +602,72 @@ def fetch_raw_message_eml(
         run_himalaya(args, account=account, timeout=timeout, max_retries=2)
         if not dest_eml.exists() or dest_eml.stat().st_size == 0:
             raise RuntimeError(f"Himalaya export produced empty or missing .eml for envelope {env_id}")
+        if max_bytes is not None and dest_eml.stat().st_size > max_bytes:
+            raise HimalayaInvocationError(
+                "himalaya_export_too_large",
+                "The exported message exceeds the bounded read-back size; it was not loaded.",
+            )
         return dest_eml.read_bytes()
+
+
+#: Newest-first envelope window inspected for an unambiguous Message-ID lookup.
+UNIQUE_LOOKUP_ENVELOPE_WINDOW = 500
+
+#: Upper bound of header reads one unambiguous lookup may spend.
+UNIQUE_LOOKUP_MAX_HEADER_READS = 50
+
+
+def find_envelopes_by_message_id(
+    folder: str,
+    message_id: str,
+    *,
+    subject: str = "",
+    account: str | None = None,
+) -> tuple[list[str], bool]:
+    """Return ``(matching envelope ids, complete)`` for one Message-ID in ``folder``.
+
+    Unlike ``verify_in_target_folder`` this does not stop at the first match: every
+    candidate (all exact-subject matches plus the three newest envelopes) is header
+    checked so a duplicate is visible.  ``complete`` is ``False`` whenever absence of
+    further duplicates cannot be established -- the listing filled the whole window,
+    more candidates than ``UNIQUE_LOOKUP_MAX_HEADER_READS`` exist or a header read
+    failed -- and a caller needing uniqueness must then fail closed.
+    """
+    wanted = normalize_message_id(message_id)
+    out = run_himalaya(
+        ["-o", "json", "envelope", "list", "-f", folder, "-s", str(UNIQUE_LOOKUP_ENVELOPE_WINDOW)],
+        account=account, timeout=30, max_retries=2,
+    )
+    if "[" in out:
+        out = out[out.find("["):]
+    envelopes = json.loads(out)
+    complete = len(envelopes) < UNIQUE_LOOKUP_ENVELOPE_WINDOW
+    expected_subject = subject.strip().lower()
+    candidates: list[str] = []
+    for env in envelopes:
+        if str(env.get("subject", "")).strip().lower() == expected_subject:
+            candidates.append(str(env["id"]))
+    for env in envelopes[:3]:
+        if str(env["id"]) not in candidates:
+            candidates.append(str(env["id"]))
+    if len(candidates) > UNIQUE_LOOKUP_MAX_HEADER_READS:
+        complete = False
+        candidates = candidates[:UNIQUE_LOOKUP_MAX_HEADER_READS]
+    matches: list[str] = []
+    for candidate in candidates:
+        try:
+            header = run_himalaya(
+                ["message", "read", "--preview", "-H", "Message-Id", "-f", folder, candidate],
+                account=account, timeout=10, max_retries=1,
+            )
+        except Exception:  # noqa: BLE001 - an unreadable candidate makes absence unprovable
+            complete = False
+            continue
+        for line in header.splitlines():
+            if line.lower().startswith("message-id:") and normalize_message_id(line.split(":", 1)[1]) == wanted:
+                matches.append(candidate)
+                break
+    return matches, complete
 
 
 def get_single_email_details(

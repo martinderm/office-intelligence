@@ -70,11 +70,21 @@ from .drafts import (
     DraftJournal,
     DraftJournalCorruptedError,
     DraftsFolderUnresolvedError,
+    DraftPartialError,
+    ATTACHMENTS_UNSPECIFIED,
     build_draft_message,
     delete_draft,
     replace_draft,
     resolve_drafts_folder,
     save_draft,
+)
+from .draft_attachments import (
+    MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENTS,
+    MAX_MIME_MESSAGE_BYTES,
+    DraftAttachment,
+    DraftAttachmentError,
+    load_attachments,
 )
 from .attachment_quarantine_index import (
     INDEX_FILENAME,

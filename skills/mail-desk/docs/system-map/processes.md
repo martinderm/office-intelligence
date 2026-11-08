@@ -415,6 +415,39 @@ bleibt unberührt.
    `old_envelope_id` und `crash_window`. Ein unlesbares Journal endet fail-loud
    (`draft_journal_corrupted`).
 
+#### 6.1a Entwurf mit Dateianhängen (Issue #18)
+
+Erweitert `save_draft`/`replace_draft` in [`scripts/core/drafts.py`](../../scripts/core/drafts.py);
+Validierung, sicheres Lesen, Bindung und Rücklesen in
+[`scripts/core/draft_attachments.py`](../../scripts/core/draft_attachments.py). Kein zweiter
+Transport: dieselbe binäre stdin-Pipe, genau ein APPEND, nie wiederholt. Anhangsmodus =
+nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl. `[]` (replace).
+
+1. **Bindung (vor jedem Dateizugriff):** `workspace_root` + Journal (`<root>/data/mail-desk`),
+   echte Lease über den geteilten Guard (`allow_legacy=False`, `draft_lock_missing`), im Workspace
+   gebundener, nicht-`null` Account (`draft_binding_failed`).
+2. **Dateien lesen (`load_attachments`):** höchstens 5; Pfad nur in den vier Zonen (ohne
+   `data/mail-desk/`); Kette ab Workspace-Wurzel ohne Symlink/Junction (`lstat`); `open` →
+   `fstat`-Identität == `lstat`-Identität **vor** dem ersten Byte, `realpath` in Zone, Lesen
+   bis `min(Größe, 3 MiB)+1`, Nachprüfung. Verstoß → `attachment_*` (inhaltsfrei).
+3. **Bauen:** `build_draft_message(attachments=…)` → `multipart/mixed`, Base64, Header-/Message-ID-
+   Validierung; serialisierte Länge ≤ 10 MiB, sonst `message_too_large` vor jedem Mailbox-Schreiben.
+4. **Ziel:** Drafts-Ordner (6.1 Schritt 1) erst nach den lokalen Prüfungen; Replace liest zusätzlich den
+   alten Entwurf begrenzt (`message export`) und bestätigt dessen Message-ID.
+5. **Eindeutigkeit vorab:** die neue Message-ID darf im Ordner nicht vorkommen
+   (`find_envelopes_by_message_id`; unbeweisbare Abwesenheit → `draft_message_id_not_unique`).
+6. **Journal `append_started`**, dann **ein** APPEND. Eindeutiger Fehler → `append_failed`
+   (`draft_save_failed`); unklarer Ausgang (Timeout, transient, Launch, Pipe, fremde Exception) →
+   `append_outcome_unknown` (`draft_append_outcome_unknown`). Ursachen werden nicht verkettet.
+7. **Rücklesen:** genau **eine** Envelope zur Message-ID, `message export` (≤ 12 MiB), semantischer
+   Vergleich (Header, Text, Anhangsanzahl, Name, MIME, Disposition, dekodierte Länge + SHA-256);
+   sonst `appended_unverified` + `draft_verification_failed`, alter Entwurf unberührt.
+8. **Replace-Ende:** Journal-Item + `replace_old_pending_delete`; alten Entwurf per Message-ID neu
+   auflösen (genau eine Treffer-Envelope → `delete_draft`; keine → `old_draft_not_found`; mehrdeutig/
+   Fehler → `draft_replace_old_not_deleted` mit neuem Envelope).
+9. **Auslassung:** `replace_draft` ohne Anhangsliste liest den alten Entwurf zuerst; Anhänge/
+   Nicht-Body-Teile → `draft_replace_would_drop_attachments`, unlesbar → `draft_old_unreadable`.
+
 ### 6.2 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 
 Implementiert in [`scripts/core/diagnostics.py`](../../scripts/core/diagnostics.py)

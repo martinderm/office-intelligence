@@ -265,6 +265,19 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **Integrität (fail-closed):** Ein unlesbares Journal oder eine ungültige
   Root-Form endet mit `DraftJournalCorruptedError` (`draft_journal_corrupted`);
   die Datei wird nie stillschweigend überschrieben oder geleert.
+* **Additiv `runs.<run_id>.attempts` (Issue #18, Schema bleibt `1`):** je normalisierter
+  Message-ID ein Eintrag eines Anhangs-APPEND (`DraftJournal.record_attempt`), geschrieben **vor**
+  dem APPEND: `message_id`, `status` (`append_started` → `append_failed` | `append_outcome_unknown` |
+  `appended_unverified` | `saved_verified` → bei Replace `replace_old_pending_delete` →
+  `old_delete_failed` | `replaced`), `action`, `folder`, `subject`, `to`, `date`, `size_bytes`,
+  `attachment_count`, `attachments` (`filename`, `content_type`, `size`, `sha256`; **nie** Inhalt),
+  bei Replace `old_envelope_id`, `old_message_id`, `old_attachment_count`, `old_status`, sowie
+  `reason`/`problems` (feste Codes), `envelope_id` nach Verifikation, `created_at`/`updated_at`.
+  Ältere Journale ohne `attempts` bleiben gültig; `items` bleibt unverändert.
+* **Draft-Anhang (`DraftAttachment`, nur im Speicher):** [`scripts/core/draft_attachments.py`](../scripts/core/draft_attachments.py)
+  — `filename`, `content_type`, `data` (nicht in `repr`), `size`, `sha256`; Grenzen
+  `MAX_ATTACHMENTS = 5`, `MAX_ATTACHMENT_BYTES = 3 MiB`, `MAX_MIME_MESSAGE_BYTES = 10 MiB`,
+  `MAX_READBACK_BYTES = 12 MiB`.
 
 ### 5.5 Replies-Needed-Log (`replies-needed.jsonl`) — Task-Desk-Eingang (Issue #16, doc-only)
 

@@ -570,3 +570,29 @@ Wissensmutation. `classifier.py` und die Matching-Module bleiben unverändert,
 L2: [Mail-Desk §40](../../skills/mail-desk/docs/system-map/README.md#40-issue-64--kontext-konsultation-und-anti-duplication).
 Tests: `skills/mail-desk/tests/test_context_consultation.py`,
 `skills/mail-desk/tests/test_synthesis_consultation_docs.py`.
+
+---
+
+## 12. Issue #18: Entwürfe mit Dateianhängen (erste Lieferung)
+
+Der bestehende Draft-Builder und der bestehende binäre stdin-APPEND
+(`skills/mail-desk/scripts/core/drafts.py`) tragen jetzt Klartext **und** bis zu 5
+explizit benannte reguläre Dateien aus den vier Consumer-Datenzonen
+(`memory/references/`, `memory/evidence/`, `memory/cloud/`, `data/` ohne
+`data/mail-desk/`): höchstens 3 MiB je Originaldatei und höchstens 10 MiB für die
+**vollständig serialisierte** MIME-Mail (Base64/CRLF/Header/Grenzen eingerechnet);
+Überschreitung wird vor dem APPEND abgewiesen, nie gekürzt, geteilt, komprimiert
+oder verlinkt. Der Anhangsmodus verlangt Workspace-Wurzel, echte Workspace-Lease
+(`allow_legacy=False`) und den im Workspace gebundenen Account **vor** jedem
+Dateizugriff; Dateien werden begrenzt, ohne Symlink-/Junction-Querung und mit
+Handle-Identitätsprüfung vor dem ersten Byte gelesen und nur verpackt. Genau ein
+APPEND, kein Retry bei unklarem Ausgang; Erfolg erst nach semantischem Rücklesen
+genau einer gespeicherten Mail (Header, Text, Anzahl, Dateiname, MIME, dekodierte
+SHA-256), sonst `draft_verification_failed` ohne Löschen des alten Entwurfs. Ersetzen
+ohne Anhangsangabe weigert sich bei einem alten Entwurf mit Anhängen; mit
+Liste (auch `[]`) gilt die vollständige Zielmenge. Das Draft-Journal führt additiv
+`attempts` (nur Metadaten). Kein HTML/Inline/Signatur, keine beliebige EML, kein
+Live-Nachweis.
+
+L2: [Mail-Desk §41](../../skills/mail-desk/docs/system-map/README.md#41-issue-18--entwürfe-mit-dateianhängen-erste-lieferung).
+Tests: `skills/mail-desk/tests/test_draft_attachments_*.py`.

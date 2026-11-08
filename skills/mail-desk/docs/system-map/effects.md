@@ -172,6 +172,25 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   Einmal-Marker wird vor dem ersten Prozess konsumiert (Replay →
   `diagnostic_replay_refused`).
 
+### 5.2 Entwürfe mit Dateianhängen (Issue #18)
+
+* **Lesende Wirkung auf den Consumer-Workspace:** nur die explizit benannten regulären Dateien der
+  vier Zonen, begrenzt (≤ 3 MiB, +1 Byte Wachstumsprobe), ohne Symlink-/Junction-Querung, ohne
+  `data/mail-desk/`; kein Schreiben, Ausführen, Entpacken, Suchen oder Laden. Einzige lokale
+  Schreibwirkung bleibt das Draft-Journal (`attempts` vor dem APPEND).
+* **Mailbox-Wirkung:** genau ein `message save`-APPEND über die bestehende binäre stdin-Pipe
+  (nie wiederholt), vorher zwei bis drei lesende Aufrufe (Eindeutigkeit, ggf. alter Entwurf),
+  danach lesend `envelope list`, `message read -H`, `message export` (≤ 12 MiB); bei Replace erst
+  nach verifizierter neuer Mail `flag add deleted` + `folder expunge` auf die per Message-ID neu
+  aufgelöste alte Envelope. Kein SMTP, kein `message send`.
+* **Fehlerklassen:** eindeutig gescheitert (`draft_save_failed`), unklarer Ausgang
+  (`draft_append_outcome_unknown`: Timeout, transient, Launch, Pipe, fremde Exception), nicht
+  verifizierbar (`draft_verification_failed`), Teilausgang (`draft_replace_old_not_deleted`,
+  `draft_journal_write_failed` mit Hinweis auf das tatsächliche Mailbox-Ergebnis). Backend-
+  Ursachen werden nicht verkettet; weder Fehlertexte noch Tracebacks tragen Anhangsinhalt.
+* **Restgrenzen:** Pfadrennen unter Windows (kein `O_NOFOLLOW`) werden vor dem Lesen erkannt, nicht
+  verhindert; Hardlinks in der Zone; Server-Normalisierung und `message export` nur offline modelliert.
+
 ---
 
 ## 7. Lokale Injection-Barrier (Issue #62)

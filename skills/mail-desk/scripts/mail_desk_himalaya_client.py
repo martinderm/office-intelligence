@@ -128,6 +128,35 @@ def _machine_arguments(argv: list[str]) -> bool:
     )
 
 
+def _add_attachment_arguments(parser: argparse.ArgumentParser, *, replace: bool) -> None:
+    """Attachment flags of ``save-draft`` / ``replace-draft`` (plain text and local zone files only)."""
+    parser.add_argument(
+        "--attach",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help="Attach one regular file named by a workspace-relative path inside memory/references, "
+        "memory/evidence, memory/cloud or data (repeatable, at most 5, 3 MiB each, 10 MiB message).",
+    )
+    parser.add_argument("--lease-id", type=str, default=None, help="Workspace lock lease ID (attachment mode).")
+    parser.add_argument(
+        "--conversation-id", type=str, default=None, help="Workspace lock conversation ID (attachment mode)."
+    )
+    if replace:
+        parser.add_argument(
+            "--drop-attachments",
+            action="store_true",
+            help="Replace with NO attachments, knowingly (excludes --attach). Without --attach / "
+            "--drop-attachments an old draft that has attachments is never replaced.",
+        )
+        parser.add_argument(
+            "--old-message-id",
+            type=str,
+            default=None,
+            help="Message-ID of the draft being replaced (required with --attach / --drop-attachments).",
+        )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     common_parent = argparse.ArgumentParser(add_help=False)
     common_parent.add_argument(
@@ -212,6 +241,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Drafts folder (default: resolved dynamically from the mailbox).",
     )
+    _add_attachment_arguments(p_save_draft, replace=False)
 
     # delete-draft (\Deleted + EXPUNGE, never a UID MOVE)
     p_delete_draft = subparsers.add_parser(
@@ -246,6 +276,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="Drafts folder (default: resolved dynamically from the mailbox).",
     )
+    _add_attachment_arguments(p_replace_draft, replace=True)
 
     # diagnose-draft (issue #19: bounded, opt-in, diagnosis-only save_draft)
     p_diagnose = subparsers.add_parser(
@@ -277,7 +308,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Workspace-local data/mail-desk directory (optional; default is resolved).",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if getattr(args, "drop_attachments", False) and getattr(args, "attach", None):
+        parser.error("--drop-attachments and --attach exclude each other.")
+    return args
 
 
 # ==============================================================================
@@ -443,6 +477,13 @@ def _active_draft_journal(
     return drafts.DraftJournal(base, "drafts-" + get_iso_week_folder())
 
 
+def _draft_workspace_root(journal: "drafts.DraftJournal") -> Path:
+    """The consumer workspace that owns the journal's ``<root>/data/mail-desk`` directory."""
+    from core.readiness import workspace_root_from_data_dir
+
+    return workspace_root_from_data_dir(Path(journal.data_dir))
+
+
 def op_save_draft(
     to: str,
     subject: str,
@@ -454,11 +495,16 @@ def op_save_draft(
     from_addr: str | None = None,
     journal: "drafts.DraftJournal | None" = None,
     data_dir: Path | None = None,
+    attachments: Any = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Append a new unsent draft into the resolved Drafts folder.
 
     No approval gate: drafts are stored unsent and sending is out of scope. The
     envelope contract is ``{envelope_id, folder, subject, to, date, message_id}``.
+    ``attachments`` (list of workspace-relative zone paths / objects) switches to the attachment
+    mode of ``core.drafts.save_draft``; the workspace is the one owning ``data/mail-desk``.
     """
     active_journal = _active_draft_journal(journal, data_dir)
     return drafts.save_draft(
@@ -470,6 +516,10 @@ def op_save_draft(
         cc=cc,
         from_addr=from_addr,
         journal=active_journal,
+        attachments=attachments,
+        workspace_root=_draft_workspace_root(active_journal) if attachments else None,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
     )
 
 
@@ -503,13 +553,20 @@ def op_replace_draft(
     from_addr: str | None = None,
     journal: "drafts.DraftJournal | None" = None,
     data_dir: Path | None = None,
+    attachments: Any = drafts.ATTACHMENTS_UNSPECIFIED,
+    old_message_id: str | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     """Replace a draft: append the new draft first, then delete the old one.
 
     The new-then-delete order and its documented crash window are owned by
     ``core.drafts.replace_draft``; the journal records both envelope ids.
+    ``attachments`` omitted keeps an old draft with attachments untouched (refusal); a list
+    (``[]`` = remove knowingly) is the complete desired set and needs ``old_message_id``.
     """
     active_journal = _active_draft_journal(journal, data_dir)
+    explicit = attachments is not drafts.ATTACHMENTS_UNSPECIFIED and attachments is not None
     return drafts.replace_draft(
         old_envelope_id,
         subject,
@@ -520,6 +577,11 @@ def op_replace_draft(
         cc=cc,
         from_addr=from_addr,
         journal=active_journal,
+        attachments=attachments,
+        old_message_id=old_message_id,
+        workspace_root=_draft_workspace_root(active_journal) if explicit else None,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
     )
 
 
@@ -753,6 +815,8 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     folder=op.get("folder"),
                     cc=op.get("cc"),
                     account=acc,
+                    # Lease credentials come only from the environment / CLI flags, never from a manifest.
+                    attachments=op.get("attachments"),
                 )
             elif action in ["delete_draft", "deletedraft"]:
                 res = op_delete_draft(
@@ -771,6 +835,8 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     folder=op.get("folder"),
                     cc=op.get("cc"),
                     account=acc,
+                    attachments=op["attachments"] if "attachments" in op else drafts.ATTACHMENTS_UNSPECIFIED,
+                    old_message_id=op.get("old_message_id"),
                 )
             elif action in ["inspect_attachments", "attachments"]:
                 op_account = op.get("account")
@@ -971,6 +1037,9 @@ def main() -> int:
                 folder=args.folder,
                 account=args.account,
                 cc=args.cc,
+                attachments=args.attach,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
             )
         elif sub == "delete_draft":
             result = op_delete_draft(
@@ -987,6 +1056,12 @@ def main() -> int:
                 folder=args.folder,
                 account=args.account,
                 cc=args.cc,
+                attachments=(
+                    [] if args.drop_attachments else (args.attach if args.attach else drafts.ATTACHMENTS_UNSPECIFIED)
+                ),
+                old_message_id=args.old_message_id,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
             )
         elif sub == "diagnose_draft":
             result = op_diagnose_draft(

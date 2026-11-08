@@ -57,10 +57,11 @@ from __future__ import annotations
 import email.utils
 import json
 import re
+import unicodedata
 from email.message import EmailMessage
 from email.policy import SMTPUTF8
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 from . import himalaya
 from .common import atomic_write_json, normalize_message_id, utc_now_iso
@@ -147,6 +148,36 @@ class DraftsFolderUnresolvedError(DraftError):
 
 class DraftJournalCorruptedError(DraftError):
     """The draft journal is unreadable or structurally invalid."""
+
+
+class DraftPartialError(DraftError):
+    """A partial outcome that must be reported honestly.
+
+    ``new_envelope`` carries the envelope contract of a draft that WAS appended (and, where stated,
+    verified) when a later step failed; it is ``None`` when nothing usable exists.
+    """
+
+    def __init__(self, reason_code: str, message: str, new_envelope: dict[str, Any] | None = None) -> None:
+        super().__init__(reason_code, message)
+        self.new_envelope = new_envelope
+
+
+#: Bounded reason codes of the attachment-mode save / replace paths.
+DRAFT_APPEND_OUTCOME_UNKNOWN_REASON = "draft_append_outcome_unknown"
+DRAFT_JOURNAL_WRITE_FAILED_REASON = "draft_journal_write_failed"
+DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON = "draft_message_id_not_unique"
+DRAFT_REPLACE_WOULD_DROP_ATTACHMENTS_REASON = "draft_replace_would_drop_attachments"
+DRAFT_OLD_UNREADABLE_REASON = "draft_old_unreadable"
+DRAFT_OLD_IDENTITY_MISMATCH_REASON = "draft_old_identity_mismatch"
+DRAFT_REPLACE_OLD_NOT_DELETED_REASON = "draft_replace_old_not_deleted"
+
+#: ``run_himalaya`` reason codes after which an APPEND may nevertheless have been committed.
+_UNKNOWN_APPEND_REASONS = frozenset(
+    {"himalaya_timeout", "himalaya_transient", "himalaya_launch_failed", "himalaya_stdin_failed"}
+)
+
+#: Sentinel: the ``attachments`` argument of ``replace_draft`` was omitted (not "no attachments").
+ATTACHMENTS_UNSPECIFIED: Any = object()
 
 
 def _parse_folder_list(raw: str) -> list[Any]:
@@ -237,6 +268,77 @@ def resolve_drafts_folder(
     )
 
 
+#: Bounded reason codes of the header / Message-ID validation (always content-free).
+DRAFT_HEADER_INVALID_REASON = "draft_header_invalid"
+DRAFT_MESSAGE_ID_INVALID_REASON = "draft_message_id_invalid"
+
+#: Control characters, line/paragraph separators and surrogates never belong into a header value.
+_HEADER_FORBIDDEN_CHARACTERS = frozenset("  ")
+
+_MESSAGE_ID_ATOM = r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+"
+_MESSAGE_ID_RE = re.compile(
+    rf"(?:<(?P<l1>{_MESSAGE_ID_ATOM})@(?P<d1>[A-Za-z0-9.-]+)>|(?P<l2>{_MESSAGE_ID_ATOM})@(?P<d2>[A-Za-z0-9.-]+))"
+)
+_MAX_MESSAGE_ID_CHARS = 255
+
+
+def _check_header_value(name: str, value: object) -> str:
+    """Return ``str(value)`` or fail closed when it could break out of its header line."""
+    text = str(value)
+    for char in text:
+        if (
+            unicodedata.category(char) in ("Cc", "Cs")
+            or char in _HEADER_FORBIDDEN_CHARACTERS
+        ):
+            raise DraftError(
+                DRAFT_HEADER_INVALID_REASON,
+                f"The '{name}' header contains a control, separator or invalid character; refusing.",
+            )
+    return text
+
+
+def _check_supplied_message_id(value: str) -> str:
+    text = str(value)
+    if len(text) > _MAX_MESSAGE_ID_CHARS or _MESSAGE_ID_RE.fullmatch(text) is None:
+        raise DraftError(
+            DRAFT_MESSAGE_ID_INVALID_REASON,
+            "The supplied Message-ID is not a plain <local@domain> identifier; refusing.",
+        )
+    return text
+
+
+def _attach_parts(message: EmailMessage, attachments: Iterable[Any]) -> None:
+    """Add validated attachment parts (Base64 via the standard library, always ``attachment``)."""
+    from . import draft_attachments as da
+
+    prepared = tuple(attachments)
+    if len(prepared) > da.MAX_ATTACHMENTS:
+        raise da.DraftAttachmentError(
+            "attachment_count_exceeded", f"at most {da.MAX_ATTACHMENTS} attachments are allowed per draft."
+        )
+    encoded_lower_bound = 0
+    for index, item in enumerate(prepared):
+        if not isinstance(item, da.DraftAttachment) or not isinstance(item.data, bytes):
+            raise da.DraftAttachmentError(
+                "attachment_spec_invalid", f"attachment #{index + 1} is not a prepared attachment."
+            )
+        da.validate_filename(item.filename, index=index)
+        da.validate_content_type(item.content_type, index=index)
+        if item.size > da.MAX_ATTACHMENT_BYTES or len(item.data) > da.MAX_ATTACHMENT_BYTES:
+            raise da.DraftAttachmentError(
+                "attachment_too_large", f"attachment #{index + 1} exceeds the {da.MAX_ATTACHMENT_BYTES} byte file limit."
+            )
+        encoded_lower_bound += 4 * ((len(item.data) + 2) // 3)
+    if encoded_lower_bound > da.MAX_MIME_MESSAGE_BYTES:
+        raise da.DraftAttachmentError(
+            "message_too_large",
+            f"the Base64 attachments alone exceed the {da.MAX_MIME_MESSAGE_BYTES} byte message limit.",
+        )
+    for item in prepared:
+        maintype, subtype = item.content_type.split("/", 1)
+        message.add_attachment(item.data, maintype=maintype, subtype=subtype, filename=item.filename)
+
+
 def build_draft_message(
     subject: str,
     to: str,
@@ -246,6 +348,7 @@ def build_draft_message(
     cc: str | None = None,
     date: str | None = None,
     message_id: str | None = None,
+    attachments: Iterable[Any] = (),
 ) -> tuple[str, str, str]:
     """Build a UTF-8 (SMTPUTF8) raw RFC-822 draft message with CRLF lines.
 
@@ -255,25 +358,51 @@ def build_draft_message(
     (``Content-Transfer-Encoding``), so no content is mangled.  The raw message
     uses canonical CRLF line endings and ends with a final CRLF, ready for the
     SMTP/IMAP wire and for the binary stdin transport.
+
+    Header values and a supplied ``message_id`` are validated strictly
+    (``draft_header_invalid`` / ``draft_message_id_invalid``).  ``attachments``
+    are prepared ``DraftAttachment`` objects (see ``core.draft_attachments``):
+    the message becomes ``multipart/mixed`` with the plain text first and one
+    Base64 ``attachment`` part each; its full serialized length must not exceed
+    ``MAX_MIME_MESSAGE_BYTES`` (``message_too_large``).  Without attachments the
+    output is byte-identical to the former builder.
     """
-    generated_id = message_id or email.utils.make_msgid()
+    subject_text = _check_header_value("Subject", subject)
+    to_text = _check_header_value("To", to)
+    cc_text = _check_header_value("Cc", cc) if cc else None
+    from_text = _check_header_value("From", from_addr) if from_addr else None
+    date_text = _check_header_value("Date", date) if date else None
+    generated_id = _check_supplied_message_id(message_id) if message_id is not None else email.utils.make_msgid()
     normalized_id = normalize_message_id(generated_id)
-    date_header = date or email.utils.formatdate(localtime=True)
+    date_header = date_text or email.utils.formatdate(localtime=True)
 
     message = EmailMessage(policy=SMTPUTF8_CRLF)
-    if from_addr:
-        message["From"] = str(from_addr)
-    message["To"] = str(to)
-    if cc:
-        message["Cc"] = str(cc)
-    message["Subject"] = str(subject)
+    if from_text:
+        message["From"] = from_text
+    message["To"] = to_text
+    if cc_text:
+        message["Cc"] = cc_text
+    message["Subject"] = subject_text
     message["Date"] = date_header
     message["Message-ID"] = generated_id if str(generated_id).startswith("<") else f"<{generated_id}>"
     message.set_content(str(body), subtype="plain", charset="utf-8")
+    prepared = tuple(attachments)
+    if prepared:
+        _attach_parts(message, prepared)
 
     raw_message = message.as_string()
     if not raw_message.endswith("\r\n"):
         raw_message += "\r\n"
+
+    if prepared:
+        from . import draft_attachments as da
+
+        if len(raw_message.encode("utf-8")) > da.MAX_MIME_MESSAGE_BYTES:
+            raise da.DraftAttachmentError(
+                "message_too_large",
+                f"the serialized MIME message exceeds the {da.MAX_MIME_MESSAGE_BYTES} byte limit; "
+                "nothing was truncated, split or uploaded.",
+            )
 
     return raw_message, normalized_id, date_header
 
@@ -306,6 +435,211 @@ def _resolve_saved_envelope(
     }
 
 
+def _try_attempt(journal: "DraftJournal", message_id: str, **fields: Any) -> bool:
+    """Best-effort attempt update after the APPEND; ``False`` when the journal write failed."""
+    try:
+        journal.record_attempt(message_id, **fields)
+    except OSError:
+        return False
+    return True
+
+
+def _append_and_verify(
+    *,
+    raw_message: str,
+    normalized_id: str,
+    date_header: str,
+    subject: str,
+    to: str,
+    body: str,
+    cc: str | None,
+    from_addr: str | None,
+    prepared: tuple[Any, ...],
+    folder: str,
+    account: str,
+    journal: "DraftJournal",
+    action: str,
+    record_item: bool,
+    extra_attempt: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attachment-mode core: unique-ID check, journaled intent, ONE APPEND, semantic read-back.
+
+    Never retries, never reports success without a semantic match of the single stored message and
+    never lets backend text (which could echo content) into an exception: causes are not chained and
+    only fixed reason codes appear in messages.
+    """
+    from . import draft_attachments as da
+
+    meta = [da.attachment_meta(item) for item in prepared]
+    size_bytes = len(raw_message.encode("utf-8"))
+    try:
+        existing, complete = himalaya.find_envelopes_by_message_id(
+            folder, normalized_id, subject=subject, account=account
+        )
+    except Exception:  # noqa: BLE001 - classified below without backend text
+        existing, complete = [], False
+    if existing or not complete:
+        raise DraftError(
+            DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON,
+            f"The Message-ID is already present in folder '{folder}' or its absence cannot be established; "
+            "nothing was appended.",
+        )
+    attempt_fields: dict[str, Any] = {
+        "action": action,
+        "folder": folder,
+        "subject": subject,
+        "to": to,
+        "date": date_header,
+        "size_bytes": size_bytes,
+        "attachment_count": len(meta),
+        "attachments": meta,
+        **(extra_attempt or {}),
+    }
+    try:
+        journal.record_attempt(normalized_id, status="append_started", **attempt_fields)
+    except OSError:
+        raise DraftError(
+            DRAFT_JOURNAL_WRITE_FAILED_REASON,
+            "The draft journal could not be written before the APPEND; nothing was appended.",
+        ) from None
+
+    stdin_payload = raw_message.encode("utf-8") + _STDIN_TRANSPORT_TERMINATOR
+    outcome: tuple[str, str] | None = None
+    try:
+        himalaya.run_himalaya(
+            ["message", "save", "-o", "plain", "-f", folder],
+            account=account,
+            stdin_bytes=stdin_payload,
+            max_retries=1,
+        )
+    except himalaya.HimalayaInvocationError as exc:
+        reason = str(getattr(exc, "reason_code", "unknown"))[:64]
+        outcome = ("unknown" if reason in _UNKNOWN_APPEND_REASONS else "failed", reason)
+    except ValueError:
+        outcome = ("failed", "request_invalid")
+    except Exception:  # noqa: BLE001 - any other backend exception leaves the outcome unknown
+        outcome = ("unknown", "backend_exception")
+    if outcome is not None:
+        kind, reason = outcome
+        journaled = _try_attempt(
+            journal,
+            normalized_id,
+            status="append_failed" if kind == "failed" else "append_outcome_unknown",
+            reason=reason,
+        )
+        suffix = "" if journaled else " The journal could not be updated; reconcile by Message-ID manually."
+        if kind == "failed":
+            raise DraftError(
+                DRAFT_SAVE_FAILED_REASON,
+                f"Draft APPEND to folder '{folder}' failed ({reason}); nothing was verified or deleted." + suffix,
+            )
+        raise DraftError(
+            DRAFT_APPEND_OUTCOME_UNKNOWN_REASON,
+            f"Draft APPEND to folder '{folder}' has an UNKNOWN outcome ({reason}); it was not retried and the "
+            f"draft may exist. Message-ID {normalized_id} is journaled for reconciliation." + suffix,
+        )
+
+    envelope_id: str | None = None
+    problems: list[str]
+    try:
+        found, complete = himalaya.find_envelopes_by_message_id(
+            folder, normalized_id, subject=subject, account=account
+        )
+        if len(found) != 1 or not complete:
+            problems = [f"lookup:found={len(found)}:complete={complete}"]
+        else:
+            stored = himalaya.fetch_raw_message_eml(
+                found[0], folder=folder, account=account, max_bytes=da.MAX_READBACK_BYTES
+            )
+            problems = da.compare_stored_message(
+                stored,
+                message_id=normalized_id,
+                subject=subject,
+                to=to,
+                body=body,
+                cc=cc,
+                from_addr=from_addr,
+                attachments=prepared,
+            )
+            envelope_id = found[0]
+    except Exception as exc:  # noqa: BLE001 - only the exception TYPE is reported, never its text
+        problems = [f"readback:{type(exc).__name__}"]
+    if problems or envelope_id is None:
+        journaled = _try_attempt(journal, normalized_id, status="appended_unverified", problems=problems[:8])
+        suffix = "" if journaled else " The journal could not be updated; reconcile by Message-ID manually."
+        raise DraftError(
+            DRAFT_VERIFICATION_FAILED_REASON,
+            f"The appended draft in folder '{folder}' could not be verified ({'; '.join(problems[:8])}); it may "
+            "exist unverified and no old draft was touched. Success is not reported." + suffix,
+        )
+
+    envelope = {
+        "envelope_id": envelope_id,
+        "folder": folder,
+        "subject": str(subject),
+        "to": str(to),
+        "date": str(date_header),
+        "message_id": normalized_id,
+        "attachment_count": len(meta),
+        "attachments": meta,
+        "size_bytes": size_bytes,
+        "verified": "content",
+    }
+    try:
+        journal.record_attempt(normalized_id, status="saved_verified", envelope_id=envelope_id)
+        if record_item:
+            journal.record(
+                action=action,
+                envelope_id=envelope_id,
+                folder=folder,
+                subject=subject,
+                to=to,
+                date=date_header,
+            )
+    except OSError:
+        raise DraftPartialError(
+            DRAFT_JOURNAL_WRITE_FAILED_REASON,
+            f"The draft was appended and verified (envelope {envelope_id}, Message-ID {normalized_id}) but the "
+            "journal could not be updated; reconcile manually.",
+            new_envelope=envelope,
+        ) from None
+    return envelope
+
+
+def _check_attachments_argument(attachments: Any) -> None:
+    """``attachments`` must be ``None`` or a list/tuple; anything else is a spec error."""
+    if attachments is not None and not isinstance(attachments, (list, tuple)):
+        from . import draft_attachments as da
+
+        raise da.DraftAttachmentError(
+            "attachment_spec_invalid", "attachments must be a list of path strings or objects."
+        )
+
+
+def _prepare_attachment_draft(
+    *,
+    attachments: Any,
+    workspace_root: Any,
+    journal: "DraftJournal | None",
+    account: str | None,
+    lease_id: str | None,
+    conversation_id: str | None,
+    lock_root: Any,
+) -> tuple[Any, str, tuple[Any, ...]]:
+    """Bind workspace / journal / lease / account, then read the files (in this order)."""
+    from . import draft_attachments as da
+
+    root, bound_account = da.bind_attachment_mode(
+        workspace_root=workspace_root,
+        journal=journal,
+        account=account,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+        lock_root=lock_root,
+    )
+    return root, bound_account, da.load_attachments(root, attachments)
+
+
 def save_draft(
     subject: str,
     to: str,
@@ -319,10 +653,24 @@ def save_draft(
     message_id: str | None = None,
     journal: "DraftJournal | None" = None,
     folders: Iterable[Any] | None = None,
+    attachments: Sequence[Any] | None = None,
+    workspace_root: Any = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+    lock_root: Any = None,
 ) -> dict[str, Any]:
     """Append a UTF-8 draft into the (resolved) Drafts folder through stdin.
 
     Returns the envelope ``{envelope_id, folder, subject, to, date, message_id}``.
+
+    With a non-empty ``attachments`` list (see ``core.draft_attachments``) the draft is built as
+    ``multipart/mixed`` and saved in *attachment mode*: workspace root, journal, a real workspace
+    lease and the workspace-bound account are mandatory and checked before any file is read; the
+    files are read bounded and zone-confined; the size limits are enforced before the single
+    APPEND (still the same binary stdin path, never retried); success needs a semantic
+    read-back of exactly one stored message (headers, text, attachment count / name / MIME /
+    decoded SHA-256).  The result then also carries ``attachment_count``, ``attachments``,
+    ``size_bytes`` and ``verified = "content"``.
 
     Every draft size uses the binary stdin transport (threshold 0): in
     Himalaya's non-TTY plain mode an argv ``MESSAGE`` is ignored and a large one
@@ -334,6 +682,37 @@ def save_draft(
     verification, no journal item and no argv fallback; every other exception
     (e.g. a programming ``ValueError``) propagates unchanged.
     """
+    _check_attachments_argument(attachments)
+    if attachments:
+        root, bound_account, prepared = _prepare_attachment_draft(
+            attachments=attachments,
+            workspace_root=workspace_root,
+            journal=journal,
+            account=account,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            lock_root=lock_root,
+        )
+        raw_message, normalized_id, date_header = build_draft_message(
+            subject, to, body, from_addr=from_addr, cc=cc, date=date, message_id=message_id, attachments=prepared
+        )
+        target_folder = folder or resolve_drafts_folder(account=bound_account, folders=folders)
+        return _append_and_verify(
+            raw_message=raw_message,
+            normalized_id=normalized_id,
+            date_header=date_header,
+            subject=subject,
+            to=to,
+            body=body,
+            cc=cc,
+            from_addr=from_addr,
+            prepared=prepared,
+            folder=target_folder,
+            account=bound_account,
+            journal=journal,
+            action="save_draft",
+            record_item=True,
+        )
     target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
     raw_message, normalized_id, date_header = build_draft_message(
         subject,
@@ -407,6 +786,174 @@ def delete_draft(
     }
 
 
+def _inspect_old_draft(
+    old_id: str,
+    folder: str,
+    account: str | None,
+    *,
+    expected_message_id: str | None,
+) -> tuple[str, str, int]:
+    """Read the old draft bounded; return ``(normalized Message-ID, subject, non-body part count)``."""
+    from . import draft_attachments as da
+
+    expected = None
+    if expected_message_id is not None:
+        expected = normalize_message_id(_check_supplied_message_id(expected_message_id))
+    try:
+        raw = himalaya.fetch_raw_message_eml(
+            old_id, folder=folder, account=account, max_bytes=da.MAX_READBACK_BYTES
+        )
+        message_id, subject, parts = da.describe_stored_message(raw)
+    except Exception:  # noqa: BLE001 - no backend text may reach the error
+        raise DraftError(
+            DRAFT_OLD_UNREADABLE_REASON,
+            "The old draft could not be read (bounded); nothing was appended or deleted.",
+        ) from None
+    if expected is not None and message_id != expected:
+        raise DraftError(
+            DRAFT_OLD_IDENTITY_MISMATCH_REASON,
+            "The draft behind the given envelope id does not carry the expected Message-ID; "
+            "nothing was appended or deleted.",
+        )
+    return message_id, subject, parts
+
+
+def _replace_with_explicit_attachments(
+    old_envelope_id: str,
+    subject: str,
+    to: str,
+    body: str,
+    *,
+    folder: str | None,
+    account: str | None,
+    cc: str | None,
+    from_addr: str | None,
+    date: str | None,
+    message_id: str | None,
+    journal: "DraftJournal | None",
+    folders: Iterable[Any] | None,
+    attachments: Any,
+    old_message_id: str | None,
+    workspace_root: Any,
+    lease_id: str | None,
+    conversation_id: str | None,
+    lock_root: Any,
+) -> dict[str, Any]:
+    """Replace with the complete desired attachment list (attachment mode, see ``replace_draft``)."""
+    old_id = str(old_envelope_id)
+    if old_message_id is None:
+        raise DraftError(
+            DRAFT_OLD_IDENTITY_MISMATCH_REASON,
+            "Replacing with an explicit attachment list requires the old draft's Message-ID; refusing.",
+        )
+    expected_old = normalize_message_id(_check_supplied_message_id(old_message_id))
+    _check_attachments_argument(attachments)
+    root, bound_account, prepared = _prepare_attachment_draft(
+        attachments=attachments,
+        workspace_root=workspace_root,
+        journal=journal,
+        account=account,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+        lock_root=lock_root,
+    )
+    raw_message, normalized_id, date_header = build_draft_message(
+        subject, to, body, from_addr=from_addr, cc=cc, date=date, message_id=message_id, attachments=prepared
+    )
+    if normalized_id == expected_old:
+        raise DraftError(
+            DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON,
+            "The new draft must not reuse the old draft's Message-ID; nothing was appended.",
+        )
+    target_folder = folder or resolve_drafts_folder(account=bound_account, folders=folders)
+    _, old_subject, old_parts = _inspect_old_draft(
+        old_id, target_folder, bound_account, expected_message_id=expected_old
+    )
+    new_envelope = _append_and_verify(
+        raw_message=raw_message,
+        normalized_id=normalized_id,
+        date_header=date_header,
+        subject=subject,
+        to=to,
+        body=body,
+        cc=cc,
+        from_addr=from_addr,
+        prepared=prepared,
+        folder=target_folder,
+        account=bound_account,
+        journal=journal,
+        action="replace_draft",
+        record_item=False,
+        extra_attempt={
+            "old_envelope_id": old_id,
+            "old_message_id": expected_old,
+            "old_attachment_count": old_parts,
+        },
+    )
+    try:
+        journal.record(
+            action="replace_draft",
+            envelope_id=new_envelope["envelope_id"],
+            folder=target_folder,
+            subject=subject,
+            to=to,
+            date=new_envelope["date"],
+            old_envelope_id=old_id,
+            crash_window=REPLACE_CRASH_WINDOW,
+        )
+        journal.record_attempt(normalized_id, status="replace_old_pending_delete")
+    except OSError:
+        raise DraftPartialError(
+            DRAFT_JOURNAL_WRITE_FAILED_REASON,
+            f"The new draft was appended and verified (envelope {new_envelope['envelope_id']}) but the journal "
+            "could not be updated; the old draft was NOT deleted. Reconcile manually.",
+            new_envelope=new_envelope,
+        ) from None
+
+    def partial(reason_text: str, status: str) -> DraftPartialError:
+        _try_attempt(journal, normalized_id, status=status)
+        return DraftPartialError(
+            DRAFT_REPLACE_OLD_NOT_DELETED_REASON,
+            f"The new draft (envelope {new_envelope['envelope_id']}) is appended and verified, but the old "
+            f"draft was not deleted: {reason_text}. Both drafts may now exist; the journal names both.",
+            new_envelope=new_envelope,
+        )
+
+    try:
+        old_ids, complete = himalaya.find_envelopes_by_message_id(
+            target_folder, expected_old, subject=old_subject, account=bound_account
+        )
+    except Exception:  # noqa: BLE001
+        old_ids, complete = [], False
+    if not complete or len(old_ids) > 1:
+        raise partial("the old draft could not be resolved unambiguously", "old_delete_failed")
+    result = dict(new_envelope)
+    result.update(
+        {
+            "old_envelope_id": old_id,
+            "crash_window": REPLACE_CRASH_WINDOW,
+            "replaced": True,
+        }
+    )
+    if not old_ids:
+        result.update({"old_deleted": False, "old_status": "old_draft_not_found"})
+        _try_attempt(journal, normalized_id, status="replaced", old_status="old_draft_not_found")
+        return result
+    try:
+        delete_draft(old_ids[0], folder=target_folder, account=bound_account, folders=folders)
+    except Exception:  # noqa: BLE001 - no backend text in the error
+        raise partial("the delete step failed", "old_delete_failed") from None
+    result.update({"old_deleted": True, "old_status": "deleted", "resolved_old_envelope_id": old_ids[0]})
+    if not _try_attempt(journal, normalized_id, status="replaced", old_status="deleted"):
+        raise DraftPartialError(
+            DRAFT_JOURNAL_WRITE_FAILED_REASON,
+            "The replacement completed (new draft verified, old draft deleted) but the journal could not be "
+            "updated; reconcile manually.",
+            new_envelope=result,
+        )
+    return result
+
+
 def replace_draft(
     old_envelope_id: str,
     subject: str,
@@ -421,6 +968,12 @@ def replace_draft(
     message_id: str | None = None,
     journal: "DraftJournal | None" = None,
     folders: Iterable[Any] | None = None,
+    attachments: Any = ATTACHMENTS_UNSPECIFIED,
+    old_message_id: str | None = None,
+    workspace_root: Any = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+    lock_root: Any = None,
 ) -> dict[str, Any]:
     """Replace a draft: append the new draft first, then delete the old one.
 
@@ -429,9 +982,52 @@ def replace_draft(
     crash can never leave the mailbox without any draft.  When a ``journal`` is
     supplied the entry naming both envelope ids is written *before* the delete
     step starts, so the delete-side orphan window is reconcile-visible.
+
+    ``attachments`` decides what happens to attachments of the old draft:
+
+    * **omitted** (or ``None``): the old draft is read first (bounded); if it carries any
+      attachment / non-body part the replace is refused (``draft_replace_would_drop_attachments``)
+      and an unreadable old draft is refused too (``draft_old_unreadable``) -- nothing is appended
+      or deleted.  Only a provably text-only old draft keeps the former behaviour.
+    * **a list** (``[]`` removes all attachments knowingly): the complete desired list is
+      authoritative.  Attachment mode applies (workspace binding, real lease, bounded reading,
+      size limits, semantic read-back of exactly one stored message), ``old_message_id`` is
+      required, and the old draft is deleted only after the new mail was verified and the old
+      draft was re-resolved by its Message-ID.
     """
+    if attachments is not ATTACHMENTS_UNSPECIFIED and attachments is not None:
+        return _replace_with_explicit_attachments(
+            old_envelope_id,
+            subject,
+            to,
+            body,
+            folder=folder,
+            account=account,
+            cc=cc,
+            from_addr=from_addr,
+            date=date,
+            message_id=message_id,
+            journal=journal,
+            folders=folders,
+            attachments=attachments,
+            old_message_id=old_message_id,
+            workspace_root=workspace_root,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+            lock_root=lock_root,
+        )
     target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
     old_id = str(old_envelope_id)
+    _, _, old_part_count = _inspect_old_draft(
+        old_id, target_folder, account, expected_message_id=old_message_id
+    )
+    if old_part_count:
+        raise DraftError(
+            DRAFT_REPLACE_WOULD_DROP_ATTACHMENTS_REASON,
+            f"The old draft carries {old_part_count} attachment / non-body part(s); replacing it without an "
+            "explicit attachment list would silently drop them. Pass the complete desired list "
+            "(an empty list removes them knowingly). Nothing was appended or deleted.",
+        )
 
     new_envelope = save_draft(
         subject,
@@ -561,6 +1157,27 @@ class DraftJournal:
         if crash_window is not None:
             entry["crash_window"] = str(crash_window)
         self.run["items"][str(envelope_id)] = entry
+        self._save()
+        return entry
+
+    def record_attempt(self, message_id: str, *, status: str, **fields: Any) -> dict[str, Any]:
+        """Record or update the attempt of one attachment-mode APPEND, keyed by Message-ID.
+
+        Attempts exist before the envelope id is known: ``append_started`` is written before the
+        APPEND, so an unknown outcome (timeout, crash) stays reconcile-visible.  Later updates merge
+        into the same entry (``append_failed``, ``append_outcome_unknown``, ``appended_unverified``,
+        ``saved_verified``, ``replace_old_pending_delete``, ``old_delete_failed``, ``replaced``).
+        Entries hold metadata only -- never attachment content.
+        """
+        key = normalize_message_id(message_id)
+        attempts = self.run.setdefault("attempts", {})
+        previous = attempts.get(key)
+        entry: dict[str, Any] = dict(previous) if isinstance(previous, dict) else {"created_at": utc_now_iso()}
+        entry.update(fields)
+        entry["message_id"] = key
+        entry["status"] = str(status)
+        entry["updated_at"] = utc_now_iso()
+        attempts[key] = entry
         self._save()
         return entry
 

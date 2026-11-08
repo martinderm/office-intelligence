@@ -209,6 +209,19 @@ def himalaya_stdin_normalize(payload: bytes) -> str:
     return "\r\n".join(line[:-1] if line.endswith("\r") else line for line in lines)
 
 
+def is_message_export(args: Sequence[str]) -> bool:
+    """Whether an argv token list is a ``message export`` command."""
+    tokens = list(args)
+    return len(tokens) >= 2 and tokens[0] == "message" and tokens[1] == "export"
+
+
+def himalaya_error(message: str) -> BaseException:
+    """A classified command failure as the real ``run_himalaya`` raises it."""
+    from core.himalaya import HimalayaInvocationError
+
+    return HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {message}")
+
+
 def is_message_delete(args: Sequence[str]) -> bool:
     """Whether an argv token list is a ``message delete`` command."""
     tokens = list(args)
@@ -327,6 +340,8 @@ class DraftRunner:
             return json.dumps(self._folder_entries())
         if is_message_save(tokens):
             return self._handle_save(tokens, stdin_bytes)
+        if is_message_export(tokens):
+            return self._handle_export(tokens)
         if is_flag_add(tokens):
             return self._handle_flag_add(tokens)
         if is_message_delete(tokens):
@@ -365,9 +380,26 @@ class DraftRunner:
                     "message_id": _header(raw, "Message-ID"),
                     "date": _header(raw, "Date"),
                     "flags": set(),
+                    "raw": raw,
                 }
             )
         return ""
+
+    def _handle_export(self, tokens: list[str]) -> str:
+        """``message export <id> -f <folder> -F -d <file>``: write the stored (or synthesized) raw message."""
+        from pathlib import Path
+
+        folder = _value_after(tokens, "-f") or "INBOX"
+        envelope_id = next(token for token in tokens[tokens.index("export") + 1:] if token.isdigit())
+        for env in self._envelopes.get(folder, []):
+            if env["id"] == envelope_id:
+                raw = env.get("raw") or (
+                    f"Message-ID: <{env['message_id']}>\r\nSubject: {env['subject']}\r\n"
+                    "To: old@example.org\r\n\r\nSynthetic body\r\n"
+                )
+                Path(_value_after(tokens, "-d") or "").write_bytes(raw.encode("utf-8"))
+                return ""
+        raise himalaya_error("no such envelope")
 
     def _handle_flag_add(self, tokens: list[str]) -> str:
         """Apply a ``flag add`` call to the matching envelopes, in place."""
