@@ -1,7 +1,7 @@
 # Office Intelligence — Paket System Map: Verben (Processes)
 
 > **Typ**: ICM Form 6 (`system-map`), Dimension: Verben  
-> **Ziel**: Beschreibung aller desk-übergreifenden Abläufe, Handoff-Punkte und Datentransformationen im Zusammenspiel der 7 Sub-Skills.  
+> **Ziel**: Beschreibung aller desk-übergreifenden Abläufe, Handoff-Punkte und Datentransformationen im Zusammenspiel der 8 Sub-Skills.  
 > **Gültig für**: Repository Root & konsumierende Workspaces (relativ)
 
 ---

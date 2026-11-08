@@ -9,9 +9,9 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from core.caldav_client import CalDAVProtocolError
-from core.ical_codec import expand_record_occurrences, resolve_tzid
-from core.injection_fence import FENCE_TAG, fence_calendar_text, sanitize_fence_collisions
+from .caldav_client import CalDAVProtocolError
+from .ical_codec import expand_record_occurrences, resolve_tzid
+from .injection_fence import FENCE_TAG, fence_calendar_text, sanitize_fence_collisions
 
 
 def fence_text(text: str) -> str:

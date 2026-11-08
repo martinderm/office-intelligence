@@ -7,27 +7,23 @@ Free/Busy / slot finding engine, and two-phase write engine without external dep
 
 from __future__ import annotations
 
-import pkgutil
-
-__path__ = pkgutil.extend_path(__path__, __name__)
-
-from core.backend_config import (
+from .backend_config import (
     AccountCredentials,
     CalDAVConfigError,
     load_backend_config,
     resolve_account_credentials,
     resolve_calendar_target,
 )
-from core.caldav_client import (
+from .caldav_client import (
     CalDAVClient,
     CalDAVProtocolError,
     parse_dav_xml,
 )
-from core.freebusy import (
+from .freebusy import (
     compute_freebusy,
     find_free_slots,
 )
-from core.ical_codec import (
+from .ical_codec import (
     ICalCodecError,
     WINDOWS_TZ_ALIASES,
     build_vevent_ics,
@@ -41,7 +37,7 @@ from core.ical_codec import (
     unfold_ics_lines,
     update_vevent_ics,
 )
-from core.injection_fence import (
+from .injection_fence import (
     ESCAPED_TAG_PLACEHOLDER,
     FENCE_TAG,
     FENCE_VERSION,
@@ -51,8 +47,7 @@ from core.injection_fence import (
     sanitize_fence_collisions,
     scan_calendar_text,
 )
-from core.write_engine import (
-    ENV_LOCK_ROOT,
+from .write_engine import (
     ENV_STD_LOCK_ROOT,
     CalendarWriteError,
     _load_guard,
@@ -98,7 +93,6 @@ __all__ = [
     "parse_dav_xml",
     "compute_freebusy",
     "find_free_slots",
-    "ENV_LOCK_ROOT",
     "ENV_STD_LOCK_ROOT",
     "CalendarWriteError",
     "_load_guard",

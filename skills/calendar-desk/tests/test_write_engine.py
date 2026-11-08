@@ -22,12 +22,14 @@ import base64
 import contextlib
 import hashlib
 import http.server
+import importlib.util
 import io
 import json
 import os
 import sys
 import tempfile
 import threading
+import types
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -309,17 +311,33 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
                 os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = old_env2
 
     def test_trusted_lock_root_env_calendar_desk_lock_root_ignored(self) -> None:
+        from core import write_engine
         guard_dir = make_mock_guard_dir(self.base_path)
         old_env1 = os.environ.get("WORKSPACE_LOCK_ROOT")
         old_env2 = os.environ.get("CALENDAR_DESK_WORKSPACE_LOCK_ROOT")
         try:
             os.environ.pop("WORKSPACE_LOCK_ROOT", None)
             os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = str(guard_dir)
-            resolved = _trusted_lock_root()
-            self.assertNotEqual(resolved.resolve(), guard_dir.resolve())
+            with mock.patch("core.write_engine._has_guard", side_effect=lambda p: p.resolve() == guard_dir.resolve()):
+                with self.assertRaises(CalendarWriteError) as ctx:
+                    _trusted_lock_root()
+                self.assertEqual(ctx.exception.code, "WORKSPACE_LOCK_UNAVAILABLE")
+
+            # Reject directory containing only scripts/guard.py (missing workspace_lock_guard.py)
+            only_guard_dir = self.base_path / "only_guard"
+            (only_guard_dir / "scripts").mkdir(parents=True, exist_ok=True)
+            (only_guard_dir / "scripts" / "guard.py").write_text("# dummy guard\n", encoding="utf-8")
+            with self.assertRaises(CalendarWriteError) as ctx_guard:
+                _trusted_lock_root(only_guard_dir)
+            self.assertEqual(ctx_guard.exception.code, "WORKSPACE_LOCK_UNAVAILABLE")
+
+            # Dead ENV_LOCK_ROOT export must be removed
+            self.assertFalse(hasattr(write_engine, "ENV_LOCK_ROOT"))
         finally:
             if old_env1 is not None:
                 os.environ["WORKSPACE_LOCK_ROOT"] = old_env1
+            else:
+                os.environ.pop("WORKSPACE_LOCK_ROOT", None)
             if old_env2 is not None:
                 os.environ["CALENDAR_DESK_WORKSPACE_LOCK_ROOT"] = old_env2
             else:
@@ -427,6 +445,35 @@ class TestWorkspaceLockGuardIntegration(unittest.TestCase):
             self.assertNotIn("workspace_lock_guard", sys.modules)
         finally:
             sys.modules.pop("workspace_lock_guard", None)
+
+    def test_calendar_desk_client_does_not_mutate_foreign_core_package(self) -> None:
+        cli_path = SCRIPTS_DIR / "calendar_desk_client.py"
+        core_init_path = SCRIPTS_DIR / "core" / "__init__.py"
+        cli_source = cli_path.read_text(encoding="utf-8")
+        core_init_source = core_init_path.read_text(encoding="utf-8")
+        self.assertNotIn("__path__.append", cli_source)
+        self.assertNotIn("extend_path", core_init_source)
+
+        foreign_core = types.ModuleType("core")
+        foreign_core.__file__ = "/foreign/mail-desk/scripts/core/__init__.py"
+        foreign_core.__path__ = ["/foreign/mail-desk/scripts/core"]
+        saved_modules = dict(sys.modules)
+        try:
+            sys.modules["core"] = foreign_core
+            spec = importlib.util.spec_from_file_location("isolated_calendar_cli", cli_path)
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            isolated_mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(isolated_mod)
+
+            self.assertIs(sys.modules["core"], foreign_core)
+            self.assertEqual(sys.modules["core"].__file__, "/foreign/mail-desk/scripts/core/__init__.py")
+            self.assertEqual(list(sys.modules["core"].__path__), ["/foreign/mail-desk/scripts/core"])
+            self.assertTrue(hasattr(isolated_mod, "CalendarWriteError"))
+            self.assertTrue(hasattr(isolated_mod, "load_guard"))
+        finally:
+            sys.modules.clear()
+            sys.modules.update(saved_modules)
 
     def test_require_owned_workspace_lock_active_owned(self) -> None:
         guard_dir = make_mock_guard_dir(self.base_path, lock_state="Active", owner_lease="lease-xyz")
@@ -1307,6 +1354,16 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
         self.ws = Path(self.temp_dir.name)
         make_backend_config_file(self.ws, write_policy="dry_run_and_approval")
         self.guard_dir = make_mock_guard_dir(self.ws, lock_state="Active", owner_lease="lease-cli-1")
+        self.dummy_plan_file = self.ws / "dummy-plan.json"
+        self.dummy_plan_file.write_text(
+            json.dumps({"account": "primary-account", "calendar_alias": "primary"}),
+            encoding="utf-8",
+        )
+        self.dummy_receipt_file = self.ws / "dummy-receipt.json"
+        self.dummy_receipt_file.write_text(
+            json.dumps({"approved": True}),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -1403,7 +1460,9 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
 
     def test_cli_exit_code_1_configuration_error(self) -> None:
         """PR #82 Review #26: Configuration or input error yields exit code 1 and state Failed."""
-        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+        with mock.patch("calendar_desk_client.require_owned_workspace_lock"), \
+             mock.patch("calendar_desk_client._build_target_and_client", return_value=({}, {}, mock.MagicMock())), \
+             mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
             mock_apply.side_effect = CalDAVConfigError("CONFIG_ERROR", "Invalid config file")
             stdout_buf = io.StringIO()
             with contextlib.redirect_stdout(stdout_buf):
@@ -1411,8 +1470,8 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
                     "--workspace", str(self.ws),
                     "--json",
                     "apply",
-                    "--plan-file", "dummy-plan.json",
-                    "--receipt-file", "dummy-receipt.json",
+                    "--plan-file", str(self.dummy_plan_file),
+                    "--receipt-file", str(self.dummy_receipt_file),
                     "--lease-id", "lease-1",
                 ])
             self.assertEqual(ret, 1)
@@ -1426,7 +1485,9 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
 
     def test_cli_exit_code_2_write_policy_violation(self) -> None:
         """PR #82 Review #26: Precondition / write-policy violation yields exit code 2 and state Failed."""
-        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+        with mock.patch("calendar_desk_client.require_owned_workspace_lock"), \
+             mock.patch("calendar_desk_client._build_target_and_client", return_value=({}, {}, mock.MagicMock())), \
+             mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
             mock_apply.side_effect = CalendarWriteError("WRITE_POLICY_VIOLATION", "Write policy violation")
             stdout_buf = io.StringIO()
             with contextlib.redirect_stdout(stdout_buf):
@@ -1434,8 +1495,8 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
                     "--workspace", str(self.ws),
                     "--json",
                     "apply",
-                    "--plan-file", "dummy-plan.json",
-                    "--receipt-file", "dummy-receipt.json",
+                    "--plan-file", str(self.dummy_plan_file),
+                    "--receipt-file", str(self.dummy_receipt_file),
                     "--lease-id", "lease-1",
                 ])
             self.assertEqual(ret, 2)
@@ -1449,7 +1510,9 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
 
     def test_cli_exit_code_2_calendar_read_only(self) -> None:
         """PR #82 Review #26: Read-only calendar yields exit code 2 and state Failed."""
-        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+        with mock.patch("calendar_desk_client.require_owned_workspace_lock"), \
+             mock.patch("calendar_desk_client._build_target_and_client", return_value=({}, {}, mock.MagicMock())), \
+             mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
             mock_apply.side_effect = CalendarWriteError("CALENDAR_READ_ONLY", "Calendar is read-only")
             stdout_buf = io.StringIO()
             with contextlib.redirect_stdout(stdout_buf):
@@ -1457,8 +1520,8 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
                     "--workspace", str(self.ws),
                     "--json",
                     "apply",
-                    "--plan-file", "dummy-plan.json",
-                    "--receipt-file", "dummy-receipt.json",
+                    "--plan-file", str(self.dummy_plan_file),
+                    "--receipt-file", str(self.dummy_receipt_file),
                     "--lease-id", "lease-1",
                 ])
             self.assertEqual(ret, 2)
@@ -1472,7 +1535,9 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
 
     def test_cli_exit_code_2_caldav_etag_conflict(self) -> None:
         """PR #82 Review #26: CalDAV ETag conflict (412) yields exit code 2 and state Failed."""
-        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+        with mock.patch("calendar_desk_client.require_owned_workspace_lock"), \
+             mock.patch("calendar_desk_client._build_target_and_client", return_value=({}, {}, mock.MagicMock())), \
+             mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
             mock_apply.side_effect = CalendarWriteError("CALDAV_ETAG_CONFLICT", "Precondition Failed (412)")
             stdout_buf = io.StringIO()
             with contextlib.redirect_stdout(stdout_buf):
@@ -1480,8 +1545,8 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
                     "--workspace", str(self.ws),
                     "--json",
                     "apply",
-                    "--plan-file", "dummy-plan.json",
-                    "--receipt-file", "dummy-receipt.json",
+                    "--plan-file", str(self.dummy_plan_file),
+                    "--receipt-file", str(self.dummy_receipt_file),
                     "--lease-id", "lease-1",
                 ])
             self.assertEqual(ret, 2)
@@ -1495,7 +1560,9 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
 
     def test_cli_exit_code_3_recovery_required(self) -> None:
         """PR #82 Review #26: Recovery-required yields exit code 3 and state Failed."""
-        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+        with mock.patch("calendar_desk_client.require_owned_workspace_lock"), \
+             mock.patch("calendar_desk_client._build_target_and_client", return_value=({}, {}, mock.MagicMock())), \
+             mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
             mock_apply.side_effect = CalendarWriteError("RECOVERY_REQUIRED", "In-progress journal requires recovery")
             stdout_buf = io.StringIO()
             with contextlib.redirect_stdout(stdout_buf):
@@ -1503,8 +1570,8 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
                     "--workspace", str(self.ws),
                     "--json",
                     "apply",
-                    "--plan-file", "dummy-plan.json",
-                    "--receipt-file", "dummy-receipt.json",
+                    "--plan-file", str(self.dummy_plan_file),
+                    "--receipt-file", str(self.dummy_receipt_file),
                     "--lease-id", "lease-1",
                 ])
             self.assertEqual(ret, 3)
@@ -1515,6 +1582,31 @@ class TestCalendarDeskClientCliWrites(unittest.TestCase):
             self.assertEqual(output["data"], {})
             self.assertIsNotNone(output["error"])
             self.assertEqual(output["error"]["type"], "RECOVERY_REQUIRED")
+
+    def test_cli_apply_does_not_skip_lock_or_validation_when_apply_mocked(self) -> None:
+        cli_path = SCRIPTS_DIR / "calendar_desk_client.py"
+        cli_source = cli_path.read_text(encoding="utf-8")
+        self.assertNotIn("assert_called", cli_source)
+        self.assertNotIn("missing-plan.json", cli_source)
+
+        with mock.patch("calendar_desk_client.apply_calendar_write") as mock_apply:
+            stdout_buf = io.StringIO()
+            with contextlib.redirect_stdout(stdout_buf):
+                ret = calendar_desk_client.main([
+                    "--workspace", str(self.ws),
+                    "--json",
+                    "apply",
+                    "--plan-file", "missing-plan.json",
+                    "--receipt-file", "missing-receipt.json",
+                    "--lease-id", "lease-cli-1",
+                    "--lock-root", str(self.guard_dir),
+                ])
+            self.assertEqual(ret, 1)
+            mock_apply.assert_not_called()
+            output = json.loads(stdout_buf.getvalue())
+            self.assertFalse(output["success"])
+            self.assertIsNotNone(output["error"])
+            self.assertEqual(output["error"]["type"], "PLAN_NOT_FOUND")
 
     def test_cli_apply_missing_secrets_fails_without_creating_journal(self) -> None:
         plan = {
@@ -2198,7 +2290,7 @@ class TestRecoveryPostconditions(unittest.TestCase):
         res_url = "/dav/calendars/user/primary/evt-upd-quote.ics"
         jfile = self.journal_dir / "plan-upd-quote.json"
         old_ics = SAMPLE_VEVENT_ICS
-        updated_ics = SAMPLE_VEVENT_ICS.replace("Meeting", "Updated Meeting")
+        updated_ics = SAMPLE_VEVENT_ICS.replace("Initial Event", "Updated Meeting")
         jfile.write_text(json.dumps({
             "status": "in_progress",
             "plan_id": "plan-upd-quote",
@@ -2227,8 +2319,8 @@ class TestRecoveryPostconditions(unittest.TestCase):
     def test_recover_update_third_party_change_aborts(self) -> None:
         res_url = "/dav/calendars/user/primary/evt-upd-third.ics"
         jfile = self.journal_dir / "plan-upd-third.json"
-        our_staged = SAMPLE_VEVENT_ICS.replace("Meeting", "Our Update")
-        third_party_ics = SAMPLE_VEVENT_ICS.replace("Meeting", "Third Party Change")
+        our_staged = SAMPLE_VEVENT_ICS.replace("Initial Event", "Our Update")
+        third_party_ics = SAMPLE_VEVENT_ICS.replace("Initial Event", "Third Party Change")
         jfile.write_text(json.dumps({
             "status": "in_progress",
             "plan_id": "plan-upd-third",
@@ -2253,6 +2345,41 @@ class TestRecoveryPostconditions(unittest.TestCase):
         )
         jdata = json.loads(jfile.read_text(encoding="utf-8"))
         self.assertEqual(jdata["status"], "recovered_aborted")
+
+    def test_recover_update_with_etag_containing_other_and_matching_staged_ics_is_applied(self) -> None:
+        write_engine_path = SCRIPTS_DIR / "core" / "write_engine.py"
+        source_text = write_engine_path.read_text(encoding="utf-8")
+        self.assertNotIn("in norm_remote.lower()", source_text)
+        self.assertNotIn("etag-v3-other", source_text)
+
+        res_url = "/dav/calendars/user/primary/evt-upd-other-match.ics"
+        jfile = self.journal_dir / "plan-upd-other-match.json"
+        our_staged = SAMPLE_VEVENT_ICS.replace("Initial Event", "Our Update")
+        jfile.write_text(json.dumps({
+            "status": "in_progress",
+            "plan_id": "plan-upd-other-match",
+            "action": "update-event",
+            "account": "primary-account",
+            "calendar_alias": "primary",
+            "uid": "evt-upd-other-match",
+            "resource_url": res_url,
+            "precondition": {"if_match_etag": '"etag-v1"'},
+            "pre_state": {"etag": '"etag-v1"'},
+            "staged_ics": our_staged,
+        }), encoding="utf-8")
+
+        client = MockCalDAVClient()
+        client.events[res_url] = {"etag": '"etag-v2-other-node"', "raw_ics": our_staged}
+
+        res = recover_workspace(
+            self.ws,
+            lease_id="lease-post-1",
+            lock_root=self.guard_dir,
+            caldav_client=client,
+        )
+        self.assertEqual(res["status"], "recovered")
+        jdata = json.loads(jfile.read_text(encoding="utf-8"))
+        self.assertEqual(jdata["status"], "recovered_applied")
 
     def test_recover_applied_syncs_local_evidence_register(self) -> None:
         res_url = "/dav/calendars/user/primary/evt-rec-sync.ics"
@@ -2724,7 +2851,7 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         for stale in ("caldav_url", "auth_type", "CALENDAR_READ_ONLY", "*.apply-receipt.json", "Close & Remove Journal", "199+"):
             self.assertNotIn(stale, l2_readme, f"Stale identifier '{stale}' found in {l2_readme_path.as_posix()}")
 
-        for required in ("principal_url", "write_policy", "dry_run_and_approval", "CALENDAR_WRITE_FORBIDDEN", "calendar-desk-register/1", "RECOVERY_REQUIRED", "237 Testmethoden"):
+        for required in ("principal_url", "write_policy", "dry_run_and_approval", "CALENDAR_WRITE_FORBIDDEN", "calendar-desk-register/1", "RECOVERY_REQUIRED", "240 Testmethoden"):
             self.assertIn(required, l2_readme, f"Required identifier '{required}' missing from {l2_readme_path.as_posix()}")
 
         # 2. skills/calendar-desk/SKILL.md and skills/calendar-desk/references/data-model.md
@@ -2745,6 +2872,9 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         for subcmd in ("discover", "agenda", "freebusy", "find-slots", "plan", "apply", "inspect", "recover"):
             self.assertIn(subcmd, skill_text, f"CLI subcommand '{subcmd}' missing from {skill_path.as_posix()}")
 
+        self.assertIn("--raw-ics-file", skill_text)
+        self.assertIn("ICAL_UNSUPPORTED_TZID", skill_text)
+
         # 3. L1 system map (docs/system-map/objects.md, docs/system-map/processes.md, docs/system-map/effects.md)
         objects_path = repo_root / "docs" / "system-map" / "objects.md"
         processes_path = repo_root / "docs" / "system-map" / "processes.md"
@@ -2762,6 +2892,8 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         processes_text = processes_path.read_text(encoding="utf-8")
         self.assertNotIn(".well-known/caldav", processes_text)
         self.assertNotIn("Entfernt das Journal", processes_text)
+        self.assertNotIn("7 Sub-Skills", processes_text)
+        self.assertIn("8 Sub-Skills", processes_text)
 
         effects_text = effects_path.read_text(encoding="utf-8")
         self.assertNotIn("CALENDAR_READ_ONLY", effects_text)
@@ -2771,7 +2903,7 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         l1_readme_path = repo_root / "docs" / "system-map" / "README.md"
         self.assertTrue(l1_readme_path.is_file(), f"File missing: {l1_readme_path}")
         l1_readme = l1_readme_path.read_text(encoding="utf-8")
-        self.assertIn("237 Tests", l1_readme, f"Required test count '237 Tests' missing from {l1_readme_path.as_posix()}")
+        self.assertIn("240 Tests", l1_readme, f"Required test count '240 Tests' missing from {l1_readme_path.as_posix()}")
 
         # 5. CONTRIBUTING.md
         contrib_path = repo_root / "CONTRIBUTING.md"
@@ -2779,6 +2911,18 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         contrib_text = contrib_path.read_text(encoding="utf-8")
         self.assertNotIn("seven desks", contrib_text)
         self.assertIn("eight desks", contrib_text)
+
+        # 6. skills/mail-desk/docs/system-map/
+        mail_l2_readme_path = repo_root / "skills" / "mail-desk" / "docs" / "system-map" / "README.md"
+        mail_l2_objects_path = repo_root / "skills" / "mail-desk" / "docs" / "system-map" / "objects.md"
+        self.assertTrue(mail_l2_readme_path.is_file(), f"File missing: {mail_l2_readme_path}")
+        self.assertTrue(mail_l2_objects_path.is_file(), f"File missing: {mail_l2_objects_path}")
+        mail_l2_readme = mail_l2_readme_path.read_text(encoding="utf-8")
+        mail_l2_objects = mail_l2_objects_path.read_text(encoding="utf-8")
+        self.assertIn("calendar_extract.py", mail_l2_readme)
+        self.assertIn("calendar_objects", mail_l2_readme)
+        self.assertIn("calendar_extract.py", mail_l2_objects)
+        self.assertIn("calendar_objects", mail_l2_objects)
 
 
 if __name__ == "__main__":

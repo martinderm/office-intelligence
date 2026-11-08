@@ -483,3 +483,15 @@ im `DraftManifest` sind sie Teil des Review-Hash-Inhalts, im
 
 Vertrag: [`references/synthesis.md`](../../references/synthesis.md); Ablauf:
 [`processes.md`](processes.md) §8; Grenzen: [`effects.md`](effects.md) §8.
+
+
+## 9. Kalenderobjekt-Referenz & Ingest (Issue #81, CD-4)
+
+Kanonische Referenzstruktur für aus E-Mail-Anhängen extrahierte iCalendar-Objekte (`.ics`, `text/calendar`, `application/ics`), implementiert in [`scripts/core/calendar_extract.py`](../../scripts/core/calendar_extract.py) (`extract_calendar_objects`), geprüft über `tests/test_calendar_attachment_ingest.py`.
+
+* **Feldstruktur (`calendar_objects[]`):**
+  - `uid`: Eindeutige Ereignis-ID (RFC 5545 `UID`).
+  - `sequence`: Revisionszähler (Ganzzahl, Standard `0`).
+  - `recurrence_id`: Optionaler Wiederholungsbezeichner (`RECURRENCE-ID` in UTC/Normalform oder `None`).
+  - `content_sha256`: Deterministischer 64-Hex SHA-256 Hash des normalisierten Roh-iCalendar-Texts.
+* **Quarantäne-Erweiterung:** `attachment_policy.py` stuft `text/calendar` und `application/ics` als zulässige MIME-Typen ein; `attachment_extract.py` extrahiert den Textinhalt bounded ohne Ausführung.

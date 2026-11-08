@@ -8,6 +8,8 @@ with deterministic --json structured output envelope.
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.util
 import json
 import os
 import sys
@@ -15,35 +17,74 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Sequence
 
-# Add parent directory of core to sys.path
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
 
-if "core" in sys.modules:
-    _core_mod = sys.modules["core"]
-    _core_dir = str(SCRIPT_DIR / "core")
-    if hasattr(_core_mod, "__path__") and _core_dir not in _core_mod.__path__:
-        _core_mod.__path__.append(_core_dir)
+_existing_core = sys.modules.get("core")
+_core_file = getattr(_existing_core, "__file__", None)
+try:
+    _core_file_resolved = Path(_core_file).resolve().parent if _core_file else None
+except Exception:
+    _core_file_resolved = None
+_our_core_dir = (SCRIPT_DIR / "core").resolve()
 
-from core.backend_config import (  # noqa: E402
-    CalDAVConfigError,
-    load_backend_config,
-    resolve_calendar_target,
-)
-from core.caldav_client import CalDAVClient, CalDAVProtocolError  # noqa: E402
-from core.freebusy import compute_freebusy, find_free_slots  # noqa: E402
-from core.write_engine import (  # noqa: E402
-    CalendarWriteError,
-    _load_guard,
-    _trusted_lock_root,
-    apply_calendar_write,
-    inspect_workspace,
-    plan_calendar_write,
-    recover_workspace,
-    require_owned_workspace_lock,
-    respond_invitation,
-)
+if _existing_core is None or _core_file_resolved == _our_core_dir:
+    if str(SCRIPT_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPT_DIR))
+    from core.backend_config import (  # noqa: E402
+        CalDAVConfigError,
+        load_backend_config,
+        resolve_calendar_target,
+    )
+    from core.caldav_client import CalDAVClient, CalDAVProtocolError  # noqa: E402
+    from core.freebusy import compute_freebusy, find_free_slots  # noqa: E402
+    from core.write_engine import (  # noqa: E402
+        CalendarWriteError,
+        _load_guard,
+        _trusted_lock_root,
+        apply_calendar_write,
+        inspect_workspace,
+        plan_calendar_write,
+        recover_workspace,
+        require_owned_workspace_lock,
+        respond_invitation,
+    )
+else:
+    _pkg_name = "_calendar_desk_core"
+    if _pkg_name not in sys.modules:
+        _spec = importlib.util.spec_from_file_location(
+            _pkg_name,
+            SCRIPT_DIR / "core" / "__init__.py",
+            submodule_search_locations=[str(SCRIPT_DIR / "core")],
+        )
+        if _spec is None or _spec.loader is None:
+            raise ImportError(f"Cannot create module spec for {_pkg_name}")
+        _core_mod = importlib.util.module_from_spec(_spec)
+        sys.modules[_pkg_name] = _core_mod
+        _spec.loader.exec_module(_core_mod)
+
+    _backend_mod = importlib.import_module(f"{_pkg_name}.backend_config")
+    CalDAVConfigError = _backend_mod.CalDAVConfigError
+    load_backend_config = _backend_mod.load_backend_config
+    resolve_calendar_target = _backend_mod.resolve_calendar_target
+
+    _caldav_mod = importlib.import_module(f"{_pkg_name}.caldav_client")
+    CalDAVClient = _caldav_mod.CalDAVClient
+    CalDAVProtocolError = _caldav_mod.CalDAVProtocolError
+
+    _freebusy_mod = importlib.import_module(f"{_pkg_name}.freebusy")
+    compute_freebusy = _freebusy_mod.compute_freebusy
+    find_free_slots = _freebusy_mod.find_free_slots
+
+    _write_mod = importlib.import_module(f"{_pkg_name}.write_engine")
+    CalendarWriteError = _write_mod.CalendarWriteError
+    _load_guard = _write_mod._load_guard
+    _trusted_lock_root = _write_mod._trusted_lock_root
+    apply_calendar_write = _write_mod.apply_calendar_write
+    inspect_workspace = _write_mod.inspect_workspace
+    plan_calendar_write = _write_mod.plan_calendar_write
+    recover_workspace = _write_mod.recover_workspace
+    require_owned_workspace_lock = _write_mod.require_owned_workspace_lock
+    respond_invitation = _write_mod.respond_invitation
 
 
 def load_guard(trusted_root: str | Path | None = None) -> Any:
@@ -335,59 +376,54 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
 
         elif args.subcommand == "apply":
-            if not callable(getattr(apply_calendar_write, "assert_called", None)):
-                require_owned_workspace_lock(
-                    workspace_root,
-                    lease_id=args.lease_id,
-                    conversation_id=args.conversation_id,
-                    lock_root=args.lock_root,
+            require_owned_workspace_lock(
+                workspace_root,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
+                lock_root=args.lock_root,
+            )
+
+            plan_path = Path(args.plan_file)
+            if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
+                plan_path = workspace_root / args.plan_file
+
+            receipt_path = Path(args.receipt_file)
+            if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
+                receipt_path = workspace_root / args.receipt_file
+
+            if not plan_path.is_file():
+                raise CalendarWriteError(
+                    "PLAN_NOT_FOUND",
+                    f"Plan file not found: '{args.plan_file}'",
                 )
-
-                plan_path = Path(args.plan_file)
-                if not plan_path.is_file() and (workspace_root / args.plan_file).is_file():
-                    plan_path = workspace_root / args.plan_file
-
-                receipt_path = Path(args.receipt_file)
-                if not receipt_path.is_file() and (workspace_root / args.receipt_file).is_file():
-                    receipt_path = workspace_root / args.receipt_file
-
-                if not plan_path.is_file():
-                    raise CalendarWriteError(
-                        "PLAN_NOT_FOUND",
-                        f"Plan file not found: '{args.plan_file}'",
-                    )
-                if not receipt_path.is_file():
-                    raise CalendarWriteError(
-                        "RECEIPT_NOT_FOUND",
-                        f"Approval receipt file not found: '{args.receipt_file}'",
-                    )
-                try:
-                    plan = json.loads(plan_path.read_text(encoding="utf-8"))
-                except Exception as exc:
-                    raise CalendarWriteError(
-                        "WRITE_VALIDATION_ERROR",
-                        f"Invalid JSON in plan file '{plan_path}': {exc}",
-                    ) from exc
-
-                try:
-                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-                except Exception as exc:
-                    raise CalendarWriteError(
-                        "WRITE_VALIDATION_ERROR",
-                        f"Invalid JSON in receipt file '{receipt_path}': {exc}",
-                    ) from exc
-
-                _, _, client = _build_target_and_client(
-                    workspace_root,
-                    plan.get("account") or args.account,
-                    plan.get("calendar_alias") or args.calendar_alias,
-                    sec_file,
-                    cfg_file=cfg_file,
+            if not receipt_path.is_file():
+                raise CalendarWriteError(
+                    "RECEIPT_NOT_FOUND",
+                    f"Approval receipt file not found: '{args.receipt_file}'",
                 )
-            else:
-                plan = {}
-                receipt = {}
-                client = None
+            try:
+                plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise CalendarWriteError(
+                    "WRITE_VALIDATION_ERROR",
+                    f"Invalid JSON in plan file '{plan_path}': {exc}",
+                ) from exc
+
+            try:
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise CalendarWriteError(
+                    "WRITE_VALIDATION_ERROR",
+                    f"Invalid JSON in receipt file '{receipt_path}': {exc}",
+                ) from exc
+
+            _, _, client = _build_target_and_client(
+                workspace_root,
+                plan.get("account") or args.account,
+                plan.get("calendar_alias") or args.calendar_alias,
+                sec_file,
+                cfg_file=cfg_file,
+            )
 
             apply_res = apply_calendar_write(
                 workspace_root,

@@ -48,6 +48,7 @@ Zugangsdaten für CalDAV-Server dürfen niemals im Quelltext, in Git-Commits ode
   - Line-Unfolding und 75-Oktett-Folding unter Schutz von UTF-8-Multibyte-Zeichen.
   - IANA- und Windows-Zeitzonenauflösung (`WINDOWS_TZ_ALIASES`).
   - Zeitzonentransfer über DST-Grenzen hinweg unter Erhalt der lokalen Wanduhrzeit.
+  - TZID-Handling-Vertrag: `calendar-desk` (`ical_codec.py`) weist unbekannte TZIDs fail-closed mit `ICAL_UNSUPPORTED_TZID` ab; demgegenüber nutzt `mail-desk` (`calendar_extract.py`) einen Fallback auf `Europe/Vienna` für tolerantes Attachment-Triage.
   - Normalisierung in `calendar-record/1`.
   - Lossless VEVENT Roundtrip-Update (`update_vevent_ics`) unter Erhalt von `VALARM` und `X-*`-Erweiterungen.
 - Sicherheitszaun (`skills/calendar-desk/scripts/core/injection_fence.py`):
@@ -74,7 +75,7 @@ Die primäre Schnittstelle für alle Kalenderoperationen ist `scripts/calendar_d
 - **`get-event`**: Lädt ein einzelnes Ereignis anhand von UID und optionaler `--recurrence-id`.
 - **`freebusy`**: Berechnet belegte Zeiten. Bricht fail-closed mit `CALDAV_INCOMPLETE_FREEBUSY` (Exit 1) ab, wenn Termine übersprungen wurden (`skipped[]`) oder die Serverantwort trunkiert ist (`truncated: true`).
 - **`find-slots`**: Ermittelt freie Zeitfenster unter Berücksichtigung konfigurierter Arbeitszeiten, Dauer und Puffer. Bricht bei unvollständigen Free/Busy-Daten fail-closed mit Exit 1 ab.
-- **`plan`**: Berechnet einen mutationsfreien Zwei-Phasen-Plan mit `--action` (`create-event`, `update-event`, `cancel-event`, `delete-event`), optionaler `--recurrence-id` und RFC-5545-Payload. Persistiert das Manifest unter `data/calendar-desk/proposals/<plan_id>.json` (kein Workspace-Lock nötig, `--lease-id` optional).
+- **`plan`**: Berechnet einen mutationsfreien Zwei-Phasen-Plan mit `--action` (`create-event`, `update-event`, `cancel-event`, `delete-event`), optionaler `--recurrence-id` und RFC-5545-Payload. Persistiert das Manifest unter `data/calendar-desk/proposals/<plan_id>.json` (kein Workspace-Lock nötig, `--lease-id` optional). Caller-Supplied State Contract: `update-event`, `cancel-event` und `delete-event` akzeptieren `--etag` und `--raw-ics-file` offline ohne CalDAV-Netzwerkzugriff; `If-Match` schützt die Konsistenz gegen den Server auf `apply`.
 - **`apply`**: Führt einen zuvor erstellten Plan aus. Benötigt `--plan-file` und ein separates `--receipt-file` gemäß Schema `calendar-desk-approval/1`. Erzwingt eine gültige Lease via `--lease-id` und `--conversation-id`, prüft `write_policy == "dry_run_and_approval"` und `collection_url`, führt ein atomares Journal (`intent` -> `in_flight` -> `completed` unter `data/calendar-desk/journal/<plan_id>.json`), aktualisiert das Evidenzregister `memory/evidence/calendar/calendars.json` (`calendar-desk-register/1`) und `raw/<account>/<calendar_alias>/<uid>.ics`. Bei HTTP 5xx/408/429 oder Netzwerkfehlern greift `unknown_remote_outcome` (`RECOVERY_REQUIRED`, Exit 3).
 - **`inspect`**: Inspiziert rein lesend vorhandene Journale unter `data/calendar-desk/journal/` auf unterbrochene Transaktionen.
 - **`recover`**: Führt Rollback oder Vorwärtswiederherstellung für unterbrochene Transaktionen unter Lease-Schutz durch.

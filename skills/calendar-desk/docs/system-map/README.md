@@ -7,8 +7,8 @@ Fehlende Installation liefert begrenzte Setup-Hilfe auf `WORKSPACE_LOCK_ROOT` un
 Bundle-README. Kein CWD-/Payload-Fallback; Ownership, Guard und Zwei-Phasen-Recovery
 bleiben unverändert fail-closed.
 
-> **Metrik (DOC-M1):** 19 getrackte Dateien (8 Core-Module unter scripts/core/, 1 CLI-Entrypoint scripts/calendar_desk_client.py, 6 Testmodule mit 237 Testmethoden, 4 Dokumentations-/Referenzdateien) ·
-> 6 Testmodule mit 237 Testmethoden (`test_ical_codec.py`, `test_injection_fence.py`,
+> **Metrik (DOC-M1):** 19 getrackte Dateien (8 Core-Module unter scripts/core/, 1 CLI-Entrypoint scripts/calendar_desk_client.py, 6 Testmodule mit 240 Testmethoden, 4 Dokumentations-/Referenzdateien) ·
+> 6 Testmodule mit 240 Testmethoden (`test_ical_codec.py`, `test_injection_fence.py`,
 > `test_backend_config.py`, `test_caldav_client.py`, `test_freebusy.py`,
 > `test_write_engine.py`) plus Fixture-Satz `calendar-record-v1.json`.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur die Referenz auf diese Karte.

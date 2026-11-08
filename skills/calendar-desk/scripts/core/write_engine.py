@@ -28,13 +28,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from core.backend_config import load_backend_config
-from core.caldav_client import CalDAVProtocolError
-from core.ical_codec import build_vevent_ics, resolve_tzid, update_vevent_ics
+from .backend_config import load_backend_config
+from .caldav_client import CalDAVProtocolError
+from .ical_codec import build_vevent_ics, resolve_tzid, update_vevent_ics
 
 ENV_STD_LOCK_ROOT = "WORKSPACE_LOCK_ROOT"
-# Deprecated: preserved for compatibility with core/__init__.py; not checked by _trusted_lock_root
-ENV_LOCK_ROOT = "CALENDAR_DESK_WORKSPACE_LOCK_ROOT"
 
 
 class CalendarWriteError(RuntimeError):
@@ -115,20 +113,11 @@ def _validate_resource_url_within_collection(resource_url: str, collection_url: 
 
 
 def _has_guard(candidate: Path) -> bool:
-    return (
-        (candidate / "scripts" / "workspace_lock_guard.py").is_file()
-        or (candidate / "scripts" / "guard.py").is_file()
-    )
+    return (candidate / "scripts" / "workspace_lock_guard.py").is_file()
 
 
 def _guard_script_path(candidate: Path) -> Path:
-    p1 = candidate / "scripts" / "workspace_lock_guard.py"
-    if p1.is_file():
-        return p1
-    p2 = candidate / "scripts" / "guard.py"
-    if p2.is_file():
-        return p2
-    return p1
+    return candidate / "scripts" / "workspace_lock_guard.py"
 
 
 def _trusted_lock_root(lock_root: Path | str | None = None) -> Path:
@@ -138,7 +127,7 @@ def _trusted_lock_root(lock_root: Path | str | None = None) -> Path:
         if not _has_guard(candidate):
             raise CalendarWriteError(
                 "WORKSPACE_LOCK_UNAVAILABLE",
-                f"Explicit lock_root '{lock_root}' does not contain scripts/guard.py",
+                f"Explicit lock_root '{lock_root}' does not contain scripts/workspace_lock_guard.py",
             )
         return candidate
 
@@ -148,7 +137,7 @@ def _trusted_lock_root(lock_root: Path | str | None = None) -> Path:
         if not _has_guard(candidate):
             raise CalendarWriteError(
                 "WORKSPACE_LOCK_UNAVAILABLE",
-                f"WORKSPACE_LOCK_ROOT '{env_std}' does not contain scripts/guard.py",
+                f"WORKSPACE_LOCK_ROOT '{env_std}' does not contain scripts/workspace_lock_guard.py",
             )
         return candidate
 
@@ -1071,7 +1060,7 @@ def recover_workspace(
                 remote_etag = fetched.get("etag") if isinstance(fetched, dict) else None
                 norm_remote = _normalize_etag(remote_etag)
                 norm_if_match = _normalize_etag(if_match_etag)
-                if (norm_remote == norm_if_match and norm_if_match != "") or "other" in norm_remote.lower():
+                if norm_remote == norm_if_match and norm_if_match != "":
                     new_status = "recovered_aborted"
                 else:
                     staged_ics = jdata.get("staged_ics")

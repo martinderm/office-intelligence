@@ -19,13 +19,13 @@ import xml.parsers.expat
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Mapping, Optional, Sequence
 
-from core.ical_codec import (
+from .ical_codec import (
     MAX_ICS_BYTES,
     expand_record_occurrences,
     parse_ics_to_records,
     resolve_tzid,
 )
-from core.injection_fence import fence_calendar_record
+from .injection_fence import fence_calendar_record
 
 MAX_XML_BYTES = 4_194_304  # 4 MiB
 MAX_RESPONSE_BYTES = max(MAX_XML_BYTES, MAX_ICS_BYTES)
