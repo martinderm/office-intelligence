@@ -1,6 +1,6 @@
 """Attachment policy, default limits, and security sanitation rules for mail-desk.
 
-Part of FR-08 (MD-A1/MD-A2/MD-A3).
+Part of FR-08 (MD-A1/MD-A2/MD-A3) and CD-4 (mail-desk .ics bridge).
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Any
+
 
 DEFAULT_ATTACHMENT_POLICY: dict[str, Any] = {
     "version": "1.0.0",
@@ -28,6 +29,8 @@ DEFAULT_ATTACHMENT_POLICY: dict[str, Any] = {
             "text/csv",
             "image/png",
             "image/jpeg",
+            "text/calendar",
+            "application/ics",
         ],
         "disallowed_extensions": [
             ".exe", ".bat", ".cmd", ".com", ".msi", ".scr", ".pif",

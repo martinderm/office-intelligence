@@ -1,7 +1,7 @@
 # Office Intelligence — Paket System Map: Verben (Processes)
 
 > **Typ**: ICM Form 6 (`system-map`), Dimension: Verben  
-> **Ziel**: Beschreibung aller desk-übergreifenden Abläufe, Handoff-Punkte und Datentransformationen im Zusammenspiel der 7 Sub-Skills.  
+> **Ziel**: Beschreibung aller desk-übergreifenden Abläufe, Handoff-Punkte und Datentransformationen im Zusammenspiel der 8 Sub-Skills.  
 > **Gültig für**: Repository Root & konsumierende Workspaces (relativ)
 
 ---
@@ -17,6 +17,8 @@ Die Sub-Skills arbeiten nach dem Prinzip modularer Stufenübergänge:
                                                   │
 [Meeting / Adapter] ──► (meeting-desk) ───────────┤
 [Event / Adapter]   ──► (event-documentation) ───┘
+                                                  │
+[CalDAV Server]     ──► (calendar-desk) ──────────┤──► [memory/evidence/calendar/ & data/]
                                                   │
                                                   ▼
                                       (project-catalog-entry)
@@ -206,3 +208,32 @@ Die detaillierten Abläufe der beiden komplexen Subsysteme sind in den jeweilige
   hash-gebundenem `injection_quarantine_present`-Gate, L2 §39)*
 * **Cloud-Atlas Deep Dive:** [`../../skills/cloud-atlas/docs/system-map/processes.md`](../../skills/cloud-atlas/docs/system-map/processes.md)  
   *(Filemap-Scan, Dokumentenkonvertierung, OCR-Verzweigung `local_derivative` vs. `enrich_source`, optionale AcroForm-Formularfelder-Extraktion mit Capture-vor-OCR-Reihenfolge Issue #20, Mirror-Sync)*
+
+---
+
+## 6. Calendar-Desk CalDAV & Zwei-Phasen-Write-Lifecycle (Paket CD-1 bis CD-4a)
+
+1. **CalDAV Discovery & Agenda-Abfrage:**
+   - Der Client führt `PROPFIND Depth: 1` auf der konfigurierten `principal_url` aus, um verfügbare Kalendersammlungen (`collection_url`), Anzeigenamen und Eigenschaften aufzulösen.
+   - `REPORT` mit `calendar-query` und `time-range` filtert Ereignisse serverseitig in einem definierten Zeitfenster.
+2. **Free/Busy-Berechnung & Slot-Suche:**
+   - Termine aus allen aktiven Kalendern werden aggregiert und nach Startzeit sortiert.
+   - Ganztages- und Zeitzonentermine werden kanonisch nach UTC normalisiert.
+   - `find-slots` berechnet freie Zeitfenster unter Berücksichtigung von Arbeitszeiten (z. B. 08:00–18:00 UTC), Mindestdauer und Pufferzeiten (Buffer). Bei unvollständigen Daten (`skipped[]` nicht leer oder `truncated: true`) brechen `compute_freebusy` und `find-slots` fail-closed mit `CALDAV_INCOMPLETE_FREEBUSY` (Exit 1) ab.
+3. **Zwei-Phasen-Write-Engine (`plan` ──► `apply`):**
+   - **Phase 1 (`plan`):** Validiert Eingaben, serialisiert den RFC-5545-Payload mit Fencing, berechnet den Content-SHA256, generiert und persistiert ein diff-fähiges Plan-Manifest (`data/calendar-desk/proposals/<plan_id>.json`) und legt die ETag-Precondition fest (`If-None-Match: *` bei Neuanlage, `If-Match: "<etag>"` bei Update/Delete). Es erfolgen **keine** mutierenden Netzwerkaufrufe (Exit 0 `Completed`, kein Lock erforderlich).
+   - **Phase 2 (`apply`):**
+     1. Verifiziert die exklusive `workspace-lock`-Lease (`allow_legacy=False`) sowie `write_policy == "dry_run_and_approval"`.
+     2. Öffnet ein atomares Recovery-Journal unter `data/calendar-desk/journal/<plan_id>.json` (`intent` -> `in_flight`).
+     3. Führt die HTTP-Mutation (PUT / DELETE) unter Übergabe der ETag-Precondition aus.
+     4. Bei HTTP 412 (Precondition Failed), Konflikt, `CALENDAR_WRITE_FORBIDDEN` oder Precondition-Verletzung: Bricht fail-closed ab (Exit 2 `PreconditionFailed` / `Failed`), ohne fremde Änderungen zu überschreiben.
+     5. Bei unterbrochenem Schreibvorgang, HTTP 5xx/408/429 oder Netzwerkfehler: Mappt auf `unknown_remote_outcome` und das Journal bleibt aktiv (Exit 3 `RecoveryRequired` / `Failed`).
+     6. Bei allgemeinen Fehlern: Bricht ab (Exit 1 `Failed`).
+     7. Bei Erfolg: Aktualisiert das Evidenzregister (calendars.json & raw/) und setzt das Journal auf completed (Exit 0 `Completed`).
+4. **Recovery-Workflow:**
+   - `calendar_desk_client.py inspect`: Prüft das Vorhandensein offener Journale rein lesend.
+   - `calendar_desk_client.py recover`: Führt rollbacks oder Nachsynchronisationen unter Lease-Schutz durch.
+5. **mail-desk .ics Bridge:**
+   - Eingehende `.ics`-Anhänge werden in `mail-desk` über `core.calendar_extract.extract_calendar_objects` extrahiert.
+   - Die Objekte folgen bit-identisch dem 4-Key-Schema von `event_dossier.py` (`{"uid", "sequence", "recurrence_id", "content_sha256"}`).
+

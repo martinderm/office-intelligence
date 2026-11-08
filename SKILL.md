@@ -1,6 +1,6 @@
 ---
 name: office-intelligence
-description: Router für die sieben Office-Intelligence-Sub-Skills. Verwende diesen Bundle-Skill zur Auswahl des passenden Fach-Desks für Cloud-Atlas, Mail-, Meeting-, Event-, Aufgaben-, Projekt- oder Topic-Arbeit; die fachliche Ausführung bleibt beim jeweiligen Sub-Skill.
+description: Router für die acht Office-Intelligence-Sub-Skills. Verwende diesen Bundle-Skill zur Auswahl des passenden Fach-Desks für Cloud-Atlas, Mail-, Kalender-, Meeting-, Event-, Aufgaben-, Projekt- oder Topic-Arbeit; die fachliche Ausführung bleibt beim jeweiligen Sub-Skill.
 ---
 
 # Office Intelligence
@@ -33,6 +33,7 @@ zuständigen Sub-Skill.
 | --- | --- |
 | projekt- oder topicbezogene Cloud-Verzeichnisse kartiert, konvertiert oder als Filemaps und lokale Mirrors synchronisiert | [cloud-atlas](skills/cloud-atlas/SKILL.md) |
 | eine einzelne Mail fachlich beurteilt, routet, auf Antwortbedarf und Todos prüft oder leicht protokolliert | [mail-desk](skills/mail-desk/SKILL.md) |
+| Kalender abfragt, Freizeiten/Slots sucht oder Termine plant/anlegt (Einladungsbeantwortung via iTIP als CD-5-Seam vorbereitet) | [calendar-desk](skills/calendar-desk/SKILL.md) |
 | Meetings, Konferenzschaltungen oder Vorträge aus einem Adapter oder Upload in Workspace-Evidenz überführt | [meeting-desk](skills/meeting-desk/SKILL.md) |
 | eine größere Konferenz, Tagung oder ein Seminar als Event mit Programm, Aufzeichnungen und Folgeaufgaben dokumentiert | [event-documentation](skills/event-documentation/SKILL.md) |
 | konkrete Action Items aus Mail, Meeting, Event oder Chat priorisiert, dedupliziert und zur Aufgaben-Synchronisation vorbereitet | [task-desk](skills/task-desk/SKILL.md) |
@@ -41,9 +42,12 @@ zuständigen Sub-Skill.
 
 Abgrenzung: `mail-desk` bearbeitet Mailfälle, `task-desk` entscheidet über
 nachverfolgbare Aufgaben, und die Katalog-Desks pflegen strukturierte Projekt- bzw.
-Topic-Daten. `meeting-desk` behandelt einzelne Meetings; `event-documentation` die
-umfassende Dokumentation größerer Veranstaltungen. `cloud-atlas` ist für
-Cloud-Speicher und deren lokale Spiegel zuständig, nicht für die Katalogpflege selbst.
+Topic-Daten. `calendar-desk` verwaltet Termine und Freizeiten via CalDAV mit striktem
+Zwei-Phasen-Write (`plan` -> `apply`); Einladungsbeantwortung (`respond-invitation` / iTIP)
+ist als vorbereiteter Phase-2-Seam (`CD-5`) deklariert. `meeting-desk` behandelt einzelne
+Meetings; `event-documentation` die umfassende Dokumentation größerer Veranstaltungen.
+`cloud-atlas` ist für Cloud-Speicher und deren lokale Spiegel zuständig, nicht für die
+Katalogpflege selbst.
 
 ## Externe Nachbar-Skills
 
@@ -60,3 +64,4 @@ Schemas und Invarianten steht die föderierte System Map (ICM Form 6) bereit:
 - [Paket System Map (Ebene 1)](docs/system-map/README.md): Gesamtarchitektur, Router-Topologie, gemeinsame Datenzonen und Bundle-Invarianten.
 - [Mail-Desk System Map (Ebene 2A)](skills/mail-desk/docs/system-map/README.md): Quarantäne Schema 1, Himalaya-Adapter, Dossier-Modi, 17 Pflichtfelder.
 - [Cloud-Atlas System Map (Ebene 2B)](skills/cloud-atlas/docs/system-map/README.md): Filemap-Engine, Dokumentkonvertierung, OCR-Policies, Frontmatter-Schemas.
+- [Calendar-Desk System Map (Ebene 2C)](skills/calendar-desk/docs/system-map/README.md): CalDAV-Client, RFC-5545-Codec, Free/Busy-Engine, Zwei-Phasen-Write (plan/apply), ETag-Preconditions und Recovery-Journal.

@@ -915,8 +915,12 @@ def _extract_content_internal(
         "sheets": None,
     }
 
-    # 1. Plain Text / CSV / Markdown / Log / JSON
-    if ext in [".txt", ".csv", ".tsv", ".md", ".log", ".json"] or eff_mime.startswith("text/"):
+    # 1. Plain Text / CSV / Markdown / Log / JSON / Calendar
+    if (
+        ext in [".txt", ".csv", ".tsv", ".md", ".log", ".json", ".ics"]
+        or eff_mime.startswith("text/")
+        or eff_mime == "application/ics"
+    ):
         decoded_str = ""
         for enc in ["utf-8", "cp1252", "latin1"]:
             try:
