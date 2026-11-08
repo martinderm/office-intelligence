@@ -46,6 +46,7 @@ unchanged or check clean), ``1`` (``--check`` drift), ``2``
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib.util
 import json
 import os
@@ -221,16 +222,45 @@ def _apply(data: dict[str, Any], body: str) -> tuple[str, dict[str, Any]]:
     return body, {"stats": stats, "tables": tables}
 
 
+_CALENDAR_DAY = re.compile(r"([0-9]{4})-([0-9]{2})-([0-9]{2})\Z")
+_EPOCH_MILLIS = re.compile(r"[+-]?[0-9]+\Z")
+
+
+def _normalize_date(value: str) -> tuple[str, str]:
+    """Render ``--date`` as ``(frontmatter value, default dateString)``.
+
+    Absent -> ``null``; epoch milliseconds -> the integer; a strict ISO calendar
+    day ``YYYY-MM-DD`` -> the quoted day (also the default ``dateString``). A bare
+    day carries no time, so no midnight start is ever invented or converted.
+    """
+    if not value:
+        return "null", ""
+    if _EPOCH_MILLIS.match(value):
+        return str(int(value)), ""
+    day = _CALENDAR_DAY.match(value)
+    if day:
+        try:
+            datetime.date(*(int(part) for part in day.groups()))
+        except ValueError:
+            day = None
+    if not day:
+        shown = value if len(value) <= 40 else value[:40] + "..."
+        raise ValueError(f"--date must be an ISO calendar day YYYY-MM-DD (for example "
+                         f"2026-10-27) or an integer of epoch milliseconds; got {shown!r}")
+    return json.dumps(value), value
+
+
 def _header(meeting_id: str, title: str, date: str, datestring: str,
             raw_name: str, result: dict[str, Any]) -> str:
     stats = result["stats"]
     tables = result["tables"]
+    date_value, default_label = _normalize_date(date)
     out = [
         "---",
         f'meeting_id: {json.dumps(meeting_id, ensure_ascii=False)}',
         f'title: {json.dumps(title, ensure_ascii=False)}',
-        f'date: {int(date) if date else "null"}',
-        f'dateString: {json.dumps(datestring, ensure_ascii=False)}',
+        f'date: {date_value}',
+        f'dateString: {json.dumps(datestring or default_label, ensure_ascii=False)}',
         f'source_raw: {json.dumps(raw_name, ensure_ascii=False)}',
         f'corrections_count: {stats["corrections_count"]}',
         f'unklar_count: {stats["unklar_count"]}',
@@ -303,6 +333,12 @@ def _require_lock(workspace: Path, lease_id: str | None, conversation_id: str | 
     writer = _writer()
     try:
         module = writer._load_guard(writer._trusted_lock_root(lock_root))
+    except writer._Reject as exc:
+        # Installation/path mistakes stay actionable; they are not lease failures.
+        raise RuntimeError(str(exc)) from None
+    except Exception:
+        raise RuntimeError("the trusted workspace-lock guard cannot be loaded") from None
+    try:
         writer._require_lease(writer._Guard(module, workspace, lease_id, conversation_id))
     except Exception:
         raise RuntimeError("an owned active workspace-lock lease is required") from None
@@ -366,6 +402,7 @@ def _run(argv: list[str] | None = None) -> int:
     ap.add_argument("--json", action="store_true", help="canonical JSON envelope (also the default)")
     args = ap.parse_args(argv)
     workspace = Path(args.workspace).resolve()
+    _normalize_date(args.date)  # reject a bad day before any read or write
 
     if args.init_template:
         if args.raw or args.corrections or args.out or args.check:

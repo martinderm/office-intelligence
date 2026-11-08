@@ -296,7 +296,14 @@ Publication is delegated to the canonical writer: only the registered
 `transcript_path` of exactly one meeting may be updated, and only while the file
 is provably writer-owned (recorded hash). A byte-identical rebuild is a no-op.
 `--check` stays read-only. For a byte-identical rebuild the same metadata options
-belong to the documented call. A planning rejection while a journal is open (for
+belong to the documented call. The builder header's `date` is a builder-specific
+union (#52 P2): `null` when absent, the integer for epoch milliseconds, or a quoted
+ISO calendar day (`date: "2026-10-27"`) for a strict `YYYY-MM-DD` input, in which
+case `dateString` defaults to the same day. A bare day never becomes a midnight
+start timestamp; an explicit `--date-string` is kept as given and an invalid day is
+rejected before any write. The register entry is not rewritten and the schema
+version does not change; readers of builder frontmatter must accept all three
+forms. A planning rejection while a journal is open (for
 example stale ownership after an interrupted publication) is reported as
 `recovery_required` (exit 3), not as a plain rejection; this holds for both the
 transcript and the summary seam.

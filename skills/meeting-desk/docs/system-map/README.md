@@ -3,12 +3,16 @@
 **Standalone-Guard (#38):** Der explizite Writer-/CLI-Installationspfad geht dem
 gemeinsamen Operator-Environment `WORKSPACE_LOCK_ROOT` vor; danach folgt der
 kompatible Alias `MEETING_DESK_WORKSPACE_LOCK_ROOT`, zuletzt der Installations-
-Sibling des Bundles. Fehlende Installation liefert begrenzte Setup-Hilfe auf
-`WORKSPACE_LOCK_ROOT` / `--workspace-lock-root` und die Bundle-README. Kein
-CWD-/Payload-Fallback; Ownership, Guard und Recovery bleiben unverändert.
+Sibling des Bundles. Fehlende oder unvollständige Installation (#52 P3) meldet im
+Writer und im Builder (auch `--init-template`) den gewählten Root, die erwarteten
+Dateien `<root>/scripts/workspace_lock_guard.py` und
+`<root>/scripts/invoke_workspace_lock.py` und das Beispiel
+`.agents/skills/workspace-lock` (nicht `.agents/skills`); der Builder verdeckt das
+nicht als Lease-Fehler. Kein CWD-/Payload-Fallback, keine Suche; Ownership, Guard
+und Recovery bleiben unverändert.
 
 > **Metrik (DOC-M1):** 15 Dateien (`git ls-files --cached --others --exclude-standard`,
-> 2026-11-05) · 163 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
+> 2026-11-08) · 176 Testmethoden in 2 Modulen (`test_ingest_meeting.py`,
 > `test_build_clean_transcript.py`) plus Crash-Treiber und Fixture-Paket.
 > Diese Kopfzeile ist die kanonische Metrik-SSOT; L1 nennt nur Dateizahl + Anker.
 >
@@ -195,7 +199,7 @@ sind untrusted. Dateiname: `<datum|undated>-<title-slug>-<sha256(meeting_id)[:8]
 | `ingest_meeting.publish_registered_transcript(...)` | einzige Builder-Publikationsgrenze |
 | `ingest_meeting.publish_registered_summary(content, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Summary-Ersatzgrenze (#52 P1); gleiche Signatur/Envelopes wie der Transkriptpfad; Zustände `DryRun`/`Unchanged`/`Applied`/`Rejected`/`RecoveryRequired`; Plan-Action `publish_summary`; in `--capabilities` unter `data.actions` als `publish_registered_summary` ausgewiesen (bestehende Namen unverändert) |
 | `ingest_meeting.retitle_registered_meeting(title, *, workspace_root, lease_id, meeting_id, conversation_id=None, trusted_workspace_lock_root=None, dry_run=False)` | einzige Titelkorrektur-Grenze (#52 P5); gleiche Envelopes/Zustände wie die Publish-Seams; Plan-Action `retitle_meeting` (`title.from/to`, `files[].frontmatter_title`); in `--capabilities` unter `data.actions` als `retitle_registered_meeting` ausgewiesen (bestehende Namen unverändert) |
-| `build_clean_transcript.py` | fachliche Ableitung; `--check` read-only; Publikation delegiert |
+| `build_clean_transcript.py` | fachliche Ableitung; `--check` read-only; Publikation delegiert; Kopf-`date` ist `null`, Epoch-Ganzzahl oder quotierter ISO-Kalendertag (`--date YYYY-MM-DD`, ohne erfundene Uhrzeit, `dateString` defaultet auf den Tag; ungültiger Wert → Exit 2 ohne Write, auch `--init-template`; #52 P2) |
 | `verify_meeting_fixtures.py` | read-only Fixture-Digest + Record-Konformität |
 
 Envelope: `action/success/state/message/data/error`; stderr nur begrenzte
@@ -227,8 +231,15 @@ Diagnostik; stdout genau eine Zeile.
   Capability, nicht-writer-eigene/mehrdeutige/aliasierte/fehlende Artefakte,
   mehrdeutiges Frontmatter, Lease-/Journal-/Eingabefehler, unterbrochene
   Publikation mit Recovery, Alias-Bindung an die stabile ID, Folgepublikation.
+  Issue-#52-P2/P3-Grenzen (`BuilderDelegationTests`, echter Guard): ISO-Kalendertag
+  als quotiertes Kopf-`date` mit byte-identischem Rebuild/`--check`, ungültiger Tag
+  ohne Änderung an Register/Ownership/Ausgabe, falscher Lock-Root (Flag und Env)
+  mit erwarteten Guard-Pfaden ohne Ausführung verschachtelten Codes, Writer-CLI/-API,
+  Lease-Fehler unverändert.
 - `tests/test_build_clean_transcript.py`: Korrektur-Engine und
-  Delegations-/Fehler-/Exit-Vertrag des Builders.
+  Delegations-/Fehler-/Exit-Vertrag des Builders; `--date`-Formen (ISO-Tag, Epoch,
+  `--date-string`, fehlend), ungültige Tage inkl. `--init-template`, Lock-Root-
+  Diagnose gegenüber Lease-Fehler.
 - `tests/fixtures/meeting-record-v1.json`: gemeinsames SSOT-Paket mit
   Digest-Manifest; `scripts/verify_meeting_fixtures.py` prüft es read-only.
 - Crash-Tests starten einen echten Kindprozess (`tests/_crash_ingest.py`) und

@@ -1297,6 +1297,166 @@ class BuilderDelegationTests(WriterTestBase):
         self.assertFalse(envelope["success"])
         self.assertEqual(envelope["state"], "Rejected")
 
+    # -- OI #52 P2/P3 through the real builder CLI, writer and trusted guard --
+    EXPECTED_HINTS = ("scripts/workspace_lock_guard.py", "scripts/invoke_workspace_lock.py",
+                      ".agents/skills/workspace-lock")
+
+    def snapshot(self):
+        return {path.relative_to(self.root).as_posix(): path.read_bytes()
+                for path in sorted(self.root.rglob("*")) if path.is_file()}
+
+    def run_with(self, args, env=None):
+        completed = subprocess.run(
+            [sys.executable, *args], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", check=False,
+            env=None if env is None else {**os.environ, **env})
+        lines = [line for line in completed.stdout.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 1, completed.stderr)
+        return completed.returncode, json.loads(lines[0])
+
+    def mistaken_parent(self):
+        """A skills directory that merely *contains* an installation (the usual slip)."""
+        parent = self.root / ".agents/skills"
+        scripts = parent / "workspace-lock/scripts"
+        scripts.mkdir(parents=True)
+        for name in ("workspace_lock_guard.py", "invoke_workspace_lock.py"):
+            (scripts / name).write_text(
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('executed.marker').write_text('x')\n",
+                encoding="utf-8")
+        return parent
+
+    def with_root(self, args, root):
+        args = list(args)
+        args[args.index("--workspace-lock-root") + 1] = str(root)
+        return args
+
+    def assert_actionable_root_error(self, message, parent):
+        for expected in (*self.EXPECTED_HINTS, parent.as_posix()):
+            self.assertIn(expected, message)
+        self.assertNotIn("owned active workspace-lock lease", message)
+        self.assertEqual(list(parent.rglob("executed.marker")), [])
+
+    def test_iso_day_is_published_as_a_quoted_calendar_date(self):
+        code, envelope = self.run_builder("--date", "2026-10-27", "--title", "Montag")
+        self.assertEqual(code, 0, envelope)
+        text = self.out_path.read_bytes().decode("utf-8")
+        self.assertIn('title: "Montag"\ndate: "2026-10-27"\ndateString: "2026-10-27"\n', text)
+        first = self.out_path.read_bytes()
+        code, again = self.run_builder("--date", "2026-10-27", "--title", "Montag")
+        self.assertEqual(code, 0, again)
+        self.assertEqual(self.out_path.read_bytes(), first)
+        completed = subprocess.run(
+            [sys.executable, *self.builder_args("--date", "2026-10-27", "--title", "Montag",
+                                                "--check")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        self.assertEqual(completed.returncode, 0, completed.stdout)
+        self.assertFalse(json.loads(completed.stdout)["data"]["drift"])
+        register = register_document(self.root)["meetings"][0]
+        self.assertEqual(register["transcript_path"], self.entry["transcript_path"])
+        # Epoch millis stay an integer through the same real seam.
+        code, epoch = self.run_builder("--date", "1792483867000", "--title", "Montag")
+        self.assertEqual(code, 0, epoch)
+        self.assertIn('date: 1792483867000\ndateString: ""\n',
+                      self.out_path.read_bytes().decode("utf-8"))
+
+    def test_invalid_date_changes_nothing_through_the_real_writer(self):
+        self.acquire()
+        before = self.snapshot()
+        for value in ("2026-02-30", "27.10.2026", "abc"):
+            with self.subTest(value=value):
+                code, envelope = self.run_builder("--date", value)
+                self.assertEqual(code, 2, envelope)
+                self.assertIn("--date", envelope["message"])
+                self.assertEqual(self.snapshot(), before)
+        target = self.root / "data/bad-date-template.json"
+        (self.root / "data").mkdir(exist_ok=True)
+        before = self.snapshot()
+        code, envelope = self.run_with(
+            [str(self.builder_module().__file__), "--workspace", str(self.root),
+             "--init-template", str(target), "--lease-id", self.lease,
+             "--workspace-lock-root", str(self.lock_root), "--date", "2026-02-30",
+             "--json"])
+        self.assertEqual(code, 2, envelope)
+        self.assertFalse(target.exists())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_publication_with_a_mistaken_lock_root_is_actionable_and_fails_closed(self):
+        self.acquire()
+        parent = self.mistaken_parent()
+        before = self.snapshot()
+        code, envelope = self.run_with(self.with_root(self.builder_args(), parent))
+        self.assertEqual(code, 2, envelope)
+        self.assertEqual(envelope["state"], "Rejected")
+        self.assert_actionable_root_error(envelope["message"], parent)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_operator_environment_mistake_is_diagnosed_like_the_flag(self):
+        self.acquire()
+        parent = self.mistaken_parent()
+        args = self.builder_args()
+        index = args.index("--workspace-lock-root")
+        del args[index:index + 2]
+        before = self.snapshot()
+        for variable in ("WORKSPACE_LOCK_ROOT", "MEETING_DESK_WORKSPACE_LOCK_ROOT"):
+            with self.subTest(variable=variable):
+                env = {"WORKSPACE_LOCK_ROOT": "", "MEETING_DESK_WORKSPACE_LOCK_ROOT": "",
+                       variable: str(parent)}
+                code, envelope = self.run_with(args, env=env)
+                self.assertEqual(code, 2, envelope)
+                self.assert_actionable_root_error(envelope["message"], parent)
+                self.assertEqual(self.snapshot(), before)
+
+    def test_template_with_the_right_root_needs_the_owned_lease(self):
+        (self.root / "data").mkdir(exist_ok=True)
+        target = self.root / "data/template.json"
+        script = str(self.builder_module().__file__)
+
+        def args(lease):
+            return [script, "--workspace", str(self.root), "--init-template", str(target),
+                    "--lease-id", lease, "--workspace-lock-root", str(self.lock_root),
+                    "--json"]
+
+        code, envelope = self.run_with(args("not-the-owner"))
+        self.assertEqual(code, 2, envelope)
+        self.assertIn("owned active workspace-lock lease is required", envelope["message"])
+        self.assertFalse(target.exists())
+        self.acquire()
+        code, envelope = self.run_with(args(self.lease))
+        self.assertEqual(code, 0, envelope)
+        self.assertTrue(target.is_file())
+
+    def test_writer_cli_and_api_report_a_mistaken_lock_root(self):
+        lease = self.acquire()
+        parent = self.mistaken_parent()
+        record = valid_record(1)
+        before = self.snapshot()
+        code, envelope, stderr = run_cli(
+            parent, ["--record", "-", "--workspace", str(self.root), "--lease-id", lease],
+            stdin=json.dumps(record).encode("utf-8"))
+        self.assertEqual(code, 2, stderr)
+        self.assert_rejected(envelope)
+        self.assert_actionable_root_error(envelope["message"], parent)
+        self.assertEqual(self.snapshot(), before)
+        envelope = self.writer.publish_registered_transcript(
+            "---\ntitle: x\n---\n\nBody\n", workspace_root=self.root, lease_id=lease,
+            meeting_id=self.entry["meeting_id"], trusted_workspace_lock_root=parent)
+        self.assert_rejected(envelope)
+        self.assert_actionable_root_error(envelope["message"], parent)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_missing_foreign_lease_keeps_the_lease_message_with_a_valid_root(self):
+        for lease in ("not-the-owner", ""):
+            with self.subTest(lease=lease):
+                args = self.builder_args()
+                args[args.index("--lease-id") + 1] = lease
+                before = self.snapshot()
+                code, envelope = self.run_with(args)
+                self.assertEqual(code, 2, envelope)
+                self.assertNotIn("scripts/workspace_lock_guard.py", envelope["message"])
+                self.assertIn("lease", envelope["message"])
+                self.assertEqual(self.snapshot(), before)
+
 
 class RegisteredSummaryPublishTests(WriterTestBase):
     """OI #52 P1: ``publish_registered_summary`` replaces only the summary."""

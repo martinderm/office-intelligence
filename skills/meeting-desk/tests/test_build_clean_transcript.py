@@ -246,6 +246,137 @@ class BuilderTests(unittest.TestCase):
         self.assertEqual(json.loads(title_line.removeprefix("title: ")), title)
         self.assertIn("date: null\n", header)
 
+    # -- OI #52 P2: calendar-day ``--date`` ---------------------------------
+    def header_lines(self):
+        lines = self.out.read_bytes().decode("utf-8").split("\n")
+        return lines[1:lines.index("---", 1)]
+
+    def date_lines(self):
+        return [line for line in self.header_lines()
+                if line.startswith(("date:", "dateString:"))]
+
+    def workspace_tree(self):
+        return {path.relative_to(self.workspace).as_posix(): path.read_bytes()
+                for path in sorted(self.workspace.rglob("*")) if path.is_file()}
+
+    def test_iso_calendar_date_is_a_quoted_day_without_invented_time(self):
+        for day in ("2026-10-27", "2024-02-29"):
+            with self.subTest(day=day):
+                self.build(["--date", day])
+                self.assertEqual(self.date_lines(),
+                                 [f'date: "{day}"', f'dateString: "{day}"'])
+                header = "\n".join(self.header_lines())
+                self.assertNotIn("T00:00", header)
+                self.assertNotRegex(header, r"(?m)^date: -?\d")
+                first = self.out.read_bytes()
+                self.build(["--date", day])
+                self.assertEqual(self.out.read_bytes(), first)
+                self.assertEqual(self.call(self.args() + ["--date", day, "--check"])[0], 0)
+        self.assertEqual(
+            self.call(self.args() + ["--date", "2026-10-28", "--check"])[0], 1)
+
+    def test_epoch_explicit_date_string_and_absent_date_stay_compatible(self):
+        cases = (
+            (["--date", "1792483867000"], ["date: 1792483867000", 'dateString: ""']),
+            (["--date", "1792483867000", "--date-string", "2026-10-20T08:11:07.000Z"],
+             ["date: 1792483867000", 'dateString: "2026-10-20T08:11:07.000Z"']),
+            (["--date-string", "Mo 27.10."], ["date: null", 'dateString: "Mo 27.10."']),
+            ([], ["date: null", 'dateString: ""']),
+            (["--date", "2026-10-27", "--date-string", "Montag, 27.10."],
+             ['date: "2026-10-27"', 'dateString: "Montag, 27.10."']),
+        )
+        for extra, expected in cases:
+            with self.subTest(extra=extra):
+                self.build(extra)
+                self.assertEqual(self.date_lines(), expected)
+                first = self.out.read_bytes()
+                self.build(extra)
+                self.assertEqual(self.out.read_bytes(), first)
+                self.assertEqual(self.call(self.args() + extra + ["--check"])[0], 0)
+
+    def test_invalid_dates_fail_before_any_output(self):
+        invalid = ("2026-02-30", "2026-02-29", "2026-13-01", "2026-00-10", "0000-01-01",
+                   "2026-10-27T10:00:00Z", "27.10.2026", "2026/10/27", "2026-1-5", "abc",
+                   "12.5", "２０２６-10-27", "1_000", " 1792483867000",
+                   "2026-10-27\n")
+        before = self.workspace_tree()
+        for value in invalid:
+            for extra in ((), ("--check",)):
+                with self.subTest(value=value, extra=extra):
+                    with patch.object(builder, "_delegate") as delegate:
+                        code, result = self.call(self.args() + ["--date", value, *extra])
+                    self.assertEqual(code, 2, result)
+                    self.assertFalse(result["success"])
+                    self.assertIn("--date", result["message"])
+                    self.assertIn("YYYY-MM-DD", result["message"])
+                    delegate.assert_not_called()
+                    self.assertFalse(self.out.exists())
+                    self.assertEqual(self.workspace_tree(), before)
+
+    def test_init_template_rejects_an_invalid_date_without_writing(self):
+        data_dir = self.workspace / "data"
+        data_dir.mkdir()
+        target = data_dir / "template.json"
+        before = self.workspace_tree()
+        with patch.object(builder, "_require_lock"):
+            for value in ("2026-02-30", "abc", "27.10.2026"):
+                with self.subTest(value=value):
+                    code, result = self.call(["--workspace", str(self.workspace),
+                                              "--init-template", str(target),
+                                              "--date", value])
+                    self.assertEqual(code, 2, result)
+                    self.assertIn("--date", result["message"])
+                    self.assertFalse(target.exists())
+                    self.assertEqual(self.workspace_tree(), before)
+
+    # -- OI #52 P3: lock-root diagnostics -----------------------------------
+    def mistaken_skills_parent(self):
+        """A skills directory that merely *contains* an installation (the usual slip)."""
+        parent = self.workspace / ".agents/skills"
+        scripts = parent / "workspace-lock/scripts"
+        scripts.mkdir(parents=True)
+        for name in ("workspace_lock_guard.py", "invoke_workspace_lock.py"):
+            (scripts / name).write_text(
+                "from pathlib import Path\n"
+                "Path(__file__).with_name('executed.marker').write_text('x')\n",
+                encoding="utf-8")
+        return parent
+
+    def test_template_lock_root_mistake_is_not_hidden_behind_a_lease_error(self):
+        parent = self.mistaken_skills_parent()
+        (self.workspace / "data").mkdir()
+        target = self.workspace / "data/template.json"
+        code, result = self.call(["--workspace", str(self.workspace),
+                                  "--init-template", str(target),
+                                  "--lease-id", "test-owner",
+                                  "--workspace-lock-root", str(parent)])
+        self.assertEqual(code, 2, result)
+        message = result["message"]
+        for expected in (parent.as_posix(), "scripts/workspace_lock_guard.py",
+                         "scripts/invoke_workspace_lock.py", ".agents/skills/workspace-lock"):
+            self.assertIn(expected, message)
+        self.assertNotIn("owned active workspace-lock lease", message)
+        self.assertFalse(target.exists())
+        # No search, no fallback into the nested installation, nothing executed.
+        self.assertEqual(list(parent.rglob("executed.marker")), [])
+
+    def test_template_without_a_lease_keeps_the_lease_error(self):
+        (self.workspace / "data").mkdir()
+        scripts = self.workspace / "lock/scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "workspace_lock_guard.py").write_text(
+            "def require_workspace_lock(*args, **kwargs):\n"
+            "    raise RuntimeError('no owner')\n", encoding="utf-8")
+        (scripts / "invoke_workspace_lock.py").write_text("", encoding="utf-8")
+        target = self.workspace / "data/template.json"
+        code, result = self.call(["--workspace", str(self.workspace),
+                                  "--init-template", str(target),
+                                  "--lease-id", "test-owner",
+                                  "--workspace-lock-root", str(self.workspace / "lock")])
+        self.assertEqual(code, 2, result)
+        self.assertIn("owned active workspace-lock lease is required", result["message"])
+        self.assertFalse(target.exists())
+
     def test_internal_thematic_breaks_are_preserved(self):
         self.raw.write_text("Intro\n---\nMiddle\n---\nEnd\n", encoding="utf-8")
         self.build()
