@@ -179,10 +179,14 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   `data/mail-desk/`; kein Schreiben, Ausführen, Entpacken, Suchen oder Laden. Einzige lokale
   Schreibwirkung bleibt das Draft-Journal (`attempts` vor dem APPEND).
 * **Mailbox-Wirkung:** genau ein `message save`-APPEND über die bestehende binäre stdin-Pipe
-  (nie wiederholt), vorher zwei bis drei lesende Aufrufe (Eindeutigkeit, ggf. alter Entwurf),
-  danach lesend `envelope list`, `message read -H`, `message export` (≤ 12 MiB); bei Replace erst
-  nach verifizierter neuer Mail `flag add deleted` + `folder expunge` auf die per Message-ID neu
-  aufgelöste alte Envelope. Kein SMTP, kein `message send`.
+  (nie wiederholt). Vorher lesend: Eindeutigkeitssuche (`envelope list` plus ein `message read -H` je
+  Envelope, höchstens 49 vorhandene Envelopes) und bei Replace ein `message export` des alten Entwurfs.
+  Danach lesend: dieselbe Suche (höchstens 50 Header-Lesungen) und `message export` der neuen Mail. Der
+  CLI-Export landet **zuerst vollständig auf der Platte**; die Python-Ladegrenze (12 MiB + 1 Byte über
+  ein reguläres Handle mit Identitäts-/Wachstumsprüfung) begrenzt nicht die vorgelagerte
+  Backend-Übertragung oder Plattengröße. Bei Replace (auch bei ausgelassener Anhangsliste) erst nach
+  verifizierter neuer Mail `flag add deleted` + `folder expunge` auf die per Message-ID neu aufgelöste
+  alte Envelope. Kein SMTP, kein `message send`.
 * **Fehlerklassen:** eindeutig gescheitert (`draft_save_failed`), unklarer Ausgang
   (`draft_append_outcome_unknown`: Timeout, transient, Launch, Pipe, fremde Exception), nicht
   verifizierbar (`draft_verification_failed`), Teilausgang (`draft_replace_old_not_deleted`,

@@ -74,6 +74,17 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertIn("6.1a", self.text("L2 processes"))
         self.assertIn("5.2 Entwürfe mit Dateianhängen", self.text("L2 effects"))
 
+    def test_review_round_one_contract_points_are_documented(self) -> None:  # D1 (review R1 / 1-6)
+        cli = self.text("cli-operations")
+        for needle in ("49", "jeder", "Platte", "Bcc", "From", "[]"):
+            self.assertIn(needle, cli, f"cli-operations lacks {needle}")
+        for name in ("L2 README", "L2 processes", "L2 effects", "himalaya"):
+            text = self.text(name)
+            self.assertTrue("Platte" in text or "disk" in text, f"{name} lacks the export-vs-load separation")
+        self.assertIn("Aktueller Frame (Issue #18", self.text("L2 README"))
+        self.assertNotIn("Aktueller Frame (2026-11-04", self.text("L2 README"))
+        self.assertNotIn("Aktueller Reconcile-Frame", self.text("L2 README"))
+
     def test_no_machine_specific_absolute_paths_in_the_new_documentation(self) -> None:  # portability
         pattern = re.compile(r"[A-Za-z]:[\\/](?:users|Users)|/home/|/Users/")
         for name in ("SKILL", "cli-operations", "himalaya", "L2 README", "L1 README"):

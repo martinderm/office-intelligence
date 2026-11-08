@@ -99,6 +99,22 @@ class ExplicitReplaceTests(ReplaceHarness):
         self.assertTrue(result["old_deleted"])
         self.assertFalse(self.old_still_stored())
 
+    def test_unexpected_mime_structure_fails_the_verification_and_keeps_the_old_draft(self) -> None:  # review R1 / 2
+        import email
+
+        def wrap_in_multipart(raw: str) -> str:
+            msg = email.message_from_string(raw, policy=drafts.SMTPUTF8_CRLF)
+            msg.make_mixed()
+            return msg.as_string()
+
+        self.box.mutate_stored = wrap_in_multipart
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.replace(attachments=[])
+        self.assertEqual(drafts.DRAFT_VERIFICATION_FAILED_REASON, raised.exception.reason_code)
+        self.assertIn("structure", str(raised.exception))
+        self.assertEqual([], self.deletes())
+        self.assertTrue(self.old_still_stored())
+
     def test_explicit_mode_needs_the_real_lease_and_the_old_message_id(self) -> None:  # K, R7
         with self.assertRaises(drafts.DraftError) as raised:
             self.replace(lease_id="foreign")
@@ -131,6 +147,26 @@ class ExplicitReplaceTests(ReplaceHarness):
         self.assertEqual(drafts.DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON, raised.exception.reason_code)
         self.assertEqual([], self.box.save_calls)
         self.assertTrue(self.old_still_stored())
+
+
+class ReplaceSizeBoundTests(ReplaceHarness):
+    def test_every_replace_mode_obeys_the_ten_mib_bound_before_the_append(self) -> None:  # review R1 / 4
+        from draft_attachment_fixtures import exact_size_body
+
+        over = exact_size_body(10485760 + 1, (), message_id="<att1@example.org>", date="Sat, 07 Nov 2026 12:00:00 +0100",
+                               )
+        common = dict(subject="Betreff", to="a@example.org", from_addr=None, body=over)
+        for label, extra in (
+            ("explicit empty list", dict(attachments=[])),
+            ("omitted", dict(attachments=drafts.ATTACHMENTS_UNSPECIFIED, workspace_root=None, lease_id=None, lock_root=None)),
+        ):
+            with self.subTest(mode=label):
+                with self.assertRaises(drafts.DraftError) as raised:
+                    self.replace(old_envelope_id=self.old_env, **common, **extra)
+                self.assertEqual("message_too_large", raised.exception.reason_code)
+                self.assertEqual([], self.box.save_calls)
+                self.assertEqual([], self.deletes())
+                self.assertTrue(self.old_still_stored())
 
 
 class OldDraftProtectionTests(ReplaceHarness):
@@ -202,12 +238,162 @@ class OldDraftProtectionTests(ReplaceHarness):
         self.assertEqual(2, len(self.box.stored("Drafts")), "both drafts stay observable and are reported")
 
 
+class OldDraftParsingTests(ReplaceHarness):
+    """Attachment freeness is never derived from a defective structure or an ambiguous identity (review R1 / 2)."""
+
+    NO_BOUNDARY = (
+        "Message-ID: <broken@example.org>\r\nSubject: Alt\r\nTo: old@example.org\r\nMIME-Version: 1.0\r\n"
+        "Content-Type: multipart/mixed\r\n\r\nLooks like plain text but hides an attachment part.\r\n"
+    )
+    DUPLICATE_ID = (
+        "Message-ID: <dupid@example.org>\r\nMessage-ID: <other@example.org>\r\nSubject: Alt\r\nTo: old@example.org\r\n\r\nText\r\n"
+    )
+
+    def legacy(self, old_id: str, **overrides):
+        params = dict(old_envelope_id=old_id, old_message_id=None, attachments=drafts.ATTACHMENTS_UNSPECIFIED,
+                      workspace_root=None, lease_id=None, lock_root=None, message_id=None, from_addr=None)
+        params.update(overrides)
+        return self.replace(**params)
+
+    def test_defective_old_structure_is_not_treated_as_attachment_free(self) -> None:
+        old = self.box.seed("Drafts", self.NO_BOUNDARY)
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.legacy(old)
+        self.assertEqual(drafts.DRAFT_OLD_UNREADABLE_REASON, raised.exception.reason_code)
+        self.assertEqual([], self.box.save_calls)
+        self.assertEqual([], self.deletes())
+
+    def test_duplicate_message_id_headers_of_the_old_draft_are_ambiguous_in_every_mode(self) -> None:
+        old = self.box.seed("Drafts", self.DUPLICATE_ID)
+        with self.assertRaises(drafts.DraftError) as omitted:
+            self.legacy(old)
+        self.assertEqual(drafts.DRAFT_OLD_UNREADABLE_REASON, omitted.exception.reason_code)
+        with self.assertRaises(drafts.DraftError) as explicit:
+            self.replace(old_envelope_id=old, old_message_id="<dupid@example.org>")
+        self.assertEqual(drafts.DRAFT_OLD_UNREADABLE_REASON, explicit.exception.reason_code)
+        self.assertEqual([], self.box.save_calls)
+        self.assertEqual([], self.deletes())
+
+    def test_explicit_list_tolerates_a_mime_defect_of_the_old_draft_but_not_its_identity(self) -> None:
+        old = self.box.seed("Drafts", self.NO_BOUNDARY)
+        result = self.replace(old_envelope_id=old, old_message_id="<broken@example.org>")
+        self.assertTrue(result["old_deleted"])
+
+
+class OmittedVerifiedReplaceTests(ReplaceHarness):
+    """Omitted attachments (text-only old draft) still get the full verified replace (review R1 / 3).
+
+    API rationale: omission cannot name a workspace, so no lease / file access is involved, but the new
+    mail, the Message-ID precheck, the journal and the re-resolution of the old draft are the very same
+    steps as for an explicit list.  The old draft's own Message-ID is read from the old draft; a given
+    ``old_message_id`` must match.  Without a journal there is no reconcile trail, so it is refused.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.plain_raw = synthetic_old_draft("<plain@example.org>", subject="Plain")
+        self.plain_env = self.box.seed("Drafts", self.plain_raw)  # "43"; the new draft becomes "44"
+
+    def omitted(self, **overrides):
+        params = dict(old_envelope_id=self.plain_env, old_message_id=None, attachments=drafts.ATTACHMENTS_UNSPECIFIED,
+                      workspace_root=None, lease_id=None, lock_root=None, message_id=None)
+        params.update(overrides)
+        return self.replace(**params)
+
+    def test_success_uses_the_shared_verification_journal_and_re_resolution(self) -> None:
+        result = self.omitted()
+        self.assertEqual("44", result["envelope_id"])
+        self.assertEqual("content", result["verified"])
+        self.assertEqual(0, result["attachment_count"])
+        self.assertTrue(result["old_deleted"])
+        self.assertEqual(1, len(self.box.save_calls))
+        order = [c for c, _ in self.box.calls]
+        new_export = max(i for i, c in enumerate(order) if "export" in c and "44" in c)
+        first_delete = next(i for i, c in enumerate(order) if "flag" in c and "add" in c)
+        self.assertLess(new_export, first_delete)
+        run = self.journal_data()["runs"]["run-att"]
+        self.assertEqual(self.plain_env, run["items"]["44"]["old_envelope_id"])
+        (attempt,) = [a for a in run["attempts"].values() if a.get("envelope_id") == "44"]
+        self.assertEqual("replaced", attempt["status"])
+        self.assertEqual("plain@example.org", attempt["old_message_id"])
+
+    def test_body_mutation_of_the_stored_new_mail_keeps_the_old_draft(self) -> None:
+        self.box.mutate_stored = lambda raw: raw.replace("Anbei die Unterlagen.", "Anbei die Unterlagen!")
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.omitted()
+        self.assertEqual(drafts.DRAFT_VERIFICATION_FAILED_REASON, raised.exception.reason_code)
+        self.assertEqual([], self.deletes())
+        self.assertIn(self.plain_raw, self.box.stored("Drafts"))
+
+    def test_message_id_collisions_are_refused_before_the_append(self) -> None:
+        for taken in ("<plain@example.org>", "<att1@example.org>"):
+            with self.subTest(taken=taken):
+                self.setUp()
+                if taken == "<att1@example.org>":
+                    self.box.seed("Drafts", synthetic_old_draft(taken, subject="Anderer Betreff"))
+                with self.assertRaises(drafts.DraftError) as raised:
+                    self.omitted(message_id=taken)
+                self.assertEqual(drafts.DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON, raised.exception.reason_code)
+                self.assertEqual([], self.box.save_calls)
+                self.assertEqual([], self.deletes())
+
+    def test_renumbered_old_draft_is_deleted_by_its_current_id_only(self) -> None:
+        def renumber() -> None:
+            for message in self.box.messages["Drafts"]:
+                if message["id"] == self.plain_env:
+                    message["id"] = "9"
+
+        self.box.after_save = renumber
+        result = self.omitted()
+        self.assertTrue(result["old_deleted"])
+        flag = self.box.commands("flag", "add")[0]
+        self.assertIn("9", flag)
+        self.assertNotIn(self.plain_env, flag)
+
+    def test_vanished_old_draft_is_reported_not_deleted(self) -> None:
+        self.box.after_save = lambda: self.box.messages["Drafts"].__delitem__(1)
+        result = self.omitted()
+        self.assertFalse(result["old_deleted"])
+        self.assertEqual("old_draft_not_found", result["old_status"])
+        self.assertEqual([], self.box.commands("flag", "add"))
+
+    def test_unknown_append_outcome_and_delete_failure_are_honest(self) -> None:
+        self.box.save_raises = OSError(206, f"x {SECRET}")
+        with self.assertRaises(drafts.DraftError) as unknown:
+            self.omitted()
+        self.assertEqual("draft_append_outcome_unknown", unknown.exception.reason_code)
+        self.assertEqual([], self.deletes())
+        self.setUp()
+        self.box.flag_exit = 1
+        self.box.flag_stderr = f"no {SECRET}"
+        with self.assertRaises(drafts.DraftPartialError) as partial:
+            self.omitted()
+        self.assertEqual(drafts.DRAFT_REPLACE_OLD_NOT_DELETED_REASON, partial.exception.reason_code)
+        self.assertEqual("44", partial.exception.new_envelope["envelope_id"])
+        self.assertNotIn(SECRET, probe(partial.exception))
+
+    def test_a_missing_journal_is_refused_before_any_mailbox_write(self) -> None:
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.omitted(journal=None)
+        self.assertEqual("draft_binding_failed", raised.exception.reason_code)
+        self.assertEqual([], self.box.save_calls)
+        self.assertEqual([], self.deletes())
+
+    def test_given_old_message_id_must_match_the_old_draft(self) -> None:
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.omitted(old_message_id="<someone-else@example.org>")
+        self.assertEqual(drafts.DRAFT_OLD_IDENTITY_MISMATCH_REASON, raised.exception.reason_code)
+        self.assertEqual([], self.box.save_calls)
+        result = self.omitted(old_message_id="<plain@example.org>")
+        self.assertTrue(result["old_deleted"])
+
+
 class OmittedAttachmentListTests(ReplaceHarness):
     """Omitting ``attachments`` must never silently drop what an existing draft carries."""
 
     def legacy_replace(self, **overrides):
         params = dict(old_message_id=None, attachments=drafts.ATTACHMENTS_UNSPECIFIED, workspace_root=None,
-                      journal=None, lease_id=None, lock_root=None, message_id=None, from_addr=None)
+                      lease_id=None, lock_root=None, message_id=None, from_addr=None)
         params.update(overrides)
         return self.replace(**params)
 
@@ -224,8 +410,8 @@ class OmittedAttachmentListTests(ReplaceHarness):
         plain_id = self.box.seed("Drafts", synthetic_old_draft("<plain@example.org>", subject="Plain"))
         result = self.legacy_replace(old_envelope_id=plain_id)
         self.assertTrue(result["replaced"])
-        self.assertNotIn("attachment_count", result)
-        self.assertEqual([], [c for c in self.box.commands("export") if "44" in c], "legacy path: no attachment read-back")
+        self.assertEqual(0, result["attachment_count"])
+        self.assertEqual("content", result["verified"], "omitted replace shares the semantic new-mail verification")
         remaining = self.box.stored("Drafts")
         self.assertEqual(2, len(remaining))  # attachment-bearing old draft + the new one; plain old is gone
 

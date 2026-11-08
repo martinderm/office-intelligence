@@ -244,6 +244,23 @@ class LimitTests(SaveHarness):
         self.assertEqual(before, len(self.box.calls), "rejected before any mailbox command")
         self.assertEqual(1, len(self.box.save_calls))
 
+    def test_text_only_save_obeys_the_ten_mib_bound_before_the_append(self) -> None:  # L4 (review R1 / 4)
+        over = exact_size_body(TEN_MIB + 1, (), message_id="<size@example.org>", date="Sat, 07 Nov 2026 12:00:00 +0100")
+        exact = exact_size_body(TEN_MIB, (), message_id="<size@example.org>", date="Sat, 07 Nov 2026 12:00:00 +0100")
+        common = dict(subject="Betreff", to="a@example.org", message_id="<size@example.org>", from_addr=None)
+        for attachments in (None, []):
+            with self.subTest(attachments=attachments, size="over"):
+                with self.assertRaises(da.DraftAttachmentError) as raised:
+                    self.save(body=over, attachments=attachments, **common)
+                self.assertEqual("message_too_large", raised.exception.reason_code)
+                self.assertEqual([], self.box.save_calls)
+        with patch.object(himalaya, "resolve_himalaya_invocation", return_value=("himalaya", Path("C:/fake/config.toml"))), \
+                patch.object(himalaya.subprocess, "run", self.box):
+            result = drafts.save_draft("Betreff", "a@example.org", exact, account="demo", message_id="<size@example.org>")
+        self.assertEqual(1, len(self.box.save_calls))
+        self.assertEqual(TEN_MIB + 2, len(self.box.saved_payloads[0]))
+        self.assertEqual("42", result["envelope_id"])
+
     def test_oversized_total_is_rejected_before_append_without_journal_attempt(self) -> None:  # L7
         big = bytes(range(256)) * 12288
         specs = []
@@ -428,6 +445,208 @@ class VerificationTests(SaveHarness):
     def test_duplicate_stored_messages_are_ambiguous_not_first_match(self) -> None:  # V3 (duplicates)
         error = self.assertUnverified(duplicate_on_save=True)
         self.assertIn("2", str(error))
+
+
+class StoredDeviationTests(SaveHarness):
+    """A sendable draft must carry exactly the intended recipients / identity (review R1 / 2)."""
+
+    def assertUnverified(self, mutate, **save_overrides) -> drafts.DraftError:  # noqa: N802
+        self.box.mutate_stored = mutate
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.save(**save_overrides)
+        self.assertEqual(drafts.DRAFT_VERIFICATION_FAILED_REASON, raised.exception.reason_code)
+        self.assertEqual("appended_unverified", self.attempt()["status"])
+        return raised.exception
+
+    def test_duplicate_or_unexpected_headers_fail_the_verification(self) -> None:  # review R1 / 2
+        def insert(line: str):
+            return lambda raw: raw.replace("Subject:", f"{line}\r\nSubject:", 1)
+
+        cases = {
+            "duplicate Subject": insert("Subject: Zweiter Betreff"),
+            "duplicate To": insert("To: weitere@example.org"),
+            "duplicate From": insert("From: zweite@example.org"),
+            "duplicate Date": insert("Date: Sat, 07 Nov 2026 13:00:00 +0100"),
+            "duplicate Message-ID": insert("Message-ID: <att1@example.org>"),
+            "unexpected Cc": insert("Cc: leak@example.org"),
+            "unexpected Bcc": insert("Bcc: leak@example.org"),
+            "unexpected Reply-To": insert("Reply-To: leak@example.org"),
+            "unexpected Sender": insert("Sender: leak@example.org"),
+            "unexpected Resent-To": insert("Resent-To: leak@example.org"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assertUnverified(mutate)
+
+    def test_cc_and_from_must_match_when_given_and_be_absent_when_not_given(self) -> None:  # review R1 / 2
+        given = {"cc": "cc@example.org", "from_addr": "me@example.org"}
+        cases = {
+            "cc removed": (lambda raw: raw.replace("Cc: cc@example.org\r\n", ""), given),
+            "cc changed": (lambda raw: raw.replace("Cc: cc@example.org", "Cc: other@example.org"), given),
+            "from changed": (lambda raw: raw.replace("From: me@example.org", "From: evil@example.org"), given),
+            "from removed": (lambda raw: raw.replace("From: me@example.org\r\n", ""), given),
+            "from added though none intended": (lambda raw: raw.replace("Subject:", "From: x@example.org\r\nSubject:", 1),
+                                                {"from_addr": None}),
+            "date changed": (lambda raw: raw.replace("Date: Sat, 07 Nov 2026 12:00:00 +0100",
+                                                     "Date: Sat, 07 Nov 2026 13:00:00 +0100"), given),
+        }
+        for label, (mutate, overrides) in cases.items():
+            with self.subTest(label=label):
+                self.setUp()
+                self.assertUnverified(mutate, **overrides)
+
+    def test_from_stays_optional_for_the_builder_and_cc_is_verified_when_given(self) -> None:  # review R1 / 2
+        result = self.save(from_addr=None, cc="cc@example.org")
+        self.assertEqual("content", result["verified"])
+        payload = self.box.saved_payloads[0].decode("utf-8")
+        self.assertNotIn("\r\nFrom:", payload)
+
+    def test_mime_defects_in_the_stored_mail_fail_the_verification(self) -> None:  # review R1 / 2
+        import re
+
+        def drop_closing_boundary(raw: str) -> str:
+            boundary = re.search(r'boundary="([^"]+)"', raw).group(1)
+            return raw.replace(f"--{boundary}--", "")
+
+        def break_boundary_declaration(raw: str) -> str:
+            return re.sub(r'; boundary="[^"]+"', "", raw, count=1)
+
+        for label, mutate in (("no closing boundary", drop_closing_boundary), ("no boundary parameter", break_boundary_declaration)):
+            with self.subTest(label=label):
+                self.setUp()
+                self.assertUnverified(mutate)
+
+
+class BoundedExportTests(SaveHarness):
+    """``fetch_raw_message_eml(max_bytes=…)`` reads ONE regular handle with a hard bound (review R1 / 5)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.raw = synthetic_old_draft("<exp@example.org>", subject="Export")
+        self.size = len(self.raw.encode("utf-8"))
+        self.box.seed("Drafts", self.raw)  # envelope "42"
+
+    def fetch(self, max_bytes: int | None):
+        with patch.object(himalaya, "resolve_himalaya_invocation", return_value=("himalaya", Path("C:/fake/config.toml"))), \
+                patch.object(himalaya.subprocess, "run", self.box):
+            return himalaya.fetch_raw_message_eml("42", folder="Drafts", account="demo", max_bytes=max_bytes)
+
+    def assertRejected(self, reason: str, max_bytes: int) -> None:  # noqa: N802
+        with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+            self.fetch(max_bytes)
+        self.assertEqual(reason, raised.exception.reason_code)
+
+    def test_message_of_exactly_the_bound_is_read_and_one_byte_less_bound_is_refused(self) -> None:
+        self.assertEqual(self.raw.encode("utf-8"), self.fetch(self.size))
+        self.assertRejected("himalaya_export_too_large", self.size - 1)
+
+    def test_oversized_export_is_refused_without_reading_a_single_byte(self) -> None:
+        reads: list[int] = []
+        real_read = os.read
+        with patch.object(os, "read", lambda fd, n: (reads.append(n), real_read(fd, n))[1]):
+            self.assertRejected("himalaya_export_too_large", self.size - 1)
+        self.assertEqual([], reads)
+
+    def test_unbounded_default_is_unchanged(self) -> None:
+        self.assertEqual(self.raw.encode("utf-8"), self.fetch(None))
+
+    def test_export_that_is_not_a_regular_file_is_refused(self) -> None:
+        self.box.export_as_directory = True
+        self.assertRejected("himalaya_export_invalid", self.size)
+
+    def test_file_growing_while_it_is_read_is_refused_and_never_over_read(self) -> None:
+        real_read = os.read
+        state = {"total": 0, "grown": False}
+        target: dict[str, str] = {}
+        real_open = os.open
+
+        def remember_open(path, flags, *args, **kwargs):
+            if str(path).endswith(".eml"):
+                target["path"] = str(path)
+            return real_open(path, flags, *args, **kwargs)
+
+        def growing_read(fd, n):
+            data = real_read(fd, n)
+            state["total"] += len(data)
+            if not state["grown"] and "path" in target:
+                state["grown"] = True
+                with open(target["path"], "ab") as handle:
+                    handle.write(b"X" * 4096)
+            return data
+
+        with patch.object(os, "open", remember_open), patch.object(os, "read", growing_read):
+            self.assertRejected("himalaya_export_invalid", self.size + 10)
+        self.assertLessEqual(state["total"], self.size + 1)
+
+    def test_file_swapped_between_stat_and_open_is_refused_before_reading(self) -> None:
+        real_open = os.open
+        reads: list[int] = []
+        real_read = os.read
+
+        def swapping_open(path, flags, *args, **kwargs):
+            if str(path).endswith(".eml") and not reads:
+                other = Path(str(path) + ".other")
+                other.write_bytes(b"A different file of other identity")
+                os.replace(other, path)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(os, "open", swapping_open), patch.object(
+            os, "read", lambda fd, n: (reads.append(n), real_read(fd, n))[1]
+        ):
+            self.assertRejected("himalaya_export_invalid", self.size + 10)
+        self.assertEqual([], reads)
+
+
+class UniquenessTests(SaveHarness):
+    """Exhaustive Message-ID uniqueness inside the 50-header budget, otherwise 'not provable' (fail closed)."""
+
+    def fillers(self, count: int) -> None:
+        for index in range(count):
+            self.box.seed("Drafts", synthetic_old_draft(f"<fill{index}@example.org>", subject=f"Filler {index}"))
+
+    def assertBlockedBeforeAppend(self) -> None:  # noqa: N802
+        with self.assertRaises(drafts.DraftError) as raised:
+            self.save()
+        self.assertEqual(drafts.DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON, raised.exception.reason_code)
+        self.assertEqual([], self.box.save_calls)
+        self.assertNotIn("attempts", self.journal_data()["runs"]["run-att"])
+
+    def test_older_same_message_id_with_another_subject_far_back_is_found(self) -> None:  # review R1 / 1
+        self.box.seed("Drafts", synthetic_old_draft("<att1@example.org>", subject="Völlig anderer Betreff"))
+        self.fillers(8)  # the duplicate sits beyond the three newest envelopes
+        self.assertBlockedBeforeAppend()
+
+    def test_budget_boundary_is_inclusive_and_leaves_room_for_the_new_message(self) -> None:  # review R1 / 1
+        self.fillers(49)
+        result = self.save()  # 49 existing + the new one = 50 headers: still provable
+        self.assertEqual("content", result["verified"])
+        self.assertEqual(50, len(self.box.stored("Drafts")))
+
+    def test_more_envelopes_than_the_header_budget_fail_closed_before_the_append(self) -> None:  # review R1 / 1
+        self.fillers(50)  # 50 + the new one would exceed the budget of 50 header reads
+        self.assertBlockedBeforeAppend()
+        self.setUp()
+        self.fillers(120)
+        self.assertBlockedBeforeAppend()
+
+    def test_duplicate_message_id_headers_inside_one_message_are_never_unique(self) -> None:  # review R1 / 1
+        first = synthetic_old_draft("<dup1@example.org>", subject="Doppelt")
+        for second in ("<att1@example.org>", "<dup2@example.org>"):
+            with self.subTest(second=second):
+                self.setUp()
+                self.box.seed("Drafts", first.replace("Message-ID: <dup1@example.org>\r\n",
+                                                       f"Message-ID: <dup1@example.org>\r\nMessage-ID: {second}\r\n"))
+                self.assertBlockedBeforeAppend()
+
+    def test_lookup_reports_incomplete_for_duplicate_headers_and_budget(self) -> None:  # review R1 / 1 (public lookup seam)
+        self.box.seed("Drafts", synthetic_old_draft("<x1@example.org>", subject="S").replace(
+            "Message-ID: <x1@example.org>\r\n", "Message-ID: <x1@example.org>\r\nMessage-ID: <x2@example.org>\r\n"))
+        with patch.object(himalaya, "resolve_himalaya_invocation", return_value=("himalaya", Path("C:/fake/config.toml"))), \
+                patch.object(himalaya.subprocess, "run", self.box):
+            ids, complete = himalaya.find_envelopes_by_message_id("Drafts", "<x2@example.org>", subject="irrelevant", account="demo")
+        self.assertEqual(["42"], ids)
+        self.assertFalse(complete)
 
 
 if __name__ == "__main__":

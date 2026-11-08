@@ -394,15 +394,15 @@ def build_draft_message(
     if not raw_message.endswith("\r\n"):
         raw_message += "\r\n"
 
-    if prepared:
-        from . import draft_attachments as da
+    # The full serialized message is bounded whether or not it carries attachments.
+    from . import draft_attachments as da
 
-        if len(raw_message.encode("utf-8")) > da.MAX_MIME_MESSAGE_BYTES:
-            raise da.DraftAttachmentError(
-                "message_too_large",
-                f"the serialized MIME message exceeds the {da.MAX_MIME_MESSAGE_BYTES} byte limit; "
-                "nothing was truncated, split or uploaded.",
-            )
+    if len(raw_message.encode("utf-8")) > da.MAX_MIME_MESSAGE_BYTES:
+        raise da.DraftAttachmentError(
+            "message_too_large",
+            f"the serialized MIME message exceeds the {da.MAX_MIME_MESSAGE_BYTES} byte limit; "
+            "nothing was truncated, split or uploaded.",
+        )
 
     return raw_message, normalized_id, date_header
 
@@ -474,7 +474,7 @@ def _append_and_verify(
     size_bytes = len(raw_message.encode("utf-8"))
     try:
         existing, complete = himalaya.find_envelopes_by_message_id(
-            folder, normalized_id, subject=subject, account=account
+            folder, normalized_id, subject=subject, account=account, reserve=1
         )
     except Exception:  # noqa: BLE001 - classified below without backend text
         existing, complete = [], False
@@ -559,6 +559,7 @@ def _append_and_verify(
                 body=body,
                 cc=cc,
                 from_addr=from_addr,
+                date=date_header,
                 attachments=prepared,
             )
             envelope_id = found[0]
@@ -792,8 +793,15 @@ def _inspect_old_draft(
     account: str | None,
     *,
     expected_message_id: str | None,
+    require_clean: bool,
 ) -> tuple[str, str, int]:
-    """Read the old draft bounded; return ``(normalized Message-ID, subject, non-body part count)``."""
+    """Read the old draft bounded; return ``(normalized Message-ID, subject, non-body part count)``.
+
+    A missing / ambiguous (duplicate) ``Message-ID`` header always makes the old draft unreadable.
+    With ``require_clean`` any MIME parser defect does too: attachment freeness must never be
+    derived from a defective structure (omitted attachment list).  An explicit list replaces the
+    old attachments knowingly and therefore only needs a unique identity.
+    """
     from . import draft_attachments as da
 
     expected = None
@@ -803,11 +811,13 @@ def _inspect_old_draft(
         raw = himalaya.fetch_raw_message_eml(
             old_id, folder=folder, account=account, max_bytes=da.MAX_READBACK_BYTES
         )
-        message_id, subject, parts = da.describe_stored_message(raw)
+        message_id, subject, parts, defective = da.describe_stored_message(raw)
+        if defective and require_clean:
+            raise ValueError("defective MIME structure")
     except Exception:  # noqa: BLE001 - no backend text may reach the error
         raise DraftError(
             DRAFT_OLD_UNREADABLE_REASON,
-            "The old draft could not be read (bounded); nothing was appended or deleted.",
+            "The old draft could not be read unambiguously (bounded, defect-free); nothing was appended or deleted.",
         ) from None
     if expected is not None and message_id != expected:
         raise DraftError(
@@ -867,8 +877,55 @@ def _replace_with_explicit_attachments(
         )
     target_folder = folder or resolve_drafts_folder(account=bound_account, folders=folders)
     _, old_subject, old_parts = _inspect_old_draft(
-        old_id, target_folder, bound_account, expected_message_id=expected_old
+        old_id, target_folder, bound_account, expected_message_id=expected_old, require_clean=False
     )
+    return _finish_replace(
+        old_id=old_id,
+        expected_old=expected_old,
+        old_subject=old_subject,
+        old_parts=old_parts,
+        raw_message=raw_message,
+        normalized_id=normalized_id,
+        date_header=date_header,
+        subject=subject,
+        to=to,
+        body=body,
+        cc=cc,
+        from_addr=from_addr,
+        prepared=prepared,
+        target_folder=target_folder,
+        bound_account=bound_account,
+        journal=journal,
+        folders=folders,
+    )
+
+
+def _finish_replace(
+    *,
+    old_id: str,
+    expected_old: str,
+    old_subject: str,
+    old_parts: int,
+    raw_message: str,
+    normalized_id: str,
+    date_header: str,
+    subject: str,
+    to: str,
+    body: str,
+    cc: str | None,
+    from_addr: str | None,
+    prepared: tuple[Any, ...],
+    target_folder: str,
+    bound_account: str | None,
+    journal: "DraftJournal",
+    folders: Iterable[Any] | None,
+) -> dict[str, Any]:
+    """Shared replace tail (explicit AND omitted attachment list): verified append, journal, delete.
+
+    The new mail is appended once and read back semantically; only then the journal item naming both
+    ids is written, the old draft is re-resolved by its Message-ID (never by the possibly stale
+    transient id) and deleted.  Any unclear result keeps the old draft and is reported honestly.
+    """
     new_envelope = _append_and_verify(
         raw_message=raw_message,
         normalized_id=normalized_id,
@@ -1016,58 +1073,56 @@ def replace_draft(
             conversation_id=conversation_id,
             lock_root=lock_root,
         )
-    target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
+    # Omitted list: the SAME verified replace as for an explicit list, restricted to a provably
+    # text-only old draft.  No workspace / lease is involved (no file is read); the journal is
+    # mandatory because the append-then-delete window needs a reconcile trail.
+    if journal is None:
+        raise DraftError(
+            "draft_binding_failed",
+            "Replacing a draft needs a draft journal (reconcile trail for the append-then-delete window); refusing.",
+        )
     old_id = str(old_envelope_id)
-    _, _, old_part_count = _inspect_old_draft(
-        old_id, target_folder, account, expected_message_id=old_message_id
+    expected_old = (
+        normalize_message_id(_check_supplied_message_id(old_message_id)) if old_message_id is not None else None
     )
-    if old_part_count:
+    raw_message, normalized_id, date_header = build_draft_message(
+        subject, to, body, from_addr=from_addr, cc=cc, date=date, message_id=message_id
+    )
+    target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
+    old_mid, old_subject, old_parts = _inspect_old_draft(
+        old_id, target_folder, account, expected_message_id=expected_old, require_clean=True
+    )
+    if old_parts:
         raise DraftError(
             DRAFT_REPLACE_WOULD_DROP_ATTACHMENTS_REASON,
-            f"The old draft carries {old_part_count} attachment / non-body part(s); replacing it without an "
+            f"The old draft carries {old_parts} attachment / non-body part(s); replacing it without an "
             "explicit attachment list would silently drop them. Pass the complete desired list "
             "(an empty list removes them knowingly). Nothing was appended or deleted.",
         )
-
-    new_envelope = save_draft(
-        subject,
-        to,
-        body,
-        folder=target_folder,
-        account=account,
+    if normalized_id == old_mid:
+        raise DraftError(
+            DRAFT_MESSAGE_ID_NOT_UNIQUE_REASON,
+            "The new draft must not reuse the old draft's Message-ID; nothing was appended.",
+        )
+    return _finish_replace(
+        old_id=old_id,
+        expected_old=old_mid,
+        old_subject=old_subject,
+        old_parts=old_parts,
+        raw_message=raw_message,
+        normalized_id=normalized_id,
+        date_header=date_header,
+        subject=subject,
+        to=to,
+        body=body,
         cc=cc,
         from_addr=from_addr,
-        date=date,
-        message_id=message_id,
+        prepared=(),
+        target_folder=target_folder,
+        bound_account=account,
+        journal=journal,
         folders=folders,
     )
-
-    # Record the replacement journal entry *before* deleting the old draft, so a
-    # crash during the delete step (``\Deleted`` + EXPUNGE) still leaves a
-    # reconcile-visible entry naming the new and old envelope ids.
-    if journal is not None:
-        journal.record(
-            action="replace_draft",
-            envelope_id=new_envelope["envelope_id"],
-            folder=target_folder,
-            subject=subject,
-            to=to,
-            date=new_envelope["date"],
-            old_envelope_id=old_id,
-            crash_window=REPLACE_CRASH_WINDOW,
-        )
-
-    delete_draft(old_id, folder=target_folder, account=account, folders=folders)
-
-    result = dict(new_envelope)
-    result.update(
-        {
-            "old_envelope_id": old_id,
-            "replaced": True,
-            "crash_window": REPLACE_CRASH_WINDOW,
-        }
-    )
-    return result
 
 
 class DraftJournal:

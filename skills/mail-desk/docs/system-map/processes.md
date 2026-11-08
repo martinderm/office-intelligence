@@ -434,19 +434,31 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    Validierung; serialisierte Länge ≤ 10 MiB, sonst `message_too_large` vor jedem Mailbox-Schreiben.
 4. **Ziel:** Drafts-Ordner (6.1 Schritt 1) erst nach den lokalen Prüfungen; Replace liest zusätzlich den
    alten Entwurf begrenzt (`message export`) und bestätigt dessen Message-ID.
-5. **Eindeutigkeit vorab:** die neue Message-ID darf im Ordner nicht vorkommen
-   (`find_envelopes_by_message_id`; unbeweisbare Abwesenheit → `draft_message_id_not_unique`).
+5. **Eindeutigkeit vorab:** die neue Message-ID darf im Ordner nicht vorkommen.
+   `find_envelopes_by_message_id` liest die `Message-ID` **jeder** Envelope (kein Betreff-Shortcut)
+   innerhalb von 50 Header-Lesungen, vor dem APPEND mit Reserve 1 (≤ 49 vorhandene); mehr Envelopes,
+   ein nicht lesbarer Header oder mehrere `Message-ID`-Header einer Mail → unvollständig →
+   `draft_message_id_not_unique` (fail-closed).
 6. **Journal `append_started`**, dann **ein** APPEND. Eindeutiger Fehler → `append_failed`
    (`draft_save_failed`); unklarer Ausgang (Timeout, transient, Launch, Pipe, fremde Exception) →
    `append_outcome_unknown` (`draft_append_outcome_unknown`). Ursachen werden nicht verkettet.
-7. **Rücklesen:** genau **eine** Envelope zur Message-ID, `message export` (≤ 12 MiB), semantischer
-   Vergleich (Header, Text, Anhangsanzahl, Name, MIME, Disposition, dekodierte Länge + SHA-256);
-   sonst `appended_unverified` + `draft_verification_failed`, alter Entwurf unberührt.
+7. **Rücklesen:** genau **eine** Envelope zur Message-ID (erschöpfend, s. 5), `message export`
+   (CLI exportiert zuerst vollständig auf die Platte; Python lädt über ein reguläres Handle mit
+   Identitäts-/Wachstumsprüfung höchstens 12 MiB + 1 Byte), semantischer Vergleich: keine
+   Parser-Defekte, keine doppelten Identitäts-/Empfänger-Header, Message-ID/Subject/To/Date exakt,
+   Cc/From nur wenn beabsichtigt, kein Bcc/Sender/Reply-To/Resent-*, flache Struktur, Text,
+   Anhangsanzahl, Name, MIME, Disposition, dekodierte Länge + SHA-256; sonst `appended_unverified` +
+   `draft_verification_failed`, alter Entwurf unberührt.
 8. **Replace-Ende:** Journal-Item + `replace_old_pending_delete`; alten Entwurf per Message-ID neu
    auflösen (genau eine Treffer-Envelope → `delete_draft`; keine → `old_draft_not_found`; mehrdeutig/
    Fehler → `draft_replace_old_not_deleted` mit neuem Envelope).
-9. **Auslassung:** `replace_draft` ohne Anhangsliste liest den alten Entwurf zuerst; Anhänge/
-   Nicht-Body-Teile → `draft_replace_would_drop_attachments`, unlesbar → `draft_old_unreadable`.
+9. **Auslassung:** `replace_draft` ohne Anhangsliste liest den alten Entwurf zuerst (Message-ID
+   eindeutig, keine Parser-Defekte); Anhänge/Nicht-Body-Teile → `draft_replace_would_drop_attachments`,
+   unlesbar/defekt/mehrdeutig → `draft_old_unreadable`; ohne Journal → `draft_binding_failed`. Danach
+   läuft derselbe Ablauf 5–8 wie bei expliziter Liste (kein Legacy-Header-Verify, kein Delete per
+   alter Envelope-ID).
+10. **Größe:** die 10-MiB-Grenze der vollständig serialisierten Mail gilt immer (auch 0 Anhänge,
+    `[]`-Save/-Replace), vor jedem APPEND.
 
 ### 6.2 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 

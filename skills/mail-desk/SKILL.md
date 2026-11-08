@@ -312,8 +312,14 @@ Entwurf in den Drafts-Ordner legt.
   `appended_unverified` oder `saved_verified` — nur Metadaten, nie Inhalte.
 - **Ersetzen mit Anhängen:** Ohne Anhangsangabe wird ein alter Entwurf **mit**
   Anhängen nie ersetzt (`draft_replace_would_drop_attachments`, auch Altbestand
-  aus Mailclients); ein nicht lesbarer alter Entwurf ebenso nicht
-  (`draft_old_unreadable`). Mit `--attach …` ist die **vollständige** gewünschte
+  aus Mailclients); ein nicht lesbarer, MIME-defekter oder mehrdeutiger alter
+  Entwurf ebenso nicht (`draft_old_unreadable`), und ohne Journal gibt es keinen
+  Ersatz. Ein beweisbar reiner Text-Entwurf wird über denselben verifizierten
+  Ablauf ersetzt wie mit Liste (Message-ID-Vorprüfung, semantisches Rücklesen,
+  Journal, Neuauflösung der alten Mail). Die 10-MiB-Grenze der vollständigen Mail
+  gilt für jeden Entwurf. Die Message-ID-Suche liest jeden Header des Ordners (≤ 50
+  Lesungen); ein Drafts-Ordner mit mehr als 49 Nachrichten ist im Anhangsmodus
+  fail-closed. Mit `--attach …` ist die **vollständige** gewünschte
   Liste maßgeblich, mit `--drop-attachments` (Manifest `"attachments": []`) werden
   alle bewusst entfernt; beides verlangt `--old-message-id`. Der alte Entwurf wird
   erst nach vollständig verifizierter neuer Mail und erneuter Auflösung per

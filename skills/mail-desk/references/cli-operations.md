@@ -395,15 +395,34 @@ keine) und `old_message_id`. Eine Lease im Manifest wird nie berücksichtigt.
   `draft_old_unreadable`, `draft_old_identity_mismatch`,
   `draft_replace_old_not_deleted`.
 - **Ersetzen:** Ohne `--attach`/`--drop-attachments` wird ein alter Entwurf mit
-  Anhängen (oder nicht lesbar) nie ersetzt. Mit expliziter Liste gilt die
-  Reihenfolge: Bindung/Lease → Dateien → Größen → alter Entwurf gelesen und per
-  Message-ID bestätigt → genau ein APPEND → eindeutiges semantisches Rücklesen →
-  Journal → alte ID per Message-ID neu auflösen → Löschen.
+  Anhängen, mit MIME-Parser-Defekten, mit mehrdeutiger Message-ID oder nicht lesbar nie
+  ersetzt (`draft_replace_would_drop_attachments` / `draft_old_unreadable`); ohne Journal
+  (`draft_binding_failed`) auch nicht. Nur ein beweisbar reiner Text-Entwurf wird ersetzt,
+  und zwar über **denselben** verifizierten Ablauf wie mit Liste (kein Header-only-Verify,
+  kein Löschen per veralteter Envelope-ID): Message-ID des alten Entwurfs aus dem
+  gelesenen Entwurf (ein angegebenes `--old-message-id` muss passen) → Neu-Message-ID-
+  Vorprüfung → genau ein APPEND → eindeutiges semantisches Rücklesen → Journal → alte ID
+  per Message-ID neu auflösen → Löschen. Mit expliziter Liste zusätzlich: Bindung/Lease →
+  Dateien → Größen, `--old-message-id` Pflicht.
+- **Größe immer:** Die 10-MiB-Grenze der vollständig serialisierten Mail gilt für jeden
+  Entwurf, auch ohne Anhänge sowie bei `[]`-Save und `[]`-Replace; Überschreitung wird vor
+  dem APPEND abgewiesen (`message_too_large`).
+- **Eindeutigkeit und Ordnergröße:** Die Message-ID-Suche liest den `Message-ID`-Header
+  **jeder** Envelope des Ordners (höchstens 50 Lesungen, vor dem APPEND mit Reserve für die
+  neue Mail). Ein Drafts-Ordner mit mehr als 49 Nachrichten ist im Anhangsmodus und beim
+  Replace daher fail-closed (`draft_message_id_not_unique`), bis er aufgeräumt ist; mehrere
+  `Message-ID`-Header in einer Mail machen die Suche ebenfalls unvollständig.
+- **Rücklesen:** Es werden zusätzlich Parser-Defekte, doppelte Identitäts-/Empfänger-Header,
+  Date, unbeabsichtigte Cc/From, Bcc/Sender/Reply-To/Resent-* und die flache MIME-Struktur
+  geprüft. `From` bleibt im Builder optional; ein gespeichertes, nicht beabsichtigtes `Cc`
+  wird nie stillschweigend akzeptiert.
 - **Grenzen des Nachweises:** Die Tests sind ein Offline-Modell des Backends, kein
   Live-Nachweis. Unter Windows gibt es kein `O_NOFOLLOW`; ein Austausch zwischen
   Prüfung und `open` wird vor dem Lesen erkannt (Identitätsvergleich), nicht
   verhindert. Hardlinks innerhalb einer Zone sind reguläre Dateien und werden nicht
-  erkannt.
+  erkannt. Der CLI-Export landet vollständig auf der Platte, bevor Python die Datei mit
+  harter Grenze (12 MiB + 1 Byte, ein reguläres Handle, Identitäts-/Wachstumsprüfung)
+  lädt: die Grenze schützt den Python-Speicher, nicht die vorgelagerte Backend-Übertragung.
 
 ## Gebundene Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
 

@@ -470,13 +470,44 @@ def split_parts(message: Any) -> tuple[Any, list[Any]]:
     return body, others
 
 
-def describe_stored_message(raw: bytes) -> tuple[str, str, int]:
-    """Return ``(normalized Message-ID, subject, number of non-body parts)`` of a stored message."""
+#: Headers that must occur at most once (a second occurrence makes the identity / recipients ambiguous).
+_SINGLETON_HEADERS = ("Message-ID", "Subject", "To", "Cc", "From", "Date", "MIME-Version", "Content-Type")
+
+#: Recipient / routing headers a draft built by this module never carries.
+_NEVER_EXPECTED_HEADERS = ("Bcc", "Sender", "Reply-To")
+
+
+def _all_defects(message: Any) -> list[Any]:
+    """Parser defects of the message and every part (including those found while decoding)."""
+    defects: list[Any] = []
+    for part in message.walk():
+        defects.extend(getattr(part, "defects", []) or [])
+    return defects
+
+
+def _header_count(message: Any, name: str) -> int:
+    return len(message.get_all(name) or [])
+
+
+def describe_stored_message(raw: bytes) -> tuple[str, str, int, bool]:
+    """Return ``(normalized Message-ID, subject, number of non-body parts, defective)``.
+
+    Raises ``ValueError`` unless the message has exactly one ``Message-ID`` header: an ambiguous
+    identity is never usable.  ``defective`` is ``True`` when the tolerant parser recorded any
+    defect, so a caller must not derive "no attachments" from such a structure.
+    """
     from .common import normalize_message_id
 
     message = _parse(raw)
+    if _header_count(message, "Message-ID") != 1:
+        raise ValueError("ambiguous or missing Message-ID header")
     _, others = split_parts(message)
-    return normalize_message_id(str(message.get("Message-ID", "") or "")), _squash(message.get("Subject")), len(others)
+    return (
+        normalize_message_id(str(message.get("Message-ID", "") or "")),
+        _squash(message.get("Subject")),
+        len(others),
+        bool(_all_defects(message)),
+    )
 
 
 def compare_stored_message(
@@ -488,14 +519,18 @@ def compare_stored_message(
     body: str,
     cc: str | None = None,
     from_addr: str | None = None,
+    date: str | None = None,
     attachments: Sequence[DraftAttachment] = (),
 ) -> list[str]:
     """Compare a stored message semantically with the intended draft.
 
     Returns a list of content-free problem codes; empty means every compared aspect matches:
-    headers, plain text, attachment count, and per attachment file name, content type,
-    ``attachment`` disposition and the decoded bytes (length and SHA-256).  This is a semantic
-    comparison, not byte equality of arbitrary raw messages.
+    parser defects (none allowed), duplicate identity / recipient headers, expected headers
+    (Message-ID, Subject, To, Cc, From, Date), absence of unintended recipient headers (Cc / From when
+    not intended, Bcc, Sender, Reply-To, Resent-*), plain text, MIME structure (flat
+    ``multipart/mixed`` exactly when attachments are intended), attachment count, and per attachment
+    file name, content type, ``attachment`` disposition and the decoded bytes (length and SHA-256).
+    This is a semantic comparison, not byte equality of arbitrary raw messages.
     """
     from .common import normalize_message_id
 
@@ -504,14 +539,36 @@ def compare_stored_message(
     except Exception:  # noqa: BLE001
         return ["unparseable"]
     problems: list[str] = []
+    for name in _SINGLETON_HEADERS:
+        if _header_count(message, name) > 1:
+            problems.append(f"header_duplicate:{name}")
     if normalize_message_id(str(message.get("Message-ID", "") or "")) != normalize_message_id(message_id):
         problems.append("header:Message-ID")
     for name, expected in (("Subject", subject), ("To", to)):
         if _squash(message.get(name)) != _squash(expected):
             problems.append(f"header:{name}")
     for name, expected in (("Cc", cc), ("From", from_addr)):
-        if expected and _squash(message.get(name)) != _squash(expected):
-            problems.append(f"header:{name}")
+        present = _header_count(message, name) > 0
+        if expected:
+            if _squash(message.get(name)) != _squash(expected):
+                problems.append(f"header:{name}")
+        elif present:
+            problems.append(f"unexpected_header:{name}")
+    if date is not None and _squash(message.get("Date")) != _squash(date):
+        problems.append("header:Date")
+    for name in _NEVER_EXPECTED_HEADERS:
+        if _header_count(message, name):
+            problems.append(f"unexpected_header:{name}")
+    if any(str(key).lower().startswith("resent-") for key in message.keys()):
+        problems.append("unexpected_header:Resent-*")
+    wants_multipart = len(attachments) > 0
+    if wants_multipart:
+        if message.get_content_type() != "multipart/mixed":
+            problems.append("structure:top_level")
+    elif message.is_multipart():
+        problems.append("structure:top_level")
+    if any(part.is_multipart() for part in message.walk() if part is not message):
+        problems.append("structure:nested_multipart")
     body_part, others = split_parts(message)
     if body_part is None:
         problems.append("body:missing")
@@ -540,6 +597,8 @@ def compare_stored_message(
             problems.append(f"{tag}:size")
         elif hashlib.sha256(payload).hexdigest() != expected_att.sha256:
             problems.append(f"{tag}:sha256")
+    if _all_defects(message):
+        problems.append("mime_defect")
     return problems
 
 

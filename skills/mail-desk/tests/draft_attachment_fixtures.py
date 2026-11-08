@@ -113,6 +113,8 @@ class MailboxBoundary:
         #: ``message export`` failure injection.
         self.export_exit = 0
         self.export_stderr = ""
+        #: The "exported file" is a directory (not a regular file).
+        self.export_as_directory = False
         #: Make a delete step fail.
         self.flag_exit = 0
         self.flag_stderr = ""
@@ -218,7 +220,9 @@ class MailboxBoundary:
         if message is None:
             return self._ok(kwargs, "", "no such envelope", 1)
         parsed = self._parse(message["raw"])
-        return self._ok(kwargs, f"Message-Id: {parsed.get('Message-ID', '')}\n\n")
+        # Himalaya prints one line per header occurrence, so duplicate Message-ID headers show up twice.
+        lines = "".join(f"Message-Id: {value}\n" for value in (parsed.get_all("Message-ID") or []))
+        return self._ok(kwargs, f"{lines}\n")
 
     def _export(self, tokens: list[str], kwargs: dict[str, Any]) -> subprocess.CompletedProcess[Any]:
         if self.export_exit != 0:
@@ -229,7 +233,10 @@ class MailboxBoundary:
         if message is None:
             return self._ok(kwargs, "", "no such envelope", 1)
         destination = Path(_token_after(tokens, "-d") or "")
-        destination.write_bytes(message["raw"].encode("utf-8"))
+        if self.export_as_directory:
+            destination.mkdir()
+        else:
+            destination.write_bytes(message["raw"].encode("utf-8"))
         return self._ok(kwargs, "exported\n")
 
     def _flag_add(self, tokens: list[str], kwargs: dict[str, Any]) -> subprocess.CompletedProcess[Any]:

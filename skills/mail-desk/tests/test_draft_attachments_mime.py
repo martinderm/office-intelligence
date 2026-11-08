@@ -136,6 +136,17 @@ class SizeBoundTests(unittest.TestCase):
             build(files)
         self.assertEqual("message_too_large", raised.exception.reason_code)
 
+    def test_the_bound_applies_with_zero_attachments_too(self) -> None:  # L4 (review R1 / 4)
+        exact = exact_size_body(TEN_MIB, (), message_id="<mime@example.org>")
+        raw, _, _ = build((), body=exact)
+        self.assertEqual(10485760, len(raw.encode("utf-8")))
+        over = exact_size_body(TEN_MIB + 1, (), message_id="<mime@example.org>")
+        for attachments in ((), []):
+            with self.subTest(attachments=attachments):
+                with self.assertRaises(da.DraftAttachmentError) as raised:
+                    build(attachments, body=over)
+                self.assertEqual("message_too_large", raised.exception.reason_code)
+
     def test_stdin_transport_crlf_is_not_counted_as_mail_content(self) -> None:  # L6
         self.assertEqual(b"\r\n", drafts._STDIN_TRANSPORT_TERMINATOR)
         files = [att("a.bin", bytes(range(256)) * 12288), att("b.bin", bytes(range(256)) * 12288)]

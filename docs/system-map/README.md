@@ -588,11 +588,17 @@ Dateizugriff; Dateien werden begrenzt, ohne Symlink-/Junction-Querung und mit
 Handle-Identitätsprüfung vor dem ersten Byte gelesen und nur verpackt. Genau ein
 APPEND, kein Retry bei unklarem Ausgang; Erfolg erst nach semantischem Rücklesen
 genau einer gespeicherten Mail (Header, Text, Anzahl, Dateiname, MIME, dekodierte
-SHA-256), sonst `draft_verification_failed` ohne Löschen des alten Entwurfs. Ersetzen
-ohne Anhangsangabe weigert sich bei einem alten Entwurf mit Anhängen; mit
-Liste (auch `[]`) gilt die vollständige Zielmenge. Das Draft-Journal führt additiv
-`attempts` (nur Metadaten). Kein HTML/Inline/Signatur, keine beliebige EML, kein
-Live-Nachweis.
+SHA-256, keine MIME-Parser-Defekte, keine doppelten oder unbeabsichtigten Empfänger-/
+Identitäts-Header), sonst `draft_verification_failed` ohne Löschen des alten Entwurfs. Die
+Eindeutigkeitssuche liest den `Message-ID`-Header jeder Envelope (≤ 50 Lesungen; größere
+Ordner fail-closed). Die 10-MiB-Grenze gilt für jeden Entwurf, auch ohne Anhänge. Ersetzen
+ohne Anhangsangabe weigert sich bei einem alten Entwurf mit Anhängen, Defekten oder
+mehrdeutiger Identität und nutzt sonst denselben verifizierten Ablauf wie mit Liste (auch
+`[]` = vollständige Zielmenge). Das Draft-Journal führt additiv `attempts` (nur Metadaten).
+Der CLI-Export landet vollständig auf der Platte; die Python-Ladegrenze (12 MiB + 1 Byte,
+ein reguläres Handle) begrenzt nicht die vorgelagerte Übertragung. Windows ohne
+`O_NOFOLLOW`/Hardlinks: Rennen werden erkannt, nicht verhindert. Kein HTML/Inline/Signatur,
+keine beliebige EML, kein Live-Nachweis.
 
 L2: [Mail-Desk §41](../../skills/mail-desk/docs/system-map/README.md#41-issue-18--entwürfe-mit-dateianhängen-erste-lieferung).
 Tests: `skills/mail-desk/tests/test_draft_attachments_*.py`.
