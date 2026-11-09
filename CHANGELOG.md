@@ -19,22 +19,37 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `sent-synthesis-ledger.jsonl` mit Thread-Ankern (`core/sent_handoff.py`).
   `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
 - **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
-  indexiert), `handoff_invalid`, `sync_partial_failure`; Exit ≠ 0. Überhang > 200 wird
-  zurückgestellt statt verworfen.
+  indexiert), `handoff_invalid`, `handoff_overflow` (Überhang > 200 wird vor jedem Write
+  verweigert), `sync_partial_failure`; Exit ≠ 0.
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
 #### Fixed (Review-/Audit-Findings zum Erstcommit)
 
 - `sync_sent_items_by_dates` committet einmal statt je Tag (Selbstblockade durch `handoff_pending`).
-- Überhang > 200 wird nur zurückgestellt, wenn ein späterer Lauf ihn erreicht, sonst `handoff_overflow`
-  vor jedem Write; kein Prune-Write mehr (konsumierte Reste werden abgeleitet ignoriert).
+- Überhang > 200: in der zweiten Runde durch die vollständige Verweigerung vor jedem Write ersetzt
+  (siehe unten); kein Prune-Write (konsumierte Reste werden abgeleitet ignoriert).
 - `handoff.state` ist überall `none|written|pending|invalid`; `new_count`/`new_items`/`handoff` auch im
   Legacy-Tupel und in allen Fehler-Envelopes (`sync_failed` statt Erfolg/ungeformtem Fehler).
 - Handoff voll schema- und identitätskonsistent validiert, Ledger strikt gegen das Schema (`ledger_invalid`),
   abgerissene (auch UTF-8-)Zeilen blockieren nichts und gehen nicht verloren (Sidecar `.torn`).
 - Konsumvertrag: `load_pending_handoff` (frisch verankert, Vorfahren zuerst) und `record_synthesized` mit
   Neuauflösung des Ankers; Verzeichnis-`fsync` best-effort, Crash-Vertrag = Prozess-Absturz.
+
+#### Fixed (zweite Review-/Audit-Runde)
+
+- Überhang über 200 wird nicht mehr zurückgestellt: der Lauf wird vor jedem Write vollständig als
+  `handoff_overflow` verweigert (keine Erreichbarkeits-Annahme; unparsebare Daten als `unparsed`).
+- Fehler-/Legacy-Envelope vollständig: `reason_code`, `handoff` (inkl. `written_count`/`pending_count`/
+  `deferred_count`/`file`) und `write_state` auch bei Bindungs- und Legacy-Fällen; `sync_invalid_count` für
+  ungültige Manifest-`count`-Werte.
+- Handoff-Grenzen werden auch beim Lesen durchgesetzt (kanonisch 200 Items, 50 References, 100 To/Cc,
+  1000 Betreffzeichen); ein dateieigenes höheres `max_items` erweitert nichts.
+- Ledger-Dubletten: die erste gültige Zeile je `message_id` gilt für alle Indizes und führt keinen
+  widersprüchlichen Thread-Anker ein.
+- Fehlervertrag trennt `write_state` `none`/`partial`/`unknown`; ein fehlgeschlagener Append meldet
+  `new_count: null` statt fälschlich null Writes, der Wiederanlauf bleibt idempotent.
+- L1/L2-Maps, Vertrag, Log-Schema, CLI-Referenz und SKILL synchron aktualisiert.
 
 ### 2026-10-18 — Historische FR-Ledger eingefroren
 

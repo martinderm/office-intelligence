@@ -2330,8 +2330,9 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 
 **Module und Verträge:**
 - [`scripts/core/sent_handoff.py`](../../scripts/core/sent_handoff.py) (neu): Handoff lesen/schreiben (atomar, ≤ 200),
-  Ledger laden/anhängen, Thread-Schlüssel und Anker, `SentHandoffError` (`handoff_pending`/`handoff_invalid`),
-  `SentSyncPartialFailure`, `durable_append_jsonl` (LF, `fsync`, Reparatur einer abgerissenen letzten Zeile).
+  Ledger laden/anhängen, Thread-Schlüssel und Anker, `SentHandoffError` (`handoff_pending`/`handoff_invalid`/
+  `handoff_overflow`), `SentSyncPartialFailure`, `SentIndexAppendError` (unverifizierter Append-Fortschritt),
+  `durable_append_jsonl` (LF, `fsync`, Reparatur einer abgerissenen letzten Zeile).
 - [`scripts/core/sent_indexer.py`](../../scripts/core/sent_indexer.py): `_sync_sent_items_for_date` zerfällt in
   `_collect_date_candidates` (nur lesen) und `_commit_sent_candidates` (Handoff, dann Index). `sync_sent_items`
   sammelt alle Fenster, committet einmal und liefert zusätzlich `new_count`, `new_items`, `handoff`. Öffentliche
@@ -2339,10 +2340,12 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py): `get_single_email_details` gibt `cc` zurück (das
   Cc wurde bisher abgefragt, aber verworfen) und `headers_complete` (nur additiv, Inbound-Semantik unverändert).
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
-  `new_items`, `handoff`; `ok: false` mit `reason_code` bei `handoff_pending`, `handoff_invalid`,
-  `sync_partial_failure` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt.
+  `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
+  `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`,
+  `sync_partial_failure` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
+  und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
-  `handoff`-Zähler (keine Items).
+  `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
 
 **Zustandsautomat (Handoff-Item):** `neu erkannt` → *Handoff schreiben* → `pending` (Handoff **und** Index) →
 *Consumer: Ledger-Zeile* → `consumed` (abgeleitet; die Datei wird erst beim nächsten Handoff mit neuen Items ersetzt). Ledger-bekannte Message-IDs
@@ -2356,37 +2359,49 @@ des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfe
 
 **Grenzen und Folgen:** Solange ein Handoff unkonsumiert ist, indexiert `sync-sent` keine weiteren neuen Items
 (`handoff_pending`), also steht auch die Antwort-Abgleich-Basis (`sent-index.jsonl`) still, bis der Consumer das
-Ledger schreibt. Mehr als 200 neue Items werden zurückgestellt, nicht verworfen. Items mit
+Ledger schreibt. Mehr als 200 neue Items werden als Ganzes verweigert (`handoff_overflow`), nicht zurückgestellt:
+nichts wird übergeben oder indexiert; Wiederanlauf mit engerem expliziten Datumsbereich. Items mit
 `headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
 dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
 
 **Review-/Audit-Härtung (Folgecommit):**
 - *Ein Commit je Aufruf:* `sync_sent_items_by_dates` liest alle Tage zuerst und committet einmal (ein Commit je Tag
   kollidierte mit dem eigenen unkonsumierten Handoff); ein scheiternder Tag schreibt dort nichts.
-- *Überhang:* Ein Überhang über 200 wird nur zurückgestellt, wenn der nächste wasserzeichenbasierte Lauf ihn
-  nachweislich erreicht (Überhang nicht älter als der neue Wasserzeichentag und als `MAX_SYNC_WINDOW_DAYS`);
-  sonst `handoff_overflow` **vor jedem Write** mit `candidates_per_day`. Ein alter expliziter Datumsbereich bei
-  neuerem Index-Wasserzeichen ist damit nie ein stiller Verlust.
+- *Überhang:* Mehr als 200 neue Items werden **vollständig vor jedem Write** verweigert (`handoff_overflow`) mit
+  `candidate_count`, `max_items` und `candidates_per_day` (unparsebare Daten als `unparsed`). Es wird keine
+  Erreichbarkeit eines späteren Wasserzeichen-/Fensterlaufs gemutmaßt und nichts zurückgestellt. Wiederanlauf mit
+  engerem expliziten Datumsbereich (älteste Tage zuerst), dazwischen konsumieren; ein Überhang am selben Tag ist
+  eine dokumentierte Betriebsgrenze.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
-  (`handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`, `sync_partial_failure`,
-  `sync_failed`).
-- *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`), Ledger-Zeilen strikt gegen das
-  Schema (`load_ledger`, `ledger_invalid`), Pending-Items eines fremden Kontos verweigern den Lauf.
+  (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
+  `handoff_overflow`, `sync_partial_failure`, `sync_failed`).
+- *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
+  Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
+  erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,
+  `ledger_invalid`), die **erste gültige Zeile je Message-ID** gilt für alle Indizes (eine widersprüchliche
+  Dublette führt keinen Thread-Anker ein); Pending-Items eines fremden Kontos verweigern den Lauf.
 - *Abgerissene Zeilen:* zeilenweise Byte-Dekodierung (ein halbes UTF-8-Zeichen macht keine Datei unlesbar); ein
   unparsbarer Rest wandert vor dem nächsten Append ins Sidecar `<datei>.torn`, vollständige Einträge bleiben.
-- *Immer geformt:* `new_count`/`new_items`/`handoff` auch im Legacy-Tupel, in Bindungs-, Lese-, Ledger- und
-  Append-Fehlern (`ok: false`, nie als Erfolg).
+- *Immer geformt:* `new_count`/`new_items`/`handoff` auch im Legacy-Tupel, in Bindungs-, Manifest-, Lese-, Ledger-
+  und Append-Fehlern (`ok: false`, nie als Erfolg). `write_state` unterscheidet in Fehler-Envelopes `none`
+  (Ablehnung vor jedem Write), `partial` (bestätigte Teilresultate) und `unknown` (Schreibfehler, Plattenstand
+  unverifiziert; dann `new_count: null`, `new_items_unavailable: true`), statt pauschal null Writes zu behaupten.
+- *Manifest und Bindung:* ein ungültiger `count` (`sync_invalid_count`) und eine fehlende oder nicht passende
+  Backend-/Account-Bindung (`backend_binding`) liefern das vollständige Fehler-Envelope ohne Mailbox-Zugriff;
+  auch der Legacy-Tupel-Pfad trägt `handoff` und `new_items_unavailable`.
 - *Konsumvertrag:* `load_pending_handoff` (validiert, frisch verankert, Vorfahren zuerst, `waits_for`) und
   `record_synthesized` (löst den Anker beim Schreiben erneut gegen das aktuelle Ledger auf).
 - *Dauerhaftigkeit:* Der Crash-Vertrag meint Prozess-Absturz; nach dem Handoff-Replace läuft ein best-effort
   `fsync` des Verzeichnisses (no-op, wo nicht möglich). Stromausfall ist nicht garantiert.
 
 **Tests:** `tests/test_sent_handoff.py` (Neu-Erkennung bei 0/1/n, Cc, Bounds, atomarer Write, drei Crash-Fenster,
-Wiederholung, Ledger-Dedupe, Thread-Anker, Envelope-/Exit-Vertrag, Himalaya-Cc, Mehrtages-Commit, Überhang-Erreichbarkeit,
-Handoff-/Ledger-Validierung, abgerissenes UTF-8, Reply-Neuauflösung) plus die bestehenden
+Wiederholung, Ledger-Dedupe, Thread-Anker, Envelope-/Exit-Vertrag, Himalaya-Cc, Mehrtages-Commit,
+Überhang-Verweigerung und Recovery per engerem Datumsbereich, Handoff-/Ledger-Validierung inkl. kanonischer
+Item-/Feldgrenzen und widersprüchlicher Ledger-Dubletten, Fehler-Injection mit `write_state: unknown` und
+Wiederanlauf, abgerissenes UTF-8, Reply-Neuauflösung) plus die bestehenden
 `test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).

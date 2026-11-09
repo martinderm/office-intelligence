@@ -658,9 +658,15 @@ Envelope-ID) und übergibt neue Sent Items als begrenzten (200), atomar geschrie
 Konsum-/Dedupe-Ledger (`sent-synthesis-ledger.jsonl`, Schreiber ist der Consumer) markiert konsumierte Items und
 verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selben Vorgang. Ein unkonsumierter
 Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
-indexiert, Handoff byte-gleich); ein inkonsistenter Handoff ergibt `handoff_invalid`, ein schemaverletzendes Ledger
-`ledger_invalid`, ein nicht erreichbarer Überhang `handoff_overflow`; `new_count`/`new_items`/`handoff` stehen auch
-in allen Fehler-Envelopes. Der Crash-Vertrag meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
+indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
+kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
+schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` (vollständig vor jedem
+Write, kein Zurückstellen). `new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state`
+unterscheidet dort wahrheitsgemäß `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen
+Datumsfenster) und `unknown` (Schreibfehler, Plattenstand unverifiziert; dann `new_count: null`). Doppelte
+Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
+meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die
 Consumer-Pipeline (`pipelines/mail-desk-batch.md`), deren `inbox_zero`-No-op bei offenem Handoff nicht greifen darf.
 Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das

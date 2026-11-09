@@ -666,10 +666,10 @@ sync-sent
   │      (ungültig ⇒ ledger_invalid/handoff_invalid; fremdes Konto ⇒ handoff_invalid; Stopp)
   │      konsumierte Items nur ableitend ignorieren, kein Write
   ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (Handoff byte-gleich, nichts indexiert)
-  ├─ 3b. Überhang > 200 und für einen späteren Lauf unerreichbar?  ⇒ handoff_overflow, Stopp (nichts geschrieben)
-  ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200; erreichbarer Überhang zurückgestellt)
+  ├─ 3b. Mehr als 200 neue Items?  ⇒ handoff_overflow, Stopp (nichts übergeben/indexiert; keine Erreichbarkeits-Annahme)
+  ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200)
   ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
-  └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}
+  └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}, write_state bei ok:false
 
 Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) → Promotion des ersten Items →
   record_synthesized (Ledger, Anker erneut aufgelöst) → load_pending_handoff erneut … bis pending_count == 0
@@ -683,5 +683,10 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   Index geschrieben/nicht konsumiert ⇒ Items bleiben `pending`; Tabelle in
   [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Nicht lösbar im Bundle:
   Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
+* **Fehlersemantik:** `write_state` in `ok:false`-Envelopes: `none` (Ablehnung/Fehler vor jedem Write, z. B.
+  `sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
+  `handoff_overflow`), `partial` (bestätigte Teilresultate erfolgreicher Datumsfenster bei
+  `sync_partial_failure`) oder `unknown` (Schreibfehler nach Handoff/beim Append; `new_count: null`,
+  `new_items_unavailable: true`, Wiederholung idempotent). Kein Fehler behauptet pauschal null Writes.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

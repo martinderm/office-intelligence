@@ -265,23 +265,65 @@ class IdempotenceAndCrashWindowTests(_Base):
 
 
 class BoundTests(_Base):
-    def test_overflow_defers_surplus_without_loss(self) -> None:
+    def test_overflow_above_the_canonical_bound_is_refused_before_any_write(self) -> None:
         mailbox = _Mailbox(*(_details(n) for n in range(1, 6)))
-        with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
-                patch.object(sent_indexer, "datetime", _frozen_datetime()):
-            first = self.sync(mailbox)
-            self.assertEqual(3, first["new_count"])
-            self.assertEqual(2, first["handoff"]["deferred_count"])
-            self.assertIn("deferred", first["follow_up_hint"])
-            self.assertEqual(["m1@example.test", "m2@example.test", "m3@example.test"], self.index_ids())
-            # Pending handoff blocks the surplus (fail-closed) until consumed.
-            with self.assertRaises(SentHandoffError):
+        with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
+            with self.assertRaises(SentHandoffError) as caught:
                 self.sync(mailbox)
+        self.assertEqual("handoff_overflow", caught.exception.reason_code)
+        self.assertEqual(("none", 5, 3), (
+            caught.exception.details["state"],
+            caught.exception.details["candidate_count"],
+            caught.exception.details["max_items"],
+        ))
+        self.assertEqual({"2026-09-24": 5}, caught.exception.details["candidates_per_day"])
+        # No reachability guess: absolutely nothing was handed off or indexed.
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+    def test_overflow_with_unparsable_dates_is_still_refused_without_speculation(self) -> None:
+        mailbox = _Mailbox(*(_details(n, date="not a date") for n in range(1, 6)))
+        with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
+            with self.assertRaises(SentHandoffError) as caught:
+                self.sync(mailbox)
+        self.assertEqual("handoff_overflow", caught.exception.reason_code)
+        self.assertEqual({"unparsed": 5}, caught.exception.details["candidates_per_day"])
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+    def test_overflow_recovery_uses_a_narrower_explicit_date_range(self) -> None:
+        mailbox = _Mailbox(
+            _details(1), _details(2), _details(3),
+            _details(4, _day="2026-09-25"), _details(5, _day="2026-09-25"),
+        )
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), \
+                patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items_by_dates(
+                    [DAY, "2026-09-25"], account="ACC", data_dir=self.dd, include_next_day=False,
+                )
+            self.assertEqual("handoff_overflow", caught.exception.reason_code)
+            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+            self.assertEqual([], self.index_ids())
+
+            # Narrower range, oldest day first: it fits, gets handed off and indexed.
+            first = sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+            self.assertEqual(3, first)
             self.consume("m1@example.test", "m2@example.test", "m3@example.test")
-            second = self.sync(mailbox)
-        self.assertEqual(["m4@example.test", "m5@example.test"], [i["norm_message_id"] for i in second["new_items"]])
+
+            # The next narrow range fetches only the remaining day.
+            second = sent_indexer.sync_sent_items_by_dates(
+                ["2026-09-25"], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(2, second)
         self.assertEqual(["m4@example.test", "m5@example.test"], self.handoff_ids())
-        self.assertEqual(0, second["handoff"]["deferred_count"])
+        self.assertEqual(
+            ["m1@example.test", "m2@example.test", "m3@example.test", "m4@example.test", "m5@example.test"],
+            self.index_ids(),
+        )
 
     def test_item_fields_are_bounded_and_marked(self) -> None:
         refs = " ".join(f"<r{i}@example.test>" for i in range(80))
@@ -292,6 +334,12 @@ class BoundTests(_Base):
         self.assertEqual("<r79@example.test>", item["references"][-1])
         self.assertEqual(sent_handoff.MAX_SUBJECT_CHARS, len(item["subject"]))
         self.assertEqual(["references", "subject"], item["truncated_fields"])
+        # A producer-bounded item is exactly at the documented limits and passes the
+        # read-side validation (the same limits are enforced when consuming).
+        self.assertEqual(
+            [{k: v for k, v in item.items() if k != "already_synthesized"}],
+            sent_handoff.read_handoff(self.dd),
+        )
 
 
 class LedgerAndThreadTests(_Base):
@@ -329,6 +377,40 @@ class LedgerAndThreadTests(_Base):
         sent_handoff.record_synthesized(self.dd, [{**item, "anchored_to": anchor}])
         record = sent_handoff.load_ledger(self.dd)["by_message_id"]["b@example.test"]
         self.assertEqual(("follow_up", "V-9", "a@example.test"), (record["role"], record["vorgang_ref"], record["anchored_to"]))
+
+    def test_first_duplicate_ledger_line_is_authoritative_for_every_index(self) -> None:
+        def line(message_id: str, thread: str, ref: str) -> str:
+            return json.dumps(_ledger_line(
+                message_id=message_id, thread_key=thread, vorgang_ref=ref,
+            ))
+
+        (self.dd / LEDGER_FILENAME).write_text(
+            line("a@example.test", "root-1@example.test", "V-1")
+            + "\n"
+            + line("a@example.test", "root-2@example.test", "V-2")
+            + "\n",
+            encoding="utf-8",
+        )
+        ledger = sent_handoff.load_ledger(self.dd)
+        self.assertEqual("V-1", ledger["by_message_id"]["a@example.test"]["vorgang_ref"])
+        reply = {
+            "norm_message_id": "b@example.test",
+            "in_reply_to": "",
+            "references": [],
+            "thread_key": "root-1@example.test",
+            "anchor_candidates": [],
+        }
+        anchor = sent_handoff.resolve_thread_anchor(reply, ledger)
+        self.assertEqual(("V-1", "a@example.test", "thread_key"), (
+            anchor["vorgang_ref"], anchor["matched_message_id"], anchor["match_type"],
+        ))
+        # The conflicting duplicate must not introduce the second thread anchor.
+        conflicting = {**reply, "norm_message_id": "c@example.test", "thread_key": "root-2@example.test"}
+        self.assertIsNone(sent_handoff.resolve_thread_anchor(conflicting, ledger))
+
+        sent_handoff.record_synthesized(self.dd, [conflicting])
+        recorded = sent_handoff.load_ledger(self.dd)["by_message_id"]["c@example.test"]
+        self.assertEqual(("primary", None), (recorded["role"], recorded["vorgang_ref"]))
 
     def test_record_synthesized_is_idempotent_and_repairs_torn_ledger(self) -> None:
         item = {"message_id": "<x@example.test>"}
@@ -375,8 +457,8 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
-    def test_unreachable_surplus_is_refused_before_any_write(self) -> None:
-        # Index watermark (2026-09-30) is newer than the surplus: a default run would never see it.
+    def test_overflow_is_refused_even_with_a_newer_index_watermark(self) -> None:
+        # The refusal never guesses reachability: the newer watermark is irrelevant.
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
@@ -392,7 +474,28 @@ class MultiDateAndOverflowTests(_Base):
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
         self.assertEqual(["seed@example.test"], self.index_ids())
 
-    def test_surplus_older_than_the_sync_window_is_refused(self) -> None:
+    def test_overflow_on_the_window_boundary_day_is_refused_and_never_silently_lost(self) -> None:
+        old_day = "2026-07-27"  # exactly 59 days before the frozen "today" 2026-09-24
+        mailbox = _Mailbox(*(_details(n, _day=old_day) for n in range(1, 6)))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), \
+                patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
+                patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(dates=[old_day], account="ACC", data_dir=self.dd)
+            self.assertEqual("handoff_overflow", caught.exception.reason_code)
+            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+            self.assertEqual([], self.index_ids())
+
+            # The next day's default watermark window cannot reach the old day, but
+            # nothing was written, so nothing is silently lost: the refusal was loud.
+            with patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 25))):
+                rerun = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual(0, rerun["new_count"])
+        self.assertEqual("none", rerun["handoff"]["state"])
+        self.assertEqual([], self.index_ids())
+
+    def test_overflow_in_an_old_explicit_window_is_refused(self) -> None:
         mailbox = _Mailbox(*(_details(n) for n in range(1, 6)))
         with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
                 patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 12, 31))):
@@ -463,6 +566,100 @@ class HandoffValidationTests(_Base):
         "duplicate": lambda d: (d["items"].append(dict(d["items"][0])), d.__setitem__("count", 2)),
         "generated_at": lambda d: d.__setitem__("generated_at", "yesterday"),
     }
+
+    def test_canonical_item_bound_applies_regardless_of_the_file_max_items(self) -> None:
+        def item(index: int) -> dict:
+            return sent_handoff.build_handoff_item(
+                {
+                    "message_id": f"<m{index}@example.test>",
+                    "at": f"Thu, 24 Sep 2026 10:{index % 60:02d}:00 +0200",
+                    "subject": f"Subject {index}",
+                    "references": [],
+                    "sent_envelope_id": str(1000 + index),
+                    "folder": "Sent Items",
+                    "mailbox": "ACC",
+                },
+                to="", cc="", headers_complete=True,
+            )
+
+        path = self.dd / HANDOFF_FILENAME
+        accepted = {
+            "schema_version": 1, "kind": "mail-desk.new-sent-items",
+            "generated_at": "2026-11-09T09:00:00Z", "max_items": 200, "count": 200,
+            "items": [item(i) for i in range(200)],
+        }
+        path.write_text(json.dumps(accepted), encoding="utf-8")
+        self.assertEqual(200, len(sent_handoff.read_handoff(self.dd)))  # canonical boundary passes
+
+        oversized = {**accepted, "max_items": 1000, "count": 201, "items": [item(i) for i in range(201)]}
+        path.write_text(json.dumps(oversized), encoding="utf-8")
+        before = path.read_bytes()
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.read_handoff(self.dd)
+        self.assertEqual(("handoff_invalid", "max_items_malformed"), (
+            caught.exception.reason_code, caught.exception.details["reason"],
+        ))
+        self.assertEqual(before, path.read_bytes())
+        with self.assertRaises(SentHandoffError):
+            sent_handoff.load_pending_handoff(self.dd)
+
+        # Even with a canonical header the count bound is the canonical one (200).
+        over_count = {**accepted, "count": 201, "items": [item(i) for i in range(201)]}
+        path.write_text(json.dumps(over_count), encoding="utf-8")
+        with self.assertRaises(SentHandoffError) as counted:
+            sent_handoff.read_handoff(self.dd)
+        self.assertEqual("count_or_bound_mismatch", counted.exception.details["reason"])
+
+        widened_header = {**accepted, "max_items": 1000}
+        path.write_text(json.dumps(widened_header), encoding="utf-8")
+        with self.assertRaises(SentHandoffError) as header:
+            sent_handoff.read_handoff(self.dd)
+        self.assertEqual("max_items_malformed", header.exception.details["reason"])
+
+    def test_documented_field_lengths_are_enforced_on_read(self) -> None:
+        self.sync(_Mailbox(_details(1)))
+        path = self.dd / HANDOFF_FILENAME
+        valid = json.loads(path.read_text("utf-8"))
+
+        cases = {
+            "subject": lambda d: d["items"][0].__setitem__("subject", "s" * (sent_handoff.MAX_SUBJECT_CHARS + 1)),
+            "to": lambda d: d["items"][0].__setitem__(
+                "to", [f"p{i}@example.test" for i in range(sent_handoff.MAX_RECIPIENTS + 1)]
+            ),
+            "cc": lambda d: d["items"][0].__setitem__(
+                "cc", [f"c{i}@example.test" for i in range(sent_handoff.MAX_RECIPIENTS + 1)]
+            ),
+        }
+
+        def overlong_references(document: dict) -> None:
+            item = document["items"][0]
+            references = [f"<r{i}@example.test>" for i in range(sent_handoff.MAX_REFERENCES + 1)]
+            item["references"] = references
+            item["thread_key"] = sent_handoff.thread_key(item["in_reply_to"], references, item["message_id"])
+            item["anchor_candidates"] = sent_handoff.thread_anchor_ids(
+                item["in_reply_to"], references, item["message_id"]
+            )
+
+        cases["references"] = overlong_references
+        expected = {
+            "subject": "subject_too_long",
+            "to": "to_too_many",
+            "cc": "cc_too_many",
+            "references": "references_too_long",
+        }
+        for name, mutate in cases.items():
+            with self.subTest(name):
+                document = json.loads(json.dumps(valid))
+                mutate(document)
+                path.write_text(json.dumps(document), encoding="utf-8")
+                before = path.read_bytes()
+                with self.assertRaises(SentHandoffError) as caught:
+                    sent_handoff.read_handoff(self.dd)
+                self.assertEqual("handoff_invalid", caught.exception.reason_code)
+                self.assertEqual(f"item[0]: {expected[name]}", caught.exception.details["reason"])
+                self.assertEqual(before, path.read_bytes())
+                with self.assertRaises(SentHandoffError):
+                    sent_handoff.load_pending_handoff(self.dd)
 
     def test_every_inconsistency_is_refused_untouched_and_nothing_is_indexed(self) -> None:
         self.sync(_Mailbox(_details(1)))
@@ -635,12 +832,20 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual("pending", envelope["handoff"]["state"])
         self.assertEqual(["m1@example.test"], self.index_ids())
 
-    def assert_failed_shape(self, envelope: dict, reason: str, state: str) -> None:
+    def assert_failed_shape(
+        self, envelope: dict, reason: str, state: str, *,
+        write_state: str = "none", new_count: int | None = 0,
+    ) -> None:
         self.assertFalse(envelope["ok"])
         self.assertEqual(reason, envelope["reason_code"])
-        self.assertEqual((0, []), (envelope["new_count"], envelope["new_items"]))
+        self.assertEqual((new_count, []), (envelope["new_count"], envelope["new_items"]))
+        self.assertEqual(write_state, envelope["write_state"])
         self.assertIn(envelope["handoff"]["state"], sent_handoff.HANDOFF_STATES)
         self.assertEqual(state, envelope["handoff"]["state"])
+        self.assertEqual(str(self.dd / HANDOFF_FILENAME), envelope["handoff"]["file"])
+        for key in ("written_count", "pending_count", "consumed_ignored", "deferred_count",
+                    "headers_incomplete_count", "max_items"):
+            self.assertIn(key, envelope["handoff"])
         json.dumps(envelope)
 
     def test_every_failure_envelope_keeps_shape_and_documented_state(self) -> None:
@@ -654,9 +859,14 @@ class ModeEnvelopeTests(_Base):
         (self.dd / LEDGER_FILENAME).unlink()
 
         with patch.object(sent_indexer, "append_sent_index_entries", side_effect=OSError("disk gone")):
-            envelope = self.run_mode(_Mailbox(_details(1)))  # read/append failure after the handoff was written
-        self.assert_failed_shape(envelope, "sync_failed", "pending")
-        self.assertEqual("RuntimeError", envelope["handoff"]["error_type"])
+            envelope = self.run_mode(_Mailbox(_details(1)))  # append failure after the handoff was written
+        # Unknown progress: the handoff is persisted, the index may be partially grown.
+        self.assert_failed_shape(envelope, "sync_failed", "pending", write_state="unknown", new_count=None)
+        self.assertEqual("OSError", envelope["handoff"]["error_type"])
+        self.assertIs(True, envelope["handoff"]["append_failed"])
+        self.assertEqual(1, envelope["handoff"]["pending_count"])
+        self.assertIs(True, envelope["new_items_unavailable"])
+        self.assertEqual(["m1@example.test"], self.handoff_ids())
 
         # Overflow refusal reports the state of the untouched handoff (here: pending, m1 is unconsumed).
         def overflow(**_kwargs):
@@ -674,8 +884,32 @@ class ModeEnvelopeTests(_Base):
         envelope = sync_sent_mode.run_sync_sent_mode(
             {"count": 3}, account="ACC", data_dir=self.dd, dependencies={"sync_sent_items": boom}
         )
-        self.assert_failed_shape(envelope, "sync_failed", "none")
+        self.assert_failed_shape(envelope, "sync_failed", "none", write_state="none", new_count=0)
         self.assertIn("PermissionError", envelope["message"])
+
+    def test_invalid_manifest_count_yields_the_shaped_refusal_and_result_envelope(self) -> None:
+        def never(**_kwargs):  # a manifest refusal must never reach the mailbox
+            raise AssertionError("sync must not run")
+
+        for bad in ("not-a-number", None, 0, -3, True, 2.5):
+            with self.subTest(bad=bad):
+                envelope = sync_sent_mode.run_sync_sent_mode(
+                    {"count": bad}, account="ACC", data_dir=self.dd,
+                    dependencies={"sync_sent_items": never},
+                )
+                self.assert_failed_shape(envelope, "sync_invalid_count", "none")
+                self.assertEqual("count", envelope["handoff"]["invalid_field"])
+                self.assertIn("positive integer", envelope["message"])
+
+        import mail_desk_batch_runner as runner
+
+        result_envelope = runner._result_envelope(envelope, "sync_sent")
+        self.assertFalse(result_envelope["success"])
+        self.assertEqual((0, []), (
+            result_envelope["data"]["new_count"], result_envelope["data"]["new_items"]
+        ))
+        self.assertEqual("sync_invalid_count", result_envelope["data"]["reason_code"])
+        self.assertEqual("none", result_envelope["data"]["handoff"]["state"])
 
     def test_legacy_tuple_contract_also_carries_new_count_and_items(self) -> None:
         envelope = sync_sent_mode.run_sync_sent_mode(
@@ -683,13 +917,31 @@ class ModeEnvelopeTests(_Base):
         )
         self.assertTrue(envelope["ok"])
         self.assertEqual((2, [], True), (envelope["new_count"], envelope["new_items"], envelope["new_items_unavailable"]))
+        self.assertEqual("none", envelope["handoff"]["state"])
+        self.assertEqual(str(self.dd / HANDOFF_FILENAME), envelope["handoff"]["file"])
+        for key in ("written_count", "pending_count", "consumed_ignored", "deferred_count",
+                    "headers_incomplete_count", "max_items"):
+            self.assertIn(key, envelope["handoff"])
 
     def test_runner_binding_refusal_keeps_the_sync_result_shape(self) -> None:
         import mail_desk_batch_runner as runner
 
         result = runner.run_sync_sent_mode({"count": 3}, account="primary", data_dir=self.dd)  # no backend binding file
         self.assertFalse(result["ok"])
+        self.assertEqual("backend_binding", result["reason_code"])
         self.assertEqual((0, []), (result["new_count"], result["new_items"]))
+        self.assertEqual("none", result["write_state"])
+        self.assertEqual(str(self.dd / HANDOFF_FILENAME), result["handoff"]["file"])
+        self.assertIn(result["handoff"]["state"], sent_handoff.HANDOFF_STATES)
+        self.assertIn("backend_binding", result)
+        json.dumps(result)
+
+        envelope = runner._result_envelope(result, "sync_sent")
+        self.assertFalse(envelope["success"])
+        self.assertEqual("backend_binding", envelope["data"]["reason_code"])
+        self.assertEqual((0, []), (envelope["data"]["new_count"], envelope["data"]["new_items"]))
+        self.assertEqual("none", envelope["data"]["handoff"]["state"])
+        self.assertIn("backend_binding", envelope["data"])
 
     def test_partial_date_failure_commits_successes_and_fails(self) -> None:
         mailbox = _Mailbox(_details(1))
@@ -697,6 +949,7 @@ class ModeEnvelopeTests(_Base):
         envelope = self.run_mode(mailbox)
         self.assertFalse(envelope["ok"])
         self.assertEqual("sync_partial_failure", envelope["reason_code"])
+        self.assertEqual("partial", envelope["write_state"])
         self.assertEqual(["2026-09-25"], envelope["failed_dates"])
         self.assertEqual(1, envelope["new_count"])
         self.assertEqual(["m1@example.test"], self.handoff_ids())
@@ -704,6 +957,31 @@ class ModeEnvelopeTests(_Base):
         run, read = mailbox.patches()
         with run, read, self.assertRaises(SentSyncPartialFailure):
             sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+
+    def test_all_dates_failing_reports_no_writes(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        mailbox.fail_dates = {DAY, "2026-09-25"}
+        envelope = self.run_mode(mailbox)
+        self.assertFalse(envelope["ok"])
+        self.assertEqual(("sync_partial_failure", "none", 0), (
+            envelope["reason_code"], envelope["write_state"], envelope["new_count"],
+        ))
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+    def test_append_failure_reports_unknown_progress_and_rerun_is_idempotent(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        with patch.object(sent_indexer, "append_sent_index_entries", side_effect=OSError("disk gone")):
+            failed = self.run_mode(mailbox)
+        self.assert_failed_shape(failed, "sync_failed", "pending", write_state="unknown", new_count=None)
+        self.assertEqual(["m1@example.test"], self.handoff_ids())
+        self.assertEqual([], self.index_ids())
+
+        rerun = self.run_mode(mailbox)
+        self.assertTrue(rerun["ok"])
+        self.assertEqual(1, rerun["new_count"])
+        self.assertEqual(0, rerun["handoff"]["written_count"])
+        self.assertEqual(["m1@example.test"], self.index_ids())
 
     def test_runner_envelope_exit_semantics(self) -> None:
         import mail_desk_batch_runner as runner
@@ -729,6 +1007,7 @@ class CliSummaryTests(unittest.TestCase):
                 "success": False, "state": "Failed", "message": "pending",
                 "data": {
                     "new_count": 0, "reason_code": "handoff_pending", "new_items": [{"subject": "x"}],
+                    "write_state": "none",
                     "handoff": {"state": "handoff_pending", "pending_count": 2, "file": "f", "ignored": 1},
                 },
             }), encoding="utf-8")
@@ -737,6 +1016,7 @@ class CliSummaryTests(unittest.TestCase):
                 subprocess.CompletedProcess([], 1),
             )
         self.assertEqual("handoff_pending", summary["reason_code"])
+        self.assertEqual("none", summary["write_state"])
         self.assertEqual({"state": "handoff_pending", "pending_count": 2, "file": "f"}, summary["handoff"])
         self.assertNotIn("new_items", summary)
 

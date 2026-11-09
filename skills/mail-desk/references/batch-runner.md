@@ -1064,27 +1064,39 @@ Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-items
 **Envelope-Felder (`data`), in jedem Sync-Ergebnis auch bei Fehlern und im Legacy-Tupel:** `new_count` (= `new_entries_indexed`),
 `new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
 Anker, `headers_complete`, `already_synthesized`) und `handoff` (`state` ∈ `none|written|pending|invalid`,
-`written_count`, `pending_count`, `consumed_ignored`, `deferred_count`, `headers_incomplete_count`, `file`).
-`headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).
+`written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — aus Kompatibilität immer 0,
+`headers_incomplete_count`, `file`). `headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt
+(Item wird wie bisher indexiert). `new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei
+`write_state: unknown` ist `new_count: null` (und `new_items_unavailable: true`), weil der Lauf den
+Fortschritt nach einem fehlgeschlagenen Schreibversuch nicht kennen kann.
 
 **Trigger für den Consumer:** `handoff.pending_count > 0`, nicht `new_count` (nach einem Absturz ist `new_count`
 0, obwohl Items offen sind). Die Synthese-Phase darf bei `inbox_zero` nur No-op sein, wenn auch nichts
 offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bundles). Der Consumer liest über
 `load_pending_handoff` und schreibt über `record_synthesized`.
 
-**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`, nichts indexiert außer bei `sync_partial_failure`):**
+**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `write_state` trennt drei Fälle
+wahrheitsgemäß: `none` = Ablehnung/Fehler vor jedem Handoff-/Index-Write, `partial` = der Commit-Pfad ist für
+die erfolgreichen Datumsfenster abgeschlossen und die gemeldeten Zähler sind bestätigt (bei
+`sync_partial_failure`), `unknown` = ein Schreibversuch schlug fehl und der Plattenstand ist unverifiziert
+(Handoff ggf. geschrieben, Index ggf. teilweise fortgeschrieben; ein Wiederholungslauf merged idempotent per
+Message-ID).
 
 | `reason_code` | Ursache |
 |---|---|
+| `sync_invalid_count` | Manifest-`count` ist kein positiver Integer; nichts gelesen oder geschrieben |
+| `backend_binding` | Backend-/Account-Bindung fehlt oder passt nicht; nichts gelesen oder geschrieben |
 | `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
-| `handoff_invalid` | Handoff unlesbar/inkonsistent oder Pending-Items eines anderen Mailkontos |
+| `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder Pending-Items eines anderen Mailkontos |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
-| `handoff_overflow` | mehr als 200 neue Items und der Überhang wäre für einen späteren Lauf unerreichbar |
+| `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
 | `sync_partial_failure` | Datumsfenster scheiterten; erfolgreiche sind übergeben und indexiert, `failed_dates` |
-| `sync_failed` | sonstiger Lese-/Transport-/Append-Fehler; ein geschriebener Handoff bleibt, Wiederholung ist idempotent |
+| `sync_failed` | sonstiger Lese-/Transport-/Konfigurationsfehler vor dem Commit (`write_state: none`) oder Append-Fehler nach dem Handoff (`write_state: unknown`, `new_count: null`, `new_items_unavailable: true`); ein geschriebener Handoff bleibt, Wiederholung ist idempotent |
 
-Ein erreichbarer Überhang über 200 wird zurückgestellt (`deferred_count`, `follow_up_hint`), nicht verworfen.
-`sync_sent_items_by_dates` committet alle Tage einmal.
+Es gibt kein Zurückstellen eines Überhangs: über 200 neue Items wird der Lauf vollständig verweigert
+(`handoff_overflow`), damit kein Überhang aus einem späteren Fenster fallen kann. Wiederanlauf mit engerem
+expliziten Datumsbereich (älteste Tage zuerst), dazwischen konsumieren; ein Überhang am selben Tag ist eine
+dokumentierte Betriebsgrenze (nicht per Datumsbereich teilbar). `sync_sent_items_by_dates` committet alle Tage einmal.
 
 ---
 

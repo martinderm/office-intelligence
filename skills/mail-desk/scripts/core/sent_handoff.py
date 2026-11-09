@@ -39,9 +39,9 @@ HANDOFF_SCHEMA_VERSION = 1
 LEDGER_SCHEMA_VERSION = 1
 HANDOFF_KIND = "mail-desk.new-sent-items"
 
-#: Upper bound of unconsumed items in the handoff file.  One run hands off at
-#: most this many new items; a surplus is either *deferred* (provably reachable by
-#: the next watermark-derived run) or refused fail-closed before any write.
+#: Upper bound of items in the handoff file.  A run with more new items than
+#: this refuses fail-closed before any write (``handoff_overflow``); nothing is
+#: deferred, because a later run could not reliably reach a surplus.
 MAX_HANDOFF_ITEMS = 200
 
 #: Per-item field bounds (the sent-index entry keeps the full values).  A bounded
@@ -72,10 +72,10 @@ class SentHandoffError(RuntimeError):
     """Fail-closed refusal; nothing was written to the handoff or the sent-index.
 
     ``reason_code``: ``handoff_pending`` (unconsumed items would be extended),
-    ``handoff_invalid`` (handoff unreadable, inconsistent or foreign),
-    ``handoff_overflow`` (more new items than one handoff may hold and the surplus
-    would not be reachable by a later run) or ``ledger_invalid`` (a ledger line
-    violates the documented schema).  ``details["state"]`` is the ``handoff.state``.
+    ``handoff_invalid`` (handoff unreadable, inconsistent, oversized or foreign),
+    ``handoff_overflow`` (more new items than one handoff may hold; refused before
+    any write) or ``ledger_invalid`` (a ledger line violates the documented
+    schema).  ``details["state"]`` is the ``handoff.state``.
     """
 
     def __init__(self, reason_code: str, message: str, details: dict[str, Any] | None = None) -> None:
@@ -94,6 +94,15 @@ class SentSyncPartialFailure(RuntimeError):
         super().__init__(message)
         self.result = result
         self.failed_dates = list(failed_dates)
+
+
+class SentIndexAppendError(RuntimeError):
+    """The sent-index append failed after the handoff was persisted.
+
+    The handoff is durable, but the index may be empty, partially written or
+    complete: the on-disk progress is *unknown*.  A rerun re-detects the same
+    items and merges idempotently by Message-ID.
+    """
 
 
 def norm_id(value: Any) -> str:
@@ -389,13 +398,20 @@ def _index_ledger_record(
     by_thread_key: dict[str, dict[str, Any]],
     record: dict[str, Any],
 ) -> None:
-    by_message_id.setdefault(record["message_id"], record)
+    """Index one validated ledger record; the first line for a Message-ID wins.
+
+    A duplicate line must not introduce a different thread anchor: the first
+    valid line is authoritative for **every** index (``by_message_id`` and
+    ``by_thread_key``), so a later conflicting duplicate is ignored as a whole
+    instead of re-anchoring replies to its (different) Vorgang.
+    """
+    message_id = record["message_id"]
+    if message_id in by_message_id:
+        return
+    by_message_id[message_id] = record
     key = norm_id(record.get("thread_key"))
     if key:
-        existing = by_thread_key.get(key)
-        # Prefer the first record that carries a Vorgang reference.
-        if existing is None or (not existing.get("vorgang_ref") and record.get("vorgang_ref")):
-            by_thread_key[key] = record
+        by_thread_key.setdefault(key, record)
 
 
 def resolve_thread_anchor(item: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any] | None:
@@ -524,6 +540,15 @@ def _item_problem(item: dict[str, Any]) -> str | None:
     truncated = item.get("truncated_fields", [])
     if not isinstance(truncated, list) or not set(truncated) <= _TRUNCATABLE:
         return "truncated_fields_malformed"
+    # Documented field bounds are enforced on read as well: a handoff written by
+    # any other producer must never smuggle oversized fields into the consumer.
+    if len(item["subject"]) > MAX_SUBJECT_CHARS:
+        return "subject_too_long"
+    if len(item["references"]) > MAX_REFERENCES:
+        return "references_too_long"
+    for name in ("to", "cc"):
+        if len(item[name]) > MAX_RECIPIENTS:
+            return f"{name}_too_many"
     return _anchored_to_problem(item["anchored_to"])
 
 
@@ -532,8 +557,10 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
 
     Document shape, count, bound, every item field and the identity consistency
     (normalized Message-ID, thread key, anchor candidates, no duplicates) are
-    checked; any violation raises ``SentHandoffError("handoff_invalid")`` and the
-    file is never consumed or rewritten.
+    checked; the canonical item bound (``MAX_HANDOFF_ITEMS``) and the documented
+    per-item field bounds apply regardless of the file's own ``max_items``.  Any
+    violation raises ``SentHandoffError("handoff_invalid")`` and the file is never
+    consumed or rewritten.
     """
     path = data_dir / HANDOFF_FILENAME
     if not path.exists():
@@ -556,11 +583,17 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
     if document.get("kind") != HANDOFF_KIND or not _iso_timestamp_ok(document.get("generated_at")):
         raise invalid("document_header_malformed")
     max_items, count, items = document.get("max_items"), document.get("count"), document.get("items")
-    if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1:
+    # The canonical bound is authoritative; a higher file-local ``max_items``
+    # must never widen what this reader accepts.
+    if (
+        not isinstance(max_items, int)
+        or isinstance(max_items, bool)
+        or not 1 <= max_items <= MAX_HANDOFF_ITEMS
+    ):
         raise invalid("max_items_malformed")
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise invalid("items_not_a_list_of_objects")
-    if count != len(items) or len(items) > max_items:
+    if count != len(items) or len(items) > max_items or len(items) > MAX_HANDOFF_ITEMS:
         raise invalid("count_or_bound_mismatch")
     seen: set[str] = set()
     for index, item in enumerate(items):

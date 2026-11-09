@@ -207,16 +207,20 @@ synthetisiertes Item übergibt **und** nichts Unkonsumiertes pending ist, nie be
 ```
 
 **Validierung (fail-closed `handoff_invalid`, Datei bleibt unangetastet):** Dokumentkopf (`schema_version`,
-`kind`, `generated_at` ISO, `max_items` ≥ 1), `count == len(items) ≤ max_items`, je Item exakt die
-dokumentierten Felder in den dokumentierten Typen, Identität (`norm_message_id` = normalisierte `message_id`,
-nicht leer), Konsistenz (`thread_key` und `anchor_candidates` stimmen mit `in_reply_to`/`references`
-überein, `mailbox` nicht leer), wohlgeformtes `anchored_to` (`null` oder genau `vorgang_ref`,
-`matched_message_id`, `match_type`), keine Dubletten. Unkonsumierte Items eines anderen Mailkontos als des
-gebundenen verweigern den Lauf (`mailbox_mismatch`). Nichts davon wird „blind konsumiert“.
+`kind`, `generated_at` ISO, `max_items` zwischen 1 und der kanonischen Obergrenze 200), `count == len(items)`,
+`count ≤ max_items` **und** `count ≤ 200` (ein dateieigenes höheres `max_items` erweitert die Grenze nie), je Item
+exakt die dokumentierten Felder in den dokumentierten Typen und Längen, Identität (`norm_message_id` =
+normalisierte `message_id`, nicht leer), Konsistenz (`thread_key` und `anchor_candidates` stimmen mit
+`in_reply_to`/`references` überein, `mailbox` nicht leer), wohlgeformtes `anchored_to` (`null` oder genau
+`vorgang_ref`, `matched_message_id`, `match_type`), keine Dubletten. Unkonsumierte Items eines anderen
+Mailkontos als des gebundenen verweigern den Lauf (`mailbox_mismatch`). Nichts davon wird „blind konsumiert“.
 
-**Grenzen (nie still gekappt):** höchstens 200 Items; `references` höchstens 50 (Thread-Wurzel plus die
-49 nächsten Vorfahren), `to`/`cc` höchstens 100 Adressen, `subject` höchstens 1000 Zeichen. Wurde ein Feld
-begrenzt, nennt `truncated_fields` es; der Sent-Index behält den vollen Wert.
+**Grenzen (nie still gekappt, beim Schreiben und beim Lesen durchgesetzt):** höchstens 200 Items;
+`references` höchstens 50 (Thread-Wurzel plus die 49 nächsten Vorfahren), `to`/`cc` höchstens 100 Adressen,
+`subject` höchstens 1000 Zeichen. Überschreitet eine gelesene Datei eine dieser Grenzen, ist sie
+`handoff_invalid` (`subject_too_long`/`references_too_long`/`to_too_many`/`cc_too_many`) und wird weder
+konsumiert noch umgeschrieben. Wurde ein Feld beim Schreiben begrenzt, nennt `truncated_fields` es; der
+Sent-Index behält den vollen Wert.
 
 **Thread-Schlüssel:** `thread_key` = erste `References`-Message-ID (Thread-Wurzel), sonst `In-Reply-To`,
 sonst die eigene Message-ID (jeweils normalisiert). `anchor_candidates` = `In-Reply-To`, dann `References`
@@ -240,7 +244,9 @@ oder direktes Anhängen derselben Zeilen:
 Pflicht sind `schema_version` (= 1), `message_id` (**bereits normalisiert**: ohne Klammern, Kleinschreibung),
 `role` (`primary`/`follow_up`) und `recorded_at` (ISO-8601); optional `thread_key`, `vorgang_ref`, `anchored_to`
 (String oder `null`); weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary`
-verbietet es. Doppelte `message_id` sind zulässig (die erste gilt).
+verbietet es. Doppelte `message_id` sind zulässig (die erste gültige Zeile gilt und ist für **alle** Indizes
+maßgeblich: eine spätere Dublette mit anderem `thread_key`/`vorgang_ref` führt weder einen Thread-Anker noch
+eine Vorgangs-Zuordnung ein).
 
 - **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
   im Ledger steht. Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht umgeschrieben
@@ -267,7 +273,7 @@ Handoff vor Index ist dann plattformabhängig.
 | Absturz | Zustand | Wiederholungslauf |
 |---|---|---|
 | vor dem Handoff-Write | nichts geschrieben | liest alles neu |
-| nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
+| nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index; ein Append-Fehler meldet `write_state: unknown` | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
 | nach Index, vor Konsum | Items im Handoff **und** im Index | `new_count: 0`, `handoff.state: pending`; neue Items → `handoff_pending` bis zum Konsum |
 | während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items gelten als konsumiert |
 
@@ -289,15 +295,18 @@ verankert (`follow_up`, gleicher `vorgang_ref`).
 pending ist; Pending-Items werden nie überschrieben, erweitert oder ausgeräumt. Konsumierte Reste in der Datei
 werden nur ignoriert (`consumed_ignored`). `handoff_pending` lässt die Datei byte-gleich.
 
-**Überhang über 200:** Die ältesten 200 werden übergeben und indexiert, der Rest zurückgestellt (weder Handoff
-noch Index), aber nur wenn der nächste wasserzeichenbasierte Lauf ihn nachweislich erreicht (nicht älter als der
-neue Index-Wasserzeichentag und als `MAX_SYNC_WINDOW_DAYS`). Sonst `handoff_overflow` vor jedem Write mit
-`candidate_count` und `candidates_per_day`; Wiederholung mit engerem expliziten Datumsbereich (älteste Tage
-zuerst), dazwischen konsumieren. Offene Grenze: ein später kleineres `count` kann den Überhang wieder aus dem
-Fenster nehmen (bekannter Wasserzeichen-Lücken-Hinweis).
+**Überhang über 200:** Der Lauf wird vollständig verweigert (`handoff_overflow`) **vor jedem Write**: nichts
+wird übergeben, zurückgestellt oder indexiert. Details: `candidate_count`, `max_items`,
+`candidates_per_day` (nicht parsebare Daten als `unparsed`). Wiederholung mit engerem expliziten Datumsbereich
+(älteste Tage zuerst), dazwischen konsumieren. Ein Überhang am selben Tag ist nicht per Datumsbereich teilbar
+und damit eine dokumentierte Betriebsgrenze; es wird keine Erreichbarkeit späterer Fenster gemutmaßt.
 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
+`write_state` trennt in Fehler-Envelopes `none` (Ablehnung/Fehler vor jedem Write), `partial` (bestätigte
+Teilresultate der erfolgreichen Datumsfenster, Zähler exakt) und `unknown` (ein Schreibversuch schlug fehl,
+Plattenstand unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, ein Wiederholungslauf
+merged idempotent per Message-ID). Fehler bedeuten also nie pauschal „null Writes“.
 
 ## Closing an item
 

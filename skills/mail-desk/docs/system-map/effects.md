@@ -271,13 +271,16 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `fsync`). Der Vertrag gilt für Prozess-Absturz, nicht für Stromausfall auf Plattformen ohne Verzeichnis-`fsync`
   (Windows). Eine abgerissene letzte Zeile in `sent-index.jsonl`/Ledger (auch mitten im UTF-8-Zeichen) blockiert kein
   Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
-* **Fail-closed:** unkonsumiertes Handoff + weitere neue Items (`handoff_pending`), ungültiges Handoff
-  (`handoff_invalid`, inkl. fremdes Konto), ungültiges Ledger (`ledger_invalid`) und nicht erreichbarer Überhang
-  (`handoff_overflow`) stoppen vor jedem Write, Exit ≠ 0; jede andere Störung wird `sync_failed`. Alle Fehler-Envelopes
-  tragen `new_count: 0`, `new_items: []` und ein `handoff` mit `state ∈ none|written|pending|invalid`. Teilweise
-  gescheiterte Datumsfenster committen die erfolgreichen und melden `sync_partial_failure`. Nichts wird still
-  verworfen: erreichbarer Überhang > 200 wird zurückgestellt (`deferred_count`), gekürzte Felder stehen in
-  `truncated_fields`.
+* **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
+  neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
+  Feldlängen), ungültiges Ledger (`ledger_invalid`) und mehr als 200 neue Items (`handoff_overflow`) stoppen vor
+  jedem Write, Exit ≠ 0. Jede andere Störung wird `sync_failed`. `write_state` unterscheidet wahrheitsgemäß:
+  `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen Datumsfenster) und `unknown`
+  (Schreibfehler, Plattenstand unverifiziert; `new_count: null`). Alle Fehler-Envelopes tragen `new_items`,
+  `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler; teilweise gescheiterte
+  Datumsfenster committen die erfolgreichen und melden `sync_partial_failure`. Nichts wird still verworfen:
+  ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen), gekürzte Felder stehen in
+  `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
 * **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
   sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
 * **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion

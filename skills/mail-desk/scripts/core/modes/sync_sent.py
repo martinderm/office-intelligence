@@ -10,11 +10,20 @@ from ..common import resolve_data_dir
 from ..sent_handoff import (
     HANDOFF_FILENAME,
     HANDOFF_STATES,
+    MAX_HANDOFF_ITEMS,
     SentHandoffError,
+    SentIndexAppendError,
     SentSyncPartialFailure,
     peek_handoff_state,
 )
 from ..sent_indexer import sync_sent_items
+
+#: Honesty of the ``ok: false`` envelope about write progress.  ``none``: the run
+#: refused or failed before any handoff/index write; ``partial``: the commit path
+#: completed for the successful date windows and the reported counts are
+#: authoritative (some windows failed); ``unknown``: a write was attempted and
+#: failed, so the on-disk progress is unverified (a rerun merges idempotently).
+WRITE_STATES = ("none", "partial", "unknown")
 
 
 def _dependency(
@@ -57,6 +66,78 @@ def _success_envelope(sync_result: Mapping[str, Any], folder: str, dd: Path) -> 
     return envelope
 
 
+def _default_handoff(dd: Path) -> dict[str, Any]:
+    """The documented handoff shape before any refusal-specific detail is merged in."""
+    return {
+        "state": "none",
+        "written_count": 0,
+        "pending_count": 0,
+        "consumed_ignored": 0,
+        "deferred_count": 0,
+        "headers_incomplete_count": 0,
+        "already_synthesized_skipped": 0,
+        "max_items": MAX_HANDOFF_ITEMS,
+        "file": str(dd / HANDOFF_FILENAME),
+    }
+
+
+def failure_envelope(
+    dd: Path,
+    folder: str,
+    message: str,
+    reason_code: str,
+    *,
+    state: str | None = None,
+    write_state: str = "none",
+    details: Mapping[str, Any] | None = None,
+    new_count: int | None = 0,
+    new_items: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """``ok: false`` result that always carries ``new_count``/``new_items``/``handoff``.
+
+    ``handoff.state`` is one of ``none|written|pending|invalid``; the refusal itself
+    is ``reason_code``.  Pending counts come from a read-only peek that never raises.
+    ``write_state`` distinguishes a pre-write refusal (``none``) from a confirmed
+    partial commit (``partial``) and from unverified progress after a failed write
+    (``unknown``); only ``unknown`` reports ``new_count: null`` because the run
+    cannot know how many entries reached the disk.
+    """
+    peek = peek_handoff_state(dd)
+    handoff = _default_handoff(dd)
+    # Peek-derived state first, so refusal-specific details (e.g. the exact
+    # pending_count of handoff_pending) can override it.
+    handoff.update(state=peek["state"], pending_count=peek["pending_count"])
+    handoff.update({key: value for key, value in (details or {}).items() if key != "state"})
+    handoff["state"] = state if state in HANDOFF_STATES else peek["state"]
+    envelope: dict[str, Any] = {
+        "ok": False,
+        "mode": "sync_sent",
+        "folder": folder,
+        "message": message,
+        "reason_code": reason_code,
+        "write_state": write_state if write_state in WRITE_STATES else "unknown",
+        "new_count": new_count,
+        "new_items": list(new_items or []),
+        "new_entries_indexed": new_count,
+        "handoff": handoff,
+        "sent_index_file": str(dd / "sent-index.jsonl"),
+    }
+    if new_count is None:
+        envelope["new_items_unavailable"] = True
+    return envelope
+
+
+def _positive_count(config: Mapping[str, Any]) -> int:
+    """Read the run count, rejecting non-integer and non-positive manifests."""
+    raw = config.get("count", 150)
+    if isinstance(raw, bool) or isinstance(raw, float):
+        raise ValueError("count must be a positive integer")
+    count = int(raw)
+    if count < 1:
+        raise ValueError("count must be a positive integer")
+    return count
+
+
 def run_sync_sent_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -66,17 +147,35 @@ def run_sync_sent_mode(
 ) -> dict[str, Any]:
     """Fetch recent Sent Items, hand off the new ones and index them into sent-index.jsonl.
 
-    A refused handoff (``handoff_pending``/``handoff_invalid``) or a partial date
-    failure is returned as ``ok: False`` so the runner exits non-zero; the former
-    wrote nothing, the latter committed (handed off + indexed) the successful dates.
+    A refused handoff (``handoff_pending``/``handoff_invalid``/``handoff_overflow``),
+    an invalid manifest (``sync_invalid_count``) or a partial date failure is
+    returned as ``ok: False`` so the runner exits non-zero; the former wrote
+    nothing, the latter committed (handed off + indexed) the successful dates.
+    An unexpected failure during the write path is ``sync_failed`` with
+    ``write_state: unknown``: the handoff may already be persisted and the index
+    may have grown, so the envelope never claims that nothing was written.
     """
     resolve_data = _dependency(dependencies, "resolve_data_dir", resolve_data_dir)
     sync_items = _dependency(dependencies, "sync_sent_items", sync_sent_items)
 
     dd = data_dir or resolve_data()
     workspace_root = dd.parent.parent
-    count = int(config.get("count", 150))
-    folder = config.get("folder", "Sent Items")
+    raw_folder = config.get("folder", "Sent Items")
+    folder = raw_folder if isinstance(raw_folder, str) else "Sent Items"
+
+    try:
+        count = _positive_count(config)
+    except (TypeError, ValueError) as error:
+        return failure_envelope(
+            dd,
+            folder,
+            (
+                "Sent sync refused: configuration field 'count' is not a positive integer "
+                f"({type(error).__name__}: {error}). Nothing was read or written."
+            )[:1000],
+            "sync_invalid_count",
+            details={"error_type": type(error).__name__, "invalid_field": "count"},
+        )
 
     try:
         sync_result = sync_items(
@@ -87,21 +186,51 @@ def run_sync_sent_mode(
             workspace_root=workspace_root,
         )
     except SentHandoffError as error:
-        return _failure_envelope(dd, folder, str(error), error.reason_code, state=error.details.get("state"), details=error.details)
+        return failure_envelope(
+            dd,
+            folder,
+            str(error),
+            error.reason_code,
+            state=error.details.get("state"),
+            write_state="none",
+            details={key: value for key, value in error.details.items() if key != "state"},
+        )
     except SentSyncPartialFailure as error:
         partial = _success_envelope(error.result, folder, dd)
+        # The commit path finished for the successful windows; the reported counts
+        # are exactly those confirmed results (never "nothing was written").
         partial.update(
             ok=False,
             message=str(error),
             reason_code="sync_partial_failure",
+            write_state="partial" if partial["new_count"] else "none",
             failed_dates=list(error.failed_dates),
         )
         return partial
+    except SentIndexAppendError as error:
+        # The handoff is durable, but the index may be empty, partially written or
+        # complete: report unverified progress instead of claiming zero entries.
+        return failure_envelope(
+            dd,
+            folder,
+            str(error)[:1000],
+            "sync_failed",
+            write_state="unknown",
+            details={
+                "error_type": type(error.__cause__).__name__ if error.__cause__ else type(error).__name__,
+                "append_failed": True,
+            },
+            new_count=None,
+        )
     except Exception as error:  # noqa: BLE001 - every failed sync stays a failed, shaped envelope
-        # Read/transport/append failures (including those after the handoff was
-        # persisted) are never reported as success and never lose the shape.
-        return _failure_envelope(
-            dd, folder, f"Sent sync failed: {type(error).__name__}: {error}"[:1000], "sync_failed",
+        # Everything else failed before the commit path wrote anything (the append is
+        # the only write after the handoff and is reported as ``unknown`` above).
+        return failure_envelope(
+            dd,
+            folder,
+            f"Sent sync failed: {type(error).__name__}: {error}"[:1000],
+            "sync_failed",
+            write_state="none",
             details={"error_type": type(error).__name__},
         )
 
@@ -110,8 +239,12 @@ def run_sync_sent_mode(
 
     # Legacy dependency contract: an injected ``(total_examined, added)`` tuple
     # keeps the historical envelope shape (batch-runner compatibility facades) and
-    # additionally reports the always-present new_count/new_items (items unknown).
+    # additionally reports the always-present new_count/new_items/handoff (items
+    # unknown, the handoff state is read-only peeked).
     total_examined, added = sync_result
+    peek = peek_handoff_state(dd)
+    handoff = _default_handoff(dd)
+    handoff.update(state=peek["state"], pending_count=peek["pending_count"])
     return {
         "ok": True,
         "mode": "sync_sent",
@@ -121,38 +254,6 @@ def run_sync_sent_mode(
         "new_count": int(added or 0),
         "new_items": [],
         "new_items_unavailable": True,
-        "sent_index_file": str(dd / "sent-index.jsonl"),
-    }
-
-
-def _failure_envelope(
-    dd: Path,
-    folder: str,
-    message: str,
-    reason_code: str,
-    *,
-    state: str | None = None,
-    details: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """``ok: false`` result that always carries ``new_count``/``new_items``/``handoff``.
-
-    ``handoff.state`` is one of ``none|written|pending|invalid``; the refusal itself
-    is ``reason_code``.  Pending counts come from a read-only peek that never raises.
-    """
-    peek = peek_handoff_state(dd)
-    handoff = {key: value for key, value in (details or {}).items() if key != "state"}
-    handoff.setdefault("pending_count", peek["pending_count"])
-    handoff["state"] = state if state in HANDOFF_STATES else peek["state"]
-    handoff["file"] = str(dd / HANDOFF_FILENAME)
-    return {
-        "ok": False,
-        "mode": "sync_sent",
-        "folder": folder,
-        "message": message,
-        "reason_code": reason_code,
-        "new_count": 0,
-        "new_items": [],
-        "new_entries_indexed": 0,
         "handoff": handoff,
         "sent_index_file": str(dd / "sent-index.jsonl"),
     }

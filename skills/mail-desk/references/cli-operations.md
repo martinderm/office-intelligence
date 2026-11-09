@@ -123,10 +123,13 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
    `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
-   Fail-closed-Codes `handoff_pending`/`handoff_invalid`:
+   Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
+   `ledger_invalid`/`handoff_overflow`/`sync_partial_failure`/`sync_failed`, `write_state`
+   `none`/`partial`/`unknown`:
    [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
-   Der Summary-Envelope nennt `new_count`, `reason_code` und `handoff` (nur Zähler);
-   die Items stehen im persistierten Runner-Envelope und im Handoff.
+   Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state` und `handoff` (nur Zähler);
+   die Items stehen im persistierten Runner-Envelope und im Handoff. Bei `write_state: unknown`
+   fehlt `new_count` (nicht verifiziert).
    Es führt keine Send-/APPEND-Aktion aus.
    Vor jeglicher Wrapper-Persistenz oder Pruning wird der eigene Workspace-Lock
    mit dem bestehenden shared Guard geprüft, ohne Legacy-Bypass. Dafür dienen

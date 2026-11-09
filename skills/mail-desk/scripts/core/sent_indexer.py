@@ -15,6 +15,7 @@ from .sent_handoff import (
     HANDOFF_FILENAME,
     MAX_HANDOFF_ITEMS,
     SentHandoffError,
+    SentIndexAppendError,
     SentSyncPartialFailure,
     build_handoff_item,
     durable_append_jsonl,
@@ -164,11 +165,6 @@ def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
     return (parsed is None, parsed or datetime.min, int(eid) if eid.isdigit() else -1, eid)
 
 
-def _day(value: datetime | None, fallback: datetime) -> datetime:
-    base = value or fallback
-    return datetime(base.year, base.month, base.day)
-
-
 def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, account: str | None) -> dict[str, Any]:
     """Hand off, then index, the newly detected Sent Items (in that order).
 
@@ -186,9 +182,9 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
 
     Fail-closed before any write (``SentHandoffError``): invalid handoff or ledger,
     pending items of another mailbox, pending items plus further new items
-    (``handoff_pending``), and an overflow whose surplus a later run could not reach
-    (``handoff_overflow``).  A reachable surplus beyond ``MAX_HANDOFF_ITEMS`` is
-    *deferred* (neither handed off nor indexed, oldest first kept) and reported.
+    (``handoff_pending``), and more new items than one handoff may hold
+    (``handoff_overflow``).  No reachability is assumed: an overflow is refused as a
+    whole before any write, so no surplus can silently fall out of a later window.
     """
     ledger = load_ledger(dd)
     consumed = ledger["by_message_id"]
@@ -226,48 +222,28 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             },
         )
 
-    cutoff = len(ordered)
-    seen_extra = 0
-    for position, candidate in enumerate(ordered):
-        cid = norm_id(candidate["entry"].get("message_id"))
-        if cid in consumed or cid in pending_ids:
-            continue
-        seen_extra += 1
-        if seen_extra > MAX_HANDOFF_ITEMS:
-            cutoff = position
-            break
-    committed, deferred = ordered[:cutoff], ordered[cutoff:]
-
-    if deferred:
-        # A deferral is only lossless if the next watermark-derived run (window start =
-        # newest indexed day, capped at MAX_SYNC_WINDOW_DAYS) still covers every
-        # deferred item.  Otherwise refuse before any write.
-        today = _day(datetime.now(), datetime.now())
-        watermark = _sent_index_watermark(dd)
-        parse = lambda c: parse_date_to_datetime(str(c["entry"].get("at", "")))  # noqa: E731
-        reached = max(
-            [_day(parse(c), today) for c in committed] + ([_day(watermark, today)] if watermark else [])
+    # No reachability guess: more new items than one handoff may hold is always
+    # refused before any write, so a surplus can never fall out of a later window.
+    if len(extra) > MAX_HANDOFF_ITEMS:
+        per_day: dict[str, int] = {}
+        for candidate in extra:
+            parsed = parse_date_to_datetime(str(candidate["entry"].get("at", "")))
+            day = parsed.strftime("%Y-%m-%d") if parsed else "unparsed"
+            per_day[day] = per_day.get(day, 0) + 1
+        raise SentHandoffError(
+            "handoff_overflow",
+            f"{len(extra)} new Sent Items exceed one handoff ({MAX_HANDOFF_ITEMS}); nothing was handed "
+            "off or indexed. Sync a narrower explicit date range (oldest days first) and consume the "
+            "handoff in between.",
+            {
+                "candidate_count": len(extra),
+                "max_items": MAX_HANDOFF_ITEMS,
+                "candidates_per_day": dict(sorted(per_day.items())[:60]),
+                "state": state_before,
+            },
         )
-        first_deferred = min(_day(parse(c), today) for c in deferred)
-        if first_deferred < reached or first_deferred < today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1):
-            per_day: dict[str, int] = {}
-            for c in extra:
-                day = _day(parse(c), today).strftime("%Y-%m-%d")
-                per_day[day] = per_day.get(day, 0) + 1
-            raise SentHandoffError(
-                "handoff_overflow",
-                f"{len(extra)} new Sent Items exceed one handoff ({MAX_HANDOFF_ITEMS}) and the surplus "
-                "would not be reachable by a later run (older than the sent-index watermark or the sync "
-                "window). Nothing was handed off or indexed; sync a narrower explicit date range "
-                "(oldest days first) and consume the handoff in between.",
-                {
-                    "candidate_count": len(extra),
-                    "max_items": MAX_HANDOFF_ITEMS,
-                    "candidates_per_day": dict(sorted(per_day.items())[:60]),
-                    "state": state_before,
-                },
-            )
 
+    committed = ordered
     new_items: list[dict[str, Any]] = []
     new_handoff_items: list[dict[str, Any]] = []
     for candidate in committed:
@@ -288,10 +264,10 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
         write_handoff(dd, all_items)  # only reached with no pending item; BEFORE the index grows
     try:
         append_sent_index_entries([c["entry"] for c in committed], dd)
-    except OSError as error:
-        raise RuntimeError(
+    except Exception as error:  # noqa: BLE001 - any append failure leaves unverified progress
+        raise SentIndexAppendError(
             f"Sent-index append failed after the handoff was persisted ({type(error).__name__}: {error}); "
-            "the handoff is retained and a rerun merges idempotently by Message-ID."
+            "the handoff is retained, the index progress is unknown and a rerun merges idempotently by Message-ID."
         ) from error
 
     return {
@@ -302,7 +278,9 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             "pending_count": len(all_items),
             "consumed_ignored": consumed_ignored,
             "already_synthesized_skipped": sum(1 for item in new_items if item["already_synthesized"]),
-            "deferred_count": len(deferred),
+            # Kept for envelope compatibility: nothing is deferred any more, an
+            # overflow is refused as a whole (``handoff_overflow``).
+            "deferred_count": 0,
             "headers_incomplete_count": sum(1 for item in new_items if not item["headers_complete"]),
             "ledger_torn_tail": ledger["torn_tail"],
             "max_items": MAX_HANDOFF_ITEMS,
@@ -637,13 +615,6 @@ def sync_sent_items(
     committed = _commit_sent_candidates(dd, candidates, account=account)
     new_items = committed["new_items"]
     handoff = committed["handoff"]
-    if handoff["deferred_count"]:
-        deferral_hint = (
-            f"{handoff['deferred_count']} newer new Sent Item(s) were deferred (neither handed off nor "
-            f"indexed) because one handoff holds at most {MAX_HANDOFF_ITEMS} items; consume the handoff "
-            "and rerun sync-sent."
-        )
-        follow_up_hint = f"{follow_up_hint} {deferral_hint}" if follow_up_hint else deferral_hint
 
     result = {
         "date_windows_synced": len(query_dates),
