@@ -823,6 +823,21 @@ class MultiDateAndOverflowTests(_Base):
             sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
         self.assertEqual("sent_initial_state_invalid", malformed.exception.reason_code)
 
+    def test_initial_marker_older_than_watermark_is_not_bypassed(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        state_path.write_text(json.dumps({"schema_version": 1, "initial_start": "2026-09-20",
+                                          "covered_through": None}), encoding="utf-8")
+        seed = {"schema_version": 1, "at": "2026-09-24", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day="2026-09-20", date="Sun, 20 Sep 2026 10:00:00 +0200"))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("2026-09-20", result["coverage_start"])
+        self.assertEqual(["m1@example.test"], [i["norm_message_id"] for i in result["new_items"]])
+        self.assertEqual({"seed@example.test", "m1@example.test"}, set(self.index_ids()))
+
     def test_empty_explicit_day_rewinds_the_barrier_so_later_mail_is_seen(self) -> None:
         day = "2026-09-22"
         empty = _Mailbox()

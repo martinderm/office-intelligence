@@ -864,11 +864,14 @@ def _sync_sent_items_impl(
                 state_tracker["state_written"] = True
         if barrier is not None:
             base_start = (datetime.strptime(barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-        elif watermark is not None:
-            # Legacy/no-barrier: re-read the watermark day (new mails can arrive there).
-            base_start = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d")
         else:
-            base_start = initial_start
+            candidates: list[str] = []
+            if watermark is not None:
+                # Legacy/no-barrier: re-read the watermark day (new mails can arrive there).
+                candidates.append(datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d"))
+            if initial_start is not None:
+                candidates.append(initial_start)
+            base_start = min(candidates) if candidates else (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
         if since is not None:
             # `since` may rewind, never move forward over open coverage.
             base_start = min(base_start, str(since)[:10])
