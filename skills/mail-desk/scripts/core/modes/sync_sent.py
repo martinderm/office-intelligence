@@ -180,7 +180,8 @@ def run_sync_sent_mode(
             folder,
             (
                 "Sent sync refused: configuration field 'count' is not a positive integer "
-                f"({type(error).__name__}: {error}). Nothing was read or written."
+                f"({type(error).__name__}: {error}). Nothing was read or written. "
+                "Recovery: set count to a positive integer and rerun."
             )[:1000],
             "sync_invalid_count",
             details={"error_type": type(error).__name__, "invalid_field": "count"},
@@ -190,14 +191,16 @@ def run_sync_sent_mode(
     if since is not None:
         if not isinstance(since, str):
             return failure_envelope(
-                dd, folder, "Sent sync refused: 'since' must be an ISO date (YYYY-MM-DD).",
+                dd, folder, "Sent sync refused: 'since' must be an ISO date (YYYY-MM-DD). "
+                "Recovery: correct since or omit it and rerun.",
                 "sync_invalid_since", details={"invalid_field": "since"},
             )
         try:
             datetime.strptime(since[:10], "%Y-%m-%d")
         except ValueError:
             return failure_envelope(
-                dd, folder, "Sent sync refused: 'since' is not a valid ISO date (YYYY-MM-DD).",
+                dd, folder, "Sent sync refused: 'since' is not a valid ISO date (YYYY-MM-DD). "
+                "Recovery: correct since or omit it and rerun.",
                 "sync_invalid_since", details={"invalid_field": "since"},
             )
     raw_max_pages = config.get("max_pages", SENT_SYNC_MAX_PAGES)
@@ -209,7 +212,8 @@ def run_sync_sent_mode(
             raise ValueError("max_pages must be a positive integer")
     except (TypeError, ValueError) as error:
         return failure_envelope(
-            dd, folder, f"Sent sync refused: configuration field 'max_pages' is invalid ({error}).",
+            dd, folder, f"Sent sync refused: configuration field 'max_pages' is invalid ({error}). "
+            "Recovery: set max_pages to a positive integer and rerun.",
             "sync_invalid_max_pages", details={"invalid_field": "max_pages"},
         )
 

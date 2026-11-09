@@ -234,7 +234,8 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             "handoff_pending",
             f"Sent handoff '{HANDOFF_FILENAME}' still holds {len(pending)} unconsumed item(s); "
             f"{len(extra)} newly detected Sent Item(s) were NOT handed off and NOT indexed. "
-            "Consume the pending items (ledger) and rerun.",
+            "Recovery: read `core.sent_handoff.load_pending_handoff(data_dir)`, promote and call "
+            "`record_synthesized(data_dir, items)` for the pending items, then rerun sync-sent.",
             {
                 "pending_count": len(pending),
                 "blocked_new_count": len(extra),
