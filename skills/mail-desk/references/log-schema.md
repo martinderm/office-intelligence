@@ -326,14 +326,14 @@ per Message-ID). `partial` ist reserviert und wird nicht erzeugt. Fehler bedeute
 ### `sent-sync-state.json` (persistente Coverage-Schranke)
 
 `schema_version: 1`, `initial_start: "YYYY-MM-DD"` (Pflicht), `covered_through: "YYYY-MM-DD"|null`;
-exakt diese drei Felder. Ein Altbestand mit `initial_start:null` und `covered_through` wird **nicht** anhand
-der alten Punktabfrage-Schranke fortgesetzt: Start ist der alte Sent-Index-Wasserzeichen-Tag (oder ein älterer,
-belegbarer Legacy-Start), `covered_through` wird auf `null` gesetzt; ohne Index-Wasserzeichen ist die Migration
-fail-closed (`unsafe_null_initial_migration`). Jeder originale neue State und jeder originale Legacy-Marker wird
-**vor** Merge/Overwrite auf Future-Werte geprüft; ein älterer Merge maskiert keinen Future-Wert. Ein
-`covered_through` gleich dem eingefrorenen Laufdatum wird vor dem Read auf gestern zurückgesetzt (heute nie
-final). Future `initial_start`/`covered_through`, fehlende Felder, ungültige Kalenderdaten oder ein `since` nach
-dem eingefrorenen Laufdatum werden **vor** jedem Read/Write abgewiesen
+exakt diese drei Felder. Ein Altbestand mit `initial_start:null` und `covered_through` ist **nicht sicher
+migrierbar** (auch der Index-Wasserzeichen beweist keine lückenlose Untergrenze; historische Punktabfragen
+können Lücken lassen): fail-closed `unsafe_null_initial_migration`, nichts gelesen/geschrieben, Datei
+unangetastet. Jeder originale neue State und jeder originale Legacy-Marker wird **vor** Merge/Overwrite auf
+Future-Werte geprüft; ein älterer Merge maskiert keinen Future-Wert. Ein `covered_through` gleich dem
+eingefrorenen Laufdatum wird vor dem Read auf gestern zurückgesetzt (heute nie final). Future
+`initial_start`/`covered_through`, fehlende Felder, ungültige Kalenderdaten oder ein `since` nach dem
+eingefrorenen Laufdatum werden **vor** jedem Read/Write abgewiesen
 (`sent_initial_state_invalid`/`sync_invalid_since`/`sync_invalid_date`); ein `since` mit Zeitanteil ist ein
 Formatfehler („YYYY-MM-DD“, nicht future). Nur ein autorisierter Operator repariert oder quarantäniert die
 Datei, keine autonome Löschung/Überschreibung und kein `since`-Workaround; ein valider State ist

@@ -200,11 +200,11 @@ Punktabfragen vor. Source-Fenster statt Header-Datum bestimmt Grenzen; das Legac
 non-destruktiv migriert. `since` springt nie über offene
 Coverage; future `since`, `since` mit Zeitanteil, future `initial_start`/`covered_through`, malformed/null-both
 State werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge geprüft,
-`covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand `initial_start:null` wird nicht
-anhand der alten Punktabfrage-Schranke fortgesetzt (Start am alten Index-Wasserzeichen, Barrier null; ohne
-Wasserzeichen fail-closed); nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome
-Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync gefiltert; der Draft-Pfad schluckt
-Sync-Ausnahmen wie bisher. In
+`covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand `initial_start:null` mit
+`covered_through` ist nicht sicher migrierbar und fail-closed (`unsafe_null_initial_migration`; Wasserzeichen
+beweist keine lückenlose Untergrenze); nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine
+autonome Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten
+akzeptiert (kein Fallback 2026-01-01); der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,

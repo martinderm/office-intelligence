@@ -2380,15 +2380,16 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   bzw. jeder Rückspulung **vor** Handoff/Index geschrieben; nach dem Append rückt sie nur über einen
   zusammenhängenden angeforderten Prefix und nie über heute/Punktabfragen vor. Ein Crash davor lässt die
   konservative Schranke stehen. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen/Recovery;
-  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert; Altbestand `initial_start:null` wird
-  **nicht** anhand der alten Punktabfrage-Schranke fortgesetzt (Start am alten Index-Wasserzeichen, Barrier
-  `null`; ohne Wasserzeichen fail-closed). Jeder originale State/Marker wird vor Merge auf Future geprüft;
-  `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Malformed/null-both/future State
-  nur autorisierte Reparatur/Quarantäne (valider Schema-JSON, konservativer verifizierter älterer Start), kein
-  `since`-Workaround; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim optionalen
-  Draft-Sent-Sync als Datumsliste gefiltert, brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt
-  Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine
-  offline nicht verifizierte Adapter-Annahme; Abweichungen bleiben fail-closed.
+  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert; Altbestand `initial_start:null` mit
+  `covered_through` ist nicht sicher migrierbar (auch der Wasserzeichen beweist keine lückenlose Untergrenze)
+  und fail-closed `unsafe_null_initial_migration`. Jeder originale State/Marker wird vor Merge auf Future
+  geprüft; `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Malformed/null/future
+  State nur autorisierte Reparatur/Quarantäne (valides Schema-JSON, konservativer verifizierter älterer Start),
+  kein `since`-Workaround; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim
+  optionalen Draft-Sent-Sync nur akzeptiert, wenn sie als echtes ISO-/RFC-2822-Datum parsebar sind (kein
+  Fallback 2026-01-01), und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie
+  bisher (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine offline nicht verifizierte
+  Adapter-Annahme; Abweichungen bleiben fail-closed.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.

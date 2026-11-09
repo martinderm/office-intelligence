@@ -1107,23 +1107,38 @@ class MultiDateAndOverflowTests(_Base):
                 )
         self.assertEqual(0, mailbox.calls)
 
-    def test_null_initial_migration_does_not_trust_an_old_barrier(self) -> None:
-        seed = {"schema_version": 1, "at": "2025-12-01", "message_id": "<seed@example.test>",
-                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
-        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
-        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
-            "schema_version": 1, "initial_start": None, "covered_through": "2026-01-02",
-        }), encoding="utf-8")
-        mailbox = _Mailbox(_details(1, _day="2025-12-15", date="Mon, 15 Dec 2025 10:00:00 +0100"))
-        mailbox.fail_dates = {"2025-12-10"}
+    def test_null_initial_state_fails_closed_across_entry_points_and_retries(self) -> None:
+        seeds = [
+            {"schema_version": 1, "at": "2025-12-01", "message_id": "<old@example.test>",
+             "sent_envelope_id": "800", "subject": "old", "to": [], "references": []},
+            {"schema_version": 1, "at": "2026-01-04", "message_id": "<new@example.test>",
+             "sent_envelope_id": "900", "subject": "new", "to": [], "references": []},
+        ]
+        (self.dd / "sent-index.jsonl").write_text(
+            "".join(json.dumps(entry) + "\n" for entry in seeds), encoding="utf-8",
+        )
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        before = json.dumps({"schema_version": 1, "initial_start": None,
+                             "covered_through": "2026-01-02"})
+        state_path.write_text(before, encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day="2026-01-03", date="Sat, 03 Jan 2026 10:00:00 +0100"))
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 1, 10))):
-            with self.assertRaises(SentSyncPartialFailure):
-                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
-        state = sent_indexer._read_sync_state(self.dd)
-        self.assertEqual("2025-12-01", state["initial_start"])  # start at old watermark, not barrier
-        self.assertIsNone(state["covered_through"])  # old point-query barrier not trusted
-        self.assertEqual(["seed@example.test"], self.index_ids())
+            for attempt in range(2):  # crash/retry: same refusal, no state/index/read changes
+                with self.subTest(attempt=attempt):
+                    with self.assertRaises(SentHandoffError) as caught:
+                        sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+                    self.assertEqual("sent_initial_state_invalid", caught.exception.reason_code)
+                    self.assertEqual("unsafe_null_initial_migration", caught.exception.details["reason"])
+                    self.assertEqual(before, state_path.read_text(encoding="utf-8"))
+            with self.assertRaises(SentHandoffError):
+                sent_indexer.sync_sent_items_by_dates_report(
+                    [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+                )
+            with self.assertRaises(SentHandoffError):
+                sent_indexer.sync_sent_items_by_date(DAY, account="ACC", data_dir=self.dd)
+        self.assertEqual(0, mailbox.calls)
+        self.assertEqual(["old@example.test", "new@example.test"], self.index_ids())
 
     def test_null_initial_without_index_watermark_fails_closed(self) -> None:
         state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
@@ -1191,19 +1206,39 @@ class MultiDateAndOverflowTests(_Base):
         self.assertNotIn("future", str(caught.exception).lower())
         self.assertEqual(0, mailbox.calls)
 
+    def test_filtered_batch_dates_drive_a_sent_sync(self) -> None:
+        dates = classifier._sent_sync_batch_dates([
+            {"date": "not a date"}, {"date": "Thu, 24 Sep 2026 10:00:00 +0200"},
+        ])
+        self.assertEqual(["2026-09-24"], dates)
+        mailbox = _Mailbox(_details(1, _day="2026-09-24", date="Thu, 24 Sep 2026 10:00:00 +0200"))
+        run, read = mailbox.patches()
+        with run, read:
+            result = sent_indexer.sync_sent_items(dates=dates, account="ACC", data_dir=self.dd)
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual(["m1@example.test"], self.index_ids())
+
     def test_invalid_header_date_does_not_abort_a_complete_sync(self) -> None:
         mailbox = _Mailbox(_details(1, date="garbage-date"))
         result = self.sync(mailbox)
         self.assertEqual(1, result["new_count"])
         self.assertEqual(["m1@example.test"], self.index_ids())
 
-    def test_draft_sent_sync_dates_filter_invalid_calendar_headers(self) -> None:
+    def test_draft_sent_sync_dates_filter_unparseable_and_fallback_dates(self) -> None:
         emails = [
+            {"date": "not a date"},
+            {"date": "N/A"},
+            {"date": "15 Foo 2026"},
             {"date": "2026-13-40"},
+            {"date": "2026-01-01"},
+            {"date": "Thu, 15 Jan 2026 13:11:40 +0000"},
             {"date": "Thu, 24 Sep 2026 10:00:00 +0200"},
             {"date": ""},
         ]
-        self.assertEqual(["2026-09-24"], classifier._sent_sync_batch_dates(emails))
+        self.assertEqual(
+            ["2026-01-01", "2026-01-15", "2026-09-24"],
+            classifier._sent_sync_batch_dates(emails),
+        )
 
     def test_bounded_batch_still_commits_the_oldest_and_defers_the_rest(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",

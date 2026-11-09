@@ -899,23 +899,20 @@ def _load_or_migrate_state(
             )
     changed = False
     if initial is None and barrier is not None:
-        # Never trust an old point-query barrier.  Restart coverage at the old index
-        # watermark (or older legacy start), with no covered_through, so no day between
-        # watermark and the claimed barrier is skipped.
-        watermark = _sent_index_watermark(data_dir)
-        if watermark is None:
-            raise SentHandoffError(
-                "sent_initial_state_invalid",
-                "Legacy coverage state has initial_start:null and covered_through without any "
-                "sent-index watermark to prove a safe start; nothing was read or written. Recovery: "
-                "an authorized operator restores a valid state with a conservative older initial_start "
-                "or quarantines the file; no autonomous deletion, no invented coverage, no since= "
-                "workaround.",
-                {"reason": "unsafe_null_initial_migration"},
-            )
-        initial = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d")
-        barrier = None
-        changed = True
+        # A historical point-query barrier is NOT proof of a safe lower bound: newer
+        # index entries can sit above an uncovered gap.  Without an independently
+        # proven boundary no migration is safe.
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            "Coverage state has initial_start:null with covered_through; the old barrier is "
+            "not proof of contiguous coverage (historical point queries can leave gaps), so no "
+            "safe migration is possible and nothing was read or written. A valid state is "
+            '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null|"YYYY-MM-DD"} '
+            "with a verified conservative initial_start. Recovery: an authorized operator restores "
+            "such a state from a verified older boundary or quarantines the file; no autonomous "
+            "deletion/overwrite, no invented coverage and no since= workaround.",
+            {"reason": "unsafe_null_initial_migration"},
+        )
     if barrier is not None and barrier >= run_day:
         # The frozen run day is never final; re-read it instead of skipping it.
         barrier = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")

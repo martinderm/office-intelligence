@@ -99,15 +99,15 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 - State-`initial_start`/`covered_through` werden gegen das eingefrorene Laufdatum geprüft; future Werte,
   malformed/null-both State und future `since`/`since` mit Zeitanteil fail-closed vor Read/Write. Altbestand
-  `initial_start:null` vertraut der alten Punktabfrage-Schranke nicht: Start am alten Index-Wasserzeichen,
-  `covered_through:null` (ohne Wasserzeichen fail-closed); jeder originale State/Marker wird vor Merge auf
-  Future geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Nur autorisierte
-  Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung.
+  `initial_start:null` mit `covered_through` ist nicht sicher migrierbar (auch der Wasserzeichen beweist keine
+  lückenlose Untergrenze) und fail-closed; jeder originale State/Marker wird vor Merge auf Future geprüft,
+  `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne
+  mit validem Schema-JSON, keine autonome Löschung.
 - Validierungsfehler setzen keinen synthetischen Handoff-State mehr; der echte Peek-Zustand/pending_count bleibt.
 - Count-Break rückt nur tatsächlich akzeptierte Tage vor; ungültige Kalenderdaten und Account-Bindung werden vor
-  State-Writes geprüft. Ungültige Header werden beim optionalen Draft-Sent-Sync als Datumsliste gefiltert und
-  brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik
-  unverändert).
+  State-Writes geprüft. Der optionale Draft-Sent-Sync akzeptiert nur echt parsebare ISO-/RFC-2822-Header (kein
+  Fallback 2026-01-01 bei „not a date“/unbekanntem Monat) und bricht keinen vollständigen Sync ab; der
+  Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert).
 
 
 

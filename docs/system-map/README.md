@@ -683,11 +683,12 @@ Prefix und nie über heute/Punktabfragen vor; `since` springt nie über offene C
 wird non-destruktiv migriert. Future `initial_start`/`covered_through`, malformed/null-both State, future `since`
 und `since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
 geprüft, `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Altbestand
-`initial_start:null` wird nicht anhand der alten Punktabfrage-Schranke fortgesetzt (Start am alten
-Index-Wasserzeichen, Barrier null; ohne Wasserzeichen fail-closed); nur autorisierte Reparatur/Quarantäne mit
-validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync gefiltert
-und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster
-statt Header-Datum bestimmt Grenzen/Recovery. Nur der
+`initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
+(`unsafe_null_initial_migration`, Wasserzeichen beweist keine lückenlose Untergrenze); nur autorisierte
+Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
+Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen
+vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster statt Header-Datum
+bestimmt Grenzen/Recovery. Nur der
 klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
 Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahme**, sonst fail-closed. Doppelte
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag

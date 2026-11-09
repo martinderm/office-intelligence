@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
@@ -906,12 +907,18 @@ def _sent_sync_batch_dates(emails: list[dict[str, Any]]) -> list[str]:
         raw = email.get("date")
         if not raw:
             continue
-        _, ymd = parse_date_to_year_month(str(raw))
+        text = str(raw).strip()
+        parsed: datetime | None = None
         try:
-            datetime.strptime(ymd, "%Y-%m-%d")
-        except ValueError:
+            if len(text) == 10:
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+            else:
+                parsed = parsedate_to_datetime(text)
+        except (TypeError, ValueError, OverflowError):
             continue
-        dates.append(ymd)
+        if parsed is None:
+            continue
+        dates.append(parsed.date().isoformat())
     return dates
 
 
