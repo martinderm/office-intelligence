@@ -156,7 +156,10 @@ class DocumentationContractTests(unittest.TestCase):
         readme = self.text("L2 README")
         self.assertNotIn("ungestagten", readme)
         self.assertNotIn("mit ungestagten Änderungen", readme)
-        self.assertIn("c6b8d2e", readme)
+        self.assertIn("f3256dd", readme)
+        self.assertIn("353 Dateien", readme)
+        self.assertIn("216 unter", readme)
+        self.assertIn("112 Testmodule", readme)
 
     def test_the_manifest_schema_in_the_docs_names_account(self) -> None:  # D1 (finding 4)
         for name in ("cli-operations", "SKILL", "L2 README"):
