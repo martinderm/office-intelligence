@@ -58,8 +58,10 @@ class _Mailbox:
     def __init__(self, *details: dict) -> None:
         self.details = {str(100 + i): d for i, d in enumerate(details, start=1)}
         self.fail_dates: set[str] = set()
+        self.calls = 0
 
     def run(self, args, account=None, timeout=30, max_retries=5):
+        self.calls += 1
         date = next(a[len("date "):] for a in args if a.startswith("date "))
         if date in self.fail_dates:
             raise RuntimeError("himalaya timeout")
@@ -484,10 +486,9 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual(["m1@example.test", "m2@example.test"], self.handoff_ids())
         self.assertEqual(["m1@example.test", "m2@example.test"], self.index_ids())
 
-    def test_failing_date_does_not_leak_known_ids_into_later_windows(self) -> None:
-        # DAY: A reads fine, B's detail read fails. The next window serves A again
-        # (different envelope, same Message-ID): it must not be skipped because the
-        # failed window already marked A as known.
+    def test_failing_window_aborts_before_any_write_and_rerun_recovers(self) -> None:
+        # DAY: A reads fine, B's detail read fails; a later window serves A again.
+        # Fail-closed: no partial commit, no ID leak; the rerun sees both mails.
         mailbox = _Mailbox(_details(1), _details(2))
         mailbox.details["102"]["_raise"] = "detail read failed"
         mailbox.details["201"] = _details(
@@ -498,11 +499,16 @@ class MultiDateAndOverflowTests(_Base):
             sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
 
         self.assertEqual([DAY], caught.exception.failed_dates)
-        result = caught.exception.result
-        self.assertEqual(1, result["new_count"])
-        self.assertEqual(["m1@example.test"], [i["norm_message_id"] for i in result["new_items"]])
-        self.assertEqual(["m1@example.test"], self.handoff_ids())
-        self.assertEqual(["m1@example.test"], self.index_ids())
+        self.assertEqual(0, caught.exception.result["new_count"])
+        self.assertEqual([], caught.exception.result["new_items"])
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+        mailbox.details["102"].pop("_raise")  # window fixed
+        rerun = self.sync(mailbox)
+        self.assertEqual(2, rerun["new_count"])
+        self.assertEqual(["m1@example.test", "m2@example.test"], self.index_ids())
+        self.assertEqual(["m1@example.test", "m2@example.test"], self.handoff_ids())
 
     def test_sync_by_dates_failing_day_writes_nothing(self) -> None:
         mailbox = _Mailbox(_details(1))
@@ -559,6 +565,43 @@ class MultiDateAndOverflowTests(_Base):
                 self.sync(mailbox)
         self.assertEqual("handoff_overflow", caught.exception.reason_code)
         self.assertEqual([], self.index_ids())
+
+
+class WindowTruncationTests(_Base):
+    def test_full_envelope_page_is_refused_before_any_write(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 101)))  # exactly one full page
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+
+        self.assertEqual("sent_window_truncated", caught.exception.reason_code)
+        self.assertEqual((DAY, 100, 100), (
+            caught.exception.details["date"],
+            caught.exception.details["page_size"],
+            caught.exception.details["envelopes_examined"],
+        ))
+        self.assertEqual("none", caught.exception.details["state"])
+        self.assertEqual(1, mailbox.calls)  # no pagination loop, one fail-closed page
+        self.assertEqual([], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+    def test_more_than_one_page_is_refused_instead_of_silently_returning_100(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 102)))  # 101 mails
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.sync_sent_items_by_dates([DAY], account="ACC", data_dir=self.dd, include_next_day=False)
+
+        self.assertEqual("sent_window_truncated", caught.exception.reason_code)
+        self.assertEqual(101, caught.exception.details["envelopes_examined"])
+        self.assertEqual(1, mailbox.calls)
+        self.assertEqual([], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+    def test_just_below_the_page_limit_still_syncs(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 100)))  # 99 mails
+        result = self.sync(mailbox)
+        self.assertEqual(99, result["new_count"])
+        self.assertEqual(99, len(self.index_ids()))
 
 
 class PendingWriteContractTests(_Base):
@@ -625,6 +668,10 @@ class HandoffValidationTests(_Base):
             "anchored_to", {"vorgang_ref": "V-1", "matched_message_id": "m@example.test", "match_type": []}
         ),
         "duplicate": lambda d: (d["items"].append(dict(d["items"][0])), d.__setitem__("count", 2)),
+        "schema_version_float": lambda d: d.__setitem__("schema_version", 1.0),
+        "schema_version_bool": lambda d: d.__setitem__("schema_version", True),
+        "count_float": lambda d: d.__setitem__("count", float(d["count"])),
+        "count_bool": lambda d: d.__setitem__("count", True),
         "generated_at": lambda d: d.__setitem__("generated_at", "yesterday"),
     }
 
@@ -722,6 +769,23 @@ class HandoffValidationTests(_Base):
                 with self.assertRaises(SentHandoffError):
                     sent_handoff.load_pending_handoff(self.dd)
 
+    def test_deeply_nested_json_is_handoff_invalid_not_recursion_error(self) -> None:
+        deep = "[" * 10000 + "]" * 10000
+        path = self.dd / HANDOFF_FILENAME
+        path.write_text(
+            '{"schema_version":1,"kind":"mail-desk.new-sent-items",'
+            '"generated_at":"2026-11-09T09:00:00Z","max_items":200,"count":0,"items":[],"deep":'
+            + deep + "}",
+            encoding="utf-8",
+        )
+        before = path.read_bytes()
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.read_handoff(self.dd)
+        self.assertEqual(("handoff_invalid", "json_too_deep"), (
+            caught.exception.reason_code, caught.exception.details["reason"],
+        ))
+        self.assertEqual(before, path.read_bytes())
+
     def test_every_inconsistency_is_refused_untouched_and_nothing_is_indexed(self) -> None:
         self.sync(_Mailbox(_details(1)))
         path = self.dd / HANDOFF_FILENAME
@@ -753,6 +817,8 @@ class LedgerValidationTests(_Base):
         "primary_with_anchor": _ledger_line(anchored_to="a@example.test"),
         "bad_timestamp": _ledger_line(recorded_at="soon"),
         "bad_schema": _ledger_line(schema_version=2),
+        "schema_float": _ledger_line(schema_version=1.0),
+        "schema_bool": _ledger_line(schema_version=True),
         "vorgang_ref_type": _ledger_line(vorgang_ref=7),
         "missing_required": {k: v for k, v in _ledger_line().items() if k != "recorded_at"},
     }
@@ -773,6 +839,15 @@ class LedgerValidationTests(_Base):
                     sent_handoff.record_synthesized(self.dd, [{"message_id": "<n@example.test>"}])
                 self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
                 self.assertEqual([], self.index_ids())
+
+    def test_deeply_nested_ledger_line_is_ledger_invalid_not_recursion_error(self) -> None:
+        deep = '{"deep":' + "[" * 10000 + "]" * 10000 + "}"
+        self.write_ledger(deep)
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.load_ledger(self.dd)
+        self.assertEqual(("ledger_invalid", [1]), (
+            caught.exception.reason_code, caught.exception.details["invalid_lines"],
+        ))
 
     def test_garbage_middle_line_fails_closed_and_minimal_valid_line_passes(self) -> None:
         valid = json.dumps(_ledger_line())
@@ -1006,27 +1081,31 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual("none", envelope["data"]["handoff"]["state"])
         self.assertIn("backend_binding", envelope["data"])
 
-    def test_partial_date_failure_commits_successes_and_fails(self) -> None:
+    def test_failed_date_window_is_fail_closed_and_reports_failed_dates(self) -> None:
         mailbox = _Mailbox(_details(1))
         mailbox.fail_dates = {"2026-09-25"}
         envelope = self.run_mode(mailbox)
         self.assertFalse(envelope["ok"])
-        self.assertEqual("sync_partial_failure", envelope["reason_code"])
-        self.assertEqual("partial", envelope["write_state"])
+        self.assertEqual("sync_window_failed", envelope["reason_code"])
+        self.assertEqual("none", envelope["write_state"])
         self.assertEqual(["2026-09-25"], envelope["failed_dates"])
-        self.assertEqual(1, envelope["new_count"])
-        self.assertEqual(["m1@example.test"], self.handoff_ids())
+        self.assertEqual((0, []), (envelope["new_count"], envelope["new_items"]))
+        self.assertEqual("none", envelope["handoff"]["state"])
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
 
-        run, read = mailbox.patches()
-        with run, read, self.assertRaises(SentSyncPartialFailure):
-            sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+        mailbox.fail_dates = set()  # window fixed: retry writes both days once
+        retry = self.run_mode(mailbox)
+        self.assertTrue(retry["ok"])
+        self.assertEqual(1, retry["new_count"])
+        self.assertEqual(["m1@example.test"], self.index_ids())
 
     def test_all_dates_failing_reports_no_writes(self) -> None:
         mailbox = _Mailbox(_details(1))
         mailbox.fail_dates = {DAY, "2026-09-25"}
         envelope = self.run_mode(mailbox)
         self.assertFalse(envelope["ok"])
-        self.assertEqual(("sync_partial_failure", "none", 0), (
+        self.assertEqual(("sync_window_failed", "none", 0), (
             envelope["reason_code"], envelope["write_state"], envelope["new_count"],
         ))
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())

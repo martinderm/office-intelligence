@@ -185,11 +185,13 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 übernommen hat; ein inkonsistenter oder übergroßer Handoff oder ein schemaverletzendes Ledger ergibt
 `handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden vollständig vor jedem Write verweigert
-(`handoff_overflow`, kein Zurückstellen); Recovery nur über die Python-API
-`sync_sent_items(dates=[...])` (älteste Tage zuerst), nicht über `--sync-sent N`/`count`, das bei heute endet
-und ältere Tage überspringt. In
-Fehler-Envelopes unterscheidet `write_state` `none`/`partial`/`unknown`; bei `unknown` (Schreibfehler) ist
-`new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
+(`handoff_overflow`, kein Zurückstellen); Recovery eines Tages nur über
+`sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest;
+kein `--sync-sent N`/`count`, das bei heute endet). Eine volle 100-Envelope-Seite verweigert
+(`sent_window_truncated`); ein scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab
+(`sync_window_failed`, `failed_dates`). In
+Fehler-Envelopes unterscheidet `write_state` `none`/`unknown` (`partial` reserviert); bei `unknown`
+(Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,
 Vorfahren zuerst) und schreibt über `record_synthesized`. Die Synthese selbst und das
 Ledger-Schreiben gehören der Consumer-Pipeline, nicht dem Bundle.

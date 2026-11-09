@@ -275,15 +275,15 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
   Feldlängen), ungültiges Ledger (`ledger_invalid`) und mehr als 200 neue Items (`handoff_overflow`) stoppen vor
   jedem Write, Exit ≠ 0. Jede andere Störung wird `sync_failed`. `write_state` unterscheidet wahrheitsgemäß:
-  `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen Datumsfenster) und `unknown`
-  (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer Publikation; Plattenstand unverifiziert;
-  `new_count: null`). Alle Fehler-Envelopes tragen `new_items`,
-  `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler; teilweise gescheiterte
-  Datumsfenster committen die erfolgreichen und melden `sync_partial_failure`. Nichts wird still verworfen:
-  ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen); Recovery ausschließlich über die
-  Python-API `sync_sent_items(dates=[...])` (älteste Tage zuerst), nicht über `--sync-sent N`/`count`; ein
-  Überhang am selben Tag ist nicht per Datumsbereich teilbar. Gekürzte Felder stehen in `truncated_fields` und
-  werden beim Lesen gegen dieselben Grenzen validiert.
+  `none` (kein Write) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer Publikation;
+  Plattenstand unverifiziert; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
+  `new_items`, `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler. Ein
+  scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`);
+  eine volle 100-Envelope-Seite ebenso (`sent_window_truncated`, keine Pagination). Nichts wird still verworfen:
+  ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen); Recovery eines Tages nur über
+  `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest),
+  nicht über `--sync-sent N`/`count`; same-day > 200 und eine volle Seite sind harte Grenzen. Gekürzte Felder
+  stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
 * **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
   sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
 * **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion

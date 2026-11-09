@@ -85,9 +85,11 @@ class SentHandoffError(RuntimeError):
 
 
 class SentSyncPartialFailure(RuntimeError):
-    """Some date windows failed; the successful windows were handed off and indexed.
+    """Some date windows failed; the run is fail-closed and wrote nothing.
 
-    ``result`` is the regular ``sync_sent_items`` result of the committed part.
+    ``result`` describes the attempted windows with zero new entries; ``failed_dates``
+    names every failing window.  Resolve them and rerun (a newer watermark must never
+    jump over an older failed window).
     """
 
     def __init__(self, message: str, result: dict[str, Any], failed_dates: list[str]) -> None:
@@ -243,7 +245,7 @@ def parse_json_object(raw: bytes) -> dict[str, Any] | None:
     """Strict UTF-8 + JSON object parse of one line; ``None`` when not a valid object."""
     try:
         value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -344,7 +346,7 @@ def _ledger_problem(record: dict[str, Any]) -> str | None:
     for name in _LEDGER_REQUIRED:
         if name not in record:
             return f"missing_field:{name}"
-    if record["schema_version"] != LEDGER_SCHEMA_VERSION or isinstance(record["schema_version"], bool):
+    if type(record["schema_version"]) is not int or record["schema_version"] != LEDGER_SCHEMA_VERSION:
         return "unsupported_schema_version"
     message_id = record["message_id"]
     if not isinstance(message_id, str) or not message_id or message_id != norm_id(message_id):
@@ -601,9 +603,13 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
 
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise invalid(type(error).__name__) from error
-    if not isinstance(document, dict) or document.get("schema_version") != HANDOFF_SCHEMA_VERSION:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        raise invalid("json_too_deep" if isinstance(error, RecursionError) else type(error).__name__) from error
+    if (
+        not isinstance(document, dict)
+        or type(document.get("schema_version")) is not int
+        or document.get("schema_version") != HANDOFF_SCHEMA_VERSION
+    ):
         raise invalid("unsupported_schema")
     if document.get("kind") != HANDOFF_KIND or not _iso_timestamp_ok(document.get("generated_at")):
         raise invalid("document_header_malformed")
@@ -618,7 +624,7 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
         raise invalid("max_items_malformed")
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise invalid("items_not_a_list_of_objects")
-    if count != len(items) or len(items) > max_items or len(items) > MAX_HANDOFF_ITEMS:
+    if type(count) is not int or count != len(items) or len(items) > max_items or len(items) > MAX_HANDOFF_ITEMS:
         raise invalid("count_or_bound_mismatch")
     seen: set[str] = set()
     for index, item in enumerate(items):

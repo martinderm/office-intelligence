@@ -371,8 +371,22 @@ def _collect_date_candidates(
         )
 
     envelopes_examined = len(envs)
-    # A full page may hide further envelopes; flag instead of silently truncating.
-    truncated = envelopes_examined >= SENT_SYNC_PAGE_SIZE
+    # A full page may hide further envelopes.  We do not paginate: refuse the run
+    # before any write instead of silently returning the first 100 of >100 mails.
+    if envelopes_examined >= SENT_SYNC_PAGE_SIZE:
+        raise SentHandoffError(
+            "sent_window_truncated",
+            f"Sent sync for {date_str} returned a full envelope page ({envelopes_examined} >= "
+            f"{SENT_SYNC_PAGE_SIZE}); more envelopes may exist. Nothing was handed off or indexed. "
+            "This sync path does not paginate; a day with a full page is a documented window limit.",
+            {
+                "date": date_str,
+                "page_size": SENT_SYNC_PAGE_SIZE,
+                "envelopes_examined": envelopes_examined,
+                "state": "none",
+            },
+        )
+    truncated = False
     stats = {"envelopes_examined": envelopes_examined, "truncated": truncated}
     unhandled_envs = [e for e in envs if str(e.get("id")) not in known_eids]
     candidates: list[dict[str, Any]] = []
@@ -622,6 +636,8 @@ def sync_sent_items(
             date_candidates, date_stats = _collect_date_candidates(
                 date_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids
             )
+        except SentHandoffError:
+            raise  # explicit fail-closed window refusal keeps its reason code
         except Exception as error:
             failures.append((date_str, error))
             continue
@@ -630,6 +646,29 @@ def sync_sent_items(
         envelopes_total += int(date_stats.get("envelopes_examined", 0))
         if date_stats.get("truncated"):
             truncated_days.append(date_str)
+
+    if failures:
+        # Fail-closed before any write: committing newer successful days would move
+        # the watermark past the failed older days and a default retry would never
+        # see them again.  Nothing is handed off or indexed.
+        failed_dates = ", ".join(date_str for date_str, _ in failures)
+        first_error = failures[0][1]
+        raise SentSyncPartialFailure(
+            f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
+            f"First error: {type(first_error).__name__}: {first_error}. "
+            "Nothing was handed off or indexed (fail-closed); resolve the failing window(s) and rerun.",
+            {
+                "date_windows_synced": len(query_dates),
+                "envelopes_examined": envelopes_total,
+                "new_entries_indexed": 0,
+                "new_count": 0,
+                "new_items": [],
+                "handoff": None,
+                "truncated_days": truncated_days,
+                "follow_up_hint": follow_up_hint,
+            },
+            [date_str for date_str, _ in failures],
+        )
 
     committed = _commit_sent_candidates(dd, candidates, account=account)
     new_items = committed["new_items"]
@@ -645,16 +684,6 @@ def sync_sent_items(
         "truncated_days": truncated_days,
         "follow_up_hint": follow_up_hint,
     }
-
-    if failures:
-        failed_dates = ", ".join(date_str for date_str, _ in failures)
-        first_error = failures[0][1]
-        raise SentSyncPartialFailure(
-            f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
-            f"First error: {type(first_error).__name__}: {first_error}",
-            result,
-            [date_str for date_str, _ in failures],
-        ) from first_error
 
     return result
 

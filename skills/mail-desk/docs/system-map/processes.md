@@ -666,7 +666,8 @@ sync-sent
   │      (ungültig ⇒ ledger_invalid/handoff_invalid; fremdes Konto ⇒ handoff_invalid; Stopp)
   │      konsumierte Items nur ableitend ignorieren, kein Write
   ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (Handoff byte-gleich, nichts indexiert)
-  ├─ 3b. Mehr als 200 neue Items?  ⇒ handoff_overflow, Stopp (nichts übergeben/indexiert; Recovery nur Python-API dates=)
+  ├─ 3b. Mehr als 200 neue Items?  ⇒ handoff_overflow, Stopp (nichts übergeben/indexiert)
+  ├─ 3c. Volle 100-Envelope-Seite oder Datumsfenster scheitert?  ⇒ sent_window_truncated/sync_window_failed, Stopp (nichts geschrieben)
   ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200)
   ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
   └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}, write_state bei ok:false
@@ -685,14 +686,15 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
 * **Fehlersemantik:** `write_state` in `ok:false`-Envelopes: `none` (Ablehnung/Fehler vor jedem Write, z. B.
   `sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`), `partial` (bestätigte Teilresultate erfolgreicher Datumsfenster bei
-  `sync_partial_failure`) oder `unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer
-  Publikation — beim Append; `new_count: null`, `new_items_unavailable: true`, Wiederholung idempotent). Kein
-  Fehler behauptet pauschal null Writes.
-* **Overflow-Recovery:** ausschließlich über die Python-API `sync_sent_items(dates=[...])` /
-  `sync_sent_items_by_dates(..., include_next_day=False)` (älteste Tage zuerst, dazwischen konsumieren).
-  `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen-Fenster endet bei heute, überspringt ältere
-  Tage; keine Datums-CLI). Same-day > 200 ist nicht per Datumsbereich teilbar; nach der Verweigerung wurde
-  nichts geschrieben, ein reiner Default-Lauf holt die alten Tage nicht nach.
+  `handoff_overflow`, `sent_window_truncated`, `sync_window_failed`) oder `unknown` (Schreibfehler — auch ein
+  Handoff-Write nach möglicher atomarer Publikation — beim Append; `new_count: null`,
+  `new_items_unavailable: true`, Wiederholung idempotent). `partial` ist reserviert. Kein Fehler behauptet
+  pauschal null Writes. Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert, damit das
+  Wasserzeichen keine ältere Lücke überspringt.
+* **Overflow-/Fenster-Recovery:** einen Tag eng nur über `sync_sent_items_by_dates(..., include_next_day=False)`
+  (nicht `sync_sent_items(dates=[D])`, das D+1 mitliest), älteste Tage zuerst, dazwischen konsumieren.
+  `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen endet bei heute, überspringt ältere Tage; keine
+  Datums-CLI). Same-day > 200 und eine volle 100-Envelope-Seite (`sent_window_truncated`, keine Pagination) sind
+  harte Grenzen; nach der Verweigerung wurde nichts geschrieben, ein Default-Lauf holt alte Tage nicht nach.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

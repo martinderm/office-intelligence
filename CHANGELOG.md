@@ -20,7 +20,7 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
 - **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
   indexiert), `handoff_invalid`, `handoff_overflow` (Überhang > 200 wird vor jedem Write
-  verweigert), `sync_partial_failure`; Exit ≠ 0.
+  verweigert), `sent_window_truncated`, `sync_window_failed`; Exit ≠ 0.
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
@@ -40,8 +40,8 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 - Überhang über 200 wird nicht mehr zurückgestellt: der Lauf wird vor jedem Write vollständig als
   `handoff_overflow` verweigert (keine Erreichbarkeits-Annahme; unparsebare Daten als `unparsed`).
-  Recovery nur über die Python-API `sync_sent_items(dates=[...])` (älteste Tage zuerst), nicht über
-  `--sync-sent N`/`count` (Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI).
+  Recovery eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
+  `sync_sent_items(dates=[D])`, das D+1 mitliest) und nicht über `--sync-sent N`/`count`.
 - Fehler-/Legacy-Envelope vollständig: `reason_code`, `handoff` (inkl. `written_count`/`pending_count`/
   `deferred_count`/`file`) und `write_state` auch bei Bindungs- und Legacy-Fällen; `sync_invalid_count` für
   ungültige Manifest-`count`-Werte.
@@ -49,11 +49,16 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   1000 Betreffzeichen); ein dateieigenes höheres `max_items` erweitert nichts.
 - Ledger-Dubletten: die erste gültige Zeile je `message_id` gilt für alle Indizes und führt keinen
   widersprüchlichen Thread-Anker ein.
-- Fehlervertrag trennt `write_state` `none`/`partial`/`unknown`; ein fehlgeschlagener Handoff-Write nach
-  möglicher Publikation oder Append meldet `new_count: null` statt fälschlich null Writes, der Wiederanlauf
-  bleibt idempotent.
+- Fehlervertrag trennt `write_state` `none`/`unknown` (`partial` reserviert); ein fehlgeschlagener
+  Handoff-Write nach möglicher Publikation oder Append meldet `new_count: null` statt fälschlich null Writes,
+  der Wiederanlauf bleibt idempotent.
 - Datumsfenster arbeiten transaktional auf ID-Kopien; ein Lesefehler verwirft Kandidaten und ID-Marken, sodass
-  eine später erneut gelistete Mail nicht still übersprungen wird.
+  eine später erneut gelistete Mail nicht still übersprungen wird. Ein scheiterndes Fenster bricht den ganzen
+  Lauf vor jedem Write ab (`sync_window_failed`), damit das Wasserzeichen keine ältere Lücke überspringt.
+- Eine volle 100-Envelope-Seite wird fail-closed als `sent_window_truncated` verweigert (keine Pagination,
+  keine stille 100/101-Kürzung).
+- Handoff-/Ledger-`schema_version` und `count` müssen exakt `int` sein (nicht `true`/`1.0`); tief
+  verschachteltes JSON (`RecursionError`) ergibt `handoff_invalid`/`ledger_invalid` statt eines Absturzes.
 - Untrusted Ledger-/Handoff-Typen (`role`, `truncated_fields`, `match_type`) werden vor Mengenoperationen
   validiert und fail-closed (`ledger_invalid`/`handoff_invalid`) statt `TypeError`.
 - Thread-Index verfeinert den Vorgang innerhalb eines Threads über verschiedene Message-IDs, ohne die

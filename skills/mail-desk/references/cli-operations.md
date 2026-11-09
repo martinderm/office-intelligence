@@ -124,8 +124,8 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
    Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
-   `ledger_invalid`/`handoff_overflow`/`sync_partial_failure`/`sync_failed`, `write_state`
-   `none`/`partial`/`unknown`:
+   `ledger_invalid`/`handoff_overflow`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
+   `write_state` `none`/`unknown` (`partial` reserviert):
    [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
    Ein `handoff_overflow` schreibt nichts; Recovery nur über die Python-API
    `sync_sent_items(dates=[...])`, nicht über `--count`/`--sync-sent N` (keine Datums-CLI).

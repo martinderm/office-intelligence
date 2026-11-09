@@ -2342,7 +2342,7 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
   `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`,
-  `sync_partial_failure` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
+  `sent_window_truncated`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
   `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
@@ -2360,9 +2360,10 @@ des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfe
 **Grenzen und Folgen:** Solange ein Handoff unkonsumiert ist, indexiert `sync-sent` keine weiteren neuen Items
 (`handoff_pending`), also steht auch die Antwort-Abgleich-Basis (`sent-index.jsonl`) still, bis der Consumer das
 Ledger schreibt. Mehr als 200 neue Items werden als Ganzes verweigert (`handoff_overflow`), nicht zurückgestellt:
-nichts wird übergeben oder indexiert. Recovery nur über die Python-API `sync_sent_items(dates=[...])` /
-`sync_sent_items_by_dates(..., include_next_day=False)`; `--sync-sent N`/`count` ist keine Recovery (endet bei
-heute, überspringt ältere Tage). Items mit
+nichts wird übergeben oder indexiert. Recovery eines Tages nur über `sync_sent_items_by_dates(...,
+include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest); `--sync-sent N`/`count` ist keine
+Recovery (endet bei heute, überspringt ältere Tage). Eine volle 100-Envelope-Seite verweigert ebenfalls
+(`sent_window_truncated`, keine Pagination). Items mit
 `headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
 dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
 
@@ -2374,19 +2375,20 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   später erneut gelistete Mail still übersprungen.
 - *Überhang:* Mehr als 200 neue Items werden **vollständig vor jedem Write** verweigert (`handoff_overflow`) mit
   `candidate_count`, `max_items` und `candidates_per_day` (unparsebare Daten als `unparsed`). Es wird keine
-  Erreichbarkeit eines späteren Wasserzeichen-/Fensterlaufs gemutmaßt und nichts zurückgestellt. **Recovery nur
-  über die Python-API** `sync_sent_items(dates=[...])`/`sync_sent_items_by_dates(..., include_next_day=False)`
-  (älteste Tage zuerst, dazwischen konsumieren); `--sync-sent N`/`count` ist **keine** Recovery, weil das
-  Wasserzeichen-Fenster bei heute endet und ältere Tage überspringt; eine Datums-CLI gibt es bewusst nicht. Ein
-  Überhang am selben Tag ist nicht per Datumsbereich teilbar (harte Betriebsgrenze). Nach der Verweigerung wurde
-  nichts geschrieben; ein reiner Default-/CLI-Wiederanlauf holt die alten Tage nicht nach, sie bleiben außerhalb
-  von Index und Handoff (laut verweigert, aber Betreiber muss die API nutzen).
+  Erreichbarkeit eines späteren Wasserzeichen-/Fensterlaufs gemutmaßt und nichts zurückgestellt. **Recovery
+  eines Tages nur über** `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
+  `sync_sent_items(dates=[D])`, das D+1 mitliest; älteste Tage zuerst, dazwischen konsumieren);
+  `--sync-sent N`/`count` ist **keine** Recovery, weil das Wasserzeichen-Fenster bei heute endet und ältere Tage
+  überspringt; eine Datums-CLI gibt es bewusst nicht. Same-day > 200 und eine volle 100-Envelope-Seite
+  (`sent_window_truncated`, keine Pagination) sind harte Grenzen. Nach der Verweigerung wurde nichts geschrieben;
+  ein Default-/CLI-Wiederanlauf holt die alten Tage nicht nach (laut verweigert, aber Betreiber muss die API
+  nutzen).
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`, `sync_partial_failure`, `sync_failed`).
+  `handoff_overflow`, `sent_window_truncated`, `sync_window_failed`, `sync_failed`).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,
@@ -2396,9 +2398,10 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   unparsbarer Rest wandert vor dem nächsten Append ins Sidecar `<datei>.torn`, vollständige Einträge bleiben.
 - *Immer geformt:* `new_count`/`new_items`/`handoff` auch im Legacy-Tupel, in Bindungs-, Manifest-, Lese-, Ledger-
   und Append-Fehlern (`ok: false`, nie als Erfolg). `write_state` unterscheidet in Fehler-Envelopes `none`
-  (Ablehnung vor jedem Write), `partial` (bestätigte Teilresultate) und `unknown` (Schreibfehler, auch ein
-  Handoff-Write nach möglicher atomarer Publikation; Plattenstand unverifiziert; dann `new_count: null`,
-  `new_items_unavailable: true`), statt pauschal null Writes zu behaupten.
+  (Ablehnung vor jedem Write) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer
+  Publikation; Plattenstand unverifiziert; dann `new_count: null`, `new_items_unavailable: true`), statt
+  pauschal null Writes zu behaupten; `partial` ist reserviert. Ein scheiterndes Datumsfenster und eine volle
+  Envelope-Seite brechen den Lauf vor jedem Write ab (`sync_window_failed`/`sent_window_truncated`).
 - *Manifest und Bindung:* ein ungültiger `count` (`sync_invalid_count`) und eine fehlende oder nicht passende
   Backend-/Account-Bindung (`backend_binding`) liefern das vollständige Fehler-Envelope ohne Mailbox-Zugriff;
   auch der Legacy-Tupel-Pfad trägt `handoff` und `new_items_unavailable`.

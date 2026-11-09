@@ -149,9 +149,9 @@ def run_sync_sent_mode(
     """Fetch recent Sent Items, hand off the new ones and index them into sent-index.jsonl.
 
     A refused handoff (``handoff_pending``/``handoff_invalid``/``handoff_overflow``),
-    an invalid manifest (``sync_invalid_count``) or a partial date failure is
-    returned as ``ok: False`` so the runner exits non-zero; the former wrote
-    nothing, the latter committed (handed off + indexed) the successful dates.
+    an invalid manifest (``sync_invalid_count``), a truncated Sent window
+    (``sent_window_truncated``) or any failed date window (``sync_window_failed``)
+    is returned as ``ok: False`` with ``write_state: none``: nothing was written.
     An unexpected failure during the write path is ``sync_failed`` with
     ``write_state: unknown``: the handoff may already be persisted and the index
     may have grown, so the envelope never claims that nothing was written.
@@ -197,16 +197,21 @@ def run_sync_sent_mode(
             details={key: value for key, value in error.details.items() if key != "state"},
         )
     except SentSyncPartialFailure as error:
-        partial = _success_envelope(error.result, folder, dd)
-        # The commit path finished for the successful windows; the reported counts
-        # are exactly those confirmed results (never "nothing was written").
-        partial.update(
-            ok=False,
-            message=str(error),
-            reason_code="sync_partial_failure",
-            write_state="partial" if partial["new_count"] else "none",
-            failed_dates=list(error.failed_dates),
+        # Fail-closed: if any date window failed, nothing was handed off or indexed.
+        # Committing newer days would move the watermark past the failed ones.
+        partial = failure_envelope(
+            dd,
+            folder,
+            str(error),
+            "sync_window_failed",
+            write_state="none",
+            details={"error_type": "DateWindowFailure"},
+            new_count=0,
         )
+        partial["failed_dates"] = list(error.failed_dates)
+        partial["date_windows_synced"] = int(error.result.get("date_windows_synced", 0) or 0)
+        partial["envelopes_examined"] = int(error.result.get("envelopes_examined", 0) or 0)
+        partial["total_envelopes_examined"] = partial["envelopes_examined"]
         return partial
     except SentHandoffPublishError as error:
         # The atomic replace may already have published the new handoff before a

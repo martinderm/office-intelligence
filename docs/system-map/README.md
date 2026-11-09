@@ -661,13 +661,15 @@ Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pendi
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
-Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` (vollständig vor jedem
-Write, kein Zurückstellen; Recovery nur über die Python-API `sync_sent_items(dates=[...])`, nicht über
-`--sync-sent N`/`count`, das bei heute endet und ältere Tage überspringt; Datums-CLI bewusst nicht vorhanden).
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` und eine volle
+100-Envelope-Seite `sent_window_truncated` (jeweils vollständig vor jedem Write, kein Zurückstellen; Recovery
+eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)`, nicht über `--sync-sent N`/`count`
+oder `sync_sent_items(dates=[D])`, das D+1 mitliest; Datums-CLI bewusst nicht vorhanden). Scheitert ein
+Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`, `failed_dates`), damit das
+Wasserzeichen keine ältere Lücke überspringt.
 `new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state` unterscheidet dort
-wahrheitsgemäß `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen Datumsfenster) und
-`unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer Publikation — Plattenstand
-unverifiziert; dann `new_count: null`). Doppelte
+wahrheitsgemäß `none` (kein Write) und `unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer
+Publikation — Plattenstand unverifiziert; dann `new_count: null`); `partial` ist reserviert. Doppelte
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
 meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die

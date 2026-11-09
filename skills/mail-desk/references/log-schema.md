@@ -206,14 +206,17 @@ synthetisiertes Item übergibt **und** nichts Unkonsumiertes pending ist, nie be
 }
 ```
 
-**Validierung (fail-closed `handoff_invalid`, Datei bleibt unangetastet):** Dokumentkopf (`schema_version`,
-`kind`, `generated_at` ISO, `max_items` zwischen 1 und der kanonischen Obergrenze 200), `count == len(items)`,
-`count ≤ max_items` **und** `count ≤ 200` (ein dateieigenes höheres `max_items` erweitert die Grenze nie), je Item
+**Validierung (fail-closed `handoff_invalid`, Datei bleibt unangetastet):** Dokumentkopf (`schema_version`
+**exakt** int 1 — nicht `true`/`1.0`, `kind`, `generated_at` ISO, `max_items` int zwischen 1 und der kanonischen
+Obergrenze 200), `count` **exakt** int, `count == len(items)`, `count ≤ max_items` **und** `count ≤ 200` (ein
+dateieigenes höheres `max_items` erweitert die Grenze nie), je Item
 exakt die dokumentierten Felder in den dokumentierten Typen und Längen, Identität (`norm_message_id` =
 normalisierte `message_id`, nicht leer), Konsistenz (`thread_key` und `anchor_candidates` stimmen mit
 `in_reply_to`/`references` überein, `mailbox` nicht leer), wohlgeformtes `anchored_to` (`null` oder genau
 `vorgang_ref`, `matched_message_id`, `match_type`), keine Dubletten. Unkonsumierte Items eines anderen
 Mailkontos als des gebundenen verweigern den Lauf (`mailbox_mismatch`). Nichts davon wird „blind konsumiert“.
+Tief verschachteltes JSON, das `json.loads` mit `RecursionError` abbricht, ist ebenfalls `handoff_invalid`
+(`json_too_deep`) und wird nicht umgeschrieben.
 
 **Grenzen (nie still gekappt, beim Schreiben und beim Lesen durchgesetzt):** höchstens 200 Items;
 `references` höchstens 50 (Thread-Wurzel plus die 49 nächsten Vorfahren), `to`/`cc` höchstens 100 Adressen,
@@ -241,13 +244,15 @@ oder direktes Anhängen derselben Zeilen:
 ```
 
 **Schema (jede vollständige Zeile wird geprüft, sonst `ledger_invalid`, nichts wird übergeben/indexiert):**
-Pflicht sind `schema_version` (= 1), `message_id` (**bereits normalisiert**: ohne Klammern, Kleinschreibung),
+Pflicht sind `schema_version` (**exakt** int 1, nicht `true`/`1.0`), `message_id` (**bereits normalisiert**: ohne
+Klammern, Kleinschreibung),
 `role` (`primary`/`follow_up`) und `recorded_at` (ISO-8601); optional `thread_key`, `vorgang_ref`, `anchored_to`
 (String oder `null`); weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary`
 verbietet es. Doppelte `message_id` sind zulässig (die erste gültige Zeile gilt und ist für **alle** Indizes
 maßgeblich: eine spätere Dublette mit anderem `thread_key`/`vorgang_ref` führt weder einen Thread-Anker noch
 eine Vorgangs-Zuordnung ein). **Verschiedene** Message-IDs desselben Threads dürfen den Thread-Index auf eine
-Zeile mit vorhandenem `vorgang_ref` verfeinern (erste Zeile je Message-ID bleibt unangetastet).
+Zeile mit vorhandenem `vorgang_ref` verfeinern (erste Zeile je Message-ID bleibt unangetastet). Tief
+verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungültige Zeile (`ledger_invalid`).
 
 - **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
   im Ledger steht. Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht umgeschrieben
@@ -298,21 +303,22 @@ werden nur ignoriert (`consumed_ignored`). `handoff_pending` lässt die Datei by
 
 **Überhang über 200:** Der Lauf wird vollständig verweigert (`handoff_overflow`) **vor jedem Write**: nichts
 wird übergeben, zurückgestellt oder indexiert. Details: `candidate_count`, `max_items`,
-`candidates_per_day` (nicht parsebare Daten als `unparsed`). **Recovery ausschließlich über die Python-API**
-`core.sent_indexer.sync_sent_items(dates=[...])` / `sync_sent_items_by_dates(..., include_next_day=False)`:
-älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen-Fenster
-endet bei heute, überspringt ältere Tage; keine Datums-CLI). Ein Überhang am selben Tag ist nicht per
-Datumsbereich teilbar (harte Betriebsgrenze). Nach der Verweigerung wurde nichts geschrieben; ein reiner
-Default-/CLI-Wiederanlauf holt die alten Tage nicht nach, die Items bleiben dann außerhalb von Index und Handoff
-(keine stille Lücke durch Writes, aber der Betreiber muss die Python-API nutzen).
+`candidates_per_day` (nicht parsebare Daten als `unparsed`). **Recovery ausschließlich über die Python-API**:
+einen einzelnen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` — `sync_sent_items(dates=[D])`
+liest D+1 mit —, älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery
+(Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI). Same-day > 200 und eine volle
+100-Envelope-Seite (`sent_window_truncated`, keine Pagination) sind harte Grenzen. Nach der Verweigerung wurde
+nichts geschrieben; ein Default-/CLI-Lauf holt die alten Tage nicht nach, die Items bleiben außerhalb von Index
+und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Python-API nutzen).
 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
-`write_state` trennt in Fehler-Envelopes `none` (Ablehnung/Fehler vor jedem Write), `partial` (bestätigte
-Teilresultate der erfolgreichen Datumsfenster, Zähler exakt) und `unknown` (ein Schreibversuch schlug fehl —
-auch ein Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
-unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, ein Wiederholungslauf merged idempotent
-per Message-ID). Fehler bedeuten also nie pauschal „null Writes“.
+Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
+`failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). `write_state` ist
+dann `none` (Ablehnung/Fehler vor jedem Write) oder `unknown` (Schreibversuch schlug fehl — auch ein
+Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
+unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent per Message-ID).
+`partial` ist reserviert und wird nicht erzeugt. Fehler bedeuten also nie pauschal „null Writes“.
 
 ## Closing an item
 
