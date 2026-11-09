@@ -894,6 +894,27 @@ def classify_email(
     return item_result
 
 
+def _sent_sync_batch_dates(emails: list[dict[str, Any]]) -> list[str]:
+    """Valid calendar dates for the optional sent sync; invalid headers are skipped.
+
+    Inbound classification is unchanged: only the transient Sent-sync date list is
+    filtered, so one malformed header cannot abort the whole draft sync (whose
+    exception is intentionally swallowed by the caller).
+    """
+    dates: list[str] = []
+    for email in emails:
+        raw = email.get("date")
+        if not raw:
+            continue
+        _, ymd = parse_date_to_year_month(str(raw))
+        try:
+            datetime.strptime(ymd, "%Y-%m-%d")
+        except ValueError:
+            continue
+        dates.append(ymd)
+    return dates
+
+
 def draft_manifest(
     emails: list[dict[str, Any]],
     workspace_root: Path | None = None,
@@ -925,7 +946,7 @@ def draft_manifest(
     if sent_lookup is None:
         if sync_sent and emails:
             try:
-                batch_dates = [parse_date_to_year_month(str(e.get("date", "")))[1] for e in emails if e.get("date")]
+                batch_dates = _sent_sync_batch_dates(emails)
                 if batch_dates:
                     sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws, account=account)
             except Exception:

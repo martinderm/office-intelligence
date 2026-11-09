@@ -19,7 +19,7 @@ from unittest.mock import patch
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
-from core import himalaya, sent_handoff, sent_indexer  # noqa: E402
+from core import classifier, himalaya, sent_handoff, sent_indexer  # noqa: E402
 from core.modes import sync_sent as sync_sent_mode  # noqa: E402
 from core.sent_handoff import (  # noqa: E402
     HANDOFF_FILENAME,
@@ -1107,29 +1107,78 @@ class MultiDateAndOverflowTests(_Base):
                 )
         self.assertEqual(0, mailbox.calls)
 
-    def test_null_initial_with_valid_barrier_migrates_conservatively(self) -> None:
+    def test_null_initial_migration_does_not_trust_an_old_barrier(self) -> None:
+        seed = {"schema_version": 1, "at": "2025-12-01", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
         (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
-            "schema_version": 1, "initial_start": None, "covered_through": "2026-09-20",
+            "schema_version": 1, "initial_start": None, "covered_through": "2026-01-02",
         }), encoding="utf-8")
-        mailbox = _Mailbox()
+        mailbox = _Mailbox(_details(1, _day="2025-12-15", date="Mon, 15 Dec 2025 10:00:00 +0100"))
+        mailbox.fail_dates = {"2025-12-10"}
         run, read = mailbox.patches()
-        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
-            result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
-        self.assertEqual("2026-09-21", result["coverage_start"])
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 1, 10))):
+            with self.assertRaises(SentSyncPartialFailure):
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
         state = sent_indexer._read_sync_state(self.dd)
-        self.assertEqual("2026-09-20", state["initial_start"])
+        self.assertEqual("2025-12-01", state["initial_start"])  # start at old watermark, not barrier
+        self.assertIsNone(state["covered_through"])  # old point-query barrier not trusted
+        self.assertEqual(["seed@example.test"], self.index_ids())
 
-    def test_null_initial_with_barrier_on_run_day_rewinds_today(self) -> None:
+    def test_null_initial_without_index_watermark_fails_closed(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        before = json.dumps({"schema_version": 1, "initial_start": None,
+                             "covered_through": "2026-01-02"})
+        state_path.write_text(before, encoding="utf-8")
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 1, 10))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("sent_initial_state_invalid", caught.exception.reason_code)
+        self.assertEqual("unsafe_null_initial_migration", caught.exception.details["reason"])
+        self.assertEqual(0, mailbox.calls)
+        self.assertEqual(before, state_path.read_text(encoding="utf-8"))
+
+    def test_barrier_equal_to_run_day_is_rewound_before_read(self) -> None:
         (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
-            "schema_version": 1, "initial_start": None, "covered_through": "2026-09-24",
+            "schema_version": 1, "initial_start": "2026-09-01", "covered_through": "2026-09-24",
         }), encoding="utf-8")
-        mailbox = _Mailbox()
+        mailbox = _Mailbox(_details(1, date="Thu, 24 Sep 2026 10:00:00 +0200"))
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
             result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
         self.assertEqual("2026-09-24", result["coverage_start"])
-        state = sent_indexer._read_sync_state(self.dd)
-        self.assertEqual(("2026-09-24", "2026-09-23"), (state["initial_start"], state["covered_through"]))
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual("2026-09-23", sent_indexer._read_sync_state(self.dd)["covered_through"])
+
+    def test_future_state_or_legacy_is_not_masked_by_a_merge(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        legacy = self.dd / sent_indexer.LEGACY_INITIAL_FILENAME
+        cases = [
+            ({"schema_version": 1, "initial_start": "2026-09-01", "covered_through": "2099-01-01"},
+             "2025-01-01"),  # future barrier + older legacy
+            ({"schema_version": 1, "initial_start": "2099-01-01", "covered_through": None},
+             "2025-01-01"),  # future initial + older legacy
+            ({"schema_version": 1, "initial_start": "2025-01-01", "covered_through": None},
+             "2099-01-01"),  # old state + future legacy
+        ]
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 1, 10))):
+            for state_doc, legacy_value in cases:
+                with self.subTest(state=state_doc, legacy=legacy_value):
+                    state_path.write_text(json.dumps(state_doc), encoding="utf-8")
+                    legacy.write_text(json.dumps({"schema_version": 1, "initial_start": legacy_value}),
+                                      encoding="utf-8")
+                    state_before = state_path.read_text(encoding="utf-8")
+                    legacy_before = legacy.read_text(encoding="utf-8")
+                    with self.assertRaises(SentHandoffError) as caught:
+                        sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+                    self.assertEqual("sent_initial_state_invalid", caught.exception.reason_code)
+                    self.assertEqual(state_before, state_path.read_text(encoding="utf-8"))
+                    self.assertEqual(legacy_before, legacy.read_text(encoding="utf-8"))
+        self.assertEqual(0, mailbox.calls)
 
     def test_since_with_time_part_reports_format_not_future(self) -> None:
         mailbox = _Mailbox(_details(1))
@@ -1147,6 +1196,14 @@ class MultiDateAndOverflowTests(_Base):
         result = self.sync(mailbox)
         self.assertEqual(1, result["new_count"])
         self.assertEqual(["m1@example.test"], self.index_ids())
+
+    def test_draft_sent_sync_dates_filter_invalid_calendar_headers(self) -> None:
+        emails = [
+            {"date": "2026-13-40"},
+            {"date": "Thu, 24 Sep 2026 10:00:00 +0200"},
+            {"date": ""},
+        ]
+        self.assertEqual(["2026-09-24"], classifier._sent_sync_batch_dates(emails))
 
     def test_bounded_batch_still_commits_the_oldest_and_defers_the_rest(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",

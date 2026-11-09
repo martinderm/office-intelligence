@@ -286,11 +286,13 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   Initialstart/`since`, nie über offener Coverage). Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
   **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
   und nie über heute/Punktabfragen vor. Future `initial_start`/`covered_through`, malformed/null-both State,
-  future `since`/`since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; Altbestand `initial_start:null`
-  mit gültigem `covered_through` wird konservativ (`initial=covered`) migriert, nur autorisierte
-  Reparatur/Quarantäne, keine autonome Löschung. Source-Fenster
-  statt Header-Datum bestimmt Grenzen/Recovery; ungültige Header verschieben kein Item und brechen keinen
-  vollständigen Sync ab (Draft-Pfad schluckt Sync-Ausnahmen wie bisher); das alte
+  future `since`/`since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird
+  vor Merge geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
+  `initial_start:null` wird nicht anhand der alten Punktabfrage-Schranke fortgesetzt (Start am alten
+  Index-Wasserzeichen, Barrier null; ohne Wasserzeichen fail-closed), nur autorisierte Reparatur/Quarantäne mit
+  validem Schema-JSON, keine autonome Löschung. Source-Fenster
+  statt Header-Datum bestimmt Grenzen/Recovery; ungültige Header werden beim optionalen Draft-Sent-Sync
+  gefiltert und brechen keinen vollständigen Sync ab (Draft-Pfad schluckt Sync-Ausnahmen wie bisher); das alte
   Marker-File wird non-destruktiv migriert. Seiten werden bis zur kurzen/leeren Seite paginiert; das
   dokumentierte „out of bound“-Ende ist eine offline nicht verifizierte **Annahme** und exakt klassifiziert,
   sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein

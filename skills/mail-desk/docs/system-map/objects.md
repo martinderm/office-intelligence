@@ -554,9 +554,11 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
 ### 10.3 Coverage-State (`sent-sync-state.json`)
 * **Rolle:** persistente, atomare Coverage-Schranke für den Default-Lauf; kein Referenzwissen.
 * **Schema:** exakt `schema_version: 1`, `initial_start` (ISO, Pflicht), `covered_through` (ISO|null).
-  Altbestand `initial_start:null` mit gültigem `covered_through` wird konservativ (`initial=covered`) migriert;
-  both-null, Zukunfts-Werte, ungültige Kalenderdaten und future `since` werden vor jedem Read/Write abgewiesen;
-  nur autorisierte Reparatur/Quarantäne, keine autonome Löschung, kein `since`-Workaround. `initial_start` wird
+  Altbestand `initial_start:null` mit `covered_through` wird nicht anhand der alten Punktabfrage-Schranke
+  fortgesetzt: Start am alten Index-Wasserzeichen (oder älterem Legacy-Start), `covered_through:null`; ohne
+  Wasserzeichen fail-closed. Jeder originale State/Marker wird vor Merge auf Future geprüft; `covered_through`
+  gleich heute wird auf gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne, keine autonome Löschung,
+  kein `since`-Workaround; valider State siehe Log-Schema. `initial_start` wird
   vor dem ersten Read persistiert (auch bei `since`); jede Rückspulung vor Handoff/Index. `covered_through` ist
   fortlaufend bewiesene Abdeckung, rückt nur über einen zusammenhängend angeforderten Prefix und nie über heute
   oder eine Punktabfrage vor. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen; das alte
