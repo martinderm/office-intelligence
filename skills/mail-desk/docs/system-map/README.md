@@ -2377,8 +2377,11 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   `handoff_pending` fail-closed, Crash-Vertrag Handoff-vor-Index bleibt. Seiten werden paginiert; nach
   `max_pages` volle Seite ⇒ `sent_window_truncated` (kein Watermark-Advance).
 - *Coverage-Schranke:* `sent-sync-state.json` (`initial_start`, `covered_through`) wird vor dem ersten Read
-  bzw. atomar nach dem Index-Append geschrieben; ein Crash davor lässt die ältere Schranke stehen, der heutige
-  Tag wird nie vollständig markiert, `since`/Schranke springen nie über offene Coverage.
+  bzw. jeder Rückspulung **vor** Handoff/Index geschrieben; nach dem Append rückt sie nur über einen
+  zusammenhängenden angeforderten Prefix und nie über heute/Punktabfragen vor. Ein Crash davor lässt die
+  konservative Schranke stehen. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen/Recovery;
+  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert. Das out-of-bound-Seitenende ist eine
+  offline nicht verifizierte Adapter-Annahme; Abweichungen bleiben fail-closed.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.

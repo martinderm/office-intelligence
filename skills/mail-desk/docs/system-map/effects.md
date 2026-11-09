@@ -283,14 +283,17 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
   stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Das Wasserzeichen-Alter
   blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen; Erstlauf: persistierter
-  Initialstart/`since`, nie über offener Coverage). Seiten werden bis zur kurzen/leeren Seite paginiert; nur der
-  klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
-  Seite 2 beendet, sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
+  Initialstart/`since`, nie über offener Coverage). Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
+  **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
+  und nie über heute/Punktabfragen vor. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery; das alte
+  Marker-File wird non-destruktiv migriert. Seiten werden bis zur kurzen/leeren Seite paginiert; das
+  dokumentierte „out of bound“-Ende ist eine offline nicht verifizierte **Annahme** und exakt klassifiziert,
+  sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
   Watermark-Advance, höheres-`max_pages`-Recovery).
   Nichts wird still verworfen:
   ein Überhang > 200 wird in 200er-Batches committet (kein ID-Skip, Rest nach Konsum); die atomare
   Coverage-Schranke steht nie hinter unvollständigen Tagen; Recovery eines Tages nur über
-  `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-API meldet
+  `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-/Singular-API melden
   `handoff_deferred`; nicht `sync_sent_items(dates=[D])`, das D+1 liest), nicht über `--sync-sent N`/`count`.
   Gekürzte Felder
   stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.

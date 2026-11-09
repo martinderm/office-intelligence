@@ -327,12 +327,14 @@ per Message-ID). `partial` ist reserviert und wird nicht erzeugt. Fehler bedeute
 
 `schema_version: 1`, `initial_start: "YYYY-MM-DD"|null`, `covered_through: "YYYY-MM-DD"|null`. `initial_start`
 wird vor dem ersten Read persistiert (auch bei explizitem `since`); ein Fehlversuch behält ihn über den
-Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag und wird atomar **nach** dem
-Index-Append geschrieben; ein Crash davor lässt die ältere Schranke stehen (sicherer Re-Read). Der heutige Tag
-wird nie als vollständig markiert. Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder
-geschrieben, Datei unangetastet); `since` und die Schranke springen nie über offene Coverage. Explizite
-Datumsläufe (`sync_sent_items_by_dates*`) setzen die Schranke konservativ vor den frühesten angeforderten Tag
-zurück, damit ein späterer Default-Lauf keine Lücke überspringt.
+Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag. Jede Rückspulung (explizite
+Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index dauerhaft geschrieben; nach dem Append darf
+sie nur über einen zusammenhängend angeforderten Prefix vorrücken, nie über eine Punktabfrage und nie über den
+heutigen Tag. Das Source-Fenster (`window_date`) statt des Header-Datums bestimmt Grenzen/Recovery; fehlende
+oder unparsebare Header verschieben kein Item. Ein Crash vor dem finalen State lässt die konservative Schranke
+stehen (sicherer Re-Read). Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder geschrieben,
+Datei unangetastet). Das alte `sent-sync-initial-start.json` wird nur gelesen und non-destruktiv in den State
+migriert (älterer `initial_start` bleibt erhalten, Schranke wird davor zurückgesetzt).
 
 ### Handoff-Batches über 200
 
@@ -340,7 +342,9 @@ Mehr als 200 neue Items werden deterministisch (älteste zuerst) in 200er-Batche
 dann Index, dann Coverage-Schranke. Der Suffix ab dem ersten deferred Item bleibt unindexiert; die Schranke
 steht davor. Nach Ledger-Konsum wird derselbe Tag erneut gescannt und der nächste Batch erzeugt — alle IDs werden
 eventual erreichbar, ohne Skip. `sync_sent_items_by_dates_report` zeigt `truncated`/`deferred_count`/`next_start`/
-`recovery`; die int-API `sync_sent_items_by_dates` meldet `handoff_deferred` statt still abzuschneiden.
+`recovery`; `sync_sent_items_by_dates` und `sync_sent_items_by_date` melden `handoff_deferred` statt still
+abzuschneiden. Das dokumentierte Seitenende („envelope page out of bound“) ist eine offline nicht verifizierte
+Adapter-Annahme; jede Abweichung bleibt fail-closed.
 
 ## Closing an item
 

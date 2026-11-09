@@ -554,8 +554,10 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
 ### 10.3 Coverage-State (`sent-sync-state.json`)
 * **Rolle:** persistente, atomare Coverage-Schranke für den Default-Lauf; kein Referenzwissen.
 * **Schema:** `schema_version: 1`, `initial_start` (ISO|null), `covered_through` (ISO|null). `initial_start` wird
-  vor dem ersten Read persistiert (auch bei `since`); `covered_through` nach dem Index-Append. Der heutige Tag
-  wird nie vollständig markiert; `since`/Schranke springen nie über offene Coverage.
+  vor dem ersten Read persistiert (auch bei `since`); jede Rückspulung vor Handoff/Index. `covered_through` ist
+  fortlaufend bewiesene Abdeckung, rückt nur über einen zusammenhängend angeforderten Prefix und nie über heute
+  oder eine Punktabfrage vor. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen; das alte
+  `sent-sync-initial-start.json` wird non-destruktiv migriert (älterer Start bleibt).
 * **Validierung:** unlesbar/ungültig ⇒ `sent_initial_state_invalid`, nichts gelesen/geschrieben.
 * **Batching:** > 200 neue Items: älteste 200 committen, Suffix ab erstem Deferred unindexiert, Schranke davor;
   nach Ledger-Konsum wird derselbe Tag erneut gescannt (kein ID-Skip).

@@ -69,17 +69,26 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 #### Fixed (dritte Review-/Audit-Runde)
 
-- Persistente, atomare Coverage-Schranke `sent-sync-state.json` (`initial_start`, `covered_through`), geschrieben
-  vor dem ersten Read bzw. nach dem Index-Append; der heutige Tag wird nie vollständig markiert. Multi-Day-
-  Deferrals und später konsumierte Items können den Watermark nicht mehr über unvollständige Tage springen.
-- 200er-Batches: älteste 200 committen (Suffix inkl. späterer Items unindexiert), Rest nach Ledger-Konsum; 201/250
-  und Crash/Retry getestet; int-Datums-API meldet `handoff_deferred`, `..._report` zeigt `truncated`/Recovery.
+- Persistente, atomare Coverage-Schranke `sent-sync-state.json` (`initial_start`, `covered_through`): jede
+  Rückspulung (explizite Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index geschrieben; nach dem
+  Append rückt sie nur über einen zusammenhängend angeforderten Prefix, nie über heute/Punktabfragen vor.
+  Der heutige Tag wird nie vollständig markiert; Multi-Day-Deferrals und später konsumierte Items können den
+  Watermark nicht mehr über unvollständige Tage springen.
+- Source-Fenster (`window_date`) statt Mail-Header-Datum bestimmt Sortierung, Barrier und Recovery; fehlende,
+  widersprüchliche oder unparsebare Header verschieben kein Item.
+- Singular-/plural-int-Datums-API melden `handoff_deferred` und laufen über den Report/State-Pfad; 200er-Batches
+  (201/250, Crash/Retry) erzeugen alle IDs eventual. Explizite Datumsaufrufe erzeugen ohne Schranke keine
+  jüngere `covered_through` und überspringen keinen Altbestand.
+- Legacy `sent-sync-initial-start.json` wird nur gelesen und non-destruktiv migriert; ein älterer `initial_start`
+  bleibt erhalten und setzt die Schranke davor zurück.
 - `count`-Item-Budget blockiert schon den ersten nichtleeren Tag über Budget (kein Überschreiten); Recovery
   tatsächlich erreichbar.
 - `since`/Initialmarker springen nie über offene Coverage; Erstlauf mit `since` persistiert den Marker.
 - Pagination beendet nur bei klassifiziertem `HimalayaInvocationError`/`himalaya_command_failed` mit exaktem
-  „envelope page out of bound“ ab Seite 2; Transport-„buffer index out of bounds“ bleibt fail-closed.
-- `write_state: state` (nur Coverage-State geschrieben, kein Handoff/Index) im Vertrag; Doku/L1/L2 bereinigt.
+  „envelope page out of bound“ ab Seite 2 (offline nicht verifizierte **Annahme**); Transport-„buffer index out
+  of bounds“ bleibt fail-closed.
+- `write_state` unterscheidet `none`/`state`/`unknown` inklusive State-Publish-Fehler und `sync_no_progress`;
+  Doku/L1/L2/objects bereinigt.
 
 
 

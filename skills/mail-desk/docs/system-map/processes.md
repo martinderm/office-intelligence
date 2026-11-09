@@ -699,10 +699,12 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery,
   sondern ein Item-Budget; schon der erste nichtleere Tag über dem Budget blockiert mit
   `truncated`/`coverage_*` und Recovery-Aufruf. **> 200/Tag**: älteste 200 committen, Rest nach Konsum; die
-  atomare Coverage-Schranke steht nie hinter einem unvollständigen Tag.
+  atomare Coverage-Schranke steht nie hinter einem unvollständigen Tag; Rückspulung (explizite Daten/`since`/
+  Legacy) wird **vor** Handoff/Index dauerhaft geschrieben, rückt nur zusammenhängend und nie über heute/Punkt-
+  abfragen vor; Source-Fenster statt Header-Datum bestimmt Grenzen; Legacy-Marker wird non-destruktiv migriert.
   Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
   `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
-  Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
+  (offline nicht verifizierte **Annahme**) Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
   Watermark-Advance). Das Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage
   zählen); `since`/Schranke springen nie über offene Coverage.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt

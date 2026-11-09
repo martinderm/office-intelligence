@@ -17,6 +17,7 @@ from .sent_handoff import (
     SentHandoffError,
     SentHandoffPublishError,
     SentIndexAppendError,
+    SentStateError,
     SentSyncPartialFailure,
     build_handoff_item,
     durable_append_jsonl,
@@ -180,11 +181,21 @@ def _known_index_ids(dd: Path) -> tuple[set[str], set[str]]:
 
 
 def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
-    """Oldest first; undated last; envelope id as the deterministic tie-break."""
+    """Oldest source window first; then header date; envelope id as tie-break.
+
+    The source window (the date query that returned the envelope) is authoritative
+    for coverage/barrier decisions; a missing, contradictory or unparseable Date
+    header must not move an item across days.
+    """
     entry = candidate["entry"]
+    window = str(candidate.get("window_date") or "")
     parsed = parse_date_to_datetime(str(entry.get("at", "")))
     eid = str(entry.get("sent_envelope_id", ""))
-    return (parsed is None, parsed or datetime.min, int(eid) if eid.isdigit() else -1, eid)
+    return (
+        not bool(window), window,
+        parsed is None, parsed or datetime.min,
+        int(eid) if eid.isdigit() else -1, eid,
+    )
 
 
 def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, account: str | None) -> dict[str, Any]:
@@ -258,11 +269,18 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
     committed = ordered[:split_index]
     deferred = ordered[split_index:]
     deferred_days = sorted({
-        parsed.strftime("%Y-%m-%d")
+        str(candidate["window_date"])
         for candidate in deferred
-        for parsed in [parse_date_to_datetime(str(candidate["entry"].get("at", "")))]
-        if parsed is not None
-    }) or (["unparsed"] if deferred else [])
+        if candidate.get("window_date")
+    })
+    if deferred and not deferred_days:
+        raise SentHandoffError(
+            "sent_window_unidentified",
+            "A deferred Sent item has no source-window date; completeness of the batch cannot be "
+            "proven. Nothing was handed off or indexed. Recovery: rerun through the normal collector "
+            "so each candidate carries its queried date.",
+            {"deferred_count": len(deferred), "state": state_before},
+        )
     new_items: list[dict[str, Any]] = []
     new_handoff_items: list[dict[str, Any]] = []
     for candidate in committed:
@@ -496,6 +514,7 @@ def _collect_date_candidates(
 
         candidates.append({
             "entry": entry,
+            "window_date": date_str,
             "to": to_field,
             "cc": email_res.get("cc", ""),
             # Absent key = legacy/injected reader that does not report completeness.
@@ -514,16 +533,35 @@ def sync_sent_items_by_date(
     folder: str = "Sent Items",
     account: str | None = None,
     data_dir: Path | None = None,
+    *,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> int:
-    """Fetch envelopes for a specific date (YYYY-MM-DD) from Sent Items and stream into sent-index.jsonl.
+    """Fetch one specific date (YYYY-MM-DD); deferrals fail closed.
 
-    Returns the number of newly indexed entries.  Fails closed with a
-    ``RuntimeError`` naming the date on any Himalaya/parse failure (never a
-    silent ``0``), and fails loud with a ``ValueError`` before any file write if
-    ``account`` is missing: every indexed entry must be bound to the verified
-    workspace account rather than a hardcoded mailbox.
+    Routes through the plural report path so coverage state, pagination and 200-item
+    batching are never bypassed.  A deferred batch raises ``handoff_deferred`` with
+    committed/deferred counts and a concrete report recovery; callers that need the
+    full result use ``sync_sent_items_by_dates_report``.
     """
-    return int(_sync_sent_items_for_date(date_str, folder=folder, account=account, data_dir=data_dir)["added"])
+    report = sync_sent_items_by_dates_report(
+        [date_str], folder=folder, account=account, data_dir=data_dir,
+        include_next_day=False, max_pages=max_pages,
+    )
+    if report["truncated"]:
+        raise SentHandoffError(
+            "handoff_deferred",
+            f"Date sync committed {report['new_count']} item(s) and deferred "
+            f"{report['deferred_count']}; use sync_sent_items_by_dates_report for visibility. "
+            f"{report['recovery']}",
+            {
+                "committed_count": report["new_count"],
+                "deferred_count": report["deferred_count"],
+                "next_start": report["next_start"],
+                "recovery": report["recovery"],
+                "state": report["handoff"]["state"] if report["handoff"] else "none",
+            },
+        )
+    return report["new_count"]
 
 
 def _dedupe_iso_dates(dates: list[str]) -> list[str]:
@@ -550,28 +588,10 @@ def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[
     return sorted(expanded)
 
 
-def _update_barrier_after_dates(dd: Path, requested: list[str], deferred_days: list[str]) -> None:
+def _write_state_after_commit(dd: Path, initial: str | None, barrier: str | None) -> None:
     try:
-        state = _read_sync_state(dd)
-    except SentHandoffError as error:
-        raise SentIndexAppendError(
-            "Coverage state unreadable after the index append; the index is committed but the coverage "
-            f"barrier is unverified ({error}). A rerun re-reads conservatively."
-        ) from error
-    barrier = state["covered_through"]
-    candidates: list[str] = []
-    if requested:
-        earliest = min(requested)
-        candidates.append((datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
-    if deferred_days and deferred_days[0] != "unparsed":
-        candidates.append(
-            (datetime.strptime(deferred_days[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-        )
-    if candidates:
-        barrier = min([d for d in (barrier, *candidates) if d])
-    try:
-        _write_sync_state(dd, initial_start=state["initial_start"], covered_through=barrier)
-    except Exception as error:  # noqa: BLE001 - index already committed, barrier unverified
+        _write_sync_state(dd, initial_start=initial, covered_through=barrier)
+    except Exception as error:  # noqa: BLE001 - index may already be committed
         raise SentIndexAppendError(
             "Coverage state write failed after the index append; the index is committed but the "
             f"coverage barrier is unverified ({type(error).__name__}: {error}). A rerun re-reads from "
@@ -587,18 +607,52 @@ def sync_sent_items_by_dates_report(
     include_next_day: bool = True,
     max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> dict[str, Any]:
-    """Date-range sync that exposes batching/coverage instead of hiding it in an int.
+    """Date-range sync with explicit coverage/batching, never a silent advance.
 
-    Returns ``{"new_count", "new_items", "handoff", "truncated",
-    "deferred_count", "next_start", "recovery", "requested_dates"}``.  A deferred
-    batch leaves later items unindexed and rewinds the persistent barrier before the
-    first deferred day, so the next default run continues there after consumption.
+    A pre-read state validation/migration happens first; a conservative rewind of
+    the coverage barrier is persisted **before** any mailbox read.  Point-date calls
+    can only advance over a contiguous fully requested prefix and never mark today
+    as complete; gaps leave the barrier untouched.
     """
     dd = data_dir or resolve_data_dir()
+    run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    state = _load_or_migrate_state(dd)
+    initial, barrier = state["initial_start"], state["covered_through"]
+    if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
+            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
+            f"'{SYNC_STATE_FILENAME}' and rerun (the file is never overwritten automatically).",
+            {"reason": "barrier_in_future", "state": "invalid"},
+        )
+    watermark = _sent_index_watermark(dd)
     expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
+    requested = sorted(set(expanded))
+    if not requested:
+        return {
+            "new_count": 0, "new_items": [], "handoff": None, "truncated": False,
+            "deferred_count": 0, "next_start": None, "recovery": None,
+            "requested_dates": [],
+        }
+    earliest = requested[0]
+    default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+    if initial is None and barrier is None:
+        reference = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d") \
+            if watermark is not None else default_start
+        initial = min(earliest, reference)
+    coverage_start = _coverage_start(initial, barrier, watermark, run_date)
+    if earliest < coverage_start:
+        initial = min([d for d in (initial, earliest) if d])
+        barrier = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        coverage_start = earliest
+    # Durable pre-write BEFORE the first read: a crash during/after commit leaves a
+    # conservative (rewound) barrier, never a younger one that skips old items.
+    _prewrite_state_if_changed(dd, initial, barrier, state, None)
+
     known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
     candidates: list[dict[str, Any]] = []
-    for d_str in expanded:
+    for d_str in requested:
         attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         date_candidates, _ = _collect_date_candidates(
             d_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids,
@@ -606,17 +660,40 @@ def sync_sent_items_by_dates_report(
         )
         known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
+
     if not candidates:
-        _update_barrier_after_dates(dd, expanded, [])
+        new_barrier = _advance_days(requested, coverage_start, [], run_date, barrier)
+        _write_sync_state(dd, initial_start=initial, covered_through=new_barrier)
+        yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        complete = bool(new_barrier is not None and new_barrier >= yesterday)
+        next_start = (datetime.strptime(new_barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") \
+            if new_barrier is not None and new_barrier < yesterday else None
+        recovery = None
+        if not complete and next_start:
+            recovery = (
+                f"Coverage gap: continue at {next_start} with "
+                f"sync_sent_items_by_dates_report(dates=['{next_start}'], include_next_day=False)."
+            )
         return {
             "new_count": 0, "new_items": [], "handoff": None, "truncated": False,
-            "deferred_count": 0, "next_start": None, "recovery": None,
-            "requested_dates": list(expanded),
+            "deferred_count": 0,
+            "next_start": next_start,
+            "recovery": recovery, "requested_dates": list(requested),
+            "coverage_start": coverage_start, "coverage_end": new_barrier,
+            "covered_days": max(0, (datetime.strptime(new_barrier, "%Y-%m-%d")
+                                    - datetime.strptime(coverage_start, "%Y-%m-%d")).days + 1)
+            if new_barrier is not None else 0,
+            "coverage_complete": complete,
         }
     committed = _commit_sent_candidates(dd, candidates, account=account)
     deferred_days = committed.get("deferred_days") or []
     truncated = bool(deferred_days)
     next_start = deferred_days[0] if deferred_days else None
+    new_barrier = _advance_days(requested, coverage_start, deferred_days, run_date, barrier)
+    _write_state_after_commit(dd, initial, new_barrier)
+    yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    if next_start is None and new_barrier is not None and new_barrier < yesterday:
+        next_start = (datetime.strptime(new_barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
     recovery = None
     if truncated:
         recovery = (
@@ -624,7 +701,12 @@ def sync_sent_items_by_dates_report(
             f"sync_sent_items_by_dates_report(dates=['{next_start}'], include_next_day=False, "
             f"max_pages={max_pages}); all remaining ids are re-detected from the barrier."
         )
-    _update_barrier_after_dates(dd, expanded, deferred_days)
+    elif not (new_barrier is not None and new_barrier >= yesterday):
+        next_start = next_start or coverage_start
+        recovery = (
+            f"Coverage gap: continue at {next_start} with "
+            f"sync_sent_items_by_dates_report(dates=['{next_start}'], include_next_day=False)."
+        )
     return {
         "new_count": len(committed["new_items"]),
         "new_items": committed["new_items"],
@@ -633,7 +715,13 @@ def sync_sent_items_by_dates_report(
         "deferred_count": committed["handoff"]["deferred_count"] if deferred_days else 0,
         "next_start": next_start,
         "recovery": recovery,
-        "requested_dates": list(expanded),
+        "requested_dates": list(requested),
+        "coverage_start": coverage_start,
+        "coverage_end": new_barrier,
+        "covered_days": max(0, (datetime.strptime(new_barrier, "%Y-%m-%d")
+                                - datetime.strptime(coverage_start, "%Y-%m-%d")).days + 1)
+        if new_barrier is not None else 0,
+        "coverage_complete": bool(new_barrier is not None and new_barrier >= yesterday),
     }
 
 
@@ -685,6 +773,7 @@ def _sent_index_watermark(data_dir: Path) -> datetime | None:
 
 
 SYNC_STATE_FILENAME = "sent-sync-state.json"
+LEGACY_INITIAL_FILENAME = "sent-sync-initial-start.json"
 INITIAL_START_FILENAME = SYNC_STATE_FILENAME  # legacy alias for callers/tests
 
 
@@ -726,18 +815,128 @@ def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
         ) from error
 
 
+def _read_legacy_initial(data_dir: Path) -> str | None:
+    """Read the pre-barrier legacy initial marker without modifying or deleting it."""
+    path = data_dir / LEGACY_INITIAL_FILENAME
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or type(document.get("schema_version")) is not int \
+                or document.get("schema_version") != 1:
+            raise ValueError("unsupported schema_version")
+        return _iso_day(document.get("initial_start"), "initial_start")
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError) as error:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"Legacy '{LEGACY_INITIAL_FILENAME}' is not a valid initial marker "
+            f"({type(error).__name__}: {error}); nothing was read or written. Recovery: repair or remove "
+            "the legacy file (it is never overwritten automatically), then rerun.",
+            {"reason": "legacy_initial_invalid", "state": "invalid"},
+        ) from error
+
+
+def _load_or_migrate_state(
+    data_dir: Path, tracker: dict[str, bool] | None = None,
+) -> dict[str, str | None]:
+    """Read the state and non-destructively migrate the legacy initial marker.
+
+    The legacy file is only ever read, never rewritten or deleted.  If it carries an
+    older ``initial_start`` than the new state, the coverage barrier is rewound
+    before it (or cleared) before any mailbox read.
+    """
+    state = _read_sync_state(data_dir)
+    legacy = _read_legacy_initial(data_dir)
+    if legacy is None:
+        return state
+    initial, barrier = state["initial_start"], state["covered_through"]
+    merged_initial = min([d for d in (initial, legacy) if d]) if (initial or legacy) else None
+    merged_barrier = barrier
+    if merged_initial != initial:
+        if barrier is not None and merged_initial is not None and barrier >= merged_initial:
+            merged_barrier = (datetime.strptime(merged_initial, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        _write_sync_state(data_dir, initial_start=merged_initial, covered_through=merged_barrier)
+        if tracker is not None:
+            tracker["state_written"] = True
+    return {"initial_start": merged_initial, "covered_through": merged_barrier}
+
+
 def _write_sync_state(
     data_dir: Path, *, initial_start: str | None, covered_through: str | None,
 ) -> None:
-    """Atomically persist the coverage state (both fields always explicit)."""
-    atomic_write_json(
-        data_dir / SYNC_STATE_FILENAME,
-        {
-            "schema_version": 1,
-            "initial_start": initial_start,
-            "covered_through": covered_through,
-        },
-    )
+    """Atomically persist the coverage state; publication may still be uncertain."""
+    try:
+        atomic_write_json(
+            data_dir / SYNC_STATE_FILENAME,
+            {
+                "schema_version": 1,
+                "initial_start": initial_start,
+                "covered_through": covered_through,
+            },
+        )
+    except Exception as error:  # noqa: BLE001 - atomic replace may already have published
+        raise SentStateError(
+            f"Coverage state write failed and may already have replaced '{SYNC_STATE_FILENAME}' "
+            f"({type(error).__name__}: {error}); rerun re-reads/repairs the coverage state."
+        ) from error
+
+
+def _coverage_start(initial_start: str | None, barrier: str | None, watermark: datetime | None,
+                    run_date: datetime) -> str:
+    if barrier is not None:
+        return (datetime.strptime(barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    if initial_start is not None:
+        return initial_start
+    if watermark is not None:
+        return datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d")
+    return (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+
+
+def _prewrite_state_if_changed(
+    dd: Path, initial: str | None, barrier: str | None, previous: dict[str, str | None],
+    tracker: dict[str, bool] | None,
+) -> None:
+    """Durably persist a rewind/new initial start BEFORE any mailbox read."""
+    if initial == previous.get("initial_start") and barrier == previous.get("covered_through"):
+        return
+    try:
+        _write_sync_state(dd, initial_start=initial, covered_through=barrier)
+    except SentStateError:
+        raise
+    except Exception as error:  # noqa: BLE001 - atomic replace may already have published
+        raise SentStateError(
+            f"Coverage state pre-write failed and may already have been published "
+            f"({type(error).__name__}: {error}); rerun re-reads/repairs the coverage state."
+        ) from error
+    if tracker is not None:
+        tracker["state_written"] = True
+
+
+def _advance_days(
+    requested: list[str], coverage_start: str, deferred_days: list[str],
+    run_date: datetime, current_barrier: str | None,
+) -> str | None:
+    """Advance only over a contiguous, fully requested prefix; today is not final."""
+    cursor = datetime.strptime(coverage_start, "%Y-%m-%d")
+    end: str | None = None
+    for day in sorted(set(requested)):
+        day_dt = datetime.strptime(day, "%Y-%m-%d")
+        if day_dt < cursor:
+            continue
+        if day_dt != cursor:
+            break
+        end = day
+        cursor += timedelta(days=1)
+    if end is not None and deferred_days:
+        cutoff = (datetime.strptime(deferred_days[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        if end > cutoff:
+            end = cutoff
+    yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+    if end is not None and end > yesterday:
+        end = yesterday
+    if end is not None and (current_barrier is None or end > current_barrier):
+        return end
+    return current_barrier
 
 
 def _derive_sent_sync_window(
@@ -747,12 +946,11 @@ def _derive_sent_sync_window(
     run_date: datetime,
     since: str | None = None,
 ) -> tuple[list[str], bool, str | None, dict[str, Any]]:
-    """Derive the no-dates coverage window from a frozen run date.
+    """Build the no-dates day window from the frozen run date and resolved start.
 
-    Coverage starts at the explicit ``since`` date, else the day after the newest
-    indexed Sent date, else a deterministic initial backfill of
-    ``MAX_SYNC_WINDOW_DAYS`` days ending at ``run_date``.  The watermark age never
-    blocks: older watermarks simply yield a longer day list.  ``count`` is an
+    The caller resolves the start from the persistent coverage state (barrier,
+    initial marker, watermark day or default backfill); it is passed as ``since``.
+    The watermark fallback remains for direct/legacy calls.  ``count`` is an
     **item** budget applied by the caller at day boundaries; this helper always
     returns the full day window.
     """
@@ -827,59 +1025,58 @@ def _sync_sent_items_impl(
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     follow_up_hint: str | None = None
     truncated = False
-    barrier: str | None = None
-    initial_start: str | None = None
+    state = _load_or_migrate_state(dd, state_tracker)  # validates before every read/write
+    initial_start = state["initial_start"]
+    barrier = state["covered_through"]
+    watermark = _sent_index_watermark(dd)
+    if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
+            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
+            f"'{SYNC_STATE_FILENAME}' and rerun (the file is never overwritten automatically).",
+            {"reason": "barrier_in_future", "state": "invalid"},
+        )
+    default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
     if dates:
-        window_dates = _dedupe_iso_dates(dates)
+        requested = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
+        earliest = min(requested) if requested else None
+        if earliest is not None and initial_start is None and barrier is None:
+            reference = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d") \
+                if watermark is not None else default_start
+            initial_start = min(earliest, reference)
+        coverage_start = _coverage_start(initial_start, barrier, watermark, run_date)
+        if earliest is not None and earliest < coverage_start:
+            initial_start = min([d for d in (initial_start, earliest) if d])
+            barrier = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            coverage_start = earliest
+        _prewrite_state_if_changed(dd, initial_start, barrier, state, state_tracker)
+        query_dates = requested
         coverage: dict[str, Any] = {
-            "coverage_start": window_dates[0] if window_dates else None,
-            "coverage_end": window_dates[-1] if window_dates else None,
-            "covered_days": len(window_dates),
-            "total_days": len(window_dates),
-            "coverage_complete": True,
-            "next_start": None,
+            "coverage_start": coverage_start, "coverage_end": None, "covered_days": 0,
+            "total_days": len(requested), "coverage_complete": False, "next_start": coverage_start,
         }
     else:
-        watermark = _sent_index_watermark(dd)
-        state = _read_sync_state(dd)
-        initial_start = state["initial_start"]
-        barrier = state["covered_through"]
-        if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
-            raise SentHandoffError(
-                "sent_initial_state_invalid",
-                f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
-                f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
-                f"'{SYNC_STATE_FILENAME}' or pass an explicit since=",
-                {"reason": "barrier_in_future", "state": "invalid"},
-            )
-        if watermark is None and initial_start is None:
-            # Persist the initial coverage start before reading: a failed first run
-            # must not shift the window or lose its oldest day on a later day.
-            initial_start = (
-                str(since)[:10] if since
-                else (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
-            )
-            _write_sync_state(dd, initial_start=initial_start, covered_through=barrier)
-            if state_tracker is not None:
-                state_tracker["state_written"] = True
-        if barrier is not None:
-            base_start = (datetime.strptime(barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-        else:
-            candidates: list[str] = []
-            if watermark is not None:
-                # Legacy/no-barrier: re-read the watermark day (new mails can arrive there).
-                candidates.append(datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d"))
-            if initial_start is not None:
-                candidates.append(initial_start)
-            base_start = min(candidates) if candidates else (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+        base_start = _coverage_start(initial_start, barrier, watermark, run_date)
+        if initial_start is None and barrier is None and watermark is None:
+            # No prior coverage: an explicit since is the deterministic initial
+            # start; otherwise the frozen 60-day backfill applies.
+            initial_start = str(since)[:10] if since else default_start
+            base_start = initial_start
         if since is not None:
-            # `since` may rewind, never move forward over open coverage.
-            base_start = min(base_start, str(since)[:10])
+            since_day = str(since)[:10]
+            if since_day < base_start:
+                initial_start = min([d for d in (initial_start, since_day) if d])
+                barrier = (datetime.strptime(since_day, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                base_start = since_day
+        if initial_start is None:
+            initial_start = base_start
+        _prewrite_state_if_changed(dd, initial_start, barrier, state, state_tracker)
         window_dates, truncated, follow_up_hint, coverage = _derive_sent_sync_window(
             count, dd, run_date=run_date, since=base_start,
         )
+        query_dates = window_dates
 
-    query_dates = _expand_sync_dates(window_dates, include_next_day=bool(dates))
     envelopes_total = 0
     truncated_days: list[str] = []
     candidates: list[dict[str, Any]] = []
@@ -1004,12 +1201,26 @@ def _sync_sent_items_impl(
     current_initial = current_state["initial_start"] or initial_start
     current_barrier = current_state["covered_through"] or barrier
     if dates:
-        if window_dates:
-            earliest = min(window_dates)
-            rewound = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-            new_barrier = min([d for d in (current_barrier, rewound) if d]) if current_barrier else rewound
-        else:
-            new_barrier = current_barrier
+        new_barrier = _advance_days(
+            query_dates, coverage_start, deferred_days, run_date, current_barrier,
+        )
+        yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        covered_days = 0
+        if new_barrier is not None:
+            covered_days = max(
+                0,
+                (datetime.strptime(new_barrier, "%Y-%m-%d")
+                 - datetime.strptime(coverage_start, "%Y-%m-%d")).days + 1,
+            )
+        coverage.update(
+            coverage_end=new_barrier,
+            covered_days=covered_days,
+            coverage_complete=bool(new_barrier is not None and new_barrier >= yesterday),
+            next_start=deferred_days[0] if deferred_days else (
+                (datetime.strptime(new_barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                if new_barrier is not None else coverage_start
+            ),
+        )
     elif deferred_days:
         first_deferred = deferred_days[0]
         if first_deferred != "unparsed":

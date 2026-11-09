@@ -292,8 +292,9 @@ def run_sync_sent_mode(
             folder,
             f"Sent sync failed: {type(error).__name__}: {error}"[:1000],
             "sync_failed",
-            write_state="none",
+            write_state=getattr(error, "write_state", "none"),
             details={"error_type": type(error).__name__},
+            new_count=None if getattr(error, "write_state", "none") == "unknown" else 0,
         )
 
     if isinstance(sync_result, Mapping):
@@ -302,7 +303,7 @@ def run_sync_sent_mode(
             envelope.update(
                 ok=False,
                 reason_code="sync_no_progress",
-                write_state="none",
+                write_state="state",
                 message=(
                     "Coverage stopped at the item budget with no new items; nothing was handed off "
                     "or indexed. " + str(sync_result.get("follow_up_hint") or "")

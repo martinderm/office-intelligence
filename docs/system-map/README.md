@@ -668,7 +668,7 @@ wird paginiert, kein sicherer Skip). Das Wasserzeichen-Alter blockiert nie: Cove
 (inklusive), leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`
 ist ein Item-Budget; schon der erste nichtleere Tag über dem Budget stoppt mit `truncated`/`coverage_*` und
 Recovery-Aufruf. Recovery eines Tages nur über
-`sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-API meldet
+`sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-/Singular-API melden
 `handoff_deferred`), nicht über `--sync-sent N`/`count` oder `sync_sent_items(dates=[D])`, das D+1 mitliest;
 Datums-CLI bewusst nicht vorhanden. Scheitert ein
 Datumsfenster, wird der ganze Lauf vor jedem Handoff-/Index-Write verweigert (`sync_window_failed`,
@@ -677,10 +677,12 @@ Datumsfenster, wird der ganze Lauf vor jedem Handoff-/Index-Write verweigert (`s
 wahrheitsgemäß `none`, `state` (nur `sent-sync-state.json`/Coverage-Schranke geschrieben, kein Handoff/Index)
 und `unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer Publikation — Plattenstand
 unverifiziert; dann `new_count: null`); `partial` ist reserviert. Die persistente Schranke
-(`initial_start`, `covered_through`) steht nie hinter einem unvollständigen Tag, der heutige Tag wird nie
-vollständig markiert, `since` springt nie über offene Coverage. Nur der klassifizierte
-`HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 beendet
-die Pagination; sonst fail-closed. Doppelte
+(`initial_start`, `covered_through`) wird vor dem ersten Read bzw. jeder Rückspulung **vor** Handoff/Index
+geschrieben, steht nie hinter einem unvollständigen Tag, rückt nur über einen zusammenhängenden angeforderten
+Prefix und nie über heute/Punktabfragen vor; `since` springt nie über offene Coverage, das Legacy-Marker-File
+wird non-destruktiv migriert. Das Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery. Nur der
+klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
+Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahme**, sonst fail-closed. Doppelte
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
 meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die

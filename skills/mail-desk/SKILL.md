@@ -186,15 +186,18 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 `handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden in 200er-Batches committet (älteste
 zuerst, Rest nach Ledger-Konsum; `truncated`/Recovery, kein Skip/Verlust); Recovery eines Tages nur über
-`sync_sent_items_by_dates_report(..., include_next_day=False)` (int-API meldet `handoff_deferred`; nicht
+`sync_sent_items_by_dates_report(..., include_next_day=False)` (int-/Singular-API melden `handoff_deferred`; nicht
 `sync_sent_items(dates=[D])`, das D+1 liest; kein `--sync-sent N`/`count`). Seiten werden bis zur
 kurzen/leeren Seite paginiert; nur der klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit
-exakt „envelope page out of bound“ ab Seite 2 beendet, sonst/ nach `max_pages` volle Seiten verweigern
+exakt „envelope page out of bound“ ab Seite 2 beendet (offline nicht verifizierte **Annahme**), sonst/ nach
+`max_pages` volle Seiten verweigern
 (`sent_window_truncated`, kein Watermark-Advance). Das
 Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen); `count` ist ein
 Item-Budget (schon der erste nichtleere Tag über Budget stoppt), `truncated`/`coverage_*` plus Recovery; der
-Erstlauf persistiert `initial_start` in `sent-sync-state.json`, `covered_through` wird atomar nach dem
-Index-Append geschrieben und steht nie hinter einem unvollständigen Tag; `since` springt nie über offene
+Erstlauf persistiert `initial_start` in `sent-sync-state.json`, jede Rückspulung (explizite Daten/`since`/Legacy)
+vor Handoff/Index; `covered_through` rückt nur über zusammenhängende angeforderte Tage und nie über heute/
+Punktabfragen vor. Source-Fenster statt Header-Datum bestimmt Grenzen; das Legacy-Marker-File wird
+non-destruktiv migriert. `since` springt nie über offene
 Coverage. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über

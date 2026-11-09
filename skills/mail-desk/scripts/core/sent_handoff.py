@@ -118,6 +118,17 @@ class SentHandoffPublishError(RuntimeError):
     """
 
 
+class SentStateError(RuntimeError):
+    """The coverage state write failed and may already have been published.
+
+    No handoff/index entry is part of this failure, but the state file may have
+    replaced the previous barrier.  Report ``write_state: unknown`` until a rerun
+    re-reads and repairs the coverage state.
+    """
+
+    write_state = "unknown"
+
+
 def norm_id(value: Any) -> str:
     """Normalized Message-ID (no brackets, lower case); empty for blank input."""
     return normalize_message_id(str(value or ""))

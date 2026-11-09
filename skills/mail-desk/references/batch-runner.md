@@ -1091,18 +1091,18 @@ vor jedem Handoff-/Index-Write ab.
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `sent_window_truncated` | volle Seite nach `max_pages` |
 | `sync_invalid_since` / `sync_invalid_max_pages` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/Initial ungültig oder Budget ohne Fortschritt |
-| `sync_window_failed` | Datumsfenster scheiterten; Lauf vor jedem Write verweigert, Originalfenster erneut abdecken |
-| `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
+| `sync_window_failed` | Datumsfenster scheiterten; Lauf vor jedem Write verweigert |
+| `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach Publikation (`unknown`, `new_count: null`) |
 
-`count` ist **Item-Budget**: auch der erste Tag über Budget wird nicht gelesen; Stopp mit
-`truncated`/`coverage_*` und Recovery (`sync_sent_items_by_dates_report(dates=['D'],
-include_next_day=False)`). >200 neue Items: älteste 200 committen, Rest unindexiert; die atomare
-Coverage-Schranke steht nie hinter unvollständigen Tagen; nach Konsum wird der Tag erneut gescannt.
-Wasserzeichen-Alter blockiert nie; Erstlauf: persistierter Initialstart/`since`, nie vor offener Coverage.
-Seiten werden bis kurze/leere Seite paginiert; nur der klassifizierte `HimalayaInvocationError` mit exakt
-`Himalaya failed: Error: envelope page out of bound` ab Seite 2 ist Ende; sonst fail-closed.
-Recovery: `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-API meldet
-`handoff_deferred`).
+`count` ist **Item-Budget**: der erste Tag über Budget; Stopp mit `truncated`/`coverage_*`, Recovery
+(`sync_sent_items_by_dates_report(dates=['D'], include_next_day=False)`). >200: älteste 200 committen, Rest
+unindexiert; atomare Coverage-Schranke nie hinter unvollständigen Tagen; nach Konsum erneut scannen.
+Wasserzeichen-Alter blockiert nie; Erstlauf: Initialstart/`since`, nie vor offener Coverage. Explizite Daten
+spulen konservativ **vor** dem Read zurück, rücken nur zusammenhängenden Prefix und nie heute vor;
+Punktabfragen erzeugen keine jüngere Schranke. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery;
+Legacy-Marker non-destruktiv migriert. Seiten bis kurze/leere Seite; das Endsignal ist eine **Annahme** (nur
+implizit belegt), strikt klassifiziert, sonst fail-closed. Recovery:
+`..._report(..., include_next_day=False, max_pages=...)`; int-/Singular-API melden `handoff_deferred`.
 
 ---
 
