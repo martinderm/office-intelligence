@@ -126,8 +126,10 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Auto-Discovery, kein Ergebnis) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
    Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
-   `ledger_invalid`/`handoff_deferred`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
-   `write_state` `none`/`state`/`unknown` (`partial` reserviert):
+   `ledger_invalid`/`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_deferred`/
+   `sent_window_truncated`/`sync_window_failed`/`sync_failed`, `write_state` `none`/`state`/`unknown`
+   (`partial` reserviert). Statische Index-/Ledger-/Sidecar-Aliase werden vor Handoff/Index geprüft;
+   keine automatische Löschung, ein Rerun ohne manuelle Reparatur scheitert identisch:
    [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
    Ein Batch > 200 wird committet, der Rest bleibt für den nächsten Lauf; Recovery über
    `sync_sent_items_by_dates_report(dates=['D'], include_next_day=False, max_pages=...)`, nicht über

@@ -36,6 +36,7 @@ from .common import atomic_write_json, normalize_message_id, utc_now_iso
 
 HANDOFF_FILENAME = "new-sent-items.json"
 LEDGER_FILENAME = "sent-synthesis-ledger.jsonl"
+SENT_INDEX_FILENAME = "sent-index.jsonl"
 HANDOFF_SCHEMA_VERSION = 1
 LEDGER_SCHEMA_VERSION = 1
 HANDOFF_KIND = "mail-desk.new-sent-items"
@@ -75,8 +76,11 @@ class SentHandoffError(RuntimeError):
     ``reason_code``: ``handoff_pending`` (unconsumed items would be extended),
     ``handoff_invalid`` (handoff unreadable, inconsistent, oversized or foreign),
     ``handoff_overflow`` (legacy producer refusals; current sync batches instead),
-    ``handoff_deferred`` (legacy int date API saw a deferred bounded batch) or
-    ``ledger_invalid`` (a ledger line violates the documented schema).
+    ``handoff_deferred`` (legacy int date API saw a deferred bounded batch),
+    ``ledger_invalid`` (a ledger line violates the documented schema),
+    ``sent_index_alias_invalid``/``ledger_alias_invalid`` (static symlink/hardlink
+    alias on the JSONL target or its ``.torn`` sidecar; a misconfiguration, not a
+    transient rerun).
     ``details["state"]`` is the ``handoff.state``.
     """
 
@@ -274,14 +278,81 @@ def tolerant_jsonl_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def _repair_torn_tail(path: Path) -> None:
+def _file_alias_kind(path: Path) -> str | None:
+    """Return ``symlink``/``hardlink`` for a static alias, else ``None``."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if getattr(info, "st_nlink", 1) != 1:
+        return "hardlink"
+    return None
+
+
+def _reject_file_alias(path: Path, *, reason_code: str, label: str) -> None:
+    """Refuse a static symlink/hardlink alias before any mutation or read-through.
+
+    Static pre-check only: a concurrent filesystem mutator is outside the
+    cooperative lease scope (issue #91).
+    """
+    alias = _file_alias_kind(path)
+    if alias is None:
+        return
+    raise SentHandoffError(
+        reason_code,
+        f"Static {alias} alias detected for '{path.name}' ({label}); nothing was written or "
+        "read through it. This is a filesystem misconfiguration, not a transient failure: "
+        "repair or quarantine the aliased file manually; a rerun without fixing it fails the "
+        "same way. No autonomous deletion.",
+        {
+            "reason": f"static_{alias}_alias",
+            "file": path.name,
+            "alias": alias,
+            "label": label,
+        },
+    )
+
+
+def reject_static_aliases(path: Path, *, reason_code: str, label: str) -> None:
+    """Reject static aliases on a JSONL file and its ``.torn`` append sidecar."""
+    _reject_file_alias(path, reason_code=reason_code, label=label)
+    _reject_file_alias(
+        path.with_name(path.name + ".torn"),
+        reason_code=reason_code,
+        label=f"{label} torn sidecar",
+    )
+
+
+def assert_append_aliases(data_dir: Path) -> None:
+    """Preflight both append targets and their sidecars before any handoff/index write."""
+    reject_static_aliases(
+        data_dir / SENT_INDEX_FILENAME,
+        reason_code="sent_index_alias_invalid",
+        label="sent-index",
+    )
+    reject_static_aliases(
+        data_dir / LEDGER_FILENAME,
+        reason_code="ledger_alias_invalid",
+        label="ledger",
+    )
+
+
+def _repair_torn_tail(path: Path, *, reason_code: str, label: str) -> None:
     """Make the file end on a newline without destroying valid evidence.
 
     A complete last record merely missing its newline gets the newline.  An
     unparsable fragment (e.g. a record cut inside a multi-byte character) is moved
     to the append-only sidecar ``<name>.torn`` (fsynced) before it is cut off, so
-    the next append can never glue two records into one line.
+    the next append can never glue two records into one line. Both the target and
+    the sidecar are statically alias-checked before any mutation.
     """
+    _reject_file_alias(path, reason_code=reason_code, label=label)
+    sidecar_path = path.with_name(path.name + ".torn")
+    _reject_file_alias(
+        sidecar_path, reason_code=reason_code, label=f"{label} torn sidecar",
+    )
     if not path.exists() or path.stat().st_size == 0:
         return
     data = path.read_bytes()
@@ -295,7 +366,7 @@ def _repair_torn_tail(path: Path) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         return
-    with path.with_name(path.name + ".torn").open("ab") as sidecar:
+    with sidecar_path.open("ab") as sidecar:
         sidecar.write(tail + b"\n")
         sidecar.flush()
         os.fsync(sidecar.fileno())
@@ -305,36 +376,20 @@ def _repair_torn_tail(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
-def _reject_file_alias(path: Path) -> None:
-    """Refuse static symlink/hardlink aliases before following the append path.
-
-    This is a static pre-check, not a defence against a concurrent filesystem
-    mutator (see the documented trust boundary).
-    """
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return
-    if stat.S_ISLNK(info.st_mode):
-        raise OSError(
-            f"Refusing to append through symlink alias '{path.name}'; nothing was written."
-        )
-    links = getattr(info, "st_nlink", 1)
-    if links != 1:
-        raise OSError(
-            f"Refusing to append through hardlink alias '{path.name}' ({links} links); "
-            "nothing was written."
-        )
-
-
-def durable_append_jsonl(path: Path, entries: Iterable[dict[str, Any]]) -> int:
+def durable_append_jsonl(
+    path: Path,
+    entries: Iterable[dict[str, Any]],
+    *,
+    alias_reason_code: str,
+    alias_label: str,
+) -> int:
     """Append JSON lines (LF) and fsync; repair a torn final line first (see ``_repair_torn_tail``)."""
     lines = [json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries]
     if not lines:
         return 0
-    _reject_file_alias(path)
+    _reject_file_alias(path, reason_code=alias_reason_code, label=alias_label)
     path.parent.mkdir(parents=True, exist_ok=True)
-    _repair_torn_tail(path)
+    _repair_torn_tail(path, reason_code=alias_reason_code, label=alias_label)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
         handle.writelines(lines)
         handle.flush()
@@ -526,6 +581,9 @@ def record_synthesized(
     otherwise.  ``vorgang_ref`` precedence: the item's own, then the argument, then
     the anchor's.
     """
+    reject_static_aliases(
+        data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
+    )
     ledger = load_ledger(data_dir)
     by_message_id, by_thread_key = ledger["by_message_id"], ledger["by_thread_key"]
     records: list[dict[str, Any]] = []
@@ -552,7 +610,10 @@ def record_synthesized(
         }
         _index_ledger_record(by_message_id, by_thread_key, record)
         records.append(record)
-    return durable_append_jsonl(data_dir / LEDGER_FILENAME, records)
+    return durable_append_jsonl(
+        data_dir / LEDGER_FILENAME, records,
+        alias_reason_code="ledger_alias_invalid", alias_label="ledger",
+    )
 
 
 # ------------------------------------------------------------------ handoff file

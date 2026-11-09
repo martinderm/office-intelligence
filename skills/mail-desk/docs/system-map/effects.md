@@ -273,7 +273,11 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
 * **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
-  Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Mehr als 200 neue Items
+  Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische
+  Symlink-/Hardlink-Aliase von Index, Ledger oder deren `<datei>.torn`-Sidecars sind
+  `sent_index_alias_invalid`/`ledger_alias_invalid`, werden **vor** Handoff-/Index-Mutationen geprüft und
+  sind keine transienten Fehler: `write_state` bleibt `none`/`state`, Handoff/Index unangetastet, nur
+  manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur scheitert gleich. Mehr als 200 neue Items
   werden in 200er-Batches committet (älteste zuerst, Rest nach Konsum, `truncated`). Jede andere Störung wird
   `sync_failed`. `write_state` unterscheidet: `none` (kein Write), `state` (nur `sent-sync-state.json`/
   Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher

@@ -672,7 +672,10 @@ verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selbe
 Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
-schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
+schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger oder
+`<datei>.torn`-Sidecars `sent_index_alias_invalid`/`ledger_alias_invalid` (Preflight **vor** Handoff-/Index-Write,
+`write_state none|state`, keine automatische Löschung, Rerun ohne Reparatur scheitert gleich), ein Manifest mit
+ungültigem `count` `sync_invalid_count`, eine fehlende
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
 Rest nach Konsum) und nach `max_pages`
 weiterhin volle Seiten `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery; sonst

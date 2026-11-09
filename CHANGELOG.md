@@ -194,6 +194,20 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   der Sent-Index-Datei mit byte-gleicher externer Datei; Race-Injection wird bewusst nicht als „sicher“
   getestet, solange keine belastbare handle-basierte Verankerung existiert.
 
+#### Fixed (elfte Review-/Audit-Runde)
+
+- `<datei>.torn`-Sidecars werden jetzt vor **jeder** Mutation statisch auf Symlink-/Hardlink-Aliase geprüft.
+  Ein aliaster Sidecar führt zu `sent_index_alias_invalid`/`ledger_alias_invalid`, ohne Hauptdatei oder externes
+  Ziel zu verändern.
+- Der statische Alias-Preflight für `sent-index.jsonl` und das Ledger (inkl. Sidecars) läuft jetzt **vor**
+  Handoff-Publikation und Index-Append. Direktes `record_synthesized` prüft das Ledger samt Sidecar vor dem
+  Lesen/Append. Die Fehler sind keine transienten `sync_failed`/`write_state: unknown`-Fälle: `write_state`
+  bleibt `none`/`state`, Handoff/Index bleiben unangetastet; Recovery ist ausschließlich manuelle
+  Reparatur/Quarantäne, ein Rerun ohne Korrektur scheitert identisch (keine automatische Löschung).
+- Reason-Codes, Sidecar-/Recovery-Semantik und `write_state` sind in Log-Schema, Effects, L1/L2, SKILL,
+  CLI-Operations und Batch-Runner-Vertrag synchronisiert; Tests decken Index- und Ledger-Aliase als Hauptdatei
+  und Sidecar ab (Hardlink immer, Symlink wo verfügbar).
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

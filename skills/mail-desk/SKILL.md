@@ -198,7 +198,9 @@ begrenzten (200 Items) Handoff und das Konsum-/Dedupe-Ledger
 Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern mit
 `handoff_pending` (Exit ≠ 0, nichts indexiert, Handoff byte-gleich), bis der Consumer sie ins Ledger
 übernommen hat; ein inkonsistenter oder übergroßer Handoff oder ein schemaverletzendes Ledger ergibt
-`handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
+`handoff_invalid`/`ledger_invalid`, statische Aliase von Index/Ledger oder `<datei>.torn`-Sidecars
+`sent_index_alias_invalid`/`ledger_alias_invalid` (Preflight vor Handoff/Index, keine automatische Löschung,
+Rerun ohne Reparatur scheitert gleich), ein Manifest mit ungültigem `count` oder fehlender Bindung
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden in 200er-Batches committet (älteste
 zuerst, Rest nach Ledger-Konsum; `truncated`/Recovery, kein Skip/Verlust); Recovery eines Tages nur über
 `sync_sent_items_by_dates_report(..., include_next_day=False)` (int-/Singular-API melden `handoff_deferred`; nicht

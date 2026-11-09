@@ -290,10 +290,11 @@ class IdempotenceAndCrashWindowTests(_Base):
             os.link(external, self.dd / "sent-index.jsonl")
         except (OSError, NotImplementedError):
             self.skipTest("hardlinks are unavailable")
-        with self.assertRaises(OSError):
+        with self.assertRaises(SentHandoffError) as caught:
             sent_indexer.append_sent_index_entries(
                 [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
             )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
         self.assertEqual(before, external.read_bytes())
 
     def test_symlinked_sent_index_alias_is_refused_without_external_write(self) -> None:
@@ -304,10 +305,120 @@ class IdempotenceAndCrashWindowTests(_Base):
             (self.dd / "sent-index.jsonl").symlink_to(external)
         except (OSError, NotImplementedError):
             self.skipTest("file symlinks are unavailable")
-        with self.assertRaises(OSError):
+        with self.assertRaises(SentHandoffError) as caught:
             sent_indexer.append_sent_index_entries(
                 [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
             )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(before, external.read_bytes())
+
+    def test_index_torn_sidecar_hardlink_is_refused_before_repair(self) -> None:
+        path = self.dd / "sent-index.jsonl"
+        path.write_text(
+            '{"message_id": "<old@example.test>"}\n{"message_id": "<torn',
+            encoding="utf-8",
+        )
+        main_before = path.read_bytes()
+        external = self.dd.parent / "external-torn-sidecar"
+        external.write_text("external\n", encoding="utf-8")
+        external_before = external.read_bytes()
+        try:
+            os.link(external, self.dd / "sent-index.jsonl.torn")
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(main_before, path.read_bytes())
+        self.assertEqual(external_before, external.read_bytes())
+
+    def test_index_torn_sidecar_symlink_is_refused_before_repair(self) -> None:
+        path = self.dd / "sent-index.jsonl"
+        path.write_text(
+            '{"message_id": "<old@example.test>"}\n{"message_id": "<torn',
+            encoding="utf-8",
+        )
+        main_before = path.read_bytes()
+        external = self.dd.parent / "external-torn-symlink"
+        external.write_text("external\n", encoding="utf-8")
+        external_before = external.read_bytes()
+        try:
+            (self.dd / "sent-index.jsonl.torn").symlink_to(external)
+        except (OSError, NotImplementedError):
+            self.skipTest("file symlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(main_before, path.read_bytes())
+        self.assertEqual(external_before, external.read_bytes())
+
+    def test_ledger_symlink_alias_is_refused_by_record_synthesized(self) -> None:
+        external = self.dd.parent / "external-ledger-symlink.jsonl"
+        external.write_text("", encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            (self.dd / sent_handoff.LEDGER_FILENAME).symlink_to(external)
+        except (OSError, NotImplementedError):
+            self.skipTest("file symlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.record_synthesized(self.dd, [{"message_id": "<m1@example.test>"}])
+        self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(before, external.read_bytes())
+
+    def test_ledger_hardlink_alias_is_refused_by_record_synthesized(self) -> None:
+        external = self.dd.parent / "external-ledger.jsonl"
+        external.write_text("", encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / sent_handoff.LEDGER_FILENAME)
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.record_synthesized(self.dd, [{"message_id": "<m1@example.test>"}])
+        self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(before, external.read_bytes())
+
+    def test_ledger_torn_sidecar_hardlink_is_refused_before_repair(self) -> None:
+        ledger = self.dd / sent_handoff.LEDGER_FILENAME
+        ledger.write_text('{"message_id": "<torn', encoding="utf-8")
+        main_before = ledger.read_bytes()
+        external = self.dd.parent / "external-ledger-torn"
+        external.write_text("external\n", encoding="utf-8")
+        external_before = external.read_bytes()
+        try:
+            os.link(external, self.dd / (sent_handoff.LEDGER_FILENAME + ".torn"))
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_handoff.record_synthesized(self.dd, [{"message_id": "<m1@example.test>"}])
+        self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(main_before, ledger.read_bytes())
+        self.assertEqual(external_before, external.read_bytes())
+
+    def test_index_alias_preflight_blocks_before_handoff_publication(self) -> None:
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": DAY, "covered_through": "2026-09-23",
+        }), encoding="utf-8")
+        external = self.dd.parent / "external-index.jsonl"
+        external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / "sent-index.jsonl")
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        mailbox = _Mailbox(_details(1, _day=DAY))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(
+                    dates=[DAY], account="ACC", data_dir=self.dd,
+                )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
         self.assertEqual(before, external.read_bytes())
 
     def test_torn_index_line_is_repaired_before_append(self) -> None:
@@ -2133,6 +2244,22 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual("2026-09-22", envelope["since_requested"])
         self.assertEqual("2026-09-21", envelope["effective_coverage_start"])
         self.assertEqual("2026-09-21", envelope["coverage_start"])  # no coverage skip
+
+    def test_index_alias_is_a_static_failure_envelope_not_unknown(self) -> None:
+        self.seed_state("2026-09-01", "2026-09-20")
+        external = self.dd.parent / "external-envelope-index.jsonl"
+        external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / "sent-index.jsonl")
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        envelope = self.run_mode(_Mailbox(_details(1, _day=DAY)))
+        self.assertFalse(envelope["ok"])
+        self.assertEqual("sent_index_alias_invalid", envelope["reason_code"])
+        self.assertNotEqual("unknown", envelope["write_state"])
+        self.assertEqual("none", envelope["handoff"]["state"])
+        self.assertEqual(before, external.read_bytes())
 
     def test_equal_since_is_applied_without_ignore_hint(self) -> None:
         self.seed_state("2026-09-01", "2026-09-20")

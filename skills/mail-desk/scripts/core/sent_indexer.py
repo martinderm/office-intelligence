@@ -19,6 +19,7 @@ from .sent_handoff import (
     SentIndexAppendError,
     SentStateError,
     SentSyncPartialFailure,
+    assert_append_aliases,
     build_handoff_item,
     durable_append_jsonl,
     load_ledger,
@@ -170,7 +171,10 @@ def append_sent_index_entries(
         existing_mids.add(mid)
         new_entries.append(entry)
 
-    return durable_append_jsonl(sent_path, new_entries)
+    return durable_append_jsonl(
+        sent_path, new_entries,
+        alias_reason_code="sent_index_alias_invalid", alias_label="sent-index",
+    )
 
 
 def _known_index_ids(dd: Path) -> tuple[set[str], set[str]]:
@@ -218,6 +222,9 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
     (``handoff_pending``).  More new items than one handoff may hold are committed in
     deterministic batches (oldest first); the suffix stays unindexed and re-readable.
     """
+    # Static preflight before ANY handoff/index mutation: an aliased index/ledger
+    # (or .torn sidecar) is a filesystem misconfiguration, not a post-write failure.
+    assert_append_aliases(dd)
     ledger = load_ledger(dd)
     consumed = ledger["by_message_id"]
 
