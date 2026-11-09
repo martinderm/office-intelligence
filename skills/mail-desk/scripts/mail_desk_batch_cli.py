@@ -144,7 +144,8 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
             data["executed_count"] = runner_data.get("executed_count")
         for key in ("recovery_required", "date_windows_synced", "envelopes_examined",
                     "total_envelopes_examined", "new_entries_indexed", "new_count", "reason_code",
-                    "write_state"):
+                    "write_state", "truncated", "coverage_start", "coverage_end", "covered_days",
+                    "total_days", "coverage_complete", "next_start", "follow_up_hint"):
             if runner_data.get(key) is not None:
                 data[key] = runner_data[key]
         handoff = runner_data.get("handoff")

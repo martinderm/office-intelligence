@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .common import atomic_rewrite_jsonl, normalize_message_id, utc_now_iso, resolve_data_dir
+from .common import atomic_rewrite_jsonl, atomic_write_json, normalize_message_id, utc_now_iso, resolve_data_dir
 from .himalaya import run_himalaya, get_single_email_details
 from .sent_handoff import (
     HANDOFF_FILENAME,
@@ -422,11 +422,17 @@ def _collect_date_candidates(
     except SentHandoffError:
         raise
     except Exception as error:
-        raise RuntimeError(
-            f"Sent sync failed for {date_str} (page {pages}): {type(error).__name__}: {error}. "
-            "Nothing was handed off or indexed. Recovery: "
-            f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False, max_pages={max_pages})."
-        ) from error
+        # A verified adapter end marker: asking for a page beyond the last full page
+        # can fail with "out of bound".  Only this exact marker on page >= 2 counts as
+        # the end; every other error remains fail-closed.
+        if pages >= 2 and "out of bound" in str(error).lower():
+            pass
+        else:
+            raise RuntimeError(
+                f"Sent sync failed for {date_str} (page {pages}): {type(error).__name__}: {error}. "
+                "Nothing was handed off or indexed. Recovery: "
+                f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False, max_pages={max_pages})."
+            ) from error
 
     envs = list(envs_by_id.values())
     envelopes_examined = len(envs)
@@ -577,6 +583,49 @@ def _sent_index_watermark(data_dir: Path) -> datetime | None:
     return latest
 
 
+INITIAL_START_FILENAME = "sent-sync-initial-start.json"
+
+
+def _read_initial_start(data_dir: Path) -> str | None:
+    """Persisted initial coverage start for a still-empty index (or ``None``)."""
+    path = data_dir / INITIAL_START_FILENAME
+    if not path.exists():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"'{INITIAL_START_FILENAME}' is unreadable ({type(error).__name__}); nothing was read "
+            "or written. Recovery: inspect/remove the file or pass an explicit since=",
+            {"reason": "unreadable", "state": "invalid"},
+        ) from error
+    value = document.get("initial_start") if isinstance(document, dict) else None
+    if not isinstance(value, str):
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"'{INITIAL_START_FILENAME}' has no valid initial_start; nothing was read or written. "
+            "Recovery: inspect/remove the file or pass an explicit since=",
+            {"reason": "malformed", "state": "invalid"},
+        )
+    return value
+
+
+def _write_initial_start(data_dir: Path, start: str) -> None:
+    """Persist the initial coverage start before the first read (retry stability)."""
+    atomic_write_json(
+        data_dir / INITIAL_START_FILENAME,
+        {"schema_version": 1, "initial_start": start},
+    )
+
+
+def _clear_initial_start(data_dir: Path) -> None:
+    try:
+        (data_dir / INITIAL_START_FILENAME).unlink()
+    except OSError:
+        pass
+
+
 def _derive_sent_sync_window(
     count: int | None,
     data_dir: Path,
@@ -674,8 +723,22 @@ def sync_sent_items(
             "next_start": None,
         }
     else:
+        watermark = _sent_index_watermark(dd)
+        if watermark is None:
+            # Persist the initial coverage start before reading: a failed first run
+            # must not shift the 60-day window on the next day and lose its oldest day.
+            effective_since = since or _read_initial_start(dd)
+            if effective_since is None:
+                effective_since = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+                _write_initial_start(dd, effective_since)
+        else:
+            watermark_day = datetime(watermark.year, watermark.month, watermark.day)
+            # `since` may not skip forward over an existing watermark.
+            effective_since = min(
+                [watermark_day.strftime("%Y-%m-%d")] + ([str(since)[:10]] if since else []),
+            )
         window_dates, truncated, follow_up_hint, coverage = _derive_sent_sync_window(
-            count, dd, run_date=run_date, since=since,
+            count, dd, run_date=run_date, since=effective_since,
         )
 
     query_dates = _expand_sync_dates(window_dates, include_next_day=bool(dates))
@@ -736,9 +799,12 @@ def sync_sent_items(
         raise SentSyncPartialFailure(
             f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
             f"First error: {type(first_error).__name__}: {first_error}. "
-            "Nothing was handed off or indexed (fail-closed). Recovery: "
-            f"sync_sent_items_by_dates(dates=[{failed_list}], include_next_day=False) "
-            "with the failing day(s) fixed, oldest first.",
+            "Nothing was handed off or indexed (fail-closed); ALL days read in this run were "
+            f"discarded, not just {failed_dates}. Recovery: rerun the full original coverage "
+            f"start={coverage['coverage_start']} end={coverage['coverage_end']} with "
+            f"sync_sent_items(since='{coverage['coverage_start']}') or "
+            f"sync_sent_items_by_dates(dates=[{failed_list}], include_next_day=False) only if no "
+            "other read day is skipped (the default run re-covers the whole window).",
             {
                 "date_windows_synced": len(accepted_dates) + len(failures),
                 "envelopes_examined": envelopes_total,
@@ -757,6 +823,8 @@ def sync_sent_items(
     committed = _commit_sent_candidates(dd, candidates, account=account)
     new_items = committed["new_items"]
     handoff = committed["handoff"]
+    if not dates and not truncated:
+        _clear_initial_start(dd)  # complete initial/default coverage reached
 
     result = {
         "date_windows_synced": len(accepted_dates),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -185,14 +186,22 @@ def run_sync_sent_mode(
         )
 
     since = config.get("since")
-    if since is not None and not isinstance(since, str):
-        return failure_envelope(
-            dd, folder, "Sent sync refused: configuration field 'since' must be an ISO date (YYYY-MM-DD).",
-            "sync_invalid_since", details={"invalid_field": "since"},
-        )
+    if since is not None:
+        if not isinstance(since, str):
+            return failure_envelope(
+                dd, folder, "Sent sync refused: 'since' must be an ISO date (YYYY-MM-DD).",
+                "sync_invalid_since", details={"invalid_field": "since"},
+            )
+        try:
+            datetime.strptime(since[:10], "%Y-%m-%d")
+        except ValueError:
+            return failure_envelope(
+                dd, folder, "Sent sync refused: 'since' is not a valid ISO date (YYYY-MM-DD).",
+                "sync_invalid_since", details={"invalid_field": "since"},
+            )
     raw_max_pages = config.get("max_pages", SENT_SYNC_MAX_PAGES)
     try:
-        if isinstance(raw_max_pages, bool):
+        if isinstance(raw_max_pages, bool) or isinstance(raw_max_pages, float):
             raise ValueError("max_pages must be a positive integer")
         max_pages = int(raw_max_pages)
         if max_pages < 1:
@@ -283,7 +292,18 @@ def run_sync_sent_mode(
         )
 
     if isinstance(sync_result, Mapping):
-        return _success_envelope(sync_result, folder, dd)
+        envelope = _success_envelope(sync_result, folder, dd)
+        if envelope.get("truncated") and envelope.get("new_count") == 0:
+            envelope.update(
+                ok=False,
+                reason_code="sync_no_progress",
+                write_state="none",
+                message=(
+                    "Coverage stopped at the item budget with no new items; nothing was handed off "
+                    "or indexed. " + str(sync_result.get("follow_up_hint") or "")
+                )[:1000],
+            )
+        return envelope
 
     # Legacy dependency contract: an injected ``(total_examined, added)`` tuple
     # keeps the historical envelope shape (batch-runner compatibility facades) and
