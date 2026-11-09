@@ -301,16 +301,12 @@ verankert (`follow_up`, gleicher `vorgang_ref`).
 pending ist; Pending-Items werden nie überschrieben, erweitert oder ausgeräumt. Konsumierte Reste in der Datei
 werden nur ignoriert (`consumed_ignored`). `handoff_pending` lässt die Datei byte-gleich.
 
-**Überhang über 200:** Der Lauf wird vollständig verweigert (`handoff_overflow`) **vor jedem Write**: nichts
-wird übergeben, zurückgestellt oder indexiert. Details: `candidate_count`, `max_items`,
-`candidates_per_day` (nicht parsebare Daten als `unparsed`). **Recovery ausschließlich über die Python-API**:
-einen einzelnen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` — `sync_sent_items(dates=[D])`
-liest D+1 mit —, älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery
-(Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI). Same-day > 200 bleibt
-`handoff_overflow`; volle Seiten werden paginiert, nur ein nach `max_pages` weiterhin voller Tag ergibt
-`sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery). Nach der Verweigerung wurde
-nichts geschrieben; ein Default-/CLI-Lauf holt die alten Tage nicht nach, die Items bleiben außerhalb von Index
-und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Python-API nutzen).
+**Überhang über 200:** Mehr als 200 neue Items werden in **200er-Batches** committet: die ältesten 200
+(Reihenfolge nach Datum/Envelope-ID) werden übergeben und indexiert, der Rest bleibt unindexiert; der Lauf
+meldet `truncated`, `deferred_count` und einen Recovery-Aufruf. Nach dem Ledger-Konsum wird der Watermark-Tag
+erneut gescannt und der nächste Batch erzeugt — kein ID-Skip, kein Datenverlust. Ein vorhandenes Pending-Handoff
+bleibt `handoff_pending` (fail-closed); Crash-Vertrag Handoff-vor-Index bleibt. **Recovery**:
+`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` nach dem Konsum.
 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.

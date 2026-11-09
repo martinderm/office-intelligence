@@ -283,65 +283,22 @@ class IdempotenceAndCrashWindowTests(_Base):
 
 
 class BoundTests(_Base):
-    def test_overflow_above_the_canonical_bound_is_refused_before_any_write(self) -> None:
+    def test_over_bound_batches_the_oldest_and_defers_the_rest(self) -> None:
         mailbox = _Mailbox(*(_details(n) for n in range(1, 6)))
         with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
-            with self.assertRaises(SentHandoffError) as caught:
-                self.sync(mailbox)
-        self.assertEqual("handoff_overflow", caught.exception.reason_code)
-        self.assertEqual(("none", 5, 3), (
-            caught.exception.details["state"],
-            caught.exception.details["candidate_count"],
-            caught.exception.details["max_items"],
-        ))
-        self.assertEqual({"2026-09-24": 5}, caught.exception.details["candidates_per_day"])
-        # No reachability guess: absolutely nothing was handed off or indexed.
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-        self.assertEqual([], self.index_ids())
+            first = self.sync(mailbox)
+        self.assertEqual(3, first["new_count"])
+        self.assertTrue(first["truncated"])
+        self.assertEqual(2, first["handoff"]["deferred_count"])
+        self.assertEqual(["m1@example.test", "m2@example.test", "m3@example.test"], self.index_ids())
 
-    def test_overflow_with_unparsable_dates_is_still_refused_without_speculation(self) -> None:
-        mailbox = _Mailbox(*(_details(n, date="not a date") for n in range(1, 6)))
-        with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
-            with self.assertRaises(SentHandoffError) as caught:
-                self.sync(mailbox)
-        self.assertEqual("handoff_overflow", caught.exception.reason_code)
-        self.assertEqual({"unparsed": 5}, caught.exception.details["candidates_per_day"])
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-        self.assertEqual([], self.index_ids())
-
-    def test_overflow_recovery_uses_a_narrower_explicit_date_range(self) -> None:
-        mailbox = _Mailbox(
-            _details(1), _details(2), _details(3),
-            _details(4, _day="2026-09-25"), _details(5, _day="2026-09-25"),
-        )
-        run, read = mailbox.patches()
-        with run, read, patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), \
-                patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3):
-            with self.assertRaises(SentHandoffError) as caught:
-                sent_indexer.sync_sent_items_by_dates(
-                    [DAY, "2026-09-25"], account="ACC", data_dir=self.dd, include_next_day=False,
-                )
-            self.assertEqual("handoff_overflow", caught.exception.reason_code)
-            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-            self.assertEqual([], self.index_ids())
-
-            # Narrower range, oldest day first: it fits, gets handed off and indexed.
-            first = sent_indexer.sync_sent_items_by_dates(
-                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
-            )
-            self.assertEqual(3, first)
-            self.consume("m1@example.test", "m2@example.test", "m3@example.test")
-
-            # The next narrow range fetches only the remaining day.
-            second = sent_indexer.sync_sent_items_by_dates(
-                ["2026-09-25"], account="ACC", data_dir=self.dd, include_next_day=False,
-            )
-        self.assertEqual(2, second)
+        self.consume("m1@example.test", "m2@example.test", "m3@example.test")
+        second = self.sync(mailbox)
+        self.assertEqual(2, second["new_count"])
+        self.assertFalse(second["truncated"])
         self.assertEqual(["m4@example.test", "m5@example.test"], self.handoff_ids())
-        self.assertEqual(
-            ["m1@example.test", "m2@example.test", "m3@example.test", "m4@example.test", "m5@example.test"],
-            self.index_ids(),
-        )
+        self.assertEqual(["m1@example.test", "m2@example.test", "m3@example.test",
+                          "m4@example.test", "m5@example.test"], self.index_ids())
 
     def test_item_fields_are_bounded_and_marked(self) -> None:
         refs = " ".join(f"<r{i}@example.test>" for i in range(80))
@@ -593,7 +550,7 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual(["seed@example.test", "m1@example.test", "m2@example.test"], self.index_ids())
         self.assertEqual(["m2@example.test"], self.handoff_ids())
 
-    def test_item_budget_smaller_than_one_day_blocks_that_day_with_recovery(self) -> None:
+    def test_item_budget_smaller_than_one_day_commits_it_without_a_block(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
@@ -601,16 +558,10 @@ class MultiDateAndOverflowTests(_Base):
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
             result = sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
-            self.assertTrue(result["truncated"])
-            self.assertEqual(("2026-09-21", "2026-09-22"), (result["coverage_end"], result["next_start"]))
-            self.assertEqual(0, result["new_count"])
-            self.assertEqual(["seed@example.test"], self.index_ids())
-            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-
-            sent_indexer.sync_sent_items_by_dates(
-                ["2026-09-22"], account="ACC", data_dir=self.dd, include_next_day=False,
-            )
-        self.assertEqual(2, len(self.index_ids()) - 1)
+        self.assertFalse(result["truncated"])
+        self.assertEqual(2, result["new_count"])
+        self.assertEqual(["seed@example.test", "m1@example.test", "m2@example.test"], self.index_ids())
+        self.assertEqual(["m1@example.test", "m2@example.test"], self.handoff_ids())
 
     def test_empty_days_do_not_consume_the_item_budget(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
@@ -678,52 +629,42 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual(1, result["new_count"])
         self.assertEqual(["seed@example.test", "m1@example.test"], self.index_ids())
 
+    def test_single_day_over_200_is_batched_and_completes_after_consume(self) -> None:
+        mailbox = _Mailbox(*(_details(n, date="Thu, 24 Sep 2026 10:00:00 +0200") for n in range(1, 202)))  # 201 mails
+        run, read = mailbox.patches()
+        with run, read:
+            first = sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+        self.assertEqual(200, first["new_count"])
+        self.assertTrue(first["truncated"])
+        self.assertEqual(DAY, first["next_start"])
+        self.assertEqual(200, first["handoff"]["written_count"])
+        self.assertEqual(1, first["handoff"]["deferred_count"])
+        self.assertEqual(200, len(self.index_ids()))
+
+        self.consume(*self.handoff_ids())  # consumer releases the first batch
+        run, read = mailbox.patches()
+        with run, read:
+            second = sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+        self.assertEqual(1, second["new_count"])
+        self.assertFalse(second["truncated"])
+        self.assertEqual(201, len(self.index_ids()))
+        self.assertEqual(201, len(set(self.index_ids())))
+        self.assertEqual(["m201@example.test"], self.handoff_ids())
+
     def test_overflow_is_refused_even_with_a_newer_index_watermark(self) -> None:
-        # The refusal never guesses reachability: the newer watermark is irrelevant.
+        # A bounded batch (MAX=3) still commits the oldest 3 and defers the rest.
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
         mailbox = _Mailbox(*(_details(n) for n in range(1, 6)))
         with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
                 patch.object(sent_indexer, "datetime", _frozen_datetime()):
-            with self.assertRaises(SentHandoffError) as caught:
-                self.sync(mailbox)
-        self.assertEqual("handoff_overflow", caught.exception.reason_code)
-        self.assertEqual("none", caught.exception.details["state"])
-        self.assertEqual(5, caught.exception.details["candidate_count"])
-        self.assertEqual({"2026-09-24": 5}, caught.exception.details["candidates_per_day"])
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-        self.assertEqual(["seed@example.test"], self.index_ids())
-
-    def test_overflow_on_the_window_boundary_day_is_refused_and_never_silently_lost(self) -> None:
-        old_day = "2026-07-27"  # exactly 59 days before the frozen "today" 2026-09-24
-        mailbox = _Mailbox(*(_details(n, _day=old_day) for n in range(1, 6)))
-        run, read = mailbox.patches()
-        with run, read, patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), \
-                patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
-                patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
-            with self.assertRaises(SentHandoffError) as caught:
-                sent_indexer.sync_sent_items(dates=[old_day], account="ACC", data_dir=self.dd)
-            self.assertEqual("handoff_overflow", caught.exception.reason_code)
-            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-            self.assertEqual([], self.index_ids())
-
-            # The next day's default watermark window cannot reach the old day, but
-            # nothing was written, so nothing is silently lost: the refusal was loud.
-            with patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 25))):
-                rerun = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
-        self.assertEqual(0, rerun["new_count"])
-        self.assertEqual("none", rerun["handoff"]["state"])
-        self.assertEqual([], self.index_ids())
-
-    def test_overflow_in_an_old_explicit_window_is_refused(self) -> None:
-        mailbox = _Mailbox(*(_details(n) for n in range(1, 6)))
-        with patch.object(sent_indexer, "MAX_HANDOFF_ITEMS", 3), patch.object(sent_handoff, "MAX_HANDOFF_ITEMS", 3), \
-                patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 12, 31))):
-            with self.assertRaises(SentHandoffError) as caught:
-                self.sync(mailbox)
-        self.assertEqual("handoff_overflow", caught.exception.reason_code)
-        self.assertEqual([], self.index_ids())
+            first = self.sync(mailbox)
+        self.assertEqual(3, first["new_count"])
+        self.assertTrue(first["truncated"])
+        self.assertEqual(2, first["handoff"]["deferred_count"])
+        self.assertEqual(["seed@example.test", "m1@example.test", "m2@example.test", "m3@example.test"],
+                         self.index_ids())
 
 
 class WindowTruncationTests(_Base):

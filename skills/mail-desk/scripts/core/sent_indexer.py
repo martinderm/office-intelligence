@@ -227,29 +227,18 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             },
         )
 
-    # No reachability guess: more new items than one handoff may hold is always
-    # refused before any write, so a surplus can never fall out of a later window.
-    if len(extra) > MAX_HANDOFF_ITEMS:
-        per_day: dict[str, int] = {}
-        for candidate in extra:
-            parsed = parse_date_to_datetime(str(candidate["entry"].get("at", "")))
-            day = parsed.strftime("%Y-%m-%d") if parsed else "unparsed"
-            per_day[day] = per_day.get(day, 0) + 1
-        raise SentHandoffError(
-            "handoff_overflow",
-            f"{len(extra)} new Sent Items exceed one handoff ({MAX_HANDOFF_ITEMS}); nothing was handed "
-            "off or indexed. Recover via the Python API sync_sent_items(dates=[...]) / "
-            "sync_sent_items_by_dates(..., include_next_day=False), oldest days first, and consume the "
-            "handoff in between; the --sync-sent count/CLI is not a date-range recovery.",
-            {
-                "candidate_count": len(extra),
-                "max_items": MAX_HANDOFF_ITEMS,
-                "candidates_per_day": dict(sorted(per_day.items())[:60]),
-                "state": state_before,
-            },
-        )
-
-    committed = ordered
+    # Handoff is bounded (200).  More new items: commit the oldest 200 now, hand
+    # them off, and leave the rest unindexed for the next run after consumption.
+    # The watermark advances only to a fully committed day; a partial day stays
+    # re-readable because the default window starts at the watermark day.
+    deferred = extra[MAX_HANDOFF_ITEMS:]
+    deferred_ids = {norm_id(c["entry"].get("message_id")) for c in deferred}
+    committed = [c for c in ordered if norm_id(c["entry"].get("message_id")) not in deferred_ids]
+    deferred_days = sorted({
+        (parse_date_to_datetime(str(c["entry"].get("at", ""))) or datetime.min).strftime("%Y-%m-%d")
+        if parse_date_to_datetime(str(c["entry"].get("at", ""))) else "unparsed"
+        for c in deferred
+    })
     new_items: list[dict[str, Any]] = []
     new_handoff_items: list[dict[str, Any]] = []
     for candidate in committed:
@@ -293,13 +282,13 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             "pending_count": len(all_items),
             "consumed_ignored": consumed_ignored,
             "already_synthesized_skipped": sum(1 for item in new_items if item["already_synthesized"]),
-            # Kept for envelope compatibility: nothing is deferred any more, an
-            # overflow is refused as a whole (``handoff_overflow``).
-            "deferred_count": 0,
+            # Items deferred to the next run after consuming this 200-item batch.
+            "deferred_count": len(deferred),
             "headers_incomplete_count": sum(1 for item in new_items if not item["headers_complete"]),
             "ledger_torn_tail": ledger["torn_tail"],
             "max_items": MAX_HANDOFF_ITEMS,
         },
+        "deferred_days": deferred_days,
     }
 
 
@@ -763,7 +752,7 @@ def sync_sent_items(
         except Exception as error:
             failures.append((date_str, error))
             continue
-        if budget is not None and len(candidates) + len(date_candidates) > budget:
+        if budget is not None and candidates and date_candidates and len(candidates) + len(date_candidates) > budget:
             # Item budget reached at a day boundary: never read past it, never
             # advance coverage over it.  The blocked day keeps a concrete recovery.
             truncated = True
@@ -823,6 +812,33 @@ def sync_sent_items(
     committed = _commit_sent_candidates(dd, candidates, account=account)
     new_items = committed["new_items"]
     handoff = committed["handoff"]
+    deferred_days = committed.get("deferred_days") or []
+    if deferred_days:
+        # The batch stopped at 200; never mark the partial last day as covered.
+        truncated = True
+        first_deferred = deferred_days[0]
+        coverage_end = coverage.get("coverage_end")
+        covered_days = coverage.get("covered_days", 0)
+        try:
+            first_dt = datetime.strptime(first_deferred, "%Y-%m-%d")
+            start_dt = datetime.strptime(str(coverage.get("coverage_start")), "%Y-%m-%d")
+            last_full = first_dt - timedelta(days=1)
+            coverage_end = last_full.strftime("%Y-%m-%d") if last_full >= start_dt else None
+            covered_days = max(0, (last_full - start_dt).days + 1)
+        except (TypeError, ValueError):
+            coverage_end = coverage_end if first_deferred == "unparsed" else None
+        coverage.update(
+            coverage_end=coverage_end,
+            covered_days=covered_days,
+            coverage_complete=False,
+            next_start=first_deferred,
+        )
+        follow_up_hint = (
+            f"Handoff batch limit {MAX_HANDOFF_ITEMS} reached; {handoff['deferred_count']} item(s) "
+            f"remain from {first_deferred}. Consume the pending handoff, then rerun (the default window "
+            f"starts at the watermark day) or use "
+            f"sync_sent_items_by_dates(dates=['{first_deferred}'], include_next_day=False)."
+        )
     if not dates and not truncated:
         _clear_initial_start(dd)  # complete initial/default coverage reached
 

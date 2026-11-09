@@ -184,8 +184,8 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 `handoff_pending` (Exit ≠ 0, nichts indexiert, Handoff byte-gleich), bis der Consumer sie ins Ledger
 übernommen hat; ein inkonsistenter oder übergroßer Handoff oder ein schemaverletzendes Ledger ergibt
 `handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
-`sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden vollständig vor jedem Write verweigert
-(`handoff_overflow`, kein Zurückstellen); Recovery eines Tages nur über
+`sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden in 200er-Batches committet (älteste
+zuerst, Rest nach Ledger-Konsum; `truncated`/Recovery, kein Skip/Verlust); Recovery eines Tages nur über
 `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest;
 kein `--sync-sent N`/`count`, das bei heute endet). Seiten werden bis zur kurzen/leeren Seite paginiert;
 erst nach `max_pages` volle Seiten verweigern (`sent_window_truncated`, kein Watermark-Advance). Das

@@ -661,7 +661,8 @@ Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pendi
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
-Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` und nach `max_pages`
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
+Rest nach Konsum) und nach `max_pages`
 weiterhin volle Seiten `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery; sonst
 wird paginiert, kein sicherer Skip). Das Wasserzeichen-Alter blockiert nie: Coverage ab Watermark-Tag
 (inklusive), leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`

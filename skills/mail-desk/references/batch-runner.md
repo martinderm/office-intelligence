@@ -1087,14 +1087,14 @@ Write ab.
 | `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
-| `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
 | `sent_window_truncated` | volle Seite nach `max_pages`; kein Watermark-Advance |
 | `sync_invalid_since` / `sync_invalid_max_pages` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/Initial ungültig oder Budget ohne Fortschritt; nichts geschrieben |
 | `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, gesamtes Originalfenster erneut abdecken |
 | `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
 
 `count` ist ein **Item-Budget**: erreicht es eine Tagesgrenze, stoppt der Lauf mit `truncated`/`coverage_*` und
-Recovery, ohne ungedeckte Tage zu überspringen. Wasserzeichen-Alter blockiert nie; Coverage ab Watermark-Tag,
+Recovery, ohne ungedeckte Tage zu überspringen. Mehr als 200: älteste 200 committen, Rest erst nach
+Ledger-Konsum erneut scannen (`truncated`/Recovery). Wasserzeichen-Alter blockiert nie; Coverage ab Watermark-Tag,
 leere Tage zählen; Erstlauf: eingefrorener Initialstart bzw. `since` (nie über Watermark). Seiten werden bis zur
 kurzen/leeren Seite paginiert; nur verifiziertes „out of bound“ ab Seite 2 beendet; sonst fail-closed. Eine nach
 `max_pages` volle Seite ergibt `sent_window_truncated`. Recovery:

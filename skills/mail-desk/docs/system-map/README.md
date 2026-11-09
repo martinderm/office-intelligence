@@ -2360,12 +2360,9 @@ des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfe
 
 **Grenzen und Folgen:** Solange ein Handoff unkonsumiert ist, indexiert `sync-sent` keine weiteren neuen Items
 (`handoff_pending`), also steht auch die Antwort-Abgleich-Basis (`sent-index.jsonl`) still, bis der Consumer das
-Ledger schreibt. Mehr als 200 neue Items werden als Ganzes verweigert (`handoff_overflow`), nicht zurückgestellt:
-nichts wird übergeben oder indexiert. Recovery eines Tages nur über `sync_sent_items_by_dates(...,
-include_next_day=False, max_pages=...)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest); `--sync-sent
-N`/`count` ist ein Item-Budget, keine Gap-Recovery. Seiten werden bis zur kurzen/leeren Seite paginiert; erst
-nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein Watermark-Advance). Items mit
-`headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
+Ledger schreibt. Mehr als 200 neue Items werden in 200er-Batches committet (älteste zuerst); der Rest bleibt
+unindexiert und wird nach Ledger-Konsum erneut gescannt (`truncated`, Recovery-Aufruf, kein ID-Skip/Verlust).
+Items mit `headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
 dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
 
 **Review-/Audit-Härtung (Folgecommit):**
@@ -2374,19 +2371,11 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
 - *Fenster-Transaktion:* Jedes Datumsfenster arbeitet auf Kopien der bekannten Message-/Envelope-IDs; nur ein
   erfolgreich gelesenes Fenster gibt sie frei. Ein Fehler verwirft Kandidaten **und** ID-Marken, sonst würde eine
   später erneut gelistete Mail still übersprungen.
-- *Überhang:* Mehr als 200 neue Items werden **vollständig vor jedem Write** verweigert (`handoff_overflow`) mit
-  `candidate_count`, `max_items` und `candidates_per_day` (unparsebare Daten als `unparsed`). Es wird keine
-  Erreichbarkeit eines späteren Wasserzeichen-/Fensterlaufs gemutmaßt und nichts zurückgestellt. **Recovery
-  eines Tages nur über** `sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` (nicht
-  `sync_sent_items(dates=[D])`, das D+1 mitliest; älteste Tage zuerst, dazwischen konsumieren); `--sync-sent
-  N`/`count` ist ein **Item-Budget** (kein Tageslimit): bei Erreichen stoppt der Lauf mit
-  `truncated`/`coverage_*` und Recovery-Aufruf, ohne über ungedeckte Tage vorzurücken. Das Wasserzeichen-Alter
-  blockiert nie: Coverage ab Watermark-Tag (inklusive), leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum
-  und 60-Tage-Backfill bzw. `since`. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per
-  Envelope-ID); erst nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein Watermark-Advance,
-  höheres-`max_pages`-Recovery). Nach der Verweigerung wurde nichts geschrieben;
-  ein Default-/CLI-Wiederanlauf holt die alten Tage nicht nach (laut verweigert, aber Betreiber muss die API
-  nutzen).
+- *Überhang:* Mehr als 200 neue Items werden in **200er-Batches** committet (älteste zuerst): 200 übergeben und
+  indexiert, Rest unindexiert; `truncated`/`deferred_count` plus Recovery. Nach Ledger-Konsum wird der
+  Watermark-Tag erneut gescannt und der nächste Batch erzeugt (kein Skip, kein Verlust); offenes Pending bleibt
+  `handoff_pending` fail-closed, Crash-Vertrag Handoff-vor-Index bleibt. Seiten werden paginiert; nach
+  `max_pages` volle Seite ⇒ `sent_window_truncated` (kein Watermark-Advance).
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.

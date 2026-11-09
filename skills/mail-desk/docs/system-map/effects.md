@@ -273,7 +273,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
 * **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
-  Feldlängen), ungültiges Ledger (`ledger_invalid`) und mehr als 200 neue Items (`handoff_overflow`) stoppen vor
+  Feldlängen), ungültiges Ledger (`ledger_invalid`) und mehr als 200 neue Items werden in 200er-Batches
+  committet (älteste zuerst, Rest nach Konsum, `truncated`) und stoppen vor
   jedem Write, Exit ≠ 0. Jede andere Störung wird `sync_failed`. `write_state` unterscheidet wahrheitsgemäß:
   `none` (kein Write) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer Publikation;
   Plattenstand unverifiziert; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
@@ -285,7 +286,7 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   bzw. `since`). Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per Envelope-ID); erst `max_pages`
   volle Seiten ergeben `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery).
   Nichts wird still verworfen:
-  ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen); Recovery eines Tages nur über
+  ein Überhang > 200 wird in 200er-Batches committet (kein ID-Skip, Rest nach Konsum); Recovery eines Tages nur über
   `sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` (nicht `sync_sent_items(dates=[D])`,
   das D+1 liest), nicht über `--sync-sent N`/`count`. Gekürzte Felder
   stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
