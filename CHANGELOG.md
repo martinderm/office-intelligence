@@ -24,6 +24,18 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
+#### Fixed (Review-/Audit-Findings zum Erstcommit)
+
+- `sync_sent_items_by_dates` committet einmal statt je Tag (Selbstblockade durch `handoff_pending`).
+- Überhang > 200 wird nur zurückgestellt, wenn ein späterer Lauf ihn erreicht, sonst `handoff_overflow`
+  vor jedem Write; kein Prune-Write mehr (konsumierte Reste werden abgeleitet ignoriert).
+- `handoff.state` ist überall `none|written|pending|invalid`; `new_count`/`new_items`/`handoff` auch im
+  Legacy-Tupel und in allen Fehler-Envelopes (`sync_failed` statt Erfolg/ungeformtem Fehler).
+- Handoff voll schema- und identitätskonsistent validiert, Ledger strikt gegen das Schema (`ledger_invalid`),
+  abgerissene (auch UTF-8-)Zeilen blockieren nichts und gehen nicht verloren (Sidecar `.torn`).
+- Konsumvertrag: `load_pending_handoff` (frisch verankert, Vorfahren zuerst) und `record_synthesized` mit
+  Neuauflösung des Ankers; Verzeichnis-`fsync` best-effort, Crash-Vertrag = Prozess-Absturz.
+
 ### 2026-10-18 — Historische FR-Ledger eingefroren
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots

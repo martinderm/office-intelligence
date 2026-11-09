@@ -662,14 +662,17 @@ Es gibt keine Synthese-, LLM- oder Katalog-Logik im Bundle; der Consumer entsche
 ```text
 sync-sent
   ├─ 1. Datumsfenster lesen (Watermark-Fenster, keine Schreibzugriffe)  ─► Kandidaten (Index-neu, Cc, Thread-Header)
-  ├─ 2. Ledger + vorhandenes Handoff laden  (ungültig ⇒ handoff_invalid, Stopp)
-  │      konsumierte Items aus dem Handoff entfernen (atomar)
-  ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (nichts indexiert)
-  ├─ 4. Handoff atomar schreiben (≤ 200 Items; Überhang zurückgestellt)
+  ├─ 2. Ledger + vorhandenes Handoff laden und voll validieren
+  │      (ungültig ⇒ ledger_invalid/handoff_invalid; fremdes Konto ⇒ handoff_invalid; Stopp)
+  │      konsumierte Items nur ableitend ignorieren, kein Write
+  ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (Handoff byte-gleich, nichts indexiert)
+  ├─ 3b. Überhang > 200 und für einen späteren Lauf unerreichbar?  ⇒ handoff_overflow, Stopp (nichts geschrieben)
+  ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200; erreichbarer Überhang zurückgestellt)
   ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
   └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}
 
-Consumer (extern): Handoff lesen → Synthese → record_synthesized (Ledger) → nächster sync-sent räumt auf
+Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) → Promotion des ersten Items →
+  record_synthesized (Ledger, Anker erneut aufgelöst) → load_pending_handoff erneut … bis pending_count == 0
 ```
 
 * **Trigger-Regel:** `handoff.pending_count > 0`, nicht `new_count`. Die Synthese-Phase ist bei `inbox_zero`

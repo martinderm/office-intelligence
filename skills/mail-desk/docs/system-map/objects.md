@@ -544,16 +544,26 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
 * **Rolle:** operative Evidence (Transit), kein Referenzwissen (Dual Evidence).
 * **Schema:** `schema_version: 1`, `kind: "mail-desk.new-sent-items"`, `generated_at`, `max_items` (200), `count`,
   `items[]` (Felder wie `new_items[]` des `sync_sent`-Envelopes ohne `already_synthesized`).
-* **Schreiben:** atomar (`atomic_write_json`: Temp-Datei, `fsync`, `os.replace`), vor dem Fortschreiben von
-  `sent-index.jsonl`; nie bei 0 neuen Items; nie mehr als 200 Items.
-* **Lesen:** strikt; unlesbar, falsches Schema, fehlende oder doppelte Message-ID ⇒ `handoff_invalid`, Datei unangetastet.
+* **Schreiben:** atomar (`atomic_write_json`: Temp-Datei, `fsync`, `os.replace`, danach best-effort `fsync` des
+  Verzeichnisses), vor dem Fortschreiben von `sent-index.jsonl`; nie bei 0 neuen Items; nie mehr als 200 Items;
+  nur wenn nichts Unkonsumiertes pending ist (kein Überschreiben, Erweitern oder Ausräumen von Pending-Items).
+* **Lesen:** vollständig validiert (Kopf, `count`/Schranke, Feldtypen, Identität, Thread-Schlüssel, Anker-Kandidaten,
+  `anchored_to`, Dubletten, unbekannte Felder); jede Abweichung ⇒ `handoff_invalid`, Datei unangetastet.
+  `handoff.state ∈ none|written|pending|invalid`.
 
 ### 10.2 Ledger (`sent-synthesis-ledger.jsonl`)
 * **Rolle:** Konsum-Status, Dedupe-Quelle und Thread-Anker-Quelle. Append-only, Schreiber ist der Consumer.
-* **Zeile (Schema 1):** `message_id` (normalisiert), `thread_key`, `vorgang_ref` (opak, optional), `role`
-  (`primary`/`follow_up`), `anchored_to`, `recorded_at`.
-* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger.
+* **Zeile (Schema 1, strikt geprüft, sonst `ledger_invalid`):** Pflicht `schema_version`, `message_id`
+  (bereits normalisiert), `role` (`primary`/`follow_up`), `recorded_at` (ISO); optional `thread_key`, `vorgang_ref`
+  (opak), `anchored_to`; `follow_up` ⇔ `anchored_to` gesetzt; keine weiteren Felder.
+* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger. Es gibt
+  keinen Prune-Write: konsumierte Reste in der Handoff-Datei werden ignoriert (`consumed_ignored`).
+* **Abgerissene Zeilen:** zeilenweise Byte-Dekodierung; ein unparsbarer unterminierter Rest (auch ein halbes
+  UTF-8-Zeichen) wird ignoriert und vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben (auch für
+  `sent-index.jsonl`).
 
 ### 10.3 Helfer (rein, deterministisch, ohne LLM)
 `thread_key`, `thread_anchor_ids`, `resolve_thread_anchor` (Reihenfolge `in_reply_to` → `references` nächster Vorfahr
-zuerst → `thread_key`), `is_synthesized`, `record_synthesized` (idempotent), `parse_address_list`.
+zuerst → `thread_key`), `is_synthesized`, `record_synthesized` (idempotent; löst den Anker beim Schreiben frisch
+gegen das aktuelle Ledger auf), `load_pending_handoff` (Konsumsicht: validiert, nur unkonsumiert, frisch verankert,
+Vorfahren zuerst, `waits_for`), `peek_handoff_state` (read-only, wirft nie), `parse_address_list`.

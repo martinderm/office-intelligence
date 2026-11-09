@@ -181,8 +181,9 @@ Regeln:
 ## new-sent-items.json (Synthese-Handoff, Issue #88)
 
 Operative Evidence (Transit), kein Referenzwissen. Die Datei ist die bounded, atomar (`tmp` + `fsync` +
-`replace`) geschriebene Liste der neu indexierten, noch **nicht konsumierten** Sent Items. Sie wird nur
-geschrieben, wenn ein Lauf mindestens ein neues, noch nicht synthetisiertes Item übergibt, nie bei 0.
+`replace`, danach best-effort `fsync` des Verzeichnisses) geschriebene Liste der neu indexierten, noch **nicht
+konsumierten** Sent Items. Sie wird nur geschrieben, wenn ein Lauf mindestens ein neues, noch nicht
+synthetisiertes Item übergibt **und** nichts Unkonsumiertes pending ist, nie bei 0 neuen Items.
 
 ```json
 {
@@ -205,6 +206,14 @@ geschrieben, wenn ein Lauf mindestens ein neues, noch nicht synthetisiertes Item
 }
 ```
 
+**Validierung (fail-closed `handoff_invalid`, Datei bleibt unangetastet):** Dokumentkopf (`schema_version`,
+`kind`, `generated_at` ISO, `max_items` ≥ 1), `count == len(items) ≤ max_items`, je Item exakt die
+dokumentierten Felder in den dokumentierten Typen, Identität (`norm_message_id` = normalisierte `message_id`,
+nicht leer), Konsistenz (`thread_key` und `anchor_candidates` stimmen mit `in_reply_to`/`references`
+überein, `mailbox` nicht leer), wohlgeformtes `anchored_to` (`null` oder genau `vorgang_ref`,
+`matched_message_id`, `match_type`), keine Dubletten. Unkonsumierte Items eines anderen Mailkontos als des
+gebundenen verweigern den Lauf (`mailbox_mismatch`). Nichts davon wird „blind konsumiert“.
+
 **Grenzen (nie still gekappt):** höchstens 200 Items; `references` höchstens 50 (Thread-Wurzel plus die
 49 nächsten Vorfahren), `to`/`cc` höchstens 100 Adressen, `subject` höchstens 1000 Zeichen. Wurde ein Feld
 begrenzt, nennt `truncated_fields` es; der Sent-Index behält den vollen Wert.
@@ -213,6 +222,8 @@ begrenzt, nennt `truncated_fields` es; der Sent-Index behält den vollen Wert.
 sonst die eigene Message-ID (jeweils normalisiert). `anchor_candidates` = `In-Reply-To`, dann `References`
 rückwärts (nächster Vorfahr zuerst), ohne die eigene ID. `anchored_to` ist `null` oder der erste Treffer im
 Ledger in der Reihenfolge `in_reply_to` → `references` → `thread_key`; `vorgang_ref` kann `null` sein.
+**`anchored_to` im Handoff ist ein Schnappschuss zum Schreibzeitpunkt**; maßgeblich ist die frische Auflösung
+(`load_pending_handoff`, `record_synthesized`).
 
 ### sent-synthesis-ledger.jsonl (Konsum- und Dedupe-Ledger)
 
@@ -225,29 +236,68 @@ oder direktes Anhängen derselben Zeilen:
  "role": "primary|follow_up", "anchored_to": "mid@id|null", "recorded_at": "2026-11-09T09:30:00Z"}
 ```
 
+**Schema (jede vollständige Zeile wird geprüft, sonst `ledger_invalid`, nichts wird übergeben/indexiert):**
+Pflicht sind `schema_version` (= 1), `message_id` (**bereits normalisiert**: ohne Klammern, Kleinschreibung),
+`role` (`primary`/`follow_up`) und `recorded_at` (ISO-8601); optional `thread_key`, `vorgang_ref`, `anchored_to`
+(String oder `null`); weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary`
+verbietet es. Doppelte `message_id` sind zulässig (die erste gilt).
+
 - **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
-  im Ledger steht. Der nächste `sync-sent` entfernt konsumierte Items atomar aus dem Handoff
-  (`consumed_pruned`); eine leere Datei (`count: 0`) bedeutet „nichts offen“.
+  im Ledger steht. Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht umgeschrieben
+  (`consumed_ignored` zählt konsumierte Reste); sie wird erst beim nächsten Handoff mit neuen Items ersetzt.
 - **Dedupe:** Message-IDs im Ledger werden nie erneut übergeben (`already_synthesized`, trotzdem
   indexiert). Eine Antwort im selben Thread wird über `anchored_to` am selben `vorgang_ref` verankert
   (`role: follow_up`), nicht als neuer Vorgang.
-- Unlesbare Ledger-Zeilen werden übersprungen und als `ledger_invalid_lines` gemeldet; das betroffene Item
-  bleibt unkonsumiert (fail-closed). Eine abgerissene letzte Zeile wird vor dem nächsten Append repariert.
+- **Abgerissene Zeilen (Prozess-Absturz beim Append, auch mitten in einem UTF-8-Zeichen):** Dateien werden
+  zeilenweise als Bytes gelesen und je Zeile dekodiert; ein nicht parsbarer, nicht mit Zeilenumbruch
+  abgeschlossener **letzter** Rest wird ignoriert (`ledger_torn_tail`) und zerstört nichts. Vor dem
+  nächsten Append wird er in das append-only Sidecar `<datei>.torn` (fsync) verschoben und abgeschnitten;
+  ein vollständiger letzter Eintrag ohne Zeilenumbruch bleibt erhalten und bekommt nur den Umbruch. Dasselbe
+  gilt für `sent-index.jsonl` (dort bleiben unparsbare Zeilen wie bisher stillschweigend ignoriert).
 - Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor** dem Ergebnis zu
   schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz liegt beim Consumer).
 
 ### Absturzfenster (`sync-sent`)
+
+Der Vertrag gilt für **Prozess-Absturz/-Abbruch**. Dateiinhalte werden vor dem Ersetzen/Anhängen mit `fsync`
+gesichert und das Verzeichnis wird nach dem Handoff-Replace best-effort synchronisiert (nicht überall
+möglich, z. B. Windows). Plötzlicher Stromausfall ist darüber hinaus nicht garantiert; die Reihenfolge
+Handoff vor Index ist dann plattformabhängig.
 
 | Absturz | Zustand | Wiederholungslauf |
 |---|---|---|
 | vor dem Handoff-Write | nichts geschrieben | liest alles neu |
 | nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
 | nach Index, vor Konsum | Items im Handoff **und** im Index | `new_count: 0`, `handoff.state: pending`; neue Items → `handoff_pending` bis zum Konsum |
-| während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items fallen aus dem Handoff |
+| während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items gelten als konsumiert |
 
 Nicht durch das Bundle lösbar: Absturz des Consumers zwischen Synthese-Ergebnis und Ledger-Zeile
 (Doppel-Promotion möglich), parallele Schreiber ohne Lease und manuelles Löschen der Handoff-Datei (verwirft
 unkonsumierte Items bewusst).
+
+### Konsumvertrag und Überhang (`sync-sent`)
+
+**Konsumvertrag (Consumer):** Items nicht blind aus Envelope oder Datei übernehmen, sondern über
+`core.sent_handoff.load_pending_handoff(data_dir)` lesen: validiert Handoff und Ledger vollständig
+(fail-closed), liefert nur unkonsumierte Items, löst `anchored_to` frisch gegen das aktuelle Ledger auf und
+ordnet Vorfahren aus demselben Handoff zuerst (`waits_for`). Schleife: erstes Item promoten →
+`record_synthesized` (löst den Anker erneut auf, auch gegen frühere Items desselben Aufrufs) →
+`load_pending_handoff` erneut. Eine Antwort im selben Handoff wird so erst nach der Promotion ihres Vorfahren
+verankert (`follow_up`, gleicher `vorgang_ref`).
+
+**Schreibregel:** Der Handoff wird nur ersetzt, wenn der Lauf neue Items übergibt **und** nichts Unkonsumiertes
+pending ist; Pending-Items werden nie überschrieben, erweitert oder ausgeräumt. Konsumierte Reste in der Datei
+werden nur ignoriert (`consumed_ignored`). `handoff_pending` lässt die Datei byte-gleich.
+
+**Überhang über 200:** Die ältesten 200 werden übergeben und indexiert, der Rest zurückgestellt (weder Handoff
+noch Index), aber nur wenn der nächste wasserzeichenbasierte Lauf ihn nachweislich erreicht (nicht älter als der
+neue Index-Wasserzeichentag und als `MAX_SYNC_WINDOW_DAYS`). Sonst `handoff_overflow` vor jedem Write mit
+`candidate_count` und `candidates_per_day`; Wiederholung mit engerem expliziten Datumsbereich (älteste Tage
+zuerst), dazwischen konsumieren. Offene Grenze: ein später kleineres `count` kann den Überhang wieder aus dem
+Fenster nehmen (bekannter Wasserzeichen-Lücken-Hinweis).
+
+**Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
+`pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
 
 ## Closing an item
 

@@ -271,6 +271,10 @@ class SyncSentModeTests(unittest.TestCase):
                 "folder": "Gesendet",
                 "total_envelopes_examined": 12,
                 "new_entries_indexed": 4,
+                # #88 (D): the legacy tuple contract also reports new_count/new_items (items unknown).
+                "new_count": 4,
+                "new_items": [],
+                "new_items_unavailable": True,
                 "sent_index_file": str(data_dir / "sent-index.jsonl"),
             },
             result,

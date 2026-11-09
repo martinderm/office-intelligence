@@ -267,12 +267,17 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
 
 ## 9. Sent-Items-Handoff (Issue #88)
 
-* **Schreibreihenfolge:** Handoff (atomar) vor Sent-Index (Append mit `fsync`); eine abgerissene letzte Zeile in
-  `sent-index.jsonl`/Ledger wird vor dem nächsten Append mit einem Zeilenumbruch repariert.
-* **Fail-closed:** unkonsumiertes Handoff + weitere neue Items (`handoff_pending`) und ungültiges Handoff
-  (`handoff_invalid`) stoppen vor jedem Index-Write, Exit ≠ 0. Teilweise gescheiterte Datumsfenster committen die
-  erfolgreichen und melden `sync_partial_failure`. Nichts wird still verworfen: Überlauf > 200 wird zurückgestellt
-  (`deferred_count`), gekürzte Felder stehen in `truncated_fields`.
+* **Schreibreihenfolge:** Handoff (atomar, danach best-effort Verzeichnis-`fsync`) vor Sent-Index (Append mit
+  `fsync`). Der Vertrag gilt für Prozess-Absturz, nicht für Stromausfall auf Plattformen ohne Verzeichnis-`fsync`
+  (Windows). Eine abgerissene letzte Zeile in `sent-index.jsonl`/Ledger (auch mitten im UTF-8-Zeichen) blockiert kein
+  Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
+* **Fail-closed:** unkonsumiertes Handoff + weitere neue Items (`handoff_pending`), ungültiges Handoff
+  (`handoff_invalid`, inkl. fremdes Konto), ungültiges Ledger (`ledger_invalid`) und nicht erreichbarer Überhang
+  (`handoff_overflow`) stoppen vor jedem Write, Exit ≠ 0; jede andere Störung wird `sync_failed`. Alle Fehler-Envelopes
+  tragen `new_count: 0`, `new_items: []` und ein `handoff` mit `state ∈ none|written|pending|invalid`. Teilweise
+  gescheiterte Datumsfenster committen die erfolgreichen und melden `sync_partial_failure`. Nichts wird still
+  verworfen: erreichbarer Überhang > 200 wird zurückgestellt (`deferred_count`), gekürzte Felder stehen in
+  `truncated_fields`.
 * **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
   sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
 * **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion

@@ -22,6 +22,8 @@ from .sent_handoff import (
     norm_id,
     read_handoff,
     resolve_thread_anchor,
+    tolerant_jsonl_records,
+    unconsumed,
     write_handoff,
 )
 from .matching.reply_heuristics import (
@@ -83,38 +85,31 @@ def load_sent_index(data_dir: Path | None = None) -> dict[str, Any]:
             "all_entries": all_entries,
         }
 
-    with sent_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line_str = line.strip()
-            if not line_str:
-                continue
-            try:
-                entry = json.loads(line_str)
-            except Exception:
-                continue
+    # Per-line decoding: a crash-torn multi-byte character in the last line is
+    # skipped as junk instead of making the whole index unreadable.
+    for entry in tolerant_jsonl_records(sent_path):
+        mid = normalize_message_id(str(entry.get("message_id", "")))
+        if not mid:
+            continue
 
-            mid = normalize_message_id(str(entry.get("message_id", "")))
-            if not mid:
-                continue
+        entry["norm_message_id"] = mid
+        all_entries.append(entry)
+        by_message_id[mid] = entry
 
-            entry["norm_message_id"] = mid
-            all_entries.append(entry)
-            by_message_id[mid] = entry
+        irt = normalize_message_id(str(entry.get("in_reply_to", "")))
+        if irt:
+            by_in_reply_to.setdefault(irt, []).append(entry)
 
-            irt = normalize_message_id(str(entry.get("in_reply_to", "")))
-            if irt:
-                by_in_reply_to.setdefault(irt, []).append(entry)
+        for ref in entry.get("references", []):
+            ref_norm = normalize_message_id(str(ref))
+            if ref_norm:
+                by_reference.setdefault(ref_norm, []).append(entry)
 
-            for ref in entry.get("references", []):
-                ref_norm = normalize_message_id(str(ref))
-                if ref_norm:
-                    by_reference.setdefault(ref_norm, []).append(entry)
-
-            subj = entry.get("subject", "")
-            if subj:
-                cs = clean_subject(subj)
-                if cs:
-                    by_subject_clean.setdefault(cs, []).append(entry)
+        subj = entry.get("subject", "")
+        if subj:
+            cs = clean_subject(subj)
+            if cs:
+                by_subject_clean.setdefault(cs, []).append(entry)
 
     return {
         "by_message_id": by_message_id,
@@ -138,19 +133,10 @@ def append_sent_index_entries(
     sent_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_mids: set[str] = set()
-    if sent_path.exists():
-        with sent_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line_str = line.strip()
-                if not line_str:
-                    continue
-                try:
-                    e = json.loads(line_str)
-                    mid = normalize_message_id(str(e.get("message_id", "")))
-                    if mid:
-                        existing_mids.add(mid)
-                except Exception:
-                    continue
+    for e in tolerant_jsonl_records(sent_path):
+        mid = normalize_message_id(str(e.get("message_id", "")))
+        if mid:
+            existing_mids.add(mid)
 
     new_entries: list[dict[str, Any]] = []
     for entry in entries:
@@ -178,42 +164,66 @@ def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
     return (parsed is None, parsed or datetime.min, int(eid) if eid.isdigit() else -1, eid)
 
 
-def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _day(value: datetime | None, fallback: datetime) -> datetime:
+    base = value or fallback
+    return datetime(base.year, base.month, base.day)
+
+
+def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, account: str | None) -> dict[str, Any]:
     """Hand off, then index, the newly detected Sent Items (in that order).
 
-    Order is the crash contract: the handoff is persisted atomically BEFORE the
-    sent-index grows.  A crash between the two leaves the items in the handoff and
-    not in the index, so a rerun re-detects exactly them and merges idempotently by
-    Message-ID.  A crash after the index but before consumption leaves them pending
-    in the handoff until the ledger releases them.
+    Order is the crash contract (process crash/kill): the handoff is persisted
+    atomically BEFORE the sent-index grows.  A crash between the two leaves the items
+    in the handoff and not in the index, so a rerun re-detects exactly them and merges
+    idempotently by Message-ID.  A crash after the index but before consumption leaves
+    them pending in the handoff until the ledger releases them.
 
-    Fail-closed: an invalid existing handoff, or unconsumed items that this run
-    would have to extend, raise ``SentHandoffError`` before any write.  More new
-    items than ``MAX_HANDOFF_ITEMS`` are *deferred* (neither handed off nor indexed,
-    oldest first kept) and reported, never dropped.
+    Write rule (no write before every refusal check passed): the handoff file is
+    replaced only when this run has new items to hand off AND no unconsumed item is
+    pending, so pending items are never overwritten, extended or pruned.  Consumed
+    items still listed in the file are ignored (state is derived from the ledger) and
+    disappear with the next replacement.  No new items means no handoff write.
+
+    Fail-closed before any write (``SentHandoffError``): invalid handoff or ledger,
+    pending items of another mailbox, pending items plus further new items
+    (``handoff_pending``), and an overflow whose surplus a later run could not reach
+    (``handoff_overflow``).  A reachable surplus beyond ``MAX_HANDOFF_ITEMS`` is
+    *deferred* (neither handed off nor indexed, oldest first kept) and reported.
     """
     ledger = load_ledger(dd)
     consumed = ledger["by_message_id"]
 
     existing = read_handoff(dd)
-    pending = [item for item in existing if norm_id(item.get("norm_message_id") or item.get("message_id")) not in consumed]
-    consumed_pruned = len(existing) - len(pending)
-    if consumed_pruned:
-        write_handoff(dd, pending)
-    pending_ids = {norm_id(item.get("norm_message_id") or item.get("message_id")) for item in pending}
+    pending = unconsumed(existing, ledger)
+    consumed_ignored = len(existing) - len(pending)
+    pending_ids = {item["norm_message_id"] for item in pending}
+    state_before = "pending" if pending else "none"
+    if account and any(item["mailbox"] != account for item in pending):
+        raise SentHandoffError(
+            "handoff_invalid",
+            f"Sent handoff '{HANDOFF_FILENAME}' holds unconsumed item(s) of another mailbox than the "
+            "bound account (mailbox_mismatch); it was left untouched and nothing was indexed.",
+            {"reason": "mailbox_mismatch", "pending_count": len(pending), "state": "invalid"},
+        )
 
     ordered = sorted(candidates, key=_candidate_sort_key)
-    extra_ids = [
-        cid for cid in (norm_id(c["entry"].get("message_id")) for c in ordered)
-        if cid not in consumed and cid not in pending_ids
+    extra = [
+        c for c in ordered
+        if norm_id(c["entry"].get("message_id")) not in consumed
+        and norm_id(c["entry"].get("message_id")) not in pending_ids
     ]
-    if pending and extra_ids:
+    if pending and extra:
         raise SentHandoffError(
             "handoff_pending",
             f"Sent handoff '{HANDOFF_FILENAME}' still holds {len(pending)} unconsumed item(s); "
-            f"{len(extra_ids)} newly detected Sent Item(s) were NOT handed off and NOT indexed. "
+            f"{len(extra)} newly detected Sent Item(s) were NOT handed off and NOT indexed. "
             "Consume the pending items (ledger) and rerun.",
-            {"pending_count": len(pending), "blocked_new_count": len(extra_ids), "consumed_pruned": consumed_pruned},
+            {
+                "pending_count": len(pending),
+                "blocked_new_count": len(extra),
+                "consumed_ignored": consumed_ignored,
+                "state": "pending",
+            },
         )
 
     cutoff = len(ordered)
@@ -227,6 +237,36 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]]) -> dict[
             cutoff = position
             break
     committed, deferred = ordered[:cutoff], ordered[cutoff:]
+
+    if deferred:
+        # A deferral is only lossless if the next watermark-derived run (window start =
+        # newest indexed day, capped at MAX_SYNC_WINDOW_DAYS) still covers every
+        # deferred item.  Otherwise refuse before any write.
+        today = _day(datetime.now(), datetime.now())
+        watermark = _sent_index_watermark(dd)
+        parse = lambda c: parse_date_to_datetime(str(c["entry"].get("at", "")))  # noqa: E731
+        reached = max(
+            [_day(parse(c), today) for c in committed] + ([_day(watermark, today)] if watermark else [])
+        )
+        first_deferred = min(_day(parse(c), today) for c in deferred)
+        if first_deferred < reached or first_deferred < today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1):
+            per_day: dict[str, int] = {}
+            for c in extra:
+                day = _day(parse(c), today).strftime("%Y-%m-%d")
+                per_day[day] = per_day.get(day, 0) + 1
+            raise SentHandoffError(
+                "handoff_overflow",
+                f"{len(extra)} new Sent Items exceed one handoff ({MAX_HANDOFF_ITEMS}) and the surplus "
+                "would not be reachable by a later run (older than the sent-index watermark or the sync "
+                "window). Nothing was handed off or indexed; sync a narrower explicit date range "
+                "(oldest days first) and consume the handoff in between.",
+                {
+                    "candidate_count": len(extra),
+                    "max_items": MAX_HANDOFF_ITEMS,
+                    "candidates_per_day": dict(sorted(per_day.items())[:60]),
+                    "state": state_before,
+                },
+            )
 
     new_items: list[dict[str, Any]] = []
     new_handoff_items: list[dict[str, Any]] = []
@@ -245,7 +285,7 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]]) -> dict[
 
     all_items = [*pending, *new_handoff_items]
     if new_handoff_items:
-        write_handoff(dd, all_items)  # persisted BEFORE the index grows
+        write_handoff(dd, all_items)  # only reached with no pending item; BEFORE the index grows
     try:
         append_sent_index_entries([c["entry"] for c in committed], dd)
     except OSError as error:
@@ -260,11 +300,11 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]]) -> dict[
             "state": "written" if new_handoff_items else ("pending" if all_items else "none"),
             "written_count": len(new_handoff_items),
             "pending_count": len(all_items),
-            "consumed_pruned": consumed_pruned,
+            "consumed_ignored": consumed_ignored,
             "already_synthesized_skipped": sum(1 for item in new_items if item["already_synthesized"]),
             "deferred_count": len(deferred),
             "headers_incomplete_count": sum(1 for item in new_items if not item["headers_complete"]),
-            "ledger_invalid_lines": ledger["invalid_lines"],
+            "ledger_torn_tail": ledger["torn_tail"],
             "max_items": MAX_HANDOFF_ITEMS,
         },
     }
@@ -295,7 +335,7 @@ def _sync_sent_items_for_date(
     )
     stats = {**stats, "new_items": [], "handoff": None, "added": 0}
     if candidates:
-        committed = _commit_sent_candidates(dd, candidates)
+        committed = _commit_sent_candidates(dd, candidates, account=account)
         stats.update(added=len(committed["new_items"]), new_items=committed["new_items"], handoff=committed["handoff"])
     return stats
 
@@ -452,11 +492,24 @@ def sync_sent_items_by_dates(
     data_dir: Path | None = None,
     include_next_day: bool = True,
 ) -> int:
-    """Sync Sent Items for a list of ISO dates (e.g. ['2026-01-19', '2026-01-20'])."""
-    total_added = 0
+    """Sync Sent Items for a list of ISO dates (e.g. ['2026-01-19', '2026-01-20']).
+
+    All dates are read first and committed **once** (one handoff, then one index
+    append).  A commit per date would let the second date collide with the unconsumed
+    handoff written for the first one (``handoff_pending``).  Returns the number of
+    newly indexed entries; a failing date raises before any write.
+    """
+    dd = data_dir or resolve_data_dir()
+    known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
+    candidates: list[dict[str, Any]] = []
     for d_str in _expand_sync_dates(dates, include_next_day=include_next_day):
-        total_added += sync_sent_items_by_date(d_str, folder=folder, account=account, data_dir=data_dir)
-    return total_added
+        date_candidates, _ = _collect_date_candidates(
+            d_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+        )
+        candidates.extend(date_candidates)
+    if not candidates:
+        return 0
+    return len(_commit_sent_candidates(dd, candidates, account=account)["new_items"])
 
 
 def _sent_index_watermark(data_dir: Path) -> datetime | None:
@@ -581,7 +634,7 @@ def sync_sent_items(
         if date_stats.get("truncated"):
             truncated_days.append(date_str)
 
-    committed = _commit_sent_candidates(dd, candidates)
+    committed = _commit_sent_candidates(dd, candidates, account=account)
     new_items = committed["new_items"]
     handoff = committed["handoff"]
     if handoff["deferred_count"]:

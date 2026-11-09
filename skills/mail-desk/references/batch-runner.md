@@ -1055,47 +1055,36 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl`/`pending-re
 
 ## Modus: `sync_sent` (Sent-Index und Synthese-Handoff, Issue #88)
 
-`--sync-sent [N]` (CLI-Wrapper: `sync-sent`) liest die Sent Items und indexiert neue Mails in
-`sent-index.jsonl`. Zusätzlich liefert der Lauf, was gegenüber dem **vorherigen Indexstand** neu ist,
-und übergibt es als begrenzten Handoff an eine nachgelagerte Synthese. Es gibt keinen weiteren
-Schalter und keine zweite CLI: Default bleibt Indexieren, die Neu-Erkennung ist immer aktiv. Die
-Synthese selbst (LLM, Promotion in Vorgänge) ist **nicht** Teil des Bundles.
+`--sync-sent [N]` indexiert neue Sent Items in `sent-index.jsonl` und übergibt, was gegenüber dem vorherigen
+Indexstand neu ist, als begrenzten Handoff `data/mail-desk/new-sent-items.json` an eine externe Synthese
+(kein weiterer Schalter, keine zweite CLI; Synthese/LLM sind nicht Teil des Bundles). Reihenfolge: Fenster
+lesen → alle Ablehnungsprüfungen → Handoff atomar schreiben → erst dann Index. Schema, Validierung,
+Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
 
-**Zusätzliche Envelope-Felder (`data`):**
+**Envelope-Felder (`data`), in jedem Sync-Ergebnis auch bei Fehlern und im Legacy-Tupel:** `new_count` (= `new_entries_indexed`),
+`new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
+Anker, `headers_complete`, `already_synthesized`) und `handoff` (`state` ∈ `none|written|pending|invalid`,
+`written_count`, `pending_count`, `consumed_ignored`, `deferred_count`, `headers_incomplete_count`, `file`).
+`headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).
 
-| Feld | Bedeutung |
+**Trigger für den Consumer:** `handoff.pending_count > 0`, nicht `new_count` (nach einem Absturz ist `new_count`
+0, obwohl Items offen sind). Die Synthese-Phase darf bei `inbox_zero` nur No-op sein, wenn auch nichts
+offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bundles). Der Consumer liest über
+`load_pending_handoff` und schreibt über `record_synthesized`.
+
+**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`, nichts indexiert außer bei `sync_partial_failure`):**
+
+| `reason_code` | Ursache |
 |---|---|
-| `new_count` / `new_entries_indexed` | Anzahl der in diesem Lauf neu indexierten Sent Items (`new_items`, identisch) |
-| `new_items[]` | je Item `message_id`, `norm_message_id`, `date`, `subject`, `from`, `to[]`, `cc[]`, `in_reply_to`, `references[]`, `envelope_id`, `folder`, `mailbox`, `thread_key`, `anchor_candidates[]`, `anchored_to`, `headers_complete`, `already_synthesized`, optional `truncated_fields[]` |
-| `handoff` | `state` (`none`/`written`/`pending`), `written_count`, `pending_count`, `consumed_pruned`, `already_synthesized_skipped`, `deferred_count`, `headers_incomplete_count`, `ledger_invalid_lines`, `max_items`, `file` |
+| `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
+| `handoff_invalid` | Handoff unlesbar/inkonsistent oder Pending-Items eines anderen Mailkontos |
+| `ledger_invalid` | Ledger-Zeile verletzt das Schema |
+| `handoff_overflow` | mehr als 200 neue Items und der Überhang wäre für einen späteren Lauf unerreichbar |
+| `sync_partial_failure` | Datumsfenster scheiterten; erfolgreiche sind übergeben und indexiert, `failed_dates` |
+| `sync_failed` | sonstiger Lese-/Transport-/Append-Fehler; ein geschriebener Handoff bleibt, Wiederholung ist idempotent |
 
-`to`/`cc` sind RFC-konform geparste Adresslisten (Anzeigenamen mit Komma bleiben heil). `cc` stammt
-aus dem Header-Read von `get_single_email_details`, der `Cc` bisher abfragte, aber nicht zurückgab.
-`headers_complete: false` heißt: Header-Read war unvollständig; `cc`, `in_reply_to` und `references`
-sind dann **unbekannt**, nicht leer. Das Item wird trotzdem indexiert (unverändertes Verhalten) und
-ist so markiert.
-
-**Trigger für den Consumer:** nicht `new_count`, sondern `handoff.pending_count > 0` (oder der Inhalt
-von `data/mail-desk/new-sent-items.json`). Nach einem Absturz kann `new_count == 0` sein, obwohl
-unkonsumierte Items im Handoff liegen. Die Datei ist die Quelle der Wahrheit, das Envelope ein Hinweis.
-Die Synthese-Phase darf bei `inbox_zero` nur dann No-op sein, wenn zusätzlich `pending_count == 0` gilt;
-diese Consumer-Pipeline (`pipelines/mail-desk-batch.md`) liegt außerhalb des Bundles.
-
-**Reihenfolge (Crash-Vertrag):** Datumsfenster lesen (ohne Schreiben) → Handoff atomar persistieren →
-erst dann `sent-index.jsonl` fortschreiben. Details und Absturzfenster:
-[`log-schema.md`](log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
-
-**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`):**
-
-| `reason_code` | Ursache | Wirkung |
-|---|---|---|
-| `handoff_pending` | Handoff enthält unkonsumierte Items, und dieser Lauf müsste weitere neue Items übergeben | Nichts übergeben, **nichts indexiert**, Handoff unverändert; `handoff.pending_count`, `blocked_new_count` |
-| `handoff_invalid` | vorhandene Handoff-Datei unlesbar oder kein gültiges Dokument | Datei unangetastet, nichts indexiert |
-| `sync_partial_failure` | einzelne Datumsfenster scheiterten | erfolgreiche Fenster sind übergeben **und** indexiert (`new_items`), `failed_dates` nennt die übrigen |
-
-Mehr als `max_items` (200) neue Items in einem Lauf werden nicht verworfen: die ältesten 200 werden
-übergeben und indexiert, der Rest wird **zurückgestellt** (weder Handoff noch Index, `deferred_count`
-und `follow_up_hint`) und nach Konsum durch einen weiteren Lauf erfasst.
+Ein erreichbarer Überhang über 200 wird zurückgestellt (`deferred_count`, `follow_up_hint`), nicht verworfen.
+`sync_sent_items_by_dates` committet alle Tage einmal.
 
 ---
 

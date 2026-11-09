@@ -2345,7 +2345,7 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
   `handoff`-Zähler (keine Items).
 
 **Zustandsautomat (Handoff-Item):** `neu erkannt` → *Handoff schreiben* → `pending` (Handoff **und** Index) →
-*Consumer: Ledger-Zeile* → `consumed` → *nächster sync-sent räumt aus dem Handoff*. Ledger-bekannte Message-IDs
+*Consumer: Ledger-Zeile* → `consumed` (abgeleitet; die Datei wird erst beim nächsten Handoff mit neuen Items ersetzt). Ledger-bekannte Message-IDs
 werden indexiert, aber nie übergeben. Ein Handoff mit offenen Items wird nie überschrieben oder erweitert.
 
 **Crash-Vertrag:** Handoff vor Index. (a) Absturz nach Handoff/vor Index: Wiederholung erkennt dieselben Items,
@@ -2360,8 +2360,33 @@ Ledger schreibt. Mehr als 200 neue Items werden zurückgestellt, nicht verworfen
 `headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
 dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
 
+**Review-/Audit-Härtung (Folgecommit):**
+- *Ein Commit je Aufruf:* `sync_sent_items_by_dates` liest alle Tage zuerst und committet einmal (ein Commit je Tag
+  kollidierte mit dem eigenen unkonsumierten Handoff); ein scheiternder Tag schreibt dort nichts.
+- *Überhang:* Ein Überhang über 200 wird nur zurückgestellt, wenn der nächste wasserzeichenbasierte Lauf ihn
+  nachweislich erreicht (Überhang nicht älter als der neue Wasserzeichentag und als `MAX_SYNC_WINDOW_DAYS`);
+  sonst `handoff_overflow` **vor jedem Write** mit `candidates_per_day`. Ein alter expliziter Datumsbereich bei
+  neuerem Index-Wasserzeichen ist damit nie ein stiller Verlust.
+- *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
+  ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
+  Handoff byte-gleich, 0 neue Items schreiben nichts.
+- *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
+  (`handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`, `sync_partial_failure`,
+  `sync_failed`).
+- *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`), Ledger-Zeilen strikt gegen das
+  Schema (`load_ledger`, `ledger_invalid`), Pending-Items eines fremden Kontos verweigern den Lauf.
+- *Abgerissene Zeilen:* zeilenweise Byte-Dekodierung (ein halbes UTF-8-Zeichen macht keine Datei unlesbar); ein
+  unparsbarer Rest wandert vor dem nächsten Append ins Sidecar `<datei>.torn`, vollständige Einträge bleiben.
+- *Immer geformt:* `new_count`/`new_items`/`handoff` auch im Legacy-Tupel, in Bindungs-, Lese-, Ledger- und
+  Append-Fehlern (`ok: false`, nie als Erfolg).
+- *Konsumvertrag:* `load_pending_handoff` (validiert, frisch verankert, Vorfahren zuerst, `waits_for`) und
+  `record_synthesized` (löst den Anker beim Schreiben erneut gegen das aktuelle Ledger auf).
+- *Dauerhaftigkeit:* Der Crash-Vertrag meint Prozess-Absturz; nach dem Handoff-Replace läuft ein best-effort
+  `fsync` des Verzeichnisses (no-op, wo nicht möglich). Stromausfall ist nicht garantiert.
+
 **Tests:** `tests/test_sent_handoff.py` (Neu-Erkennung bei 0/1/n, Cc, Bounds, atomarer Write, drei Crash-Fenster,
-Wiederholung, Ledger-Dedupe, Thread-Anker, Envelope-/Exit-Vertrag, Himalaya-Cc) plus die bestehenden
+Wiederholung, Ledger-Dedupe, Thread-Anker, Envelope-/Exit-Vertrag, Himalaya-Cc, Mehrtages-Commit, Überhang-Erreichbarkeit,
+Handoff-/Ledger-Validierung, abgerissenes UTF-8, Reply-Neuauflösung) plus die bestehenden
 `test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).

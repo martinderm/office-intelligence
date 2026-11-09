@@ -181,9 +181,12 @@ deterministischen Teil: `new_count`/`new_items[]` im Envelope, den atomaren,
 begrenzten (200 Items) Handoff und das Konsum-/Dedupe-Ledger
 `sent-synthesis-ledger.jsonl` mit Thread-Ankern ([`log-schema.md`](references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88)).
 Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern mit
-`handoff_pending` (Exit ≠ 0, nichts indexiert), bis der Consumer sie ins Ledger
-übernommen hat. Die Synthese selbst und das Ledger-Schreiben gehören der
-Consumer-Pipeline, nicht dem Bundle.
+`handoff_pending` (Exit ≠ 0, nichts indexiert, Handoff byte-gleich), bis der Consumer sie ins Ledger
+übernommen hat; ein inkonsistenter Handoff oder ein schemaverletzendes Ledger ergibt
+`handoff_invalid`/`ledger_invalid`. Der Consumer liest ausschließlich über
+`core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,
+Vorfahren zuerst) und schreibt über `record_synthesized`. Die Synthese selbst und das
+Ledger-Schreiben gehören der Consumer-Pipeline, nicht dem Bundle.
 
 ## Mutationen, Identität und Backend
 

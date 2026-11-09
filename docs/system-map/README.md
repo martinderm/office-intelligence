@@ -658,7 +658,9 @@ Envelope-ID) und übergibt neue Sent Items als begrenzten (200), atomar geschrie
 Konsum-/Dedupe-Ledger (`sent-synthesis-ledger.jsonl`, Schreiber ist der Consumer) markiert konsumierte Items und
 verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selben Vorgang. Ein unkonsumierter
 Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
-indexiert); ein ungültiger Handoff ergibt `handoff_invalid`. Dual Evidence: Handoff = operative Evidence, Ledger =
+indexiert, Handoff byte-gleich); ein inkonsistenter Handoff ergibt `handoff_invalid`, ein schemaverletzendes Ledger
+`ledger_invalid`, ein nicht erreichbarer Überhang `handoff_overflow`; `new_count`/`new_items`/`handoff` stehen auch
+in allen Fehler-Envelopes. Der Crash-Vertrag meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die
 Consumer-Pipeline (`pipelines/mail-desk-batch.md`), deren `inbox_zero`-No-op bei offenem Handoff nicht greifen darf.
 Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das

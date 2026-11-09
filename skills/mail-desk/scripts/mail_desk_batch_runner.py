@@ -613,7 +613,8 @@ def run_sync_sent_mode(
     """Compatibility facade for the extracted sent-items synchronization handler."""
     dd, binding, failure = _bind_mailbox_mode("sync_sent", account, data_dir)
     if failure is not None:
-        return failure
+        # Binding/readiness refusals keep the sync result shape: nothing was synced.
+        return {**failure, "new_count": 0, "new_items": [], "new_entries_indexed": 0}
     return _run_sync_sent_mode(
         config,
         account=binding["account"],

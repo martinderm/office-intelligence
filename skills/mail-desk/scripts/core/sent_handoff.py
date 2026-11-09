@@ -10,7 +10,13 @@ indexed* Sent Items without any content judgement or LLM logic:
   ledger.  A handoff item counts as *consumed* iff its normalized Message-ID has
   a ledger line; the ledger is also the dedupe source ("already synthesized")
   and the anchor source for thread follow-ups.
-* Pure helpers for the thread key and the thread anchor lookup.
+* Pure helpers for the thread key, the thread anchor lookup and the consumer
+  view ``load_pending_handoff`` (unconsumed items, anchors re-resolved against the
+  current ledger, ancestors first).
+
+Crash contract: a *process* crash or kill.  Files are fsynced before the atomic
+replace and, where the platform allows it, the directory entry is fsynced too;
+sudden power loss on platforms without directory fsync (Windows) is not covered.
 
 The bundle never writes synthesis results; the consumer owns the ledger writes
 (``record_synthesized`` or a direct append of the documented line schema).
@@ -20,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Iterable
@@ -30,10 +37,11 @@ HANDOFF_FILENAME = "new-sent-items.json"
 LEDGER_FILENAME = "sent-synthesis-ledger.jsonl"
 HANDOFF_SCHEMA_VERSION = 1
 LEDGER_SCHEMA_VERSION = 1
+HANDOFF_KIND = "mail-desk.new-sent-items"
 
 #: Upper bound of unconsumed items in the handoff file.  One run hands off at
-#: most this many new items; the surplus (newest first) is *deferred*, i.e. not
-#: indexed either, and is picked up by a later run once the handoff is consumed.
+#: most this many new items; a surplus is either *deferred* (provably reachable by
+#: the next watermark-derived run) or refused fail-closed before any write.
 MAX_HANDOFF_ITEMS = 200
 
 #: Per-item field bounds (the sent-index entry keeps the full values).  A bounded
@@ -42,13 +50,32 @@ MAX_REFERENCES = 50
 MAX_RECIPIENTS = 100
 MAX_SUBJECT_CHARS = 1000
 
+#: ``handoff.state`` values reported in every sync envelope (success and failure).
+HANDOFF_STATES = ("none", "written", "pending", "invalid")
+
+_ITEM_STRING_FIELDS = (
+    "message_id", "norm_message_id", "date", "subject", "from", "in_reply_to",
+    "envelope_id", "folder", "mailbox", "thread_key",
+)
+_ITEM_LIST_FIELDS = ("to", "cc", "references", "anchor_candidates")
+_ITEM_OPTIONAL_FIELDS = ("truncated_fields",)
+_ITEM_FIELDS = frozenset((*_ITEM_STRING_FIELDS, *_ITEM_LIST_FIELDS, *_ITEM_OPTIONAL_FIELDS, "anchored_to", "headers_complete"))
+_TRUNCATABLE = frozenset(("references", "to", "cc", "subject"))
+_MATCH_TYPES = frozenset(("in_reply_to", "references", "thread_key"))
+
+_LEDGER_REQUIRED = ("schema_version", "message_id", "role", "recorded_at")
+_LEDGER_FIELDS = frozenset((*_LEDGER_REQUIRED, "thread_key", "vorgang_ref", "anchored_to"))
+_LEDGER_ROLES = frozenset(("primary", "follow_up"))
+
 
 class SentHandoffError(RuntimeError):
-    """Fail-closed handoff refusal; nothing was written to the sent-index.
+    """Fail-closed refusal; nothing was written to the handoff or the sent-index.
 
-    ``reason_code`` is one of ``handoff_pending`` (unconsumed items would be
-    overwritten/extended) or ``handoff_invalid`` (existing file unreadable or not
-    a valid handoff document).
+    ``reason_code``: ``handoff_pending`` (unconsumed items would be extended),
+    ``handoff_invalid`` (handoff unreadable, inconsistent or foreign),
+    ``handoff_overflow`` (more new items than one handoff may hold and the surplus
+    would not be reachable by a later run) or ``ledger_invalid`` (a ledger line
+    violates the documented schema).  ``details["state"]`` is the ``handoff.state``.
     """
 
     def __init__(self, reason_code: str, message: str, details: dict[str, Any] | None = None) -> None:
@@ -176,70 +203,199 @@ def build_handoff_item(
     return item
 
 
-# ------------------------------------------------------------------ durable append
+# ------------------------------------------------------------------ JSONL I/O
+
+
+def read_jsonl_lines(path: Path) -> tuple[list[bytes], bytes]:
+    """Return ``(complete lines, unterminated tail)`` of a JSONL file as raw bytes.
+
+    Decoding is left to the caller per line, so a crash-torn UTF-8 sequence in the
+    tail can never make the whole file unreadable.  Blank lines are dropped.
+    """
+    if not path.exists():
+        return [], b""
+    data = path.read_bytes()
+    cut = data.rfind(b"\n") + 1
+    complete = [line for line in data[:cut].split(b"\n") if line.strip()]
+    return complete, data[cut:]
+
+
+def parse_json_object(raw: bytes) -> dict[str, Any] | None:
+    """Strict UTF-8 + JSON object parse of one line; ``None`` when not a valid object."""
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def tolerant_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    """Valid JSON-object lines (including a complete unterminated last line); junk is skipped."""
+    complete, tail = read_jsonl_lines(path)
+    records: list[dict[str, Any]] = []
+    for raw in [*complete, *([tail] if tail.strip() else [])]:
+        record = parse_json_object(raw)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _repair_torn_tail(path: Path) -> None:
+    """Make the file end on a newline without destroying valid evidence.
+
+    A complete last record merely missing its newline gets the newline.  An
+    unparsable fragment (e.g. a record cut inside a multi-byte character) is moved
+    to the append-only sidecar ``<name>.torn`` (fsynced) before it is cut off, so
+    the next append can never glue two records into one line.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return
+    data = path.read_bytes()
+    if data.endswith(b"\n"):
+        return
+    cut = data.rfind(b"\n") + 1
+    tail = data[cut:]
+    if parse_json_object(tail) is not None:
+        with path.open("ab") as handle:
+            handle.write(b"\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        return
+    with path.with_name(path.name + ".torn").open("ab") as sidecar:
+        sidecar.write(tail + b"\n")
+        sidecar.flush()
+        os.fsync(sidecar.fileno())
+    with path.open("r+b") as handle:
+        handle.truncate(cut)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def durable_append_jsonl(path: Path, entries: Iterable[dict[str, Any]]) -> int:
-    """Append JSON lines (LF) and fsync; repair a torn final line first.
-
-    A crash can leave a last line without its newline; without the repair the next
-    append would glue two records into one unparsable line.
-    """
+    """Append JSON lines (LF) and fsync; repair a torn final line first (see ``_repair_torn_tail``)."""
     lines = [json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries]
     if not lines:
         return 0
     path.parent.mkdir(parents=True, exist_ok=True)
-    needs_newline = False
-    if path.exists() and path.stat().st_size > 0:
-        with path.open("rb") as existing:
-            existing.seek(-1, os.SEEK_END)
-            needs_newline = existing.read(1) != b"\n"
+    _repair_torn_tail(path)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
-        if needs_newline:
-            handle.write("\n")
         handle.writelines(lines)
         handle.flush()
         os.fsync(handle.fileno())
     return len(lines)
 
 
+def _fsync_directory(directory: Path) -> None:
+    """Best-effort directory fsync after an atomic replace; a no-op where unsupported (Windows)."""
+    try:
+        descriptor = os.open(str(directory), os.O_RDONLY)
+    except (OSError, AttributeError):
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
 # ------------------------------------------------------------------ ledger
 
 
-def load_ledger(data_dir: Path) -> dict[str, Any]:
-    """Load the consumption ledger.
+def _iso_timestamp_ok(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
-    Returns ``{"by_message_id", "by_thread_key", "invalid_lines"}``.  A malformed
-    line is skipped and counted: the affected item then simply stays unconsumed,
-    which is the fail-closed direction.
+
+def _ledger_problem(record: dict[str, Any]) -> str | None:
+    unknown = sorted(set(record) - _LEDGER_FIELDS)
+    if unknown:
+        return f"unknown_field:{unknown[0]}"
+    for name in _LEDGER_REQUIRED:
+        if name not in record:
+            return f"missing_field:{name}"
+    if record["schema_version"] != LEDGER_SCHEMA_VERSION or isinstance(record["schema_version"], bool):
+        return "unsupported_schema_version"
+    message_id = record["message_id"]
+    if not isinstance(message_id, str) or not message_id or message_id != norm_id(message_id):
+        return "message_id_not_normalized"
+    if record["role"] not in _LEDGER_ROLES:
+        return "invalid_role"
+    if not _iso_timestamp_ok(record["recorded_at"]):
+        return "invalid_recorded_at"
+    for name in ("thread_key", "vorgang_ref", "anchored_to"):
+        if record.get(name) is not None and not isinstance(record[name], str):
+            return f"{name}_not_string"
+    anchored = record.get("anchored_to")
+    if record["role"] == "follow_up" and not anchored:
+        return "follow_up_without_anchor"
+    if record["role"] == "primary" and anchored:
+        return "primary_with_anchor"
+    return None
+
+
+def load_ledger(data_dir: Path) -> dict[str, Any]:
+    """Load and fully validate the consumption ledger; fail closed on any invalid line.
+
+    Returns ``{"by_message_id", "by_thread_key", "torn_tail"}``.  Every complete line
+    must satisfy the documented schema, else ``SentHandoffError("ledger_invalid")``
+    names the first offending line numbers.  An unterminated, unparsable *last* line
+    is a crash artifact of an interrupted append: it is ignored (``torn_tail``),
+    preserved on disk and moved to ``<ledger>.torn`` by the next append.
     """
     by_message_id: dict[str, dict[str, Any]] = {}
     by_thread_key: dict[str, dict[str, Any]] = {}
-    invalid = 0
     path = data_dir / LEDGER_FILENAME
-    if path.exists():
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                text = line.strip()
-                if not text:
-                    continue
-                try:
-                    record = json.loads(text)
-                except json.JSONDecodeError:
-                    invalid += 1
-                    continue
-                mid = norm_id(record.get("message_id")) if isinstance(record, dict) else ""
-                if not mid or record.get("schema_version") != LEDGER_SCHEMA_VERSION:
-                    invalid += 1
-                    continue
-                by_message_id.setdefault(mid, record)
-                key = norm_id(record.get("thread_key"))
-                if key:
-                    existing = by_thread_key.get(key)
-                    # Prefer the first record that carries a Vorgang reference.
-                    if existing is None or (not existing.get("vorgang_ref") and record.get("vorgang_ref")):
-                        by_thread_key[key] = record
-    return {"by_message_id": by_message_id, "by_thread_key": by_thread_key, "invalid_lines": invalid}
+    complete, tail = read_jsonl_lines(path)
+    problems: list[tuple[int, str]] = []
+    for number, raw in enumerate(complete, start=1):
+        record = parse_json_object(raw)
+        problem = "not_a_json_object" if record is None else _ledger_problem(record)
+        if problem is not None:
+            problems.append((number, problem))
+            continue
+        _index_ledger_record(by_message_id, by_thread_key, record)
+    if problems:
+        shown = ", ".join(f"line {number}: {reason}" for number, reason in problems[:5])
+        raise SentHandoffError(
+            "ledger_invalid",
+            f"Ledger '{LEDGER_FILENAME}' violates its schema ({len(problems)} invalid line(s); {shown}). "
+            "Nothing was handed off or indexed; repair the ledger and rerun.",
+            {"invalid_lines": [number for number, _ in problems[:20]], "state": "invalid"},
+        )
+    torn_tail = False
+    if tail.strip():
+        record = parse_json_object(tail)
+        if record is not None and _ledger_problem(record) is None:
+            _index_ledger_record(by_message_id, by_thread_key, record)
+        elif record is not None:
+            raise SentHandoffError(
+                "ledger_invalid",
+                f"Ledger '{LEDGER_FILENAME}' ends in a complete but schema-violating record.",
+                {"invalid_lines": [len(complete) + 1], "state": "invalid"},
+            )
+        else:
+            torn_tail = True
+    return {"by_message_id": by_message_id, "by_thread_key": by_thread_key, "torn_tail": torn_tail}
+
+
+def _index_ledger_record(
+    by_message_id: dict[str, dict[str, Any]],
+    by_thread_key: dict[str, dict[str, Any]],
+    record: dict[str, Any],
+) -> None:
+    by_message_id.setdefault(record["message_id"], record)
+    key = norm_id(record.get("thread_key"))
+    if key:
+        existing = by_thread_key.get(key)
+        # Prefer the first record that carries a Vorgang reference.
+        if existing is None or (not existing.get("vorgang_ref") and record.get("vorgang_ref")):
+            by_thread_key[key] = record
 
 
 def resolve_thread_anchor(item: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any] | None:
@@ -248,12 +404,13 @@ def resolve_thread_anchor(item: dict[str, Any], ledger: dict[str, Any]) -> dict[
     Match order: ``In-Reply-To``, ``References`` (nearest first), then the shared
     thread key.  The result names the ledger's ``vorgang_ref`` (may be ``None`` when
     the consumer recorded none) so the follow-up evidence attaches to the same Vorgang.
+    Always pass the *current* ledger: an anchor stored in a handoff is a snapshot.
     """
     by_message_id = ledger.get("by_message_id", {})
     in_reply_to = norm_id(item.get("in_reply_to"))
     own = norm_id(item.get("norm_message_id") or item.get("message_id"))
     for candidate in item.get("anchor_candidates") or thread_anchor_ids(
-        item.get("in_reply_to"), item.get("references") or [], own
+        item.get("in_reply_to"), _split_references(item.get("references")), own
     ):
         record = by_message_id.get(candidate)
         if record is not None:
@@ -264,10 +421,10 @@ def resolve_thread_anchor(item: dict[str, Any], ledger: dict[str, Any]) -> dict[
             }
     key = norm_id(item.get("thread_key"))
     record = ledger.get("by_thread_key", {}).get(key) if key else None
-    if record is not None and norm_id(record.get("message_id")) != own:
+    if record is not None and record["message_id"] != own:
         return {
             "vorgang_ref": record.get("vorgang_ref"),
-            "matched_message_id": norm_id(record.get("message_id")),
+            "matched_message_id": record["message_id"],
             "match_type": "thread_key",
         }
     return None
@@ -288,39 +445,96 @@ def record_synthesized(
 
     Call this only after the item's synthesis result is durably persisted: the
     ledger line is what releases the item from the handoff and from re-promotion.
-    An item may carry its own ``vorgang_ref``; otherwise ``vorgang_ref`` or the
-    item's resolved ``anchored_to.vorgang_ref`` is used.
+    The anchor is **re-resolved here** against the current ledger including the
+    lines of this very call, so a reply recorded after its ancestor becomes a
+    ``follow_up`` of the ancestor's Vorgang even if the handoff snapshot said
+    otherwise.  ``vorgang_ref`` precedence: the item's own, then the argument, then
+    the anchor's.
     """
     ledger = load_ledger(data_dir)
-    known = set(ledger["by_message_id"])
+    by_message_id, by_thread_key = ledger["by_message_id"], ledger["by_thread_key"]
     records: list[dict[str, Any]] = []
     for item in items:
         mid = norm_id(item.get("norm_message_id") or item.get("message_id"))
         if not mid:
             raise ValueError("Cannot record a ledger line without a Message-ID.")
-        if mid in known:
+        if mid in by_message_id:
             continue
-        known.add(mid)
-        anchor = item.get("anchored_to") or {}
-        records.append({
+        anchor = resolve_thread_anchor(item, ledger)
+        ref = item.get("vorgang_ref") or vorgang_ref or (anchor or {}).get("vorgang_ref")
+        if ref is not None and not isinstance(ref, str):
+            raise ValueError("vorgang_ref must be a string.")
+        record = {
             "schema_version": LEDGER_SCHEMA_VERSION,
             "message_id": mid,
             "thread_key": norm_id(item.get("thread_key")) or thread_key(
                 item.get("in_reply_to"), _split_references(item.get("references")), mid
             ),
-            "vorgang_ref": item.get("vorgang_ref") or vorgang_ref or anchor.get("vorgang_ref"),
+            "vorgang_ref": ref,
             "role": "follow_up" if anchor else "primary",
-            "anchored_to": anchor.get("matched_message_id"),
+            "anchored_to": anchor["matched_message_id"] if anchor else None,
             "recorded_at": utc_now_iso(),
-        })
+        }
+        _index_ledger_record(by_message_id, by_thread_key, record)
+        records.append(record)
     return durable_append_jsonl(data_dir / LEDGER_FILENAME, records)
 
 
 # ------------------------------------------------------------------ handoff file
 
 
+def _anchored_to_problem(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"vorgang_ref", "matched_message_id", "match_type"}:
+        return "anchored_to_malformed"
+    if value["vorgang_ref"] is not None and not isinstance(value["vorgang_ref"], str):
+        return "anchored_to_malformed"
+    if not isinstance(value["matched_message_id"], str) or not value["matched_message_id"]:
+        return "anchored_to_malformed"
+    if value["match_type"] not in _MATCH_TYPES:
+        return "anchored_to_malformed"
+    return None
+
+
+def _item_problem(item: dict[str, Any]) -> str | None:
+    unknown = sorted(set(item) - _ITEM_FIELDS)
+    if unknown:
+        return f"unknown_field:{unknown[0]}"
+    for name in (*_ITEM_STRING_FIELDS, *_ITEM_LIST_FIELDS, "headers_complete", "anchored_to"):
+        if name not in item:
+            return f"missing_field:{name}"
+    for name in _ITEM_STRING_FIELDS:
+        if not isinstance(item[name], str):
+            return f"{name}_not_string"
+    for name in _ITEM_LIST_FIELDS:
+        if not isinstance(item[name], list) or not all(isinstance(entry, str) for entry in item[name]):
+            return f"{name}_not_string_list"
+    if not isinstance(item["headers_complete"], bool):
+        return "headers_complete_not_bool"
+    mid = norm_id(item["message_id"])
+    if not mid or item["norm_message_id"] != mid:
+        return "identity_mismatch"
+    if not item["mailbox"].strip():
+        return "mailbox_missing"
+    if item["thread_key"] != thread_key(item["in_reply_to"], item["references"], item["message_id"]):
+        return "thread_key_mismatch"
+    if item["anchor_candidates"] != thread_anchor_ids(item["in_reply_to"], item["references"], item["message_id"]):
+        return "anchor_candidates_mismatch"
+    truncated = item.get("truncated_fields", [])
+    if not isinstance(truncated, list) or not set(truncated) <= _TRUNCATABLE:
+        return "truncated_fields_malformed"
+    return _anchored_to_problem(item["anchored_to"])
+
+
 def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
-    """Read the handoff items; ``[]`` when absent.  Fail closed when invalid."""
+    """Read the handoff items; ``[]`` when absent.  Fully validated, fail closed.
+
+    Document shape, count, bound, every item field and the identity consistency
+    (normalized Message-ID, thread key, anchor candidates, no duplicates) are
+    checked; any violation raises ``SentHandoffError("handoff_invalid")`` and the
+    file is never consumed or rewritten.
+    """
     path = data_dir / HANDOFF_FILENAME
     if not path.exists():
         return []
@@ -330,7 +544,7 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
             "handoff_invalid",
             f"Existing sent handoff '{HANDOFF_FILENAME}' is not a valid handoff document ({reason}); "
             "it was left untouched and nothing was indexed.",
-            {"reason": reason},
+            {"reason": reason, "state": "invalid"},
         )
 
     try:
@@ -339,33 +553,100 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
         raise invalid(type(error).__name__) from error
     if not isinstance(document, dict) or document.get("schema_version") != HANDOFF_SCHEMA_VERSION:
         raise invalid("unsupported_schema")
-    items = document.get("items")
+    if document.get("kind") != HANDOFF_KIND or not _iso_timestamp_ok(document.get("generated_at")):
+        raise invalid("document_header_malformed")
+    max_items, count, items = document.get("max_items"), document.get("count"), document.get("items")
+    if not isinstance(max_items, int) or isinstance(max_items, bool) or max_items < 1:
+        raise invalid("max_items_malformed")
     if not isinstance(items, list) or not all(isinstance(item, dict) for item in items):
         raise invalid("items_not_a_list_of_objects")
+    if count != len(items) or len(items) > max_items:
+        raise invalid("count_or_bound_mismatch")
     seen: set[str] = set()
-    for item in items:
-        mid = norm_id(item.get("norm_message_id") or item.get("message_id"))
-        if not mid or mid in seen:
-            raise invalid("missing_or_duplicate_message_id")
-        seen.add(mid)
+    for index, item in enumerate(items):
+        problem = _item_problem(item)
+        if problem is None and item["norm_message_id"] in seen:
+            problem = "duplicate_message_id"
+        if problem is not None:
+            raise invalid(f"item[{index}]: {problem}")
+        seen.add(item["norm_message_id"])
     return items
 
 
 def write_handoff(data_dir: Path, items: list[dict[str, Any]]) -> None:
-    """Atomically replace the handoff document (never called with more than the bound)."""
+    """Atomically replace the handoff document (never called with more than the bound).
+
+    Only callers that hold no unconsumed item may replace the file; see
+    ``sent_indexer._commit_sent_candidates``.
+    """
     if len(items) > MAX_HANDOFF_ITEMS:
         raise SentHandoffError(
             "handoff_invalid",
             f"Refusing to write {len(items)} handoff items (bound {MAX_HANDOFF_ITEMS}).",
+            {"state": "invalid"},
         )
     atomic_write_json(
         data_dir / HANDOFF_FILENAME,
         {
             "schema_version": HANDOFF_SCHEMA_VERSION,
-            "kind": "mail-desk.new-sent-items",
+            "kind": HANDOFF_KIND,
             "generated_at": utc_now_iso(),
             "max_items": MAX_HANDOFF_ITEMS,
             "count": len(items),
             "items": items,
         },
     )
+    _fsync_directory(data_dir)
+
+
+def unconsumed(items: list[dict[str, Any]], ledger: dict[str, Any]) -> list[dict[str, Any]]:
+    """Handoff items whose Message-ID has no ledger line (file order)."""
+    consumed = ledger["by_message_id"]
+    return [item for item in items if item["norm_message_id"] not in consumed]
+
+
+def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
+    """Consumer view: the unconsumed items, re-anchored against the *current* ledger.
+
+    Read-only.  Each returned item carries a fresh ``anchored_to`` and ``waits_for``
+    (pending ancestors from the same handoff, which must be promoted and recorded
+    first); items are ordered ancestors first, otherwise in handoff order.  Consume
+    loop: take the first item, promote it, ``record_synthesized`` it, call this
+    again -- replies then resolve against their just-recorded ancestors.
+    Raises ``SentHandoffError`` for an invalid handoff or ledger.
+    """
+    ledger = load_ledger(data_dir)
+    items = read_handoff(data_dir)
+    pending = unconsumed(items, ledger)
+    pending_ids = {item["norm_message_id"] for item in pending}
+    resolved = [
+        {
+            **item,
+            "anchored_to": resolve_thread_anchor(item, ledger),
+            "waits_for": [c for c in item["anchor_candidates"] if c in pending_ids],
+        }
+        for item in pending
+    ]
+    ordered: list[dict[str, Any]] = []
+    placed: set[str] = set()
+    remaining = list(resolved)
+    while remaining:
+        for candidate in remaining:
+            if all(wait in placed for wait in candidate["waits_for"]):
+                ordered.append(candidate)
+                placed.add(candidate["norm_message_id"])
+                remaining.remove(candidate)
+                break
+        else:  # ancestry cycle in untrusted headers: keep handoff order for the rest
+            ordered.extend(remaining)
+            break
+    return {"items": ordered, "pending_count": len(ordered), "consumed_ignored": len(items) - len(pending)}
+
+
+def peek_handoff_state(data_dir: Path) -> dict[str, Any]:
+    """Read-only ``{"state", "pending_count"}`` for error envelopes; never raises."""
+    try:
+        pending = len(unconsumed(read_handoff(data_dir), load_ledger(data_dir)))
+    except Exception:  # noqa: BLE001 - diagnostics must never mask the real failure
+        return {"state": "invalid", "pending_count": None}
+    return {"state": "pending" if pending else "none", "pending_count": pending}
