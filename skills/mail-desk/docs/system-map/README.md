@@ -66,9 +66,9 @@ Unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47). Historische
 Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
 **Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum `feat/issue-18-raw-eml`
-auf Basis von `c6b8d2e` (Raw-EML-Lieferung), die Review-Korrekturen eingeschlossen; alle älteren
-Frames dieser Seite sind historisch):** 352 Dateien im Bundle, 215 unter `skills/mail-desk/`, 80 Python-Dateien unter
-`scripts/` (davon 65 unter `scripts/core/`), 111 Testmodule `tests/test_*.py` (`git ls-files --cached
+auf Basis des finalen Code-Head `f3256dd` einschließlich der Härtungsrunden; alle älteren
+Frames dieser Seite sind historisch):** 353 Dateien im Bundle, 216 unter `skills/mail-desk/`, 80 Python-Dateien unter
+`scripts/` (davon 65 unter `scripts/core/`), 112 Testmodule `tests/test_*.py` (`git ls-files --cached
 --others --exclude-standard`, im Lauf frisch erhoben). Raw-EML-Import: §42. Die Anzahl der Testfälle
 wird hier nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
 
