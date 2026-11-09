@@ -143,9 +143,15 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
         if runner_data.get("executed_count") is not None:
             data["executed_count"] = runner_data.get("executed_count")
         for key in ("recovery_required", "date_windows_synced", "envelopes_examined",
-                    "total_envelopes_examined", "new_entries_indexed"):
+                    "total_envelopes_examined", "new_entries_indexed", "new_count", "reason_code"):
             if runner_data.get(key) is not None:
                 data[key] = runner_data[key]
+        handoff = runner_data.get("handoff")
+        if isinstance(handoff, dict):
+            # Counts only: the items stay in the persisted runner envelope and the handoff file.
+            data["handoff"] = {key: handoff[key] for key in (
+                "state", "pending_count", "written_count", "deferred_count", "file",
+            ) if key in handoff}
     return data
 
 

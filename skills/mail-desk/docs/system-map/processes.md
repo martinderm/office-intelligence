@@ -652,3 +652,33 @@ execute ─► verify / reconcile ─► completion_report + synthesis_handoff (
 Stopbedingungen: fehlende Kataloge, mehrdeutiges Ziel, nichtkanonischer Pfad,
 fehlendes Dossier, doppelte Event-IDs, nicht deklarierte Cloud-Ressource.
 Details: L2-§40, [`objects.md`](objects.md) §8, [`effects.md`](effects.md) §8.
+
+## 9. Sent-Items-Handoff für die Synthese (Issue #88)
+
+`sync-sent` bleibt ein lesender Mailbox-Zugriff mit lokalen Schreibzugriffen; neu ist, dass es die **neuen**
+Sent Items (gegenüber dem vorherigen Indexstand) als Handoff für eine nachgelagerte Synthese bereitstellt.
+Es gibt keine Synthese-, LLM- oder Katalog-Logik im Bundle; der Consumer entscheidet über Promotion.
+
+```text
+sync-sent
+  ├─ 1. Datumsfenster lesen (Watermark-Fenster, keine Schreibzugriffe)  ─► Kandidaten (Index-neu, Cc, Thread-Header)
+  ├─ 2. Ledger + vorhandenes Handoff laden  (ungültig ⇒ handoff_invalid, Stopp)
+  │      konsumierte Items aus dem Handoff entfernen (atomar)
+  ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (nichts indexiert)
+  ├─ 4. Handoff atomar schreiben (≤ 200 Items; Überhang zurückgestellt)
+  ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
+  └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}
+
+Consumer (extern): Handoff lesen → Synthese → record_synthesized (Ledger) → nächster sync-sent räumt auf
+```
+
+* **Trigger-Regel:** `handoff.pending_count > 0`, nicht `new_count`. Die Synthese-Phase ist bei `inbox_zero`
+  nur dann No-op, wenn auch kein Handoff offen ist (Consumer-Pipeline, außerhalb des Bundles).
+* **Idempotenz:** Erkennung relativ zum Index; Merge per normalisierter Message-ID; Ledger-Treffer werden
+  indexiert, aber nie erneut übergeben (`already_synthesized`); Folge-Mails im Thread tragen `anchored_to`.
+* **Absturzfenster:** Handoff geschrieben/Index nicht ⇒ Wiederholung erkennt dieselben Items, kein Duplikat;
+  Index geschrieben/nicht konsumiert ⇒ Items bleiben `pending`; Tabelle in
+  [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Nicht lösbar im Bundle:
+  Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
+* **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
+  denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

@@ -173,6 +173,18 @@ beim Draft bzw. `--allow-fewer` beim Signieren der vorgesehene Weg, nie eine sti
 Erhöhung. Die konkrete Consumer-Datei `pipelines/mail-desk-batch.md` im
 Consumer-Repo übernimmt diese Guard-Clause als separaten Consumer-Schritt.
 
+**Ausnahme Sent-Items (Issue #88):** Der No-op bei `inbox_zero` gilt für die
+Synthese-Phase nur, wenn der vorangehende `sync-sent` kein offenes Handoff meldet
+(`handoff.pending_count == 0`; Datei `data/mail-desk/new-sent-items.json`). Neue
+ausgehende Mails sind Primärevidenz, auch bei leerer Inbox. Das Bundle liefert nur den
+deterministischen Teil: `new_count`/`new_items[]` im Envelope, den atomaren,
+begrenzten (200 Items) Handoff und das Konsum-/Dedupe-Ledger
+`sent-synthesis-ledger.jsonl` mit Thread-Ankern ([`log-schema.md`](references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88)).
+Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern mit
+`handoff_pending` (Exit ≠ 0, nichts indexiert), bis der Consumer sie ins Ledger
+übernommen hat. Die Synthese selbst und das Ledger-Schreiben gehören der
+Consumer-Pipeline, nicht dem Bundle.
+
 ## Mutationen, Identität und Backend
 
 Vor jeder lokalen oder externen Mutation besteht verifizierte `workspace-lock`-

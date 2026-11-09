@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..common import resolve_data_dir
+from ..sent_handoff import HANDOFF_FILENAME, SentHandoffError, SentSyncPartialFailure
 from ..sent_indexer import sync_sent_items
 
 
@@ -20,6 +21,36 @@ def _dependency(
     return default
 
 
+def _success_envelope(sync_result: Mapping[str, Any], folder: str, dd: Path) -> dict[str, Any]:
+    examined = int(sync_result.get("envelopes_examined", 0) or 0)
+    new_items = list(sync_result.get("new_items") or [])
+    envelope: dict[str, Any] = {
+        "ok": True,
+        "mode": "sync_sent",
+        "folder": folder,
+        # date_windows_synced counts the queried date buckets; the envelope
+        # counts are the real, summed envelope number (MD-SE2 separation).
+        "date_windows_synced": int(sync_result.get("date_windows_synced", 0) or 0),
+        "envelopes_examined": examined,
+        "total_envelopes_examined": examined,
+        "new_entries_indexed": int(sync_result.get("new_entries_indexed", 0) or 0),
+        # Additive (#88): the Sent Items that are new relative to the previous index state.
+        "new_count": int(sync_result.get("new_count", len(new_items)) or 0),
+        "new_items": new_items,
+        "sent_index_file": str(dd / "sent-index.jsonl"),
+    }
+    handoff = sync_result.get("handoff")
+    if isinstance(handoff, Mapping):
+        envelope["handoff"] = {**handoff, "file": str(dd / HANDOFF_FILENAME)}
+    truncated_days = sync_result.get("truncated_days")
+    if truncated_days:
+        envelope["truncated_days"] = list(truncated_days)
+    follow_up_hint = sync_result.get("follow_up_hint")
+    if follow_up_hint:
+        envelope["follow_up_hint"] = follow_up_hint
+    return envelope
+
+
 def run_sync_sent_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -27,7 +58,12 @@ def run_sync_sent_mode(
     *,
     dependencies: Mapping[str, Callable[..., Any]] | None = None,
 ) -> dict[str, Any]:
-    """Fetch recent Sent Items and index them into sent-index.jsonl."""
+    """Fetch recent Sent Items, hand off the new ones and index them into sent-index.jsonl.
+
+    A refused handoff (``handoff_pending``/``handoff_invalid``) or a partial date
+    failure is returned as ``ok: False`` so the runner exits non-zero; the former
+    wrote nothing, the latter committed (handed off + indexed) the successful dates.
+    """
     resolve_data = _dependency(dependencies, "resolve_data_dir", resolve_data_dir)
     sync_items = _dependency(dependencies, "sync_sent_items", sync_sent_items)
 
@@ -36,35 +72,39 @@ def run_sync_sent_mode(
     count = int(config.get("count", 150))
     folder = config.get("folder", "Sent Items")
 
-    sync_result = sync_items(
-        count=count,
-        folder=folder,
-        account=account,
-        data_dir=dd,
-        workspace_root=workspace_root,
-    )
-
-    if isinstance(sync_result, Mapping):
-        examined = int(sync_result.get("envelopes_examined", 0) or 0)
-        envelope: dict[str, Any] = {
-            "ok": True,
+    try:
+        sync_result = sync_items(
+            count=count,
+            folder=folder,
+            account=account,
+            data_dir=dd,
+            workspace_root=workspace_root,
+        )
+    except SentHandoffError as error:
+        return {
+            "ok": False,
             "mode": "sync_sent",
             "folder": folder,
-            # date_windows_synced counts the queried date buckets; the envelope
-            # counts are the real, summed envelope number (MD-SE2 separation).
-            "date_windows_synced": int(sync_result.get("date_windows_synced", 0) or 0),
-            "envelopes_examined": examined,
-            "total_envelopes_examined": examined,
-            "new_entries_indexed": int(sync_result.get("new_entries_indexed", 0) or 0),
+            "message": str(error),
+            "reason_code": error.reason_code,
+            "new_count": 0,
+            "new_items": [],
+            "new_entries_indexed": 0,
+            "handoff": {**error.details, "state": error.reason_code, "file": str(dd / HANDOFF_FILENAME)},
             "sent_index_file": str(dd / "sent-index.jsonl"),
         }
-        truncated_days = sync_result.get("truncated_days")
-        if truncated_days:
-            envelope["truncated_days"] = list(truncated_days)
-        follow_up_hint = sync_result.get("follow_up_hint")
-        if follow_up_hint:
-            envelope["follow_up_hint"] = follow_up_hint
-        return envelope
+    except SentSyncPartialFailure as error:
+        partial = _success_envelope(error.result, folder, dd)
+        partial.update(
+            ok=False,
+            message=str(error),
+            reason_code="sync_partial_failure",
+            failed_dates=list(error.failed_dates),
+        )
+        return partial
+
+    if isinstance(sync_result, Mapping):
+        return _success_envelope(sync_result, folder, dd)
 
     # Legacy dependency contract: an injected ``(total_examined, added)`` tuple
     # keeps the historical envelope shape (batch-runner compatibility facades).

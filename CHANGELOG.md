@@ -8,6 +8,22 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-09 — Issue #88: Sent-Items-Handoff für die Synthese (Teillieferung)
+
+#### Added
+
+- **mail-desk `sync-sent`:** Envelope-Felder `new_count`/`new_items[]` (inkl. `Cc`,
+  `In-Reply-To`, `References`, Envelope-ID, Thread-Schlüssel) und `handoff`; begrenzter (200),
+  atomar geschriebener, idempotenter Handoff `data/mail-desk/new-sent-items.json`, der **vor**
+  dem Sent-Index fortgeschrieben wird. Konsum-/Dedupe-Ledger
+  `sent-synthesis-ledger.jsonl` mit Thread-Ankern (`core/sent_handoff.py`).
+  `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
+- **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
+  indexiert), `handoff_invalid`, `sync_partial_failure`; Exit ≠ 0. Überhang > 200 wird
+  zurückgestellt statt verworfen.
+- Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
+  offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
+
 ### 2026-10-18 — Historische FR-Ledger eingefroren
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots

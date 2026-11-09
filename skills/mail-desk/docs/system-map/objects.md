@@ -531,3 +531,29 @@ Kanonische Referenzstruktur für aus E-Mail-Anhängen extrahierte iCalendar-Obje
   - `recurrence_id`: Optionaler Wiederholungsbezeichner (`RECURRENCE-ID` in UTC/Normalform oder `None`).
   - `content_sha256`: Deterministischer 64-Hex SHA-256 Hash des normalisierten Roh-iCalendar-Texts.
 * **Quarantäne-Erweiterung:** `attachment_policy.py` stuft `text/calendar` und `application/ics` als zulässige MIME-Typen ein; `attachment_extract.py` extrahiert den Textinhalt bounded ohne Ausführung.
+
+---
+
+## 10. Sent-Synthese-Handoff und Konsum-Ledger (Issue #88)
+
+Beide Dateien liegen im Datenbereich des Consumers (`data/mail-desk/`), werden nur zur Laufzeit geschrieben und
+nie im Bundle. Implementierung: [`scripts/core/sent_handoff.py`](../../scripts/core/sent_handoff.py).
+Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
+
+### 10.1 Handoff (`new-sent-items.json`)
+* **Rolle:** operative Evidence (Transit), kein Referenzwissen (Dual Evidence).
+* **Schema:** `schema_version: 1`, `kind: "mail-desk.new-sent-items"`, `generated_at`, `max_items` (200), `count`,
+  `items[]` (Felder wie `new_items[]` des `sync_sent`-Envelopes ohne `already_synthesized`).
+* **Schreiben:** atomar (`atomic_write_json`: Temp-Datei, `fsync`, `os.replace`), vor dem Fortschreiben von
+  `sent-index.jsonl`; nie bei 0 neuen Items; nie mehr als 200 Items.
+* **Lesen:** strikt; unlesbar, falsches Schema, fehlende oder doppelte Message-ID ⇒ `handoff_invalid`, Datei unangetastet.
+
+### 10.2 Ledger (`sent-synthesis-ledger.jsonl`)
+* **Rolle:** Konsum-Status, Dedupe-Quelle und Thread-Anker-Quelle. Append-only, Schreiber ist der Consumer.
+* **Zeile (Schema 1):** `message_id` (normalisiert), `thread_key`, `vorgang_ref` (opak, optional), `role`
+  (`primary`/`follow_up`), `anchored_to`, `recorded_at`.
+* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger.
+
+### 10.3 Helfer (rein, deterministisch, ohne LLM)
+`thread_key`, `thread_anchor_ids`, `resolve_thread_anchor` (Reihenfolge `in_reply_to` → `references` nächster Vorfahr
+zuerst → `thread_key`), `is_synthesized`, `record_synthesized` (idempotent), `parse_address_list`.

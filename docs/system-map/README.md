@@ -649,3 +649,22 @@ Offline-Tests).
 
 L2: [Mail-Desk §42](../../skills/mail-desk/docs/system-map/README.md#42-issue-18--raw-eml-import-zweite-lieferung).
 Tests: `skills/mail-desk/tests/test_draft_raw_eml_*.py`.
+
+## 14. Issue #88: Sent-Items-Handoff für die Synthese
+
+`sync-sent` meldet im Envelope `new_count`/`new_items[]` (inklusive Cc, `In-Reply-To`, `References`,
+Envelope-ID) und übergibt neue Sent Items als begrenzten (200), atomar geschriebenen, idempotenten Handoff
+`data/mail-desk/new-sent-items.json` **vor** dem Fortschreiben von `sent-index.jsonl`. Ein
+Konsum-/Dedupe-Ledger (`sent-synthesis-ledger.jsonl`, Schreiber ist der Consumer) markiert konsumierte Items und
+verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selben Vorgang. Ein unkonsumierter
+Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
+indexiert); ein ungültiger Handoff ergibt `handoff_invalid`. Dual Evidence: Handoff = operative Evidence, Ledger =
+Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die
+Consumer-Pipeline (`pipelines/mail-desk-batch.md`), deren `inbox_zero`-No-op bei offenem Handoff nicht greifen darf.
+Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das
+Stehenbleiben der Sent-Indexierung bis zum Konsum.
+
+L2: [Mail-Desk §43](../../skills/mail-desk/docs/system-map/README.md#43-issue-88--sent-items-handoff-für-die-synthese-deterministischer-bundle-teil).
+Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88),
+[Log-Schema](../../skills/mail-desk/references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
+Tests: `skills/mail-desk/tests/test_sent_handoff.py`.

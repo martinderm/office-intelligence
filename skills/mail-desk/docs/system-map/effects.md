@@ -264,3 +264,16 @@ Details: L2-§39, [`objects.md`](objects.md) §7, [`processes.md`](processes.md)
 - `classifier.py`/Matching bleiben unangetastet, `classifier_revision` rotiert nicht.
 
 Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md) §8.
+
+## 9. Sent-Items-Handoff (Issue #88)
+
+* **Schreibreihenfolge:** Handoff (atomar) vor Sent-Index (Append mit `fsync`); eine abgerissene letzte Zeile in
+  `sent-index.jsonl`/Ledger wird vor dem nächsten Append mit einem Zeilenumbruch repariert.
+* **Fail-closed:** unkonsumiertes Handoff + weitere neue Items (`handoff_pending`) und ungültiges Handoff
+  (`handoff_invalid`) stoppen vor jedem Index-Write, Exit ≠ 0. Teilweise gescheiterte Datumsfenster committen die
+  erfolgreichen und melden `sync_partial_failure`. Nichts wird still verworfen: Überlauf > 200 wird zurückgestellt
+  (`deferred_count`), gekürzte Felder stehen in `truncated_fields`.
+* **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
+  sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
+* **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion
+  möglich (Consumer-Idempotenz nötig).

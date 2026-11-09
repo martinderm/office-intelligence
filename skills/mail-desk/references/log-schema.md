@@ -10,6 +10,8 @@ data/mail-desk/
   pending-review.jsonl      # nur offene Review-Fälle
   replies-needed.jsonl      # nur offene Antwortfälle
   sent-index.jsonl          # leichter Index gesendeter Antworten (Header-/Routingmetadaten)
+  new-sent-items.json       # Issue #88: begrenzter Transit-Handoff neuer Sent Items (operative Evidence)
+  sent-synthesis-ledger.jsonl # Issue #88: append-only Konsum-/Dedupe-Ledger der Synthese
   final-location-index.json # schneller O(1)-Lookup für finale Backend-Location (nur script-basiert)
   runner-progress.json      # atomare Fortschrittsdatei bei Batch-Läufen
   injection-quarantine/     # Issue #62: operative Evidence, kein Referenzwissen
@@ -174,6 +176,78 @@ Regeln:
 - `confidence` setzen, wenn Zuordnung heuristisch erfolgte.
 - `updated_at` dokumentiert die letzte Datenaktualisierung des Eintrags.
 - `backend_locator` ist die zuletzt verifizierte, backend-spezifische Kennung im Sent-Bereich.
+- Der Eintragsschlüsselsatz von `sync-sent` ist unverändert; `cc`, `thread_key` und Anker stehen nur im Handoff (nächster Abschnitt).
+
+## new-sent-items.json (Synthese-Handoff, Issue #88)
+
+Operative Evidence (Transit), kein Referenzwissen. Die Datei ist die bounded, atomar (`tmp` + `fsync` +
+`replace`) geschriebene Liste der neu indexierten, noch **nicht konsumierten** Sent Items. Sie wird nur
+geschrieben, wenn ein Lauf mindestens ein neues, noch nicht synthetisiertes Item übergibt, nie bei 0.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "mail-desk.new-sent-items",
+  "generated_at": "2026-11-09T09:00:00Z",
+  "max_items": 200,
+  "count": 1,
+  "items": [{
+    "message_id": "<sent@id>", "norm_message_id": "sent@id",
+    "date": "Mon, 09 Nov 2026 09:55:00 +0100",
+    "subject": "Re: ...", "from": "Owner <owner@example.org>",
+    "to": ["Partner <partner@example.org>"], "cc": ["Doe, John <john@example.org>"],
+    "in_reply_to": "<mid@id>", "references": ["<root@id>", "<mid@id>"],
+    "envelope_id": "4711", "folder": "Sent Items", "mailbox": "MAIN-MAILBOX",
+    "thread_key": "root@id", "anchor_candidates": ["mid@id", "root@id"],
+    "anchored_to": {"vorgang_ref": "V-7", "matched_message_id": "mid@id", "match_type": "in_reply_to"},
+    "headers_complete": true
+  }]
+}
+```
+
+**Grenzen (nie still gekappt):** höchstens 200 Items; `references` höchstens 50 (Thread-Wurzel plus die
+49 nächsten Vorfahren), `to`/`cc` höchstens 100 Adressen, `subject` höchstens 1000 Zeichen. Wurde ein Feld
+begrenzt, nennt `truncated_fields` es; der Sent-Index behält den vollen Wert.
+
+**Thread-Schlüssel:** `thread_key` = erste `References`-Message-ID (Thread-Wurzel), sonst `In-Reply-To`,
+sonst die eigene Message-ID (jeweils normalisiert). `anchor_candidates` = `In-Reply-To`, dann `References`
+rückwärts (nächster Vorfahr zuerst), ohne die eigene ID. `anchored_to` ist `null` oder der erste Treffer im
+Ledger in der Reihenfolge `in_reply_to` → `references` → `thread_key`; `vorgang_ref` kann `null` sein.
+
+### sent-synthesis-ledger.jsonl (Konsum- und Dedupe-Ledger)
+
+Append-only, ein Objekt je Zeile, Schreiber ist der **Consumer** (nach dauerhaft gesichertem
+Synthese-Ergebnis), z. B. über `core.sent_handoff.record_synthesized(data_dir, items, vorgang_ref=...)`
+oder direktes Anhängen derselben Zeilen:
+
+```json
+{"schema_version": 1, "message_id": "sent@id", "thread_key": "root@id", "vorgang_ref": "V-7",
+ "role": "primary|follow_up", "anchored_to": "mid@id|null", "recorded_at": "2026-11-09T09:30:00Z"}
+```
+
+- **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
+  im Ledger steht. Der nächste `sync-sent` entfernt konsumierte Items atomar aus dem Handoff
+  (`consumed_pruned`); eine leere Datei (`count: 0`) bedeutet „nichts offen“.
+- **Dedupe:** Message-IDs im Ledger werden nie erneut übergeben (`already_synthesized`, trotzdem
+  indexiert). Eine Antwort im selben Thread wird über `anchored_to` am selben `vorgang_ref` verankert
+  (`role: follow_up`), nicht als neuer Vorgang.
+- Unlesbare Ledger-Zeilen werden übersprungen und als `ledger_invalid_lines` gemeldet; das betroffene Item
+  bleibt unkonsumiert (fail-closed). Eine abgerissene letzte Zeile wird vor dem nächsten Append repariert.
+- Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor** dem Ergebnis zu
+  schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz liegt beim Consumer).
+
+### Absturzfenster (`sync-sent`)
+
+| Absturz | Zustand | Wiederholungslauf |
+|---|---|---|
+| vor dem Handoff-Write | nichts geschrieben | liest alles neu |
+| nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
+| nach Index, vor Konsum | Items im Handoff **und** im Index | `new_count: 0`, `handoff.state: pending`; neue Items → `handoff_pending` bis zum Konsum |
+| während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items fallen aus dem Handoff |
+
+Nicht durch das Bundle lösbar: Absturz des Consumers zwischen Synthese-Ergebnis und Ledger-Zeile
+(Doppel-Promotion möglich), parallele Schreiber ohne Lease und manuelles Löschen der Handoff-Datei (verwirft
+unkonsumierte Items bewusst).
 
 ## Closing an item
 

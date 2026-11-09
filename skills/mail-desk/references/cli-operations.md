@@ -121,7 +121,13 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150).
    `sync-sent` delegiert ausschließlich an den bestehenden `--sync-sent`-Modus:
    Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
-   `batch-sync-sent.json` und Wrapper-Logs). Es führt keine Send-/APPEND-Aktion aus.
+   `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
+   `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
+   Fail-closed-Codes `handoff_pending`/`handoff_invalid`:
+   [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
+   Der Summary-Envelope nennt `new_count`, `reason_code` und `handoff` (nur Zähler);
+   die Items stehen im persistierten Runner-Envelope und im Handoff.
+   Es führt keine Send-/APPEND-Aktion aus.
    Vor jeglicher Wrapper-Persistenz oder Pruning wird der eigene Workspace-Lock
    mit dem bestehenden shared Guard geprüft, ohne Legacy-Bypass. Dafür dienen
    `--workspace-lease-id`/`--workspace-conversation-id` oder die bestehenden

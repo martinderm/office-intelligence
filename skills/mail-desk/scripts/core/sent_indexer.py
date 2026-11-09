@@ -11,6 +11,19 @@ from typing import Any
 
 from .common import atomic_rewrite_jsonl, normalize_message_id, utc_now_iso, resolve_data_dir
 from .himalaya import run_himalaya, get_single_email_details
+from .sent_handoff import (
+    HANDOFF_FILENAME,
+    MAX_HANDOFF_ITEMS,
+    SentHandoffError,
+    SentSyncPartialFailure,
+    build_handoff_item,
+    durable_append_jsonl,
+    load_ledger,
+    norm_id,
+    read_handoff,
+    resolve_thread_anchor,
+    write_handoff,
+)
 from .matching.reply_heuristics import (
     DEFAULT_NO_REPLY_SENDER_TOKENS,
     DEFAULT_SENT_SENDER_DOMAIN_WHITELIST,
@@ -139,17 +152,122 @@ def append_sent_index_entries(
                 except Exception:
                     continue
 
-    added_count = 0
-    with sent_path.open("a", encoding="utf-8") as f:
-        for entry in entries:
-            mid = normalize_message_id(str(entry.get("message_id", "")))
-            if not mid or mid in existing_mids:
-                continue
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            existing_mids.add(mid)
-            added_count += 1
+    new_entries: list[dict[str, Any]] = []
+    for entry in entries:
+        mid = normalize_message_id(str(entry.get("message_id", "")))
+        if not mid or mid in existing_mids:
+            continue
+        existing_mids.add(mid)
+        new_entries.append(entry)
 
-    return added_count
+    return durable_append_jsonl(sent_path, new_entries)
+
+
+def _known_index_ids(dd: Path) -> tuple[set[str], set[str]]:
+    """Message-IDs and Sent envelope ids already present in the sent-index."""
+    index = load_sent_index(dd)
+    eids = {str(e.get("sent_envelope_id", "")) for e in index["all_entries"] if e.get("sent_envelope_id")}
+    return set(index["by_message_id"].keys()), eids
+
+
+def _candidate_sort_key(candidate: dict[str, Any]) -> tuple[Any, ...]:
+    """Oldest first; undated last; envelope id as the deterministic tie-break."""
+    entry = candidate["entry"]
+    parsed = parse_date_to_datetime(str(entry.get("at", "")))
+    eid = str(entry.get("sent_envelope_id", ""))
+    return (parsed is None, parsed or datetime.min, int(eid) if eid.isdigit() else -1, eid)
+
+
+def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Hand off, then index, the newly detected Sent Items (in that order).
+
+    Order is the crash contract: the handoff is persisted atomically BEFORE the
+    sent-index grows.  A crash between the two leaves the items in the handoff and
+    not in the index, so a rerun re-detects exactly them and merges idempotently by
+    Message-ID.  A crash after the index but before consumption leaves them pending
+    in the handoff until the ledger releases them.
+
+    Fail-closed: an invalid existing handoff, or unconsumed items that this run
+    would have to extend, raise ``SentHandoffError`` before any write.  More new
+    items than ``MAX_HANDOFF_ITEMS`` are *deferred* (neither handed off nor indexed,
+    oldest first kept) and reported, never dropped.
+    """
+    ledger = load_ledger(dd)
+    consumed = ledger["by_message_id"]
+
+    existing = read_handoff(dd)
+    pending = [item for item in existing if norm_id(item.get("norm_message_id") or item.get("message_id")) not in consumed]
+    consumed_pruned = len(existing) - len(pending)
+    if consumed_pruned:
+        write_handoff(dd, pending)
+    pending_ids = {norm_id(item.get("norm_message_id") or item.get("message_id")) for item in pending}
+
+    ordered = sorted(candidates, key=_candidate_sort_key)
+    extra_ids = [
+        cid for cid in (norm_id(c["entry"].get("message_id")) for c in ordered)
+        if cid not in consumed and cid not in pending_ids
+    ]
+    if pending and extra_ids:
+        raise SentHandoffError(
+            "handoff_pending",
+            f"Sent handoff '{HANDOFF_FILENAME}' still holds {len(pending)} unconsumed item(s); "
+            f"{len(extra_ids)} newly detected Sent Item(s) were NOT handed off and NOT indexed. "
+            "Consume the pending items (ledger) and rerun.",
+            {"pending_count": len(pending), "blocked_new_count": len(extra_ids), "consumed_pruned": consumed_pruned},
+        )
+
+    cutoff = len(ordered)
+    seen_extra = 0
+    for position, candidate in enumerate(ordered):
+        cid = norm_id(candidate["entry"].get("message_id"))
+        if cid in consumed or cid in pending_ids:
+            continue
+        seen_extra += 1
+        if seen_extra > MAX_HANDOFF_ITEMS:
+            cutoff = position
+            break
+    committed, deferred = ordered[:cutoff], ordered[cutoff:]
+
+    new_items: list[dict[str, Any]] = []
+    new_handoff_items: list[dict[str, Any]] = []
+    for candidate in committed:
+        item = build_handoff_item(
+            candidate["entry"],
+            to=candidate["to"],
+            cc=candidate["cc"],
+            headers_complete=candidate["headers_complete"],
+        )
+        item["anchored_to"] = resolve_thread_anchor(item, ledger)
+        already = item["norm_message_id"] in consumed
+        new_items.append({**item, "already_synthesized": already})
+        if not already and item["norm_message_id"] not in pending_ids:
+            new_handoff_items.append(item)
+
+    all_items = [*pending, *new_handoff_items]
+    if new_handoff_items:
+        write_handoff(dd, all_items)  # persisted BEFORE the index grows
+    try:
+        append_sent_index_entries([c["entry"] for c in committed], dd)
+    except OSError as error:
+        raise RuntimeError(
+            f"Sent-index append failed after the handoff was persisted ({type(error).__name__}: {error}); "
+            "the handoff is retained and a rerun merges idempotently by Message-ID."
+        ) from error
+
+    return {
+        "new_items": new_items,
+        "handoff": {
+            "state": "written" if new_handoff_items else ("pending" if all_items else "none"),
+            "written_count": len(new_handoff_items),
+            "pending_count": len(all_items),
+            "consumed_pruned": consumed_pruned,
+            "already_synthesized_skipped": sum(1 for item in new_items if item["already_synthesized"]),
+            "deferred_count": len(deferred),
+            "headers_incomplete_count": sum(1 for item in new_items if not item["headers_complete"]),
+            "ledger_invalid_lines": ledger["invalid_lines"],
+            "max_items": MAX_HANDOFF_ITEMS,
+        },
+    }
 
 
 def _sync_sent_items_for_date(
@@ -158,9 +276,10 @@ def _sync_sent_items_for_date(
     account: str | None = None,
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Fetch one Sent-Items date and return its indexing statistics.
+    """Fetch one Sent-Items date, hand off and index its new items.
 
-    Returns ``{"added", "envelopes_examined", "truncated"}``.  A Himalaya or
+    Returns ``{"added", "envelopes_examined", "truncated", "new_items", "handoff"}``
+    (``handoff`` is ``None`` when the day had nothing new).  A Himalaya or
     envelope-parse failure is fail-closed: it re-raises with the date in the
     message instead of masquerading as ``0 new mails``.  A legitimately empty
     day (``[]``) is not an error and returns ``added: 0``.
@@ -169,16 +288,37 @@ def _sync_sent_items_for_date(
     missing: every indexed entry must be bound to the verified workspace account
     rather than a hardcoded mailbox.
     """
+    dd = data_dir or resolve_data_dir()
+    known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
+    candidates, stats = _collect_date_candidates(
+        date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+    )
+    stats = {**stats, "new_items": [], "handoff": None, "added": 0}
+    if candidates:
+        committed = _commit_sent_candidates(dd, candidates)
+        stats.update(added=len(committed["new_items"]), new_items=committed["new_items"], handoff=committed["handoff"])
+    return stats
+
+
+def _collect_date_candidates(
+    date_str: str,
+    *,
+    folder: str,
+    account: str | None,
+    known_mids: set[str],
+    known_eids: set[str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read one Sent-Items date (no writes) and return the not-yet-indexed candidates.
+
+    ``known_mids``/``known_eids`` are updated in place so overlapping dates of one
+    run never yield the same message twice.  Returns ``(candidates, stats)`` with
+    ``stats = {"envelopes_examined", "truncated"}``.
+    """
     if account is None or not str(account).strip():
         raise ValueError(
             "Missing account: cannot bind sent-index entries to a mailbox without "
             "a verified account. Bind an account before syncing Sent Items."
         )
-
-    dd = data_dir or resolve_data_dir()
-    existing_index = load_sent_index(dd)
-    existing_eids = {str(e.get("sent_envelope_id", "")) for e in existing_index["all_entries"] if e.get("sent_envelope_id")}
-    existing_mids = set(existing_index["by_message_id"].keys())
 
     # Date query via Himalaya (fast single-day filter); transport/parse errors
     # are fail-closed and never collapse into a silent "0 new mails".
@@ -204,62 +344,64 @@ def _sync_sent_items_for_date(
     envelopes_examined = len(envs)
     # A full page may hide further envelopes; flag instead of silently truncating.
     truncated = envelopes_examined >= SENT_SYNC_PAGE_SIZE
-    if not envs:
-        return {"added": 0, "envelopes_examined": 0, "truncated": False}
-
-    unhandled_envs = [e for e in envs if str(e.get("id")) not in existing_eids]
-    if not unhandled_envs:
-        return {"added": 0, "envelopes_examined": envelopes_examined, "truncated": truncated}
-
-    sent_path = dd / "sent-index.jsonl"
-    sent_path.parent.mkdir(parents=True, exist_ok=True)
-    added_count = 0
+    stats = {"envelopes_examined": envelopes_examined, "truncated": truncated}
+    unhandled_envs = [e for e in envs if str(e.get("id")) not in known_eids]
+    candidates: list[dict[str, Any]] = []
     now_iso = utc_now_iso()
 
-    with sent_path.open("a", encoding="utf-8") as out_f:
-        for env in unhandled_envs:
-            eid = str(env.get("id"))
-            email_res = get_single_email_details(eid, folder, account=account, preview_lines=5, fallback_envelope=env)
-            mid = normalize_message_id(str(email_res.get("message_id", "")))
-            if not mid:
-                mid = f"sent-env-{eid}"
+    for env in unhandled_envs:
+        eid = str(env.get("id"))
+        email_res = get_single_email_details(eid, folder, account=account, preview_lines=5, fallback_envelope=env)
+        mid = normalize_message_id(str(email_res.get("message_id", "")))
+        real_message_id = bool(mid)
+        if not mid:
+            mid = f"sent-env-{eid}"
 
-            if mid in existing_mids:
-                continue
+        if mid in known_mids:
+            continue
 
-            raw_mid = email_res.get("raw_message_id") or mid
-            raw_irt = email_res.get("in_reply_to", "")
-            raw_refs = email_res.get("references", [])
-            if isinstance(raw_refs, str):
-                raw_refs = [r for r in raw_refs.split() if r]
+        raw_mid = email_res.get("raw_message_id") or mid
+        raw_irt = email_res.get("in_reply_to", "")
+        raw_refs = email_res.get("references", [])
+        if isinstance(raw_refs, str):
+            raw_refs = [r for r in raw_refs.split() if r]
 
-            to_field = email_res.get("to", "")
-            to_list = [t.strip() for t in to_field.split(",") if t.strip()] if isinstance(to_field, str) else to_field
+        to_field = email_res.get("to", "")
+        to_list = [t.strip() for t in to_field.split(",") if t.strip()] if isinstance(to_field, str) else to_field
 
-            entry: dict[str, Any] = {
-                "schema_version": 1,
-                "at": email_res.get("date") or now_iso,
-                "updated_at": now_iso,
-                "mailbox": account,
-                "message_id": f"<{raw_mid}>" if not raw_mid.startswith("<") else raw_mid,
-                "in_reply_to": f"<{raw_irt}>" if raw_irt and not raw_irt.startswith("<") else (raw_irt or ""),
-                "references": [f"<{r}>" if not str(r).startswith("<") else str(r) for r in raw_refs],
-                "subject": email_res.get("subject", ""),
-                "from": email_res.get("from", ""),
-                "to": to_list,
-                "folder": folder,
-                "sent_envelope_id": eid,
-                "backend_locator": f"{eid}|{mid}",
-                "note": f"Gesendet: {email_res.get('subject', '')}",
-            }
+        entry: dict[str, Any] = {
+            "schema_version": 1,
+            "at": email_res.get("date") or now_iso,
+            "updated_at": now_iso,
+            "mailbox": account,
+            "message_id": f"<{raw_mid}>" if not raw_mid.startswith("<") else raw_mid,
+            "in_reply_to": f"<{raw_irt}>" if raw_irt and not raw_irt.startswith("<") else (raw_irt or ""),
+            "references": [f"<{r}>" if not str(r).startswith("<") else str(r) for r in raw_refs],
+            "subject": email_res.get("subject", ""),
+            "from": email_res.get("from", ""),
+            "to": to_list,
+            "folder": folder,
+            "sent_envelope_id": eid,
+            "backend_locator": f"{eid}|{mid}",
+            "note": f"Gesendet: {email_res.get('subject', '')}",
+        }
+        entry_mid = norm_id(entry["message_id"])
+        if entry_mid in known_mids:
+            continue
 
-            out_f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-            out_f.flush()
-            existing_mids.add(mid)
-            existing_eids.add(eid)
-            added_count += 1
+        candidates.append({
+            "entry": entry,
+            "to": to_field,
+            "cc": email_res.get("cc", ""),
+            # Absent key = legacy/injected reader that does not report completeness.
+            "headers_complete": bool(email_res.get("headers_complete", True))
+            and not email_res.get("error")
+            and real_message_id,
+        })
+        known_mids.update({mid, entry_mid})
+        known_eids.add(eid)
 
-    return {"added": added_count, "envelopes_examined": envelopes_examined, "truncated": truncated}
+    return candidates, stats
 
 
 def sync_sent_items_by_date(
@@ -402,8 +544,16 @@ def sync_sent_items(
     Himalaya/parse failures are collected and re-raised fail-closed with the
     failing dates named, so the caller never sees a silent ``ok``.
 
+    The date windows are read first (no writes); the new items are then handed
+    off to ``new-sent-items.json`` *before* the sent-index grows (see
+    ``_commit_sent_candidates``).  Detection is relative to the previous index
+    state, so a repeated run yields no new items and no duplicate handoff.
+
     Returns ``{"date_windows_synced", "envelopes_examined",
-    "new_entries_indexed", "truncated_days", "follow_up_hint"}``.
+    "new_entries_indexed", "new_count", "new_items", "handoff",
+    "truncated_days", "follow_up_hint"}``.  ``SentHandoffError`` (pending/invalid
+    handoff) is raised before any write; date failures raise
+    ``SentSyncPartialFailure`` after the successful dates were committed.
     """
     dd = data_dir or resolve_data_dir()
     follow_up_hint: str | None = None
@@ -413,36 +563,57 @@ def sync_sent_items(
         window_dates, follow_up_hint = _derive_sent_sync_window(count, dd)
 
     query_dates = _expand_sync_dates(window_dates, include_next_day=True)
-    added_total = 0
     envelopes_total = 0
     truncated_days: list[str] = []
+    candidates: list[dict[str, Any]] = []
     failures: list[tuple[str, Exception]] = []
+    known_mids, known_eids = _known_index_ids(dd)
     for date_str in query_dates:
         try:
-            date_result = _sync_sent_items_for_date(date_str, folder=folder, account=account, data_dir=dd)
+            date_candidates, date_stats = _collect_date_candidates(
+                date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+            )
         except Exception as error:
             failures.append((date_str, error))
             continue
-        added_total += int(date_result.get("added", 0))
-        envelopes_total += int(date_result.get("envelopes_examined", 0))
-        if date_result.get("truncated"):
+        candidates.extend(date_candidates)
+        envelopes_total += int(date_stats.get("envelopes_examined", 0))
+        if date_stats.get("truncated"):
             truncated_days.append(date_str)
+
+    committed = _commit_sent_candidates(dd, candidates)
+    new_items = committed["new_items"]
+    handoff = committed["handoff"]
+    if handoff["deferred_count"]:
+        deferral_hint = (
+            f"{handoff['deferred_count']} newer new Sent Item(s) were deferred (neither handed off nor "
+            f"indexed) because one handoff holds at most {MAX_HANDOFF_ITEMS} items; consume the handoff "
+            "and rerun sync-sent."
+        )
+        follow_up_hint = f"{follow_up_hint} {deferral_hint}" if follow_up_hint else deferral_hint
+
+    result = {
+        "date_windows_synced": len(query_dates),
+        "envelopes_examined": envelopes_total,
+        "new_entries_indexed": len(new_items),
+        "new_count": len(new_items),
+        "new_items": new_items,
+        "handoff": handoff,
+        "truncated_days": truncated_days,
+        "follow_up_hint": follow_up_hint,
+    }
 
     if failures:
         failed_dates = ", ".join(date_str for date_str, _ in failures)
         first_error = failures[0][1]
-        raise RuntimeError(
+        raise SentSyncPartialFailure(
             f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
-            f"First error: {type(first_error).__name__}: {first_error}"
+            f"First error: {type(first_error).__name__}: {first_error}",
+            result,
+            [date_str for date_str, _ in failures],
         ) from first_error
 
-    return {
-        "date_windows_synced": len(query_dates),
-        "envelopes_examined": envelopes_total,
-        "new_entries_indexed": added_total,
-        "truncated_days": truncated_days,
-        "follow_up_hint": follow_up_hint,
-    }
+    return result
 
 
 def parse_date_to_datetime(s: str) -> datetime | None:

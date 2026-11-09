@@ -759,6 +759,7 @@ def get_single_email_details(
             subj = str(msg_obj.get("Subject", "") or "")
             from_hdr = str(msg_obj.get("From", "") or "")
             to_hdr = str(msg_obj.get("To", "") or "")
+            cc_hdr = str(msg_obj.get("Cc", "") or "")
             date_hdr = str(msg_obj.get("Date", "") or "")
             in_reply_to = str(msg_obj.get("In-Reply-To", "") or "")
             references = str(msg_obj.get("References", "") or "")
@@ -790,6 +791,8 @@ def get_single_email_details(
                 "subject": subj or (fallback_envelope.get("subject", "") if fallback_envelope else ""),
                 "from": from_hdr,
                 "to": to_hdr,
+                "cc": cc_hdr,
+                "headers_complete": True,
                 "date": date_hdr,
                 "in_reply_to": in_reply_to,
                 "references": references,
@@ -872,6 +875,8 @@ def get_single_email_details(
                 "subject": fb_subj,
                 "from": fb_from,
                 "to": fb_to,
+                "cc": "",
+                "headers_complete": False,
                 "date": fb_date,
                 "in_reply_to": "",
                 "references": "",
@@ -902,6 +907,8 @@ def get_single_email_details(
             "subject": fb_subj,
             "from": fb_from,
             "to": fb_to,
+            "cc": "",
+            "headers_complete": False,
             "date": fb_date,
             "in_reply_to": "",
             "references": "",
@@ -948,6 +955,8 @@ def get_single_email_details(
             "subject": headers.get("subject", "") or fb_subj,
             "from": headers.get("from", "") or fb_from,
             "to": headers.get("to", "") or fb_to,
+            "cc": headers.get("cc", ""),
+            "headers_complete": read_error is None,
             "date": headers.get("date", "") or fb_date,
             "in_reply_to": headers.get("in-reply-to", ""),
             "references": headers.get("references", ""),
@@ -967,6 +976,8 @@ def get_single_email_details(
             "subject": fb_subj,
             "from": fb_from,
             "to": fb_to,
+            "cc": "",
+            "headers_complete": False,
             "date": fb_date,
             "in_reply_to": "",
             "references": "",

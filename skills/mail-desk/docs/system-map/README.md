@@ -65,6 +65,13 @@ wurde gemessen und die Assertions sind in PR #46 an den Produktvertrag gebunden.
 Unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47). Historische
 Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
+**Lane-Frame (Issue #88, Sent-Synthese-Handoff, erhoben 2026-11-09 im Lane-Arbeitsbaum
+`feat/issue-88-sent-synthesis` auf Basis `4ec6385` mit dem Dateisatz des Lane-Commits; ergänzt den Frame unten):**
+355 Dateien im Bundle, 218 unter `skills/mail-desk/`, 81 Python-Dateien
+unter `scripts/` (davon 66 unter `scripts/core/`), 113 Testmodule `tests/test_*.py` (`git ls-files --cached
+--others --exclude-standard`, im Lauf frisch erhoben). Sent-Synthese-Handoff: §43. Die Anzahl der Testfälle wird hier
+nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
+
 **Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum `feat/issue-18-raw-eml`
 auf Basis des finalen Code-Head `f3256dd` einschließlich der Härtungsrunden; alle älteren
 Frames dieser Seite sind historisch):** 353 Dateien im Bundle, 216 unter `skills/mail-desk/`, 80 Python-Dateien unter
@@ -2307,3 +2314,54 @@ nur offline modelliert); zusätzlich ist der Nachweis semantisch, nicht byteglei
 `run_himalaya`, echter Workspace-Lock-Guard über `OI_TEST_WORKSPACE_LOCK_ROOT`).
 
 L1: [Paket-System-Map §13](../../../../docs/system-map/README.md).
+
+---
+
+## 43. Issue #88 — Sent-Items-Handoff für die Synthese (deterministischer Bundle-Teil)
+
+**Ziel:** Neu synchronisierte ausgehende Mails sind Primärevidenz und sollen die Post-Batch-Synthese
+erreichen, auch wenn die Inbox leer ist. Das Bundle liefert dafür nur den deterministischen Teil; Synthese,
+Promotion in Vorgänge und das Ledger-Schreiben gehören der Consumer-Pipeline (extern, unverändert).
+Issue #88 bleibt offen.
+
+**Entscheidung (kein zweiter Schalter):** `sync-sent` liefert `new_count`/`new_items[]` immer; Default bleibt
+Indexieren, es gibt kein `--synthesize` und keine zweite CLI. Die bestehende Pipeline braucht keinen Schalter,
+weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.json`).
+
+**Module und Verträge:**
+- [`scripts/core/sent_handoff.py`](../../scripts/core/sent_handoff.py) (neu): Handoff lesen/schreiben (atomar, ≤ 200),
+  Ledger laden/anhängen, Thread-Schlüssel und Anker, `SentHandoffError` (`handoff_pending`/`handoff_invalid`),
+  `SentSyncPartialFailure`, `durable_append_jsonl` (LF, `fsync`, Reparatur einer abgerissenen letzten Zeile).
+- [`scripts/core/sent_indexer.py`](../../scripts/core/sent_indexer.py): `_sync_sent_items_for_date` zerfällt in
+  `_collect_date_candidates` (nur lesen) und `_commit_sent_candidates` (Handoff, dann Index). `sync_sent_items`
+  sammelt alle Fenster, committet einmal und liefert zusätzlich `new_count`, `new_items`, `handoff`. Öffentliche
+  Signaturen, Eintragsschlüssel des Sent-Index und Rückgabetypen von `sync_sent_items_by_date(s)` sind unverändert.
+- [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py): `get_single_email_details` gibt `cc` zurück (das
+  Cc wurde bisher abgefragt, aber verworfen) und `headers_complete` (nur additiv, Inbound-Semantik unverändert).
+- [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
+  `new_items`, `handoff`; `ok: false` mit `reason_code` bei `handoff_pending`, `handoff_invalid`,
+  `sync_partial_failure` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt.
+- [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
+  `handoff`-Zähler (keine Items).
+
+**Zustandsautomat (Handoff-Item):** `neu erkannt` → *Handoff schreiben* → `pending` (Handoff **und** Index) →
+*Consumer: Ledger-Zeile* → `consumed` → *nächster sync-sent räumt aus dem Handoff*. Ledger-bekannte Message-IDs
+werden indexiert, aber nie übergeben. Ein Handoff mit offenen Items wird nie überschrieben oder erweitert.
+
+**Crash-Vertrag:** Handoff vor Index. (a) Absturz nach Handoff/vor Index: Wiederholung erkennt dieselben Items,
+Merge per Message-ID, kein Duplikat. (b) Absturz nach Index/vor Konsum: Items bleiben `pending`, `new_count` ist 0,
+`pending_count` zeigt sie. (c) Wiederholungslauf: keine Duplikate in Handoff oder Index. Bewusst **nicht** gelöst:
+Consumer-Absturz zwischen Synthese-Ergebnis und Ledger-Zeile; konkurrierende Writer ohne Lease; manuelles Löschen
+des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent).
+
+**Grenzen und Folgen:** Solange ein Handoff unkonsumiert ist, indexiert `sync-sent` keine weiteren neuen Items
+(`handoff_pending`), also steht auch die Antwort-Abgleich-Basis (`sent-index.jsonl`) still, bis der Consumer das
+Ledger schreibt. Mehr als 200 neue Items werden zurückgestellt, nicht verworfen. Items mit
+`headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
+dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
+
+**Tests:** `tests/test_sent_handoff.py` (Neu-Erkennung bei 0/1/n, Cc, Bounds, atomarer Write, drei Crash-Fenster,
+Wiederholung, Ledger-Dedupe, Thread-Anker, Envelope-/Exit-Vertrag, Himalaya-Cc) plus die bestehenden
+`test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
+
+L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).
