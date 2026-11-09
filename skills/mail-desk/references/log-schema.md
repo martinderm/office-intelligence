@@ -311,9 +311,11 @@ bleibt `handoff_pending` (fail-closed); Crash-Vertrag Handoff-vor-Index bleibt. 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
 Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
-`failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Eine
-Wasserzeichen-Lücke über 60 Tage blockiert nicht: Coverage startet am Watermark-Tag (inklusive) und leere
-Tage zählen; der Erstlauf nutzt das eingefrorene Laufdatum und ein 60-Tage-Backfill bzw. `since`. `count` ist
+`failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Im expliziten
+Datums-Pfad blockiert eine Wasserzeichen-Lücke über 60 Tage nicht: Coverage startet am Watermark-Tag
+(inklusive) und leere Tage zählen; der Default-Pfad ohne State ist dagegen fail-closed
+(`sent_initial_state_required`), und der Erstlauf ohne Index nutzt das eingefrorene Laufdatum sowie ein
+60-Tage-Backfill bzw. `since`. `count` ist
 ein Item-Budget (kein Tageslimit); bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und Recovery-Aufruf,
 ohne über ungedeckte Tage vorzurücken. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per
 Envelope-ID); nach `max_pages` weiterhin volle Seite ⇒ `sent_window_truncated`, kein Watermark-Advance.
@@ -336,9 +338,12 @@ eingefrorenen Laufdatum wird vor dem Read auf gestern zurückgesetzt (heute nie 
 eingefrorenen Laufdatum werden **vor** jedem Read/Write abgewiesen
 (`sent_initial_state_invalid`/`sync_invalid_since`/`sync_invalid_date`); ein `since` mit Zeitanteil ist ein
 Formatfehler („YYYY-MM-DD“, nicht future). Nur ein autorisierter Operator repariert oder quarantäniert die
-Datei, keine autonome Löschung/Überschreibung und kein `since`-Workaround; ein valider State ist
+Datei, keine autonome Löschung/Überschreibung und kein `since`-Bypass eines malformed State; ein valider State ist
 `{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null|"YYYY-MM-DD"}` mit konservativem,
-verifiziertem älterem Start (keine erfundene Coverage). `initial_start`
+verifiziertem älterem Start (keine erfundene Coverage). Fehlt bei nichtleerem Sent-Index jede State-Datei,
+fail-closed `sent_initial_state_required`; eine bloße Quarantäne reicht nicht: vor erneuter Synchronisierung
+muss ein autorisierter Operator einen verifizierten konservativen State anlegen oder `since` mit verifiziertem
+Start setzen, sonst keine Wasserzeichen-Autoinitialisierung. `initial_start`
 wird vor dem ersten Read persistiert (auch bei explizitem `since`); ein Fehlversuch behält ihn über den
 Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag. Jede Rückspulung (explizite
 Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index dauerhaft geschrieben; nach dem Append darf

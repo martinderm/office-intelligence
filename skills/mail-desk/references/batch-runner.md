@@ -1090,7 +1090,7 @@ vor jedem Handoff-/Index-Write ab.
 | `handoff_deferred` | int-Datums-API traf einen Batch; nutze `..._report` |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `sent_window_truncated` | volle Seite nach `max_pages` |
-| `sync_invalid_since` / `sync_invalid_max_pages` / `sync_invalid_date` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/State/Datum ungültig oder Budget-Stopp |
+| `sync_invalid_since` / `sync_invalid_max_pages` / `sync_invalid_date` / `sent_initial_state_required` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/State/Datum ungültig |
 | `sync_window_failed` | Datumsfenster scheiterten; Lauf vor jedem Write verweigert |
 | `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach Publikation (`unknown`, `new_count: null`) |
 

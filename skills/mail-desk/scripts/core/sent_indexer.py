@@ -834,8 +834,9 @@ def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
             "nothing was read or written and no index/handoff was changed. A valid state is "
             '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null|"YYYY-MM-DD"} '
             "with a required initial_start. Recovery: an authorized operator restores a VERIFIED "
-            "older initial_start (conservative re-read) or quarantines the file; no autonomous "
-            "deletion/overwrite, no invented coverage and no explicit since= workaround.",
+            "older initial_start (conservative re-read); quarantining the corrupt state alone is "
+            "insufficient: after quarantine a verified conservative initial_start/since must be "
+            "recreated before the next sync. No autonomous deletion/overwrite and no invented coverage.",
             {"reason": "unreadable_or_malformed"},
         ) from error
 
@@ -860,8 +861,9 @@ def _read_legacy_initial(data_dir: Path) -> str | None:
             f"Legacy '{LEGACY_INITIAL_FILENAME}' is not a valid initial marker "
             f"({type(error).__name__}: {error}); nothing was read or written. A valid legacy marker "
             'is {"schema_version":1,"initial_start":"YYYY-MM-DD"}. Recovery: an authorized operator '
-            "restores a verified older date or quarantines the legacy file (never overwritten/deleted "
-            "automatically), with no invented coverage.",
+            "restores a verified older date; quarantining the legacy file alone is insufficient because "
+            "a verified state/since must still exist (never overwritten/deleted automatically), with no "
+            "invented coverage.",
             {"reason": "legacy_initial_invalid"},
         ) from error
 
@@ -893,8 +895,9 @@ def _load_or_migrate_state(
                 "was read or written. The valid schema is "
                 '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null|"YYYY-MM-DD"} '
                 "with initial_start required. Recovery: an authorized operator restores a VERIFIED "
-                "older initial_start (or quarantines the file); no autonomous deletion/overwrite, no "
-                "invented coverage and no since= workaround.",
+                "older initial_start; quarantining the state alone is insufficient (a verified state/"
+                "since must be recreated before resync). No autonomous deletion/overwrite and no "
+                "invented coverage.",
                 {"reason": reason},
             )
     changed = False
@@ -909,8 +912,9 @@ def _load_or_migrate_state(
             "safe migration is possible and nothing was read or written. A valid state is "
             '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null|"YYYY-MM-DD"} '
             "with a verified conservative initial_start. Recovery: an authorized operator restores "
-            "such a state from a verified older boundary or quarantines the file; no autonomous "
-            "deletion/overwrite, no invented coverage and no since= workaround.",
+            "such a state from a verified older boundary; quarantining the state alone is insufficient "
+            "(a verified state/since must be recreated before resync). No autonomous deletion/overwrite "
+            "and no invented coverage.",
             {"reason": "unsafe_null_initial_migration"},
         )
     if barrier is not None and barrier >= run_day:
@@ -929,7 +933,8 @@ def _load_or_migrate_state(
             "sent_initial_state_invalid",
             f"Migrated initial_start '{initial}' lies in the future of the frozen run date {run_day}; "
             "nothing was read or written. Recovery: an authorized operator restores a verified older "
-            "state/watermark or quarantines the file; no autonomous deletion or invented coverage.",
+            "state; quarantining alone is insufficient and no watermark is used as a start. No "
+            "autonomous deletion or invented coverage.",
             {"reason": "migrated_initial_in_future"},
         )
     if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
@@ -937,7 +942,7 @@ def _load_or_migrate_state(
             "sent_initial_state_invalid",
             f"Migrated covered_through '{barrier}' lies in the future of the frozen run date {run_day}; "
             "nothing was read or written. Recovery: an authorized operator restores a verified older "
-            "state or quarantines the file; no autonomous deletion.",
+            "state; quarantining alone is insufficient. No autonomous deletion.",
             {"reason": "migrated_barrier_in_future"},
         )
     if changed:
@@ -1146,6 +1151,17 @@ def _sync_sent_items_impl(
     barrier = state["covered_through"]
     watermark = _sent_index_watermark(dd)
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+    if not dates and initial_start is None and barrier is None and watermark is not None and since is None:
+        raise SentHandoffError(
+            "sent_initial_state_required",
+            "A sent-index exists but no coverage state proves a safe lower bound; nothing was read "
+            "or written. Recovery: an authorized operator restores a valid "
+            '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null} with a verified '
+            "conservative older start, or reruns with a verified conservative since=; quarantining the "
+            "state alone is insufficient until a valid state is recreated. No autonomous deletion and "
+            "no watermark-based auto-initialisation.",
+            {"reason": "missing_state_with_index"},
+        )
     if dates:
         requested = requested_dates or []
         earliest = min(requested) if requested else None

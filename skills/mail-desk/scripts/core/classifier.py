@@ -909,13 +909,28 @@ def _sent_sync_batch_dates(emails: list[dict[str, Any]]) -> list[str]:
             continue
         text = str(raw).strip()
         parsed: datetime | None = None
-        try:
-            if len(text) == 10:
+        if len(text) == 10:
+            try:
                 parsed = datetime.strptime(text, "%Y-%m-%d")
-            else:
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            for fmt in ("%a, %d %b %Y", "%d %b %Y"):
+                try:
+                    parsed = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            try:
                 parsed = parsedate_to_datetime(text)
-        except (TypeError, ValueError, OverflowError):
-            continue
+            except (TypeError, ValueError, OverflowError):
+                parsed = None
         if parsed is None:
             continue
         dates.append(parsed.date().isoformat())

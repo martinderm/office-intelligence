@@ -534,6 +534,9 @@ class MultiDateAndOverflowTests(_Base):
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-09-21", "covered_through": "2026-09-20",
+        }), encoding="utf-8")
         mailbox = _Mailbox(
             _details(1, _day="2026-09-22"),
             _details(2, _day="2026-09-23"),
@@ -563,6 +566,9 @@ class MultiDateAndOverflowTests(_Base):
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-09-21", "covered_through": "2026-09-20",
+        }), encoding="utf-8")
         mailbox = _Mailbox(_details(1, _day="2026-09-22"), _details(2, _day="2026-09-22"))
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
@@ -588,6 +594,9 @@ class MultiDateAndOverflowTests(_Base):
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-09-21", "covered_through": "2026-09-20",
+        }), encoding="utf-8")
         mailbox = _Mailbox(_details(1, _day="2026-09-24"))
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
@@ -603,6 +612,9 @@ class MultiDateAndOverflowTests(_Base):
         seed = {"schema_version": 1, "at": "2026-07-25", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-07-25", "covered_through": "2026-07-24",
+        }), encoding="utf-8")
         mailbox = _Mailbox()  # every day is empty
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
@@ -1167,6 +1179,25 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual(1, result["new_count"])
         self.assertEqual("2026-09-23", sent_indexer._read_sync_state(self.dd)["covered_through"])
 
+    def test_missing_state_with_nonempty_index_requires_verified_start(self) -> None:
+        seed = {"schema_version": 1, "at": "2026-09-20", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day="2026-09-24", date="Thu, 24 Sep 2026 10:00:00 +0200"))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+            self.assertEqual("sent_initial_state_required", caught.exception.reason_code)
+            self.assertEqual(0, mailbox.calls)
+            self.assertFalse((self.dd / sent_indexer.SYNC_STATE_FILENAME).exists())
+
+            recovered = sent_indexer.sync_sent_items(
+                since="2026-09-20", account="ACC", data_dir=self.dd,
+            )
+        self.assertEqual(1, recovered["new_count"])
+        self.assertEqual("2026-09-20", sent_indexer._read_sync_state(self.dd)["initial_start"])
+
     def test_future_state_or_legacy_is_not_masked_by_a_merge(self) -> None:
         state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
         legacy = self.dd / sent_indexer.LEGACY_INITIAL_FILENAME
@@ -1206,6 +1237,29 @@ class MultiDateAndOverflowTests(_Base):
         self.assertNotIn("future", str(caught.exception).lower())
         self.assertEqual(0, mailbox.calls)
 
+    def test_draft_manifest_filters_invalid_dates_before_sent_sync(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            emails = [
+                {"envelope_id": "1", "message_id": "<bad@example.test>", "subject": "Bad",
+                 "from": "a@example.test", "to": "b@example.test", "date": "not a date",
+                 "preview": "x"},
+                {"envelope_id": "2", "message_id": "<good@example.test>", "subject": "Good",
+                 "from": "a@example.test", "to": "b@example.test",
+                 "date": "Thu, 24 Sep 2026 10:00:00 +0200", "preview": "x"},
+            ]
+            with patch.object(classifier, "load_catalogs", return_value=({}, {})), \
+                    patch.object(classifier, "load_sent_index", return_value={}), \
+                    patch.object(classifier, "sync_sent_items") as sync_sent:
+                classifier.draft_manifest(
+                    emails, workspace_root=root, sent_lookup=None, sync_sent=True,
+                    account="ACC", final_index={"items": {}},
+                )
+        sync_sent.assert_called_once_with(
+            dates=["2026-09-24"], data_dir=root / "data" / "mail-desk",
+            workspace_root=root, account="ACC",
+        )
+
     def test_filtered_batch_dates_drive_a_sent_sync(self) -> None:
         dates = classifier._sent_sync_batch_dates([
             {"date": "not a date"}, {"date": "Thu, 24 Sep 2026 10:00:00 +0200"},
@@ -1231,12 +1285,19 @@ class MultiDateAndOverflowTests(_Base):
             {"date": "15 Foo 2026"},
             {"date": "2026-13-40"},
             {"date": "2026-01-01"},
+            {"date": "2026-09-24T10:00:00Z"},
+            {"date": "2026-09-24 10:00+00:00"},
+            {"date": "2026-01-15 13:11:40"},
+            {"date": "2026-01-16T13:11:40+01:00"},
+            {"date": "15 Jan 2026"},
+            {"date": "Thu, 15 Jan 2026"},
             {"date": "Thu, 15 Jan 2026 13:11:40 +0000"},
             {"date": "Thu, 24 Sep 2026 10:00:00 +0200"},
             {"date": ""},
         ]
         self.assertEqual(
-            ["2026-01-01", "2026-01-15", "2026-09-24"],
+            ["2026-01-01", "2026-09-24", "2026-09-24", "2026-01-15", "2026-01-16",
+             "2026-01-15", "2026-01-15", "2026-01-15", "2026-09-24"],
             classifier._sent_sync_batch_dates(emails),
         )
 

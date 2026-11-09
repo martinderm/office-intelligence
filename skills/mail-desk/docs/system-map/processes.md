@@ -706,10 +706,12 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   ungültige Kalenderdaten werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
   geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
   `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
-  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze). Nur autorisierte
+  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); bloße Quarantäne
+  reicht nicht, vor Resync muss ein autorisierter Operator einen verifizierten State/`since` anlegen. Fehlt bei
+  nichtleerem Index jede State-Datei, fail-closed `sent_initial_state_required`. Nur autorisierte
   Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
-  Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback-Datum); der Draft-Pfad schluckt
-  Sync-Ausnahmen wie bisher.
+  Draft-Sent-Sync nur als echte ISO-Datum/ISO-Datetime/RFC-2822-Daten akzeptiert (kein Fallback-Datum); der
+  Draft-Pfad schluckt Sync-Ausnahmen wie bisher.
   Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
   `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
   (offline nicht verifizierte **Annahme**) Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein

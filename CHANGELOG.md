@@ -88,7 +88,7 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - `since`/Initialmarker springen nie über offene Coverage; future `since` wird vor jeder Mutation abgewiesen,
   der Erstlauf mit gültigem `since` persistiert den Marker. State-Schema ist exakt (drei Felder, nicht-null
   `initial_start`); malformed/null/future State und ungültige Kalenderdaten werden vor Read/Write abgewiesen,
-  nur autorisierte Reparatur/Quarantäne, keine `since`-Workarounds.
+  nur autorisierte Reparatur/Quarantäne, kein `since`-Bypass eines malformed State.
 - Pagination beendet nur bei klassifiziertem `HimalayaInvocationError`/`himalaya_command_failed` mit exaktem
   „envelope page out of bound“ ab Seite 2 (offline nicht verifizierte **Annahme**); Transport-„buffer index out
   of bounds“ bleibt fail-closed.
@@ -100,14 +100,16 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - State-`initial_start`/`covered_through` werden gegen das eingefrorene Laufdatum geprüft; future Werte,
   malformed/null-both State und future `since`/`since` mit Zeitanteil fail-closed vor Read/Write. Altbestand
   `initial_start:null` mit `covered_through` ist nicht sicher migrierbar (auch der Wasserzeichen beweist keine
-  lückenlose Untergrenze) und fail-closed; jeder originale State/Marker wird vor Merge auf Future geprüft,
-  `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne
-  mit validem Schema-JSON, keine autonome Löschung.
+  lückenlose Untergrenze) und fail-closed; fehlt bei nichtleerem Index jede State-Datei, ebenfalls
+  `sent_initial_state_required` (keine Wasserzeichen-Autoinitialisierung). Eine bloße Quarantäne reicht nicht:
+  vor Resync muss ein autorisierter Operator einen verifizierten konservativen State/`since` anlegen. Jeder
+  originale State/Marker wird vor Merge auf Future geprüft, `covered_through` gleich heute vor dem Read auf
+  gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung.
 - Validierungsfehler setzen keinen synthetischen Handoff-State mehr; der echte Peek-Zustand/pending_count bleibt.
 - Count-Break rückt nur tatsächlich akzeptierte Tage vor; ungültige Kalenderdaten und Account-Bindung werden vor
-  State-Writes geprüft. Der optionale Draft-Sent-Sync akzeptiert nur echt parsebare ISO-/RFC-2822-Header (kein
-  Fallback 2026-01-01 bei „not a date“/unbekanntem Monat) und bricht keinen vollständigen Sync ab; der
-  Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert).
+  State-Writes geprüft. Der optionale Draft-Sent-Sync akzeptiert nur echt parsebare ISO-Datum/ISO-Datetime/
+  RFC-2822-Header (kein Fallback 2026-01-01 bei „not a date“/unbekanntem Monat) und bricht keinen vollständigen
+  Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert).
 
 
 

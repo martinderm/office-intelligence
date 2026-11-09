@@ -684,7 +684,10 @@ wird non-destruktiv migriert. Future `initial_start`/`covered_through`, malforme
 und `since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
 geprüft, `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Altbestand
 `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
-(`unsafe_null_initial_migration`, Wasserzeichen beweist keine lückenlose Untergrenze); nur autorisierte
+(`unsafe_null_initial_migration`, Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
+reicht nicht, vor Resync muss ein autorisierter Operator einen verifizierten konservativen State/`since`
+anlegen. Fehlt bei nichtleerem Index jede State-Datei, fail-closed `sent_initial_state_required` (keine
+Wasserzeichen-Autoinitialisierung). Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
 Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen
 vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster statt Header-Datum

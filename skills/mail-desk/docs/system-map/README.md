@@ -2382,10 +2382,13 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   konservative Schranke stehen. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen/Recovery;
   das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert; Altbestand `initial_start:null` mit
   `covered_through` ist nicht sicher migrierbar (auch der Wasserzeichen beweist keine lückenlose Untergrenze)
-  und fail-closed `unsafe_null_initial_migration`. Jeder originale State/Marker wird vor Merge auf Future
+  und fail-closed `unsafe_null_initial_migration`. Fehlt bei nichtleerem Index jede State-Datei, fail-closed
+  `sent_initial_state_required`; bloße Quarantäne reicht nicht, vor Resync muss ein autorisierter Operator einen
+  verifizierten konservativen State/`since` anlegen (keine Wasserzeichen-Autoinitialisierung). Jeder originale
+  State/Marker wird vor Merge auf Future
   geprüft; `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Malformed/null/future
   State nur autorisierte Reparatur/Quarantäne (valides Schema-JSON, konservativer verifizierter älterer Start),
-  kein `since`-Workaround; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim
+  kein `since`-Bypass eines malformed State; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim
   optionalen Draft-Sent-Sync nur akzeptiert, wenn sie als echtes ISO-/RFC-2822-Datum parsebar sind (kein
   Fallback 2026-01-01), und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie
   bisher (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine offline nicht verifizierte
