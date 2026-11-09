@@ -189,9 +189,11 @@ Erhöhung. Die konkrete Consumer-Datei `pipelines/mail-desk-batch.md` im
 Consumer-Repo übernimmt diese Guard-Clause als separaten Consumer-Schritt.
 
 **Ausnahme Sent-Items (Issue #88):** Der No-op bei `inbox_zero` gilt für die
-Synthese-Phase nur, wenn der vorangehende `sync-sent` kein offenes Handoff meldet
-(`handoff.pending_count == 0`; Datei `data/mail-desk/new-sent-items.json`). Neue
-ausgehende Mails sind Primärevidenz, auch bei leerer Inbox. Das Bundle liefert nur den
+Synthese-Phase nur, wenn der vorangehende `sync-sent` ein bekannt leeres Handoff
+meldet (`handoff.pending_count == 0` bei `handoff.state` `none`/`written`; Datei
+`data/mail-desk/new-sent-items.json`). **Blockiert – weder Synthese starten noch
+No-op** – bei `handoff.state` `unknown`/`invalid` oder `pending_count: null`;
+Ursache manuell beheben. Neue ausgehende Mails sind Primärevidenz, auch bei leerer Inbox. Das Bundle liefert nur den
 deterministischen Teil: `new_count`/`new_items[]` im Envelope, den atomaren,
 begrenzten (200 Items) Handoff und das Konsum-/Dedupe-Ledger
 `sent-synthesis-ledger.jsonl` mit Thread-Ankern ([`log-schema.md`](references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88)).

@@ -1070,10 +1070,10 @@ Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|
 `new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei `write_state: unknown` ist `new_count: null`
 (und `new_items_unavailable: true`).
 
-**Trigger für den Consumer:** `handoff.pending_count > 0`, nicht `new_count` (nach einem Absturz ist `new_count`
-0, obwohl Items offen sind). Die Synthese-Phase darf bei `inbox_zero` nur No-op sein, wenn auch nichts
-offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bundles). Der Consumer liest über
-`load_pending_handoff` und schreibt über `record_synthesized`.
+**Trigger für den Consumer:** `pending_count > 0`, nicht `new_count` (Absturz: `new_count` 0 bei offenen Items).
+`state` `unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und** No-op bis zur manuellen
+Behebung; nur `0` bei `none`/`written` ist leer (`handoff_allows_noop`). Consumer:
+`pipelines/mail-desk-batch.md` (extern), liest `load_pending_handoff`, schreibt `record_synthesized`.
 
 **Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
 jedem Write; `state` = nur Coverage-Marker/-Schranke (`sent-sync-state.json`) wurde persistiert, kein

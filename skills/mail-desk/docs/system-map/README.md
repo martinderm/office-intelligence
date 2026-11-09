@@ -1852,7 +1852,11 @@ keine Mailbox-Mutation. Die Runner-Fassade reicht beide Felder unverändert durc
 `processed: 0`); Review, Signieren und Execute entfallen, der Lock wird
 freigegeben. Für `0 < total_drafted < expected_count` ist `allow_fewer` beim
 Draft bzw. `--allow-fewer` beim Signieren der vorgesehene Weg, nie eine stille
-Erhöhung. Die Consumer-Datei `pipelines/mail-desk-batch.md` (Consumer-Repo
+Erhöhung. Für Sent-Handoffs (Issue #88) gilt zusätzlich: `handoff.state`
+`unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und**
+`inbox_zero`-No-op bis zur manuellen Behebung; nur `pending_count == 0` bei `state`
+`none`/`written` ist ein bekannt leeres Handoff (`handoff_allows_noop`). Die Consumer-Datei
+`pipelines/mail-desk-batch.md` (Consumer-Repo
 `boku-user`) übernimmt die Guard-Clause als separaten Consumer-Schritt; sie ist
 nicht Teil dieses Repos.
 
@@ -2430,6 +2434,7 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   `<datei>.torn`-Sidecars werden in allen Einstiegen vor Index-/State-Nutzung, Mailbox-Read und jedem
   Handoff-/Index-Write geprüft; `write_state` bleibt `none|state`, keine automatische Löschung, ein Rerun ohne
   manuelle Reparatur scheitert identisch; `handoff.file` bleibt der Handoff-Pfad (`alias_file` separat).
+  Consumer-Reads `load_ledger`/`load_pending_handoff`/`load_sent_index` fail-closed vor dem Lesen.
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,

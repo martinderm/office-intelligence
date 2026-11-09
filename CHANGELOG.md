@@ -233,6 +233,19 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - `handoff.state` erlaubt additiv `unknown`; Log-Schema, Effects, Objects, L1/L2, SKILL, CLI und Batch-Runner
   sind synchronisiert. Die Same-User-Race-Grenze (#91) bleibt unverändert außerhalb des kooperativen Scope.
 
+#### Fixed (vierzehnte Review-/Audit-Runde)
+
+- `_file_alias_kind` behandelt `PermissionError`/andere `OSError` als `unverifiable` statt sie entweichen zu
+  lassen. `peek_handoff_state` wirft dadurch nie und meldet bei unverifizierbarem Ledger `unknown`/
+  `pending_count: null`; auch `failure_envelope` bleibt bei invalid-count/sync-Fehlern vollständig geformt.
+- Consumer-Reads sind fail-closed: `load_ledger`, `load_pending_handoff` und `load_sent_index` prüfen ihre
+  Zieldateien (inklusive `.torn`) statisch vor dem Lesen. Ein fremdes Hardlink-Ledger kann keine
+  Konsumentscheidung mehr verfälschen; Tests decken pending Handoff, fremde bereits synthetisierte IDs,
+  keine Lese-/Schreib-/Promotion-Aufrufe und bytegleiche externe Dateien ab.
+- SOP-Trigger ist maschinenlesbar: `handoff_allows_noop` erlaubt nur `pending_count == 0` bei `state`
+  `none`/`written`; `unknown`/`invalid` oder `pending_count: null` blockieren Synthese **und** No-op bis zur
+  manuellen Behebung. SKILL, Batch-Runner, L1/L2, Log-Schema und Effects sind synchronisiert.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

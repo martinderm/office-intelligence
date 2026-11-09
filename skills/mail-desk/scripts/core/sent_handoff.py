@@ -30,7 +30,7 @@ import stat
 from datetime import datetime
 from email.utils import getaddresses
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from .common import atomic_write_json, normalize_message_id, utc_now_iso
 
@@ -279,11 +279,14 @@ def tolerant_jsonl_records(path: Path) -> list[dict[str, Any]]:
 
 
 def _file_alias_kind(path: Path) -> str | None:
-    """Return ``symlink``/``hardlink`` for a static alias, else ``None``."""
+    """Return ``symlink``/``hardlink``/``unverifiable`` for a static alias, else ``None``."""
     try:
         info = path.lstat()
     except FileNotFoundError:
         return None
+    except OSError:
+        # Permission/IO errors must fail closed, never be treated as "no alias".
+        return "unverifiable"
     if stat.S_ISLNK(info.st_mode):
         return "symlink"
     if getattr(info, "st_nlink", 1) != 1:
@@ -300,14 +303,28 @@ def _reject_file_alias(path: Path, *, reason_code: str, label: str) -> None:
     alias = _file_alias_kind(path)
     if alias is None:
         return
+    if alias == "unverifiable":
+        message = (
+            f"Cannot verify '{path.name}' ({label}) for symlink/hardlink aliases; no "
+            "handoff/index/coverage mutation was performed and the path was not used for a "
+            "write. This is a filesystem/permission misconfiguration, not a transient failure: "
+            "repair permissions or quarantine the file manually; a rerun without fixing it "
+            "fails the same way. No autonomous deletion."
+        )
+        reason = "alias_unverifiable"
+    else:
+        message = (
+            f"Static {alias} alias detected for '{path.name}' ({label}); no handoff/index/coverage "
+            "mutation was performed and the alias was not used for a write. This is a filesystem "
+            "misconfiguration, not a transient failure: repair or quarantine the aliased file "
+            "manually; a rerun without fixing it fails the same way. No autonomous deletion."
+        )
+        reason = f"static_{alias}_alias"
     raise SentHandoffError(
         reason_code,
-        f"Static {alias} alias detected for '{path.name}' ({label}); no handoff/index/coverage "
-        "mutation was performed and the alias was not used for a write. This is a filesystem "
-        "misconfiguration, not a transient failure: repair or quarantine the aliased file "
-        "manually; a rerun without fixing it fails the same way. No autonomous deletion.",
+        message,
         {
-            "reason": f"static_{alias}_alias",
+            "reason": reason,
             "alias_file": path.name,
             "alias_kind": alias,
             "alias_label": label,
@@ -469,6 +486,7 @@ def load_ledger(data_dir: Path) -> dict[str, Any]:
     by_message_id: dict[str, dict[str, Any]] = {}
     by_thread_key: dict[str, dict[str, Any]] = {}
     path = data_dir / LEDGER_FILENAME
+    reject_static_aliases(path, reason_code="ledger_alias_invalid", label="ledger")
     complete, tail = read_jsonl_lines(path)
     problems: list[tuple[int, str]] = []
     for number, raw in enumerate(complete, start=1):
@@ -774,8 +792,11 @@ def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
     first); items are ordered ancestors first, otherwise in handoff order.  Consume
     loop: take the first item, promote it, ``record_synthesized`` it, call this
     again -- replies then resolve against their just-recorded ancestors.
-    Raises ``SentHandoffError`` for an invalid handoff or ledger.
+    Raises ``SentHandoffError`` for an invalid or aliased handoff/ledger.
     """
+    reject_static_aliases(
+        data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
+    )
     ledger = load_ledger(data_dir)
     items = read_handoff(data_dir)
     pending = unconsumed(items, ledger)
@@ -804,6 +825,23 @@ def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
     return {"items": ordered, "pending_count": len(ordered), "consumed_ignored": len(items) - len(pending)}
 
 
+def handoff_allows_noop(handoff: Mapping[str, Any] | None) -> bool:
+    """True only for a known-empty handoff; uncertainty always blocks the phase.
+
+    ``unknown``/``invalid`` or a null/non-zero ``pending_count`` forbids both the
+    synthesis start and the ``inbox_zero`` no-op until a human fixes the cause.
+    """
+    if not isinstance(handoff, Mapping):
+        return False
+    state = handoff.get("state")
+    pending = handoff.get("pending_count")
+    if state not in HANDOFF_STATES or state in {"unknown", "invalid"}:
+        return False
+    if type(pending) is not int or pending != 0:
+        return False
+    return state in {"none", "written"}
+
+
 def peek_handoff_state(data_dir: Path) -> dict[str, Any]:
     """Read-only ``{"state", "pending_count"}`` for error envelopes; never raises.
 
@@ -814,7 +852,7 @@ def peek_handoff_state(data_dir: Path) -> dict[str, Any]:
         reject_static_aliases(
             data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
         )
-    except SentHandoffError:
+    except (SentHandoffError, OSError):
         return {"state": "unknown", "pending_count": None}
     try:
         pending = len(unconsumed(read_handoff(data_dir), load_ledger(data_dir)))

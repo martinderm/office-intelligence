@@ -284,7 +284,9 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher
   atomarer Publikation; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
   `new_items`, `handoff` mit `state ∈ none|written|pending|invalid|unknown` und die dokumentierten Zähler;
-  statische Aliasfehler melden `unknown`/`pending_count: null`, weil der abgewiesene Pfad nicht gelesen wird. Ein
+  statische Aliasfehler melden `unknown`/`pending_count: null`, weil der abgewiesene Pfad nicht gelesen wird.
+  Consumer-Reads (`load_ledger`, `load_pending_handoff`, `load_sent_index`) prüfen ihre Zieldateien statisch
+  vor dem Lesen und fail-closed. Ein
   scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`,
   `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
   stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State
@@ -318,5 +320,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
 * **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
   sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
+* **Consumer-Trigger:** `pending_count > 0` startet die Synthese; `handoff.state` `unknown`/`invalid` oder
+  `pending_count: null` **blockiert** Synthese **und** `inbox_zero`-No-op bis zur manuellen Behebung. Nur
+  `pending_count == 0` bei `state` `none`/`written` gilt als bekannt leer (`handoff_allows_noop`).
 * **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion
   möglich (Consumer-Idempotenz nötig).

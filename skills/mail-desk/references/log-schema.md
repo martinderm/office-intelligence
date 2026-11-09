@@ -266,8 +266,11 @@ verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungül
   nächsten Append wird er in das append-only Sidecar `<datei>.torn` (fsync) verschoben und abgeschnitten;
   ein vollständiger letzter Eintrag ohne Zeilenumbruch bleibt erhalten und bekommt nur den Umbruch. Dasselbe
   gilt für `sent-index.jsonl` (dort bleiben unparsbare Zeilen wie bisher stillschweigend ignoriert).
-- Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor** dem Ergebnis zu
-  schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz liegt beim Consumer).
+- **Consumer-Trigger:** `handoff.pending_count > 0` startet die Synthese. `handoff.state` `unknown`/`invalid`
+  oder `pending_count: null` **blockiert** Synthese **und** den `inbox_zero`-No-op bis zur manuellen
+  Ursachenbehebung; nur `pending_count == 0` bei `state` `none`/`written` ist ein bekannt leeres Handoff
+  (`handoff_allows_noop`). Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor**
+  dem Ergebnis zu schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz beim Consumer).
 
 **Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`):** In **allen**
 Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den Index, das
@@ -278,7 +281,9 @@ Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Prefli
 unangetastet. Fehler-Details heißen `alias_file`, `alias_kind`, `alias_label`; `handoff.file` bleibt der
 Handoff-Pfad. Recovery ist ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en), keine
 automatische Löschung; ein bloßer Rerun ohne Korrektur scheitert identisch. Direktes `record_synthesized`
-prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Auch der diagnostische
+prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Auch `load_ledger`,
+`load_pending_handoff` und `load_sent_index` prüfen ihre Zieldateien statisch **vor** dem Lesen und
+fail-closed; ein fremdes Hardlink-Ledger kann so keine Konsumentscheidung verfälschen. Auch der diagnostische
 Handoff-Peek in Fehler-Envelopes prüft das Ledger statisch und meldet `unknown`/`null` statt eines falschen
 `none`/`0`; statische Aliasfehler überspringen den Peek ganz. Der Check ist keine Zusage gegen einen
 konkurrierenden Same-User-Mutator (Issue #91).

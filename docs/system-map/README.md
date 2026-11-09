@@ -675,7 +675,8 @@ kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres 
 schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger oder
 `<datei>.torn`-Sidecars `sent_index_alias_invalid`/`ledger_alias_invalid` (Preflight in allen Einstiegen **vor**
 Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Write, `write_state none|state`, keine automatische
-Löschung, Rerun ohne Reparatur scheitert gleich), ein Manifest mit
+Löschung, Rerun ohne Reparatur scheitert gleich; auch Consumer-Reads `load_ledger`/`load_pending_handoff`/
+`load_sent_index` fail-closed), ein Manifest mit
 ungültigem `count` `sync_invalid_count`, eine fehlende
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
 Rest nach Konsum) und nach `max_pages`
@@ -720,7 +721,9 @@ Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahm
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
 meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die
-Consumer-Pipeline (`pipelines/mail-desk-batch.md`), deren `inbox_zero`-No-op bei offenem Handoff nicht greifen darf.
+Consumer-Pipeline (`pipelines/mail-desk-batch.md`); deren `inbox_zero`-No-op darf weder bei offenem Handoff
+noch bei `handoff.state unknown|invalid` oder `pending_count: null` greifen – dann ist die Synthese blockiert,
+bis ein Mensch die Ursache behebt; nur `pending_count == 0` bei `none|written` gilt als leer.
 Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das
 Stehenbleiben der Sent-Indexierung bis zum Konsum.
 

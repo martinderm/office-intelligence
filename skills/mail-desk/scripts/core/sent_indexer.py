@@ -25,6 +25,7 @@ from .sent_handoff import (
     load_ledger,
     norm_id,
     read_handoff,
+    reject_static_aliases,
     resolve_thread_anchor,
     tolerant_jsonl_records,
     unconsumed,
@@ -94,6 +95,9 @@ def load_sent_index(data_dir: Path | None = None) -> dict[str, Any]:
     """Load sent-index.jsonl into structured lookup maps."""
     dd = data_dir or resolve_data_dir()
     sent_path = dd / "sent-index.jsonl"
+    reject_static_aliases(
+        sent_path, reason_code="sent_index_alias_invalid", label="sent-index",
+    )
 
     by_message_id: dict[str, dict[str, Any]] = {}
     by_in_reply_to: dict[str, list[dict[str, Any]]] = {}
