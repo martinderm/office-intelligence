@@ -274,7 +274,7 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
 * **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
   Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische
-  Symlink-/Hardlink-Aliase von Index, Ledger, Handoff oder deren `<datei>.torn`-Sidecars sind
+  Symlink-/Hardlink-Aliase von Index, Ledger, Handoff (jeweils inklusive `<datei>.torn`-Sidecar) sind
   `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`, werden in allen Einstiegen
   **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Mutationen geprüft und sind keine transienten
   Fehler: `write_state` bleibt `none`/`state`, Handoff/Index unangetastet (`handoff.file` bleibt der

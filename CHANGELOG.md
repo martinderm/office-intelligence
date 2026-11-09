@@ -272,6 +272,18 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`; Log-Schema, Effects, Processes,
   L1/L2, SKILL und Batch-Runner sind synchron. Issue #91 bleibt außerhalb des kooperativen Scope.
 
+#### Fixed (siebzehnte Review-/Audit-Runde)
+
+- `assert_append_aliases` prüft den Handoff jetzt mit demselben `reject_static_aliases` wie die Handoff-Reader:
+  `new-sent-items.json` **und** `.torn`-Sidecar. Ein Handoff-Sidecar-Hardlink stoppt damit in allen Einstiegen
+  vor State-/Index-Nutzung, Mailbox-Read und jedem Write; der Report kann bei leerem Tag keine Coverage mehr
+  vorrücken.
+- Tests decken echte Handoff-JSON- und `.torn`-Hardlinks, leer/pending und State vorhanden/fehlend über Default,
+  `dates`, Report, Singular/Plural und Direkt-Append ab: 0 Mailbox-/State-Writes, unveränderte Dateien, keine
+  neuen Dateien, Diagnose `unknown`/`null`. Fehlendes Sidecar blockiert weiterhin nicht.
+- Log-Schema, Effects, L1/L2, SKILL und CLI präzisieren Handoff inkl. `.torn`-Sidecar; Issue #91 bleibt
+  unverändert außerhalb des kooperativen Scope.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

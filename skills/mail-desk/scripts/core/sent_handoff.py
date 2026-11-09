@@ -346,7 +346,7 @@ def reject_static_aliases(path: Path, *, reason_code: str, label: str) -> None:
 
 
 def assert_append_aliases(data_dir: Path) -> None:
-    """Preflight index, ledger/sidecars and the handoff document before any read/write."""
+    """Preflight index, ledger and handoff (each with sidecar) before any read/write."""
     reject_static_aliases(
         data_dir / SENT_INDEX_FILENAME,
         reason_code="sent_index_alias_invalid",
@@ -357,8 +357,9 @@ def assert_append_aliases(data_dir: Path) -> None:
         reason_code="ledger_alias_invalid",
         label="ledger",
     )
-    # The handoff is a single JSON document (no append sidecar); check only its path.
-    _reject_file_alias(
+    # Keep the handoff preflight identical to its readers: the JSON document and
+    # the defensive .torn sidecar are both statically checked.
+    reject_static_aliases(
         data_dir / HANDOFF_FILENAME,
         reason_code="handoff_alias_invalid",
         label="handoff",

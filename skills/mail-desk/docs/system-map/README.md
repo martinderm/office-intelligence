@@ -2363,7 +2363,8 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
   `effective_coverage_start`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `handoff_deferred`, `ledger_invalid`,
   `sent_index_alias_invalid`, `ledger_alias_invalid`, `handoff_alias_invalid` (statische Index-/Ledger-/
-  Handoff-/Sidecar-Aliase; `alias_kind: unverifiable` bei Permission/IO ebenfalls fail-closed; Preflight vor
+  Handoff-Aliase inkl. jeweiligem `.torn`-Sidecar; `alias_kind: unverifiable` bei Permission/IO ebenfalls
+  fail-closed; Preflight vor
   Index-/State-Nutzung, Mailbox-Read und Handoff/Index), `sent_window_truncated`, `sync_invalid_since`,
   `sync_invalid_max_pages`, `sync_invalid_date`,
   `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
@@ -2433,7 +2434,7 @@ wie bisher und propagiert statische `*_alias_invalid`.
   `sent_index_alias_invalid`, `ledger_alias_invalid`, `handoff_alias_invalid`, `handoff_deferred`,
   `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`,
   `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed`, `sync_failed`). Statische Aliase von
-  Index/Ledger/Handoff und `<datei>.torn`-Sidecars werden in allen Einstiegen vor Index-/State-Nutzung,
+  Index/Ledger/Handoff (jeweils inkl. `<datei>.torn`-Sidecar) werden in allen Einstiegen vor Index-/State-Nutzung,
   Mailbox-Read und jedem Handoff-/Index-Write geprüft; `alias_kind: unverifiable` (Permission/IO) ist ebenfalls
   fail-closed; `write_state` bleibt `none|state`, keine automatische Löschung, ein Rerun ohne manuelle Reparatur
   scheitert identisch; `handoff.file` bleibt der Handoff-Pfad (`alias_file` separat). Consumer-Reads

@@ -274,7 +274,8 @@ verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungül
 
 **Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`):**
 In **allen** Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den
-Index, das Ledger, beide `<datei>.torn`-Sidecars und das Handoff-Dokument statisch auf Symlink-/Hardlink-Aliase,
+Index, das Ledger, beide `<datei>.torn`-Sidecars sowie das Handoff-Dokument samt `.torn`-Sidecar statisch auf
+Symlink-/Hardlink-Aliase,
 **bevor** Index-/State-Inhalte genutzt, die Mailbox gelesen oder Handoff/Index/Coverage geschrieben wird. Ein
 Alias ist eine Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Preflight bleibt
 `write_state` `none`; ein erst später (nur durch Race) erkannter Alias kann `state` melden. Handoff und Index

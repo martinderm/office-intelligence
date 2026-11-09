@@ -672,8 +672,8 @@ verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selbe
 Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
-schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger/Handoff oder
-`<datei>.torn`-Sidecars `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid` (Preflight in
+schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger/Handoff
+(jeweils inkl. `<datei>.torn`-Sidecar) `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid` (Preflight in
 allen Einstiegen **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Write, `write_state none|state`,
 keine automatische Löschung, Rerun ohne Reparatur scheitert gleich; `alias_kind: unverifiable` bei
 Permission/IO ebenfalls fail-closed; Consumer-Reads `load_ledger`/`load_pending_handoff`/`load_sent_index`/

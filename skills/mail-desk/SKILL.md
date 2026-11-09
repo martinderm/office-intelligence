@@ -202,7 +202,7 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 übernommen hat; ein inkonsistenter oder übergroßer Handoff oder ein schemaverletzendes Ledger ergibt
 `handoff_invalid`/`ledger_invalid`, statische Aliase von Index/Ledger oder `<datei>.torn`-Sidecars
 `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid` (Preflight vor Index-/State-Nutzung,
-Mailbox-Read und Handoff/Index, keine automatische Löschung, Rerun ohne Reparatur scheitert gleich;
+Mailbox-Read und Handoff/Index, jeweils inkl. `.torn`-Sidecar; keine automatische Löschung, Rerun ohne Reparatur scheitert gleich;
 `alias_kind: unverifiable` bei Permission/IO ebenfalls fail-closed; `handoff.file` bleibt der Handoff-Pfad,
 `alias_file` separat; der Classifier propagiert Index-Alias statt `needs_reply: true`), ein Manifest mit
 ungültigem `count` oder fehlender Bindung
