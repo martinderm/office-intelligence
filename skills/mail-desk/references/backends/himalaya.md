@@ -155,6 +155,19 @@ journal.
   `appended_unverified` / `saved_verified` / `replace_old_pending_delete` /
   `old_delete_failed` / `replaced`, with metadata only: folder, subject, to, size,
   attachment file name / type / size / SHA-256).
+- **Raw-EML import (Issue #18):** `save-raw-draft` appends one prepared `.eml` through the very same
+  single binary-stdin `message save -o plain` call and the same `_append_and_verify` core (no second
+  writer, no retry, same read-only Message-ID uniqueness search before and exactly-one lookup plus
+  `message export` after the APPEND). Himalaya 1.2.0 (`save.rs`) reads stdin with Rust `lines()`,
+  strips every `\r`, joins with CRLF and drops the final terminator; therefore the file is normalised
+  to canonical CRLF lines **before** the APPEND (one final CRLF added if missing, trailing blank lines
+  kept, a bare CR refused) and the one transport CRLF of the existing path is appended. Non-UTF-8
+  input is refused instead of converted, because upstream truncates silently at the first invalid
+  byte. The stored message is compared semantically (header sequence, decoded text, attachment name /
+  type / size / SHA-256) with the normalised prepared message; this is not byte equality of arbitrary
+  mail and the server-side normalisation is modelled offline only, not live-proven. The 10 MiB bound
+  applies to the file and to the normalised message; the CLI export is written to disk before Python
+  loads it (bound 12 MiB + 1 byte), as for builder drafts.
 
 ### Bounded diagnostic draft APPEND (`diagnose-draft`, opt-in, default off)
 

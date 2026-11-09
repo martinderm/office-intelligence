@@ -613,7 +613,39 @@ mehrdeutiger Identität und nutzt sonst denselben verifizierten Ablauf wie mit L
 Der CLI-Export landet vollständig auf der Platte; die Python-Ladegrenze (12 MiB + 1 Byte,
 ein reguläres Handle) begrenzt nicht die vorgelagerte Übertragung. Windows ohne
 `O_NOFOLLOW`/Hardlinks: Rennen werden erkannt, nicht verhindert. Kein HTML/Inline/Signatur,
-keine beliebige EML, kein Live-Nachweis.
+keine beliebige EML (die vorbereitete Rohmail ist die zweite Lieferung, §13), kein Live-Nachweis.
 
 L2: [Mail-Desk §41](../../skills/mail-desk/docs/system-map/README.md#41-issue-18--entwürfe-mit-dateianhängen-erste-lieferung).
 Tests: `skills/mail-desk/tests/test_draft_attachments_*.py`.
+
+## 13. Issue #18: Raw-EML-Import (zweite Lieferung)
+
+`save-raw-draft --eml PATH` (Manifest `save_raw_draft`) legt eine vorbereitete reguläre `*.eml` aus den vier
+Consumer-Datenzonen (`memory/references/`, `memory/evidence/`, `memory/cloud/`, `data/` ohne
+`data/mail-desk/`) als ungesendeten Entwurf ab. Es gibt **keinen zweiten Schreibpfad**: dieselbe
+Bindung (Workspace-Wurzel, echte Lease, gebundener Account **vor** dem Lesen), derselbe begrenzte
+Dateileser ohne Symlink-/Junction-Querung, derselbe Message-ID-Vorcheck, dasselbe Journal, **genau ein**
+binärer stdin-APPEND ohne Retry (unklarer Ausgang wird journalisiert) und dasselbe semantische
+Zurücklesen genau einer gespeicherten Mail wie bei Builder-Entwürfen
+(`skills/mail-desk/scripts/core/drafts.py`, `_append_and_verify`).
+Profil (alles andere fail-closed, `raw_eml_*`): höchstens 10 MiB als Datei und normalisiert, UTF-8,
+Zeilen höchstens 998 Oktette, strikter RFC-5322-Header, genau eine Message-ID `<dot-atom@hostname>`,
+`To`/`Date` Pflicht, flaches `text/plain` oder `multipart/mixed` mit höchstens 5 Base64-Anhängen von je
+höchstens 3 MiB; `To` und `Date` werden gegen die strikte RFC-5322-Grammatik geprüft (nur ASCII-Ziffern;
+Unicode-Whitespace ist nur innerhalb von Kommentaren und Anzeigenamen in Anführungszeichen erlaubt; Kommas in
+Anführungszeichen und Kommentaren trennen nichts; eine leere Gruppe mit nachfolgendem Leerraum/Kommentar bleibt wegen
+eines Fehlers von Python 3.12 in `email.headerregistry` fail-closed abgewiesen), `Content-Type`/`-Disposition`/
+`-Transfer-Encoding` von einem eigenen strengen RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine
+doppelten Parameter, Dateinamen ohne Pfad und `..`, Text nie als `attachment`; Parameterposition: `name` nur im
+`Content-Type`, `filename` nur in der `Content-Disposition`, auch bei Text und `multipart/mixed`-Container), der Header-Block jedes MIME-Teils
+strikt zerlegt, doppelte oder widersprüchliche `Content-*` abgewiesen und höchstens 64 MIME-Teile gezählt, bevor ein
+Teil-Header geparst wird (`raw_eml_part_count_exceeded`; das Produktlimit bleibt 5 Anhänge). Fehlende oder
+doppelte Message-ID, Fremdkodierung, Limitüberschreitung, ungültige Adresse oder ungültiges Datum stoppen vor
+jedem Mailbox-Kontakt. Die Mail wird vor dem APPEND zu kanonischem CRLF normalisiert, weil Himalaya 1.2.0 stdin
+zeilenweise liest und mit CRLF neu verbindet; Zeilenende-Form und SHA-256 von Quelle und Normalform stehen
+in Ergebnis und Journal. Der Nachweis ist semantisch (Header-Folge, Teil-Header-Werte jedes MIME-Teils, Text samt
+abschließenden Zeilenumbrüchen, Anhang-Name/Typ/Größe/SHA-256), nicht bytegleich. Kein HTML/Alternative, kein Replace für Rohmails, kein Live-Nachweis (synthetische
+Offline-Tests).
+
+L2: [Mail-Desk §42](../../skills/mail-desk/docs/system-map/README.md#42-issue-18--raw-eml-import-zweite-lieferung).
+Tests: `skills/mail-desk/tests/test_draft_raw_eml_*.py`.

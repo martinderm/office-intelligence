@@ -128,6 +128,13 @@ def _machine_arguments(argv: list[str]) -> bool:
     )
 
 
+def _add_lease_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--lease-id", type=str, default=None, help="Workspace lock lease ID (attachment / Raw-EML mode).")
+    parser.add_argument(
+        "--conversation-id", type=str, default=None, help="Workspace lock conversation ID (attachment / Raw-EML mode)."
+    )
+
+
 def _add_attachment_arguments(parser: argparse.ArgumentParser, *, replace: bool) -> None:
     """Attachment flags of ``save-draft`` / ``replace-draft`` (plain text and local zone files only)."""
     parser.add_argument(
@@ -138,10 +145,7 @@ def _add_attachment_arguments(parser: argparse.ArgumentParser, *, replace: bool)
         help="Attach one regular file named by a workspace-relative path inside memory/references, "
         "memory/evidence, memory/cloud or data (repeatable, at most 5, 3 MiB each, 10 MiB message).",
     )
-    parser.add_argument("--lease-id", type=str, default=None, help="Workspace lock lease ID (attachment mode).")
-    parser.add_argument(
-        "--conversation-id", type=str, default=None, help="Workspace lock conversation ID (attachment mode)."
-    )
+    _add_lease_arguments(parser)
     if replace:
         parser.add_argument(
             "--drop-attachments",
@@ -242,6 +246,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Drafts folder (default: resolved dynamically from the mailbox).",
     )
     _add_attachment_arguments(p_save_draft, replace=False)
+
+    # save-raw-draft (Raw-EML import, issue #18: one prepared .eml through the same verified stdin APPEND)
+    p_save_raw = subparsers.add_parser(
+        "save-raw-draft",
+        parents=[common_parent],
+        help="Append one prepared .eml (workspace zone file) as an unsent draft; no composition flags.",
+    )
+    p_save_raw.add_argument(
+        "--eml",
+        type=str,
+        required=True,
+        metavar="PATH",
+        help="Workspace-relative path of one regular *.eml inside memory/references, memory/evidence, "
+        "memory/cloud or data (max 10 MiB, text + up to 5 base64 attachments of 3 MiB each).",
+    )
+    p_save_raw.add_argument(
+        "-f",
+        "--folder",
+        type=str,
+        default=None,
+        help="Drafts folder (default: resolved dynamically from the mailbox).",
+    )
+    _add_lease_arguments(p_save_raw)
 
     # delete-draft (\Deleted + EXPUNGE, never a UID MOVE)
     p_delete_draft = subparsers.add_parser(
@@ -518,6 +545,34 @@ def op_save_draft(
         journal=active_journal,
         attachments=attachments,
         workspace_root=_draft_workspace_root(active_journal) if attachments else None,
+        lease_id=lease_id,
+        conversation_id=conversation_id,
+    )
+
+
+def op_save_raw_draft(
+    eml: str,
+    *,
+    folder: str | None = None,
+    account: str | None = None,
+    journal: "drafts.DraftJournal | None" = None,
+    data_dir: Path | None = None,
+    lease_id: str | None = None,
+    conversation_id: str | None = None,
+) -> dict[str, Any]:
+    """Append one prepared ``.eml`` (workspace-relative zone path) as an unsent draft (issue #18).
+
+    No composition: subject, recipients, body and attachments all come from the validated file. The
+    workspace is the one owning ``data/mail-desk``; binding, lease, validation, the single verified
+    stdin APPEND and the journal are owned by ``core.drafts.save_raw_draft``.
+    """
+    active_journal = _active_draft_journal(journal, data_dir)
+    return drafts.save_raw_draft(
+        eml,
+        folder=folder,
+        account=account,
+        journal=active_journal,
+        workspace_root=_draft_workspace_root(active_journal),
         lease_id=lease_id,
         conversation_id=conversation_id,
     )
@@ -818,6 +873,24 @@ def execute_manifest(manifest_path: Path, account: str | None = None) -> dict[st
                     # Lease credentials come only from the environment / CLI flags, never from a manifest.
                     attachments=op.get("attachments"),
                 )
+            elif action == "save_raw_draft":
+                # Closed schema: the message is the file; a lease never comes from a manifest.
+                if not set(op) <= {"action", "eml", "folder", "account"}:
+                    raise ValueError(
+                        "save_raw_draft accepts only 'eml', 'folder' and 'account' "
+                        "('account' must equal the manifest account)."
+                    )
+                op_account = op.get("account")
+                if op_account is not None and str(op_account).strip() and (
+                    not acc or str(op_account).strip() != str(acc).strip()
+                ):
+                    raise AccountDriftError(
+                        f"Account drift detected in manifest operation: operation specifies '{op_account}', "
+                        f"but manifest is bound to '{acc}'"
+                    )
+                if not isinstance(op.get("eml"), str) or not op["eml"].strip():
+                    raise ValueError("save_raw_draft requires 'eml' as a workspace-relative path string.")
+                res = op_save_raw_draft(eml=op["eml"], folder=op.get("folder"), account=acc)
             elif action in ["delete_draft", "deletedraft"]:
                 res = op_delete_draft(
                     envelope_id=str(op.get("envelope_id", op.get("id"))),
@@ -1038,6 +1111,14 @@ def main() -> int:
                 account=args.account,
                 cc=args.cc,
                 attachments=args.attach,
+                lease_id=args.lease_id,
+                conversation_id=args.conversation_id,
+            )
+        elif sub == "save_raw_draft":
+            result = op_save_raw_draft(
+                eml=args.eml,
+                folder=args.folder,
+                account=args.account,
                 lease_id=args.lease_id,
                 conversation_id=args.conversation_id,
             )

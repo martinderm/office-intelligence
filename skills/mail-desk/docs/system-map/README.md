@@ -65,7 +65,14 @@ wurde gemessen und die Assertions sind in PR #46 an den Produktvertrag gebunden.
 Unter CPU-Sättigung trat die READY-Familie erneut auf (Issue #47). Historische
 Flake-Zahlen unten sind keine aktuelle Abnahme. [Diagnose](../../../../docs/analysis/issue-10-stability.md).
 
-**Aktueller Frame (Issue #18, erhoben 2026-11-08 im Lane-Arbeitsbaum mit dem Dateisatz des
+**Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum `feat/issue-18-raw-eml`
+auf Basis des finalen Code-Head `f3256dd` einschließlich der Härtungsrunden; alle älteren
+Frames dieser Seite sind historisch):** 353 Dateien im Bundle, 216 unter `skills/mail-desk/`, 80 Python-Dateien unter
+`scripts/` (davon 65 unter `scripts/core/`), 112 Testmodule `tests/test_*.py` (`git ls-files --cached
+--others --exclude-standard`, im Lauf frisch erhoben). Raw-EML-Import: §42. Die Anzahl der Testfälle
+wird hier nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
+
+**Frame (Issue #18, erste Lieferung, historisch; erhoben 2026-11-08 im Lane-Arbeitsbaum mit dem Dateisatz des
 Fix-Commits; alle älteren Frames dieser Seite sind historisch):** 325 Dateien im Bundle,
 207 unter `skills/mail-desk/`, 78 Python-Dateien unter `scripts/` (davon 63 unter
 `scripts/core/`), 106 Testmodule `tests/test_*.py` (`git ls-files --cached --others
@@ -2147,7 +2154,7 @@ ein Zustellbarkeitsnachweis; Offline-Tests sind **kein** Live-Nachweis.
 
 **Umfang:** Klartext plus bis zu 5 explizit benannte reguläre lokale Dateien aus den vier
 Consumer-Datenzonen; kein HTML, keine Inline-Bilder, keine Signatur, keine beliebige EML
-(`save_raw_draft` ist nicht beschlossen), kein Download/Suche/Entpacken, keine Link-/Cloud-
+(die vorbereitete Rohmail ist die zweite Lieferung, §42), kein Download/Suche/Entpacken, keine Link-/Cloud-
 Automation. Eine zweite Transportimplementierung gibt es nicht.
 
 **Module und Verträge:**
@@ -2217,3 +2224,86 @@ Workspace-Lock-Guard über `OI_TEST_WORKSPACE_LOCK_ROOT`); `himalaya_fixtures.Dr
 `message export`.
 
 L1: [Paket-System-Map §12](../../../../docs/system-map/README.md).
+
+## 42. Issue #18 — Raw-EML-Import (zweite Lieferung)
+
+**Ziel:** Eine vorbereitete, in einer Consumer-Datenzone liegende `.eml` (Text plus normale
+Base64-Anhänge) wird als ungesendeter Entwurf im serverseitigen Drafts-Ordner abgelegt - semantisch
+treu bei Header, Text, Anhängen und Message-ID. Weder Versand noch Zustellbarkeitsnachweis;
+Offline-Tests mit synthetischen Mails sind **kein** Live-Nachweis.
+
+**Entscheidung (kein zweiter Transport):** `save_raw_draft` ist ein dünner Einstieg auf dem bestehenden
+verifizierten stdin-APPEND (`_append_and_verify`, §41). Das ist die im Backlog bevorzugte
+Wiederverwendung des kanonischen Transports; die historische Lösungsoption eines eigenen
+Schreibpfads wurde nicht gebaut. `_append_and_verify` erhielt nur zwei additive Parameter
+(`verify`: alternativer semantischer Vergleich, `extra_result`: zusätzliche Ergebnisfelder).
+
+**Umfang und Grenzen:** genau eine reguläre `*.eml` aus den vier Zonen (nicht `data/mail-desk/`, nie
+Symlink/Junction), höchstens 10 MiB als Datei **und** nach der Normalisierung, UTF-8 ohne NUL/CR-Einzelzeichen,
+Zeilen höchstens 998 Oktette, strikter RFC-5322-Header (höchstens 100 Felder / 64 KiB), genau eine
+Message-ID `<dot-atom@hostname>`, `To` (strikte RFC-5322-Adresslisten-Grammatik, `raw_eml_address_invalid`) und `Date`
+(strikter RFC-5322-`date-time`, `raw_eml_date_invalid`) Pflicht, Singleton-Header und jedes `Content-*` höchstens einmal,
+Header-Block jedes MIME-Teils strikt zerlegt (`raw_eml_part_header_invalid`; doppelte oder widersprüchliche `Content-*`
+und Steuerzeichen werden abgewiesen), `Content-Type`/`Content-Disposition`/`Content-Transfer-Encoding` von einem eigenen
+strengen RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine doppelten Parameter, `name`/`filename` ohne
+Pfad und `..`, RFC-2231-Fortsetzungen unterstützt, Text nie als `attachment` oder mit Dateinamen;
+`raw_eml_mime_invalid`/`raw_eml_structure_unsupported`/`raw_eml_attachment_invalid`; die Sicht der Standardbibliothek muss
+übereinstimmen), höchstens 64 MIME-Teile werden gezählt, bevor ein Teil-Header geparst oder die Standardbibliothek
+aufgerufen wird (`raw_eml_part_count_exceeded`; das Produktlimit bleibt 5 Anhänge), `To` mit Kommas in Anführungszeichen
+und Kommentaren als Nicht-Trenner und ohne leere Elemente, `To`/`Date` nur mit ASCII-Ziffern (NBSP u. a.
+Unicode-Whitespace ist nur innerhalb von Kommentaren und Anzeigenamen in Anführungszeichen erlaubt, sonst abgewiesen;
+im `Date` nur innerhalb des einen Trailing-Kommentars), Parameterposition (`name` nur im `Content-Type`, `filename` nur
+in der `Content-Disposition`, auch bei Text und `multipart/mixed`-Container; sonst abgewiesen), eine leere `To`-Gruppe
+mit nachfolgendem Leerraum/Kommentar bleibt wegen eines Fehlers von Python 3.12 in `email.headerregistry` (`AttributeError`)
+fail-closed abgewiesen und der Parser wird nicht gepatcht, Struktur
+`text/plain` oder flaches `multipart/mixed` (Text zuerst, höchstens 5 streng-Base64-Anhänge von je höchstens
+3 MiB mit gültigem eindeutigem Namen). Nicht unterstützt und fail-closed: HTML/Alternative, verschachtelte oder
+`message/*`-Teile, Preamble/Epilog, Parser-Defekte, fremde Charsets, 8bit-Anhänge, `replace` für Rohmails.
+
+**Module und Verträge:**
+- [`scripts/core/draft_raw_eml.py`](../../scripts/core/draft_raw_eml.py) (neu): `validate_raw_eml` (rein),
+  `load_raw_eml` (Pfad, `.eml`, gemeinsamer Leser), `compare_stored_raw` (semantischer Vergleich,
+  Codes `structure`, `header:<name>`, `header_order`, `part[n]:header:<name>`, `part[n]:header_order`,
+  `body:text`, `attachment_count:<n>!=<m>`, `attachment[i]:<feld>`, `stored:<reason>`), `PreparedRawEml`,
+  `RawEmlError`, `MAX_MIME_PARTS = 64`.
+- [`scripts/core/draft_attachments.py`](../../scripts/core/draft_attachments.py): der begrenzte Dateileser
+  wurde zu `read_zone_file` und die Pfadprüfung zu `validate_zone_path` verallgemeinert
+  (`prefix`/`error` wählen Reason-Code-Familie und Ausnahme); das Anhangsverhalten und seine Codes
+  `attachment_*` sind unverändert. Es gibt **einen** Leser für Anhänge und Roh-EML.
+- [`scripts/core/drafts.py`](../../scripts/core/drafts.py): `save_raw_draft`, `_append_and_verify(verify=., extra_result=.)`.
+- [`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py): `save-raw-draft --eml PATH
+  [-f FOLDER] [--lease-id] [--conversation-id]`, Manifest `save_raw_draft`
+  (geschlossenes Schema `eml`/`folder`/`account`, `account` muss dem Manifest-Account entsprechen; keine Lease, kein
+  Betreff/Empfänger/Body/`attachments` aus dem Manifest), `op_save_raw_draft`. `core/__init__.py` re-exportiert
+  `save_raw_draft` und `RawEmlError` (`__all__` bleibt die eingefrorene Kompatibilitätsbasis).
+
+**CRLF-/Himalaya-Normalisierung (dokumentiert, getestet):** Himalaya 1.2.0 liest die stdin-Nachricht mit
+`lines()`, entfernt jedes `\r` und verbindet mit CRLF ohne finales Zeilenende. Die Datei wird vor dem APPEND zu
+kanonischen CRLF-Zeilen (LF/CRLF/gemischt erlaubt, einzelnes CR nicht), mit höchstens einem hinzugefügten
+abschließenden CRLF; Leerzeilen am Ende bleiben. Das eine Transport-CRLF des bestehenden Pfads folgt.
+Ergebnis und Journal weisen Zeilenende-Form sowie SHA-256 von Quelle und Normalform aus; ein von der Quelle
+abweichender gespeicherter Bytestrom ist damit erwartet, ein von der Normalform abweichender nicht.
+Der Textvergleich im Rücklesen behält abschließende Zeilenumbrüche (`Text\r\n\r\n\r\n` ≠ `Text\r\n`); nur die Form
+des Zeilenendes (LF/CRLF/einzelnes CR, auch nach dem Dekodieren) ist neutral. Die Teil-Header-Werte jedes MIME-Teils
+(`Content-ID`, `Content-Description`, `Content-Transfer-Encoding`, `Content-Type` samt `charset`, `Content-Disposition`,
+`Content-Language`, `Content-Location`, jeder weitere Teil-Header) sind Teil des Rücklesevergleichs
+(`part[n]:header:<name>`, `part[n]:header_order`). Zusätzlich gilt das gesamte Profil - Teil-Header-Prüfung, MIME-Werte,
+Adress-/Datumsgrammatik, Teile-Grenze - identisch für die gespeicherte Mail: ein Verstoß ergibt `stored:<reason>`.
+Unicode-Whitespace bleibt in allen Vergleichswerten signifikant (nur ASCII-Leerzeichen/Tab werden zusammengefasst).
+
+**Zustandsautomat:** wie §41 ohne Replace: Bindung → Pfad → Lesen → Profil/Normalisierung → Eindeutigkeit vorab
+→ Journal `append_started` → genau ein APPEND → `append_failed` | `append_outcome_unknown` | Rücklesen →
+`appended_unverified` | `saved_verified`. Alle Validierungs- und Bindungsfehler liegen vor dem ersten
+Mailbox-Kontakt und ohne Journal-Eintrag; ein unklarer Ausgang wird nie wiederholt.
+
+**Sicherheit:** Fehlertexte nennen feste Codes und Zähler, nie Dateiinhalt, Aufruferpfad oder Backend-Stderr;
+`PreparedRawEml` und `DraftAttachment.data` fehlen in `repr`; das Journal enthält nur Metadaten. Header-
+Injection ist durch den zeilenweisen strikten Parser ausgeschlossen (keine Steuer-/Trennzeichen, kein bares CR).
+Restrisiken wie §41 (Windows ohne `O_NOFOLLOW`, Hardlinks, Export zuerst auf der Platte, Server-Normalisierung
+nur offline modelliert); zusätzlich ist der Nachweis semantisch, nicht bytegleich.
+
+**Tests:** `tests/test_draft_raw_eml_{validate,save,client,docs}.py` mit `tests/raw_eml_fixtures.py`
+(Standardbibliothek-Builder, unabhängig vom Produktcode) und den Fixtures von §41 (Subprozess-Grenze mit echtem
+`run_himalaya`, echter Workspace-Lock-Guard über `OI_TEST_WORKSPACE_LOCK_ROOT`).
+
+L1: [Paket-System-Map §13](../../../../docs/system-map/README.md).

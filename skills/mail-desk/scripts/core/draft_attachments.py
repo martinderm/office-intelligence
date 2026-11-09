@@ -176,14 +176,24 @@ def _default_content_type(filename: str) -> str:
     return _EXTENSION_CONTENT_TYPES.get(Path(filename).suffix.lower(), DEFAULT_CONTENT_TYPE)
 
 
-def _validate_path(value: Any, *, index: int) -> tuple[tuple[str, ...], str]:
-    label = f"attachment #{index + 1}"
+def validate_zone_path(
+    value: Any,
+    *,
+    label: str,
+    prefix: str = "attachment",
+    error: type[DraftError] = DraftAttachmentError,
+) -> tuple[tuple[str, ...], str]:
+    """Validate a workspace-relative file path below one of the four zones (no file-system access).
+
+    ``label`` names the file in error texts, ``prefix`` selects the reason-code family
+    (``<prefix>_path_invalid`` / ``<prefix>_path_forbidden``) and ``error`` the exception type.
+    """
     invalid = f"{label} path is not a valid workspace-relative zone path."
     if not isinstance(value, str) or not value or len(value) > _MAX_PATH_CHARS:
-        raise _fail("attachment_path_invalid", invalid)
+        raise error(f"{prefix}_path_invalid", invalid)
     for char in value:
         if ord(char) < 0x20 or ord(char) == 0x7F or char in ("\\", ":") or unicodedata.category(char) in ("Cc", "Cs"):
-            raise _fail("attachment_path_invalid", invalid)
+            raise error(f"{prefix}_path_invalid", invalid)
     segments = tuple(value.split("/"))
     for segment in segments:
         if (
@@ -192,16 +202,20 @@ def _validate_path(value: Any, *, index: int) -> tuple[tuple[str, ...], str]:
             or segment.endswith((".", " "))
             or _is_reserved_device(segment)
         ):
-            raise _fail("attachment_path_invalid", invalid)
+            raise error(f"{prefix}_path_invalid", invalid)
     zone = next(
         (z for z in ATTACHMENT_ZONES if segments[: len(z.split("/"))] == tuple(z.split("/"))),
         None,
     )
     if zone is None or len(segments) <= len(zone.split("/")):
-        raise _fail("attachment_path_invalid", f"{label} is not a file inside one of the four data zones.")
+        raise error(f"{prefix}_path_invalid", f"{label} is not a file inside one of the four data zones.")
     if zone == "data" and segments[1].casefold() == _FORBIDDEN_DATA_SEGMENT:
-        raise _fail("attachment_path_forbidden", f"{label} is inside the desk's own runtime state; refusing.")
+        raise error(f"{prefix}_path_forbidden", f"{label} is inside the desk's own runtime state; refusing.")
     return segments, zone
+
+
+def _validate_path(value: Any, *, index: int) -> tuple[tuple[str, ...], str]:
+    return validate_zone_path(value, label=f"attachment #{index + 1}")
 
 
 def normalize_attachment_specs(specs: Any) -> list[AttachmentSpec]:
@@ -257,7 +271,14 @@ def _identity(info: os.stat_result) -> tuple[int, int, int]:
     return (info.st_dev, info.st_ino, info.st_size)
 
 
-def _lstat_chain(root: Path, segments: Sequence[str], label: str) -> os.stat_result:
+def _lstat_chain(
+    root: Path,
+    segments: Sequence[str],
+    label: str,
+    *,
+    prefix: str = "attachment",
+    error: type[DraftError] = DraftAttachmentError,
+) -> os.stat_result:
     """``lstat`` every component below the trusted root without resolving anything."""
     current = root
     info: os.stat_result | None = None
@@ -266,43 +287,63 @@ def _lstat_chain(root: Path, segments: Sequence[str], label: str) -> os.stat_res
         try:
             info = os.lstat(current)
         except OSError:
-            raise _fail("attachment_unreadable", f"{label} could not be read.") from None
+            raise error(f"{prefix}_unreadable", f"{label} could not be read.") from None
         if _is_link(info):
-            raise _fail("attachment_link_refused", f"{label} path crosses a symlink or junction; refusing.")
+            raise error(f"{prefix}_link_refused", f"{label} path crosses a symlink or junction; refusing.")
     assert info is not None
     return info
 
 
-def _read_one(root: Path, spec: AttachmentSpec, index: int) -> DraftAttachment:
-    label = f"attachment #{index + 1}"
+def read_zone_file(
+    root: Path,
+    segments: Sequence[str],
+    zone: str,
+    label: str,
+    *,
+    max_bytes: int,
+    prefix: str = "attachment",
+    error: type[DraftError] = DraftAttachmentError,
+) -> bytes:
+    """Read one regular, link-free, zone-confined file with a hard byte bound (single bounded reader).
+
+    Shared by attachment files and Raw-EML sources: every path component is ``lstat``-ed without
+    resolving, the opened handle must be the very file the chain pointed at (proven before the first
+    byte), the size is rejected from ``fstat`` before any read, growth or truncation while reading and a
+    mid-read swap are detected.  ``prefix`` / ``error`` select the reason-code family and exception type;
+    messages carry ``label`` only -- no file content, caller path or OS error text.
+    """
     unreadable = f"{label} could not be read."
     changed = f"{label} changed while it was read; refusing."
-    pre = _lstat_chain(root, spec.segments, label)
+
+    def fail(reason: str, message: str) -> DraftError:
+        return error(f"{prefix}_{reason}", message)
+
+    pre = _lstat_chain(root, segments, label, prefix=prefix, error=error)
     if stat.S_ISDIR(pre.st_mode) or not stat.S_ISREG(pre.st_mode):
-        raise _fail("attachment_not_regular_file", f"{label} is not a regular file.")
+        raise fail("not_regular_file", f"{label} is not a regular file.")
     if pre.st_ino == 0 and pre.st_dev == 0:
-        raise _fail("attachment_unreadable", f"{label} identity cannot be established; refusing.")
+        raise fail("unreadable", f"{label} identity cannot be established; refusing.")
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    path = root.joinpath(*spec.segments)
+    path = root.joinpath(*segments)
     try:
         descriptor = os.open(path, flags)
     except OSError:
-        raise _fail("attachment_unreadable", unreadable) from None
+        raise fail("unreadable", unreadable) from None
     try:
         handle_info = os.fstat(descriptor)
         # The opened HANDLE must be the very file the unresolved chain pointed at, proven before the
         # first byte is read.  A directory/file swapped for a link (or any other file) fails here.
         if not stat.S_ISREG(handle_info.st_mode):
-            raise _fail("attachment_not_regular_file", f"{label} is not a regular file.")
+            raise fail("not_regular_file", f"{label} is not a regular file.")
         if _identity(handle_info) != _identity(pre):
-            raise _fail("attachment_changed", changed)
-        _lstat_chain(root, spec.segments, label)
-        _assert_inside_zone(root, path, spec, label)
+            raise fail("changed", changed)
+        _lstat_chain(root, segments, label, prefix=prefix, error=error)
+        _assert_inside_zone(root, path, zone, label, prefix=prefix, error=error)
         size = handle_info.st_size
         if size == 0:
-            raise _fail("attachment_empty", f"{label} is empty.")
-        if size > MAX_ATTACHMENT_BYTES:
-            raise _fail("attachment_too_large", f"{label} exceeds the {MAX_ATTACHMENT_BYTES} byte file limit.")
+            raise fail("empty", f"{label} is empty.")
+        if size > max_bytes:
+            raise fail("too_large", f"{label} exceeds the {max_bytes} byte file limit.")
         chunks: list[bytes] = []
         remaining = size + 1  # one byte more than announced detects growth
         total = 0
@@ -315,16 +356,23 @@ def _read_one(root: Path, spec: AttachmentSpec, index: int) -> DraftAttachment:
                 total += len(block)
                 remaining -= len(block)
         except OSError:
-            raise _fail("attachment_unreadable", unreadable) from None
+            raise fail("unreadable", unreadable) from None
         if total != size:
-            raise _fail("attachment_changed", changed)
+            raise fail("changed", changed)
         data = b"".join(chunks)
     finally:
         os.close(descriptor)
     # Re-prove the chain and the identity after reading (a mid-read swap leaves a trace).
-    post = _lstat_chain(root, spec.segments, label)
+    post = _lstat_chain(root, segments, label, prefix=prefix, error=error)
     if _identity(post) != _identity(handle_info):
-        raise _fail("attachment_changed", changed)
+        raise fail("changed", changed)
+    return data
+
+
+def _read_one(root: Path, spec: AttachmentSpec, index: int) -> DraftAttachment:
+    data = read_zone_file(
+        root, spec.segments, spec.zone, f"attachment #{index + 1}", max_bytes=MAX_ATTACHMENT_BYTES
+    )
     return DraftAttachment(
         filename=spec.filename,
         content_type=spec.content_type,
@@ -334,16 +382,24 @@ def _read_one(root: Path, spec: AttachmentSpec, index: int) -> DraftAttachment:
     )
 
 
-def _assert_inside_zone(root: Path, path: Path, spec: AttachmentSpec, label: str) -> None:
+def _assert_inside_zone(
+    root: Path,
+    path: Path,
+    zone: str,
+    label: str,
+    *,
+    prefix: str = "attachment",
+    error: type[DraftError] = DraftAttachmentError,
+) -> None:
     """Resolved location must still be below ``<root>/<zone>`` and outside the desk's runtime state."""
     try:
         real = Path(os.path.realpath(path))
-        zone_root = Path(os.path.realpath(root.joinpath(*spec.zone.split("/"))))
+        zone_root = Path(os.path.realpath(root.joinpath(*zone.split("/"))))
         relative = Path(os.path.normcase(real)).relative_to(Path(os.path.normcase(zone_root)))
     except (OSError, ValueError):
-        raise _fail("attachment_path_invalid", f"{label} resolves outside its data zone; refusing.") from None
-    if spec.zone == "data" and relative.parts and relative.parts[0].casefold() == _FORBIDDEN_DATA_SEGMENT:
-        raise _fail("attachment_path_forbidden", f"{label} resolves into the desk's runtime state; refusing.")
+        raise error(f"{prefix}_path_invalid", f"{label} resolves outside its data zone; refusing.") from None
+    if zone == "data" and relative.parts and relative.parts[0].casefold() == _FORBIDDEN_DATA_SEGMENT:
+        raise error(f"{prefix}_path_forbidden", f"{label} resolves into the desk's runtime state; refusing.")
 
 
 def resolve_workspace_root(workspace_root: Any) -> Path:
@@ -617,7 +673,9 @@ __all__ = [
     "compare_stored_message",
     "describe_stored_message",
     "load_attachments",
+    "read_zone_file",
     "split_parts",
+    "validate_zone_path",
     "normalize_attachment_specs",
     "resolve_workspace_root",
     "validate_content_type",

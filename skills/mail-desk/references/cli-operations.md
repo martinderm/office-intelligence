@@ -424,6 +424,157 @@ keine) und `old_message_id`. Eine Lease im Manifest wird nie berücksichtigt.
   harter Grenze (12 MiB + 1 Byte, ein reguläres Handle, Identitäts-/Wachstumsprüfung)
   lädt: die Grenze schützt den Python-Speicher, nicht die vorgelagerte Backend-Übertragung.
 
+### Vorbereitete Rohmail (Raw-EML-Import, Issue #18)
+
+```bash
+python3 scripts/mail_desk_himalaya_client.py save-raw-draft -a konto --eml data/eingang/angebot.eml \
+  --lease-id <lease> --json
+```
+
+Manifest-Aktion `save_raw_draft` mit `{"eml": "data/eingang/angebot.eml", "folder": "Drafts"}`
+(`folder` optional). Das Schema ist geschlossen: erlaubt sind nur `action`, `eml`, `folder` und
+`account` (`account` muss dem Manifest-Account entsprechen, sonst `Account drift`; die Fehlermeldung
+nennt `'eml'`, `'folder'` und `'account'`); `subject`, `to`, `cc`, `body`, `attachments`,
+`lease_id` und jeder weitere Schlüssel werden abgewiesen; die Lease kommt nur aus `--lease-id`/
+`--conversation-id` bzw. der Umgebung. Die Mail ist die Datei - es gibt keine Kompositions-Flags
+und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
+
+- **Kein zweiter Schreibpfad:** Dieselbe Kette wie bei Builder-Entwürfen (`_append_and_verify`):
+  Bindung (Workspace-Wurzel aus `data/mail-desk`, Journal, echte Lease mit `allow_legacy=False`,
+  gebundener Account) **vor** dem ersten Dateizugriff, Datei lesen und prüfen, Message-ID-Vorprüfung
+  (muss im Zielordner fehlen und beweisbar fehlen; Ordner mit mehr als 49 Nachrichten sind
+  fail-closed), Journal `append_started`, **genau ein** binärer stdin-APPEND, niemals wiederholt,
+  semantisches Zurücklesen genau einer gespeicherten Mail. Ein unklarer APPEND-Ausgang
+  (`draft_append_outcome_unknown`) wird journalisiert und nie wiederholt.
+- **Quelle:** genau eine reguläre Datei `*.eml` unterhalb von `memory/references/`,
+  `memory/evidence/`, `memory/cloud/` oder `data/` (nicht `data/mail-desk/`); gleiche Pfadregeln,
+  Link-/Junction-Abweisung und Handle-Identitätsprüfung wie bei Anhängen (ein gemeinsamer begrenzter
+  Leser). Höchstens **10 MiB** als Datei **und** nach der Normalisierung (LF→CRLF kann eine Datei
+  über die Grenze heben: `raw_eml_message_too_large`); die Prüfung geschieht aus `fstat` vor dem Lesen.
+- **Profil (alles andere fail-closed, inhaltsfreie Codes):** gültiges UTF-8
+  (`raw_eml_not_utf8` - der stdin-Transport erlaubt nur UTF-8, es wird nichts umkodiert), kein NUL
+  (`raw_eml_nul_byte`), kein einzelnes CR (`raw_eml_bare_cr`), Zeilen höchstens 998 Oktette
+  (`raw_eml_line_too_long`). Header strikt nach RFC 5322 (`raw_eml_header_invalid`): Feldname aus
+  druckbarem US-ASCII, kein Leerraum vor dem Doppelpunkt, Faltung nur durch führendes Leerzeichen/
+  Tab (kein leeres Fortsetzungsfeld), keine Steuer-/Zeilen-/Absatztrenner-Zeichen außer Tab, höchstens
+  100 Felder und 64 KiB Header, Trennzeile Pflicht. Genau **eine** `Message-ID` der Form
+  `<dot-atom@hostname>` (`raw_eml_header_missing` / `raw_eml_header_duplicate` /
+  `raw_eml_message_id_invalid`; Kommentare, Mehrfach-IDs, Anführungszeichen, Domain-Literale und
+  Nicht-ASCII-Hosts werden abgewiesen); `To` und `Date` nicht leer; `From`, `Sender`, `Reply-To`,
+  `To`, `Cc`, `Bcc`, `Subject`, `Date`, `In-Reply-To`, `References`, `MIME-Version` und **jedes**
+  `Content-*` (auch `Content-ID`, `Content-Description`, `Content-Language`, `Content-Location`) höchstens
+  einmal (Groß-/Kleinschreibung egal). Alle Header, auch `Bcc`/`X-Unsent`, bleiben erhalten; die
+  Nachrichten-Header **und** die Header-Blöcke aller MIME-Teile werden im Rücklesen Name für Name
+  verglichen (siehe Nachweis). Die Datei wird nie verändert außer durch die Zeilenende-Normalisierung.
+- **Adresse und Datum (strikte RFC-5322-Grammatik):** `To` muss eine wohlgeformte Adressliste sein
+  (Mailboxen und Gruppen; Anzeigename in UTF-8 oder RFC 2047 erlaubt; Kommentare erlaubt, soweit der
+  Standardbibliotheks-Parser sie ohne Defekt annimmt, auch mehrere und verschachtelte; ASCII-`addr-spec`;
+  kein überzähliger Text; kein Parser-Defekt): `raw_eml_address_invalid` (z. B. `not-an-address`, `a@`,
+  `Doe, John <j@example.org>`, `a@example..org`). Ein eigener Scan trennt Listenelemente nur an Kommas
+  **außerhalb** von Anführungszeichen und Kommentaren: `"Doe, , John" <a@example.org>`,
+  `a@example.org (Kommentar, , x)` und `"a, , b"@example.org` sind gültig, leere Elemente
+  (`a@example.org,`, `,a@example.org`, `a@x,,b@x`, `Group: a@example.org,;`) und offene Anführungszeichen
+  oder Kommentare werden abgewiesen. **Whitespace:** Nur ASCII-Leerzeichen und Tab trennen Tokens.
+  Unicode-Whitespace (NBSP, EM SPACE, ...) ist **nur innerhalb von Kommentaren und innerhalb von
+  Anzeigenamen in Anführungszeichen** erlaubt (RFC-6532-Text); außerhalb davon - zwischen Tokens, am
+  Anfang oder Ende, in Domain oder Local-Part, zwischen Adresse und Kommentar (z. B. `a@x,<NBSP>b@x`) - wird
+  die Liste abgewiesen. Auch eine Adresse in Anführungszeichen (`"a<NBSP>b"@x`) bleibt wegen der
+  ASCII-`addr-spec`-Regel abgewiesen. **Leere Gruppe mit CFWS (dokumentierte Grenze, Python 3.12):**
+  `email.headerregistry` der Standardbibliothek wirft einen `AttributeError`, sobald auf eine leere Gruppe
+  Leerraum oder ein Kommentar folgt (`Group:; , a@example.org`, `a@example.org, Group:; , b@example.org`,
+  `Group:; (c), a@example.org`); der Parser wird nicht gepatcht, die Liste bleibt fail-closed abgewiesen
+  (`raw_eml_address_invalid`), obwohl sie nach RFC 5322 gültig wäre. Ohne CFWS (`Group:;`,
+  `Group:;, a@example.org`) und bei nichtleeren Gruppen mit CFWS wird sie angenommen; auf einem Interpreter
+  ohne diesen Fehler würde sie ebenfalls angenommen (die Tests springen dann). Andere Adress-Header werden erhalten und
+  verglichen, aber nicht auf Grammatik geprüft. `Date` muss ein RFC-5322-`date-time` sein: optionaler
+  Wochentag (muss zum Datum passen), 1-2-stelliger Tag, Monatsname, 4-stelliges Jahr 1900-9999, reales
+  Kalenderdatum, Stunde 00-23, Minute 00-59, Sekunde 00-60 (optional), numerische Zone `±hhmm` (hh 00-23,
+  mm 00-59), alles mit **ASCII-Ziffern** `0`-`9` (arabisch-indische oder Vollbreiten-Ziffern werden
+  abgewiesen) und ASCII-Leerzeichen zwischen den Feldern; obsolete Formen (zweistelliges Jahr, `GMT`/`EST`)
+  und `Sat, 99 Foo 2026 99:99:99 +9999` werden mit `raw_eml_date_invalid` abgewiesen. Erlaubt ist höchstens
+  ein Trailing-Kommentar ohne Verschachtelung (`+0100 (CET)`); sein Inhalt darf beliebige Zeichen außer
+  Klammern enthalten, auch Unicode-Whitespace (`(CET<NBSP>x)`), während Unicode-Whitespace außerhalb des
+  Kommentars (zwischen den Feldern, vor dem Kommentar, am Anfang oder Ende) mit `raw_eml_date_invalid`
+  abgewiesen wird.
+- **Teil-Header und MIME-Werte (`multipart/mixed`, Nachrichten- und Teil-Ebene):** Der Header-Block
+  **jedes** MIME-Teils wird zuerst mit denselben strikten Regeln wie der Nachrichten-Header zerlegt
+  (`raw_eml_part_header_invalid`): gültige Feldzeilen und Faltung, keine Steuer-/Trennzeichen außer Tab,
+  höchstens 100 Felder / 64 KiB, Trennzeile Pflicht. Doppelte oder widersprüchliche `Content-Disposition`,
+  `Content-Type`, `Content-Transfer-Encoding` und jedes weitere `Content-*` sowie `MIME-Version` im selben
+  Teil werden abgewiesen. Danach werden `Content-Type`, `Content-Disposition` und
+  `Content-Transfer-Encoding` von einem eigenen strengen Parser gelesen (RFC 2045/2231,
+  `raw_eml_mime_invalid`) - **nicht** über die toleranten Getter der Standardbibliothek: genau ein
+  `type/subtype` (`text/html, text/plain` und jedes nachfolgende Zeichen werden abgewiesen), Parameter als
+  Token oder Anführungszeichen-String mit `\`-Escapes, Leerraum nur um `;` (nie um `=`), kein Kommentar,
+  kein hängendes `;`; derselbe Parametername (`filename`, `name`, `charset`, `boundary`, ...) höchstens
+  einmal, auch nicht gleichzeitig als `name` und `name*`. RFC 2231 wird unterstützt (`name*=utf-8''...`,
+  `name*0=`/`name*0*=`-Fortsetzungen, nur Charsets UTF-8/US-ASCII, lückenlose Abschnitte, gültige
+  `%XX`), weil die Standardbibliothek selbst lange Dateinamen so schreibt. `boundary` muss genau einmal
+  vorkommen und aus 1-70 gültigen Zeichen bestehen. Die Sicht des strengen Parsers muss mit der der
+  Standardbibliothek übereinstimmen (Content-Type, Boundary, Dateiname, Anzahl der Teile), sonst
+  `raw_eml_mime_invalid`. **Parameterposition:** `name` gilt ausschließlich im `Content-Type`, `filename` ausschließlich in der
+  `Content-Disposition` - überall: in einer anderen Position (`Content-Type: ...; filename=...`,
+  `Content-Disposition: ...; name=...`, auch als `filename*`/`name*`) werden sie abgewiesen, ob sicher,
+  gleich oder pfadartig. Der Text (Nachricht oder erster Teil) darf weder `Content-Disposition: attachment`
+  noch einen `name`/`filename` in irgendeiner Position tragen (`raw_eml_structure_unsupported`); `inline`
+  ohne Dateinamen ist erlaubt. Ein `multipart/mixed`-Container trägt `name`/`filename` ebenfalls in keiner
+  Position (`raw_eml_structure_unsupported`). Ein Anhang braucht `attachment` mit `filename` in der
+  `Content-Disposition`; `filename` und, falls vorhanden, das `name` des `Content-Type` müssen die
+  Dateinamen-Regeln erfüllen (kein `/`, `\`, `:`, `..`, Gerätename, ...) und gleich sein; ein `filename` im
+  `Content-Type` oder ein `name` in der `Content-Disposition` ist ein Verstoß (`raw_eml_attachment_invalid`).
+- **Teile-Grenze:** Höchstens **64 MIME-Teile** (Textteil plus Anhangsteile) werden überhaupt gezählt: das
+  65. Delimiter stoppt den Scan mit `raw_eml_part_count_exceeded`, **bevor** ein Teil-Header-Block
+  geparst oder die Standardbibliothek aufgerufen wird. Das Produktlimit bleibt 5 Anhänge
+  (`raw_eml_attachment_count_exceeded`); die 64 begrenzen nur die Arbeit.
+- **Struktur:** `text/plain` (Charset UTF-8 oder US-ASCII, Encoding 7bit/8bit/quoted-printable/
+  base64; ohne MIME-Header gilt US-ASCII, ein Text mit Umlauten braucht `MIME-Version: 1.0` und
+  `Content-Type: text/plain; charset=utf-8`) oder flach `multipart/mixed` mit dem Text als erstem Teil
+  und höchstens **5** `attachment`-Teilen, je Base64 (streng, nur das Alphabet), dekodiert 1 Byte bis
+  **3 MiB**, gültiger und eindeutiger Dateiname (Regeln der Anhangsliste), streng geparster Content-Type
+  (`raw_eml_attachment_invalid` / `raw_eml_attachment_count_exceeded` / `raw_eml_attachment_too_large`).
+  Nicht unterstützt (`raw_eml_structure_unsupported` / `raw_eml_mime_invalid`): HTML, `multipart/
+  alternative|related`, geschachtelte oder `message/*`-Teile, Preamble/Epilog-Text, ein Anhang mit
+  `inline`, jeder MIME-Parser-Defekt, fremde Charsets.
+- **CRLF-Normalisierung (Himalaya):** Himalaya 1.2.0 liest die stdin-Nachricht mit Rust `lines()`,
+  entfernt jedes `\r` und verbindet mit CRLF, ohne finales Zeilenende. Die Datei wird deshalb **vor**
+  dem APPEND zu kanonischen CRLF-Zeilen (LF und CRLF gemischt erlaubt, einzelnes CR nicht), mit genau
+  einem abschließenden CRLF falls es fehlt (Leerzeilen am Ende bleiben), und mit dem einen
+  Transport-CRLF des bestehenden Pfads gesendet. Die gespeicherte Mail muss der normalisierten
+  entsprechen. Ergebnis und Journal führen `source` bzw. `source_path`/`source_sha256`/
+  `normalized_sha256`/`source_line_endings` (`crlf`, `lf`, `mixed`).
+- **Nachweis:** Erfolg erst nach `message export` genau einer Envelope zur Message-ID und einem
+  semantischen Vergleich mit der vorbereiteten Mail: Header-Folge (Name und whitespace-normalisierter
+  Wert; zusätzliche, fehlende, geänderte oder umgestellte Header ergeben `header:<name>`/
+  `header_order`), dekodierter Text **einschließlich seiner abschließenden Zeilenumbrüche**
+  (`Text\r\n\r\n\r\n` und `Text\r\n` sind verschieden, `body:text`; neutral ist nur die Form des
+  Zeilenendes LF/CRLF/einzelnes CR, auch nach dem Dekodieren), die **Teil-Header-Werte** jedes MIME-Teils
+  (`Content-ID`, `Content-Description`, `Content-Transfer-Encoding`, `Content-Type` samt `charset`,
+  `Content-Disposition`, `Content-Language`, `Content-Location`, jeder weitere Teil-Header: Name und
+  ASCII-whitespace-normalisierter Wert, geänderte, fehlende, zusätzliche oder umgestellte Header ergeben
+  `part[n]:header:<name>` bzw. `part[n]:header_order`, `n` ab 1 mit dem Textteil als erstem Teil),
+  Anhangsanzahl und je Anhang Name, Typ, Größe und SHA-256. Unicode-Whitespace bleibt in allen
+  Vergleichswerten signifikant (nur ASCII-Leerzeichen/Tab werden zusammengefasst).
+  Abweichung, Duplikat oder Nichtauffindbarkeit: `draft_verification_failed` (`appended_unverified`
+  im Journal), kein Erfolg. Das ist keine Byte-Gleichheit beliebiger Rohmails.
+- **Fehlercodes (neu):** `raw_eml_path_invalid`, `raw_eml_path_forbidden`, `raw_eml_extension_invalid`,
+  `raw_eml_unreadable`, `raw_eml_link_refused`, `raw_eml_not_regular_file`, `raw_eml_changed`,
+  `raw_eml_empty`, `raw_eml_too_large`, `raw_eml_message_too_large`, `raw_eml_invalid`, `raw_eml_not_utf8`,
+  `raw_eml_nul_byte`, `raw_eml_bare_cr`, `raw_eml_line_too_long`, `raw_eml_header_invalid`,
+  `raw_eml_header_missing`, `raw_eml_header_duplicate`, `raw_eml_message_id_invalid`,
+  `raw_eml_mime_invalid`, `raw_eml_structure_unsupported`, `raw_eml_attachment_invalid`,
+  `raw_eml_attachment_count_exceeded`, `raw_eml_attachment_too_large`, `raw_eml_part_header_invalid`,
+  `raw_eml_address_invalid`, `raw_eml_date_invalid`, `raw_eml_part_count_exceeded`; dazu die bestehenden
+  `draft_binding_failed`, `draft_lock_missing`, `draft_message_id_not_unique`,
+  `draft_journal_write_failed`, `draft_save_failed`, `draft_append_outcome_unknown`,
+  `draft_verification_failed`. Ein Validierungsfehler führt zu **keinem** Mailbox-Kontakt und keinem
+  Journal-Eintrag; Fehlertexte enthalten nie Dateiinhalt, Aufruferpfade oder Backend-Stderr.
+- **Grenzen des Nachweises:** Offline-Modell des Backends (synthetische Mails, kein echtes
+  Postfach, kein SMTP, keine Cloud), kein Live-Nachweis. Hardlinks innerhalb einer Zone sind
+  reguläre Dateien; unter Windows gibt es kein `O_NOFOLLOW` (Rennen werden erkannt, nicht
+  verhindert). Der CLI-Export landet vor dem begrenzten Python-Laden vollständig auf der Platte.
+  Bytegleiche Übertragung beliebiger Rohmails (8bit-Fremdcharsets, HTML-Alternativen, eingebettete
+  Mails) ist ausdrücklich nicht Teil des Profils.
+
 ## Gebundene Draft-Diagnose (`diagnose-draft`, opt-in, Default aus)
 
 Zusätzlich zu den drei Entwurfsoperationen existiert ein **rein diagnostischer**
