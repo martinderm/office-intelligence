@@ -692,7 +692,11 @@ die Flags dort nicht). Backend-/Account-/Review-Gates unverändert.
 `sync-sent` ist nur mailbox-lesend: Sent-Index sowie Wrapper-Envelope/Progress
 unter `tmp/mail-batch/` werden lokal geschrieben. `--since ... --account ...` sendet
 ein verifiziertes Recovery-Manifest per stdin (kein direkter `--sync-sent`-Modus).
-Summary führt Sent-Zähler und propagiert Fehler
+`--data-dir` (relativ/absolut) muss kanonisch genau `<workspace>/data/mail-desk` des
+lease-geprüften Consumer-Workspaces sein; Symlinks/Junctions werden aufgelöst und mit der
+Runner-Root-Inferenz abgeglichen. Externe Consumer, Escapes und fehlende Workspaces stoppen
+mit `WorkspacePathError` vor Child/Read/Write; ein fehlendes `data/mail-desk` im geprüften
+Workspace bleibt zulässig. Summary führt Sent-Zähler und propagiert Fehler
 einschließlich defektem Runner-Envelope mit Nichtnull-Exit. Regressionen in
 `tests/test_batch_cli_wrapper.py`; historische Abnahmezahlen unten sind alte Frames.
 

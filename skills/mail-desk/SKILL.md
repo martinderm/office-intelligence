@@ -163,7 +163,10 @@ unverändert an den Runner delegiert, nicht bei anderen Modi. `sync-sent` liest
 die Mailbox, schreibt jedoch lokal Sent-Index, Wrapper-Envelope/Progress unter
 `tmp/mail-batch/`; es ist keine schreibfreie Operation. `sync-sent --since ... --account ...`
 leitet ein verifiziertes Recovery-Manifest per stdin an den Runner, ohne den
-direkten `--sync-sent`-Modus.
+direkten `--sync-sent`-Modus. `--data-dir` muss kanonisch exakt
+`<workspace>/data/mail-desk` des lease-geprüften Workspaces sein; der Wrapper löst
+Symlinks/Junctions auf, gleicht mit der Runner-Root-Inferenz ab und stoppt mit
+`WorkspacePathError` vor Child/Read/Write bei externen Consumern/Escapes.
 
 **SOP-Guard (leerer Posteingang, Vorlage für Consumer-Pipelines):** Meldet `draft`
 `is_empty: true`/`inbox_zero: true` (bzw. `total_drafted == 0`), ist der Lauf ein

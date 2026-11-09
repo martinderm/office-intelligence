@@ -125,7 +125,10 @@ Execute, Verify oder Handoff. FR-04/`dossier_apply` prüft inneren H2-Vertrag pl
 bestehende äußere Dossier-Receipt; keine Ausnahme und keine automatische Freigabe.
 Receipt-Formate und Hash-Kanonisierung bleiben unverändert.
 Der CLI-Wrapper prüft denselben Vertrag vor eigenen Logs/Pruning und übergibt den
-geprüften Snapshot per stdin (Runner revalidiert).
+geprüften Snapshot per stdin (Runner revalidiert). Er bindet `--data-dir` kanonisch an den
+lease-geprüften `--workspace` (`<workspace>/data/mail-desk`, inkl. Symlink-/Junction-Auflösung)
+und stoppt mit `WorkspacePathError` vor Child/Read/Write bei externen Consumern, Escapes oder
+fehlendem Workspace.
 Details: Mail-Desk-L2 und [`Batch-Vertrag`](../../skills/mail-desk/references/batch-runner.md#review-gebundene-kandidatenzahl).
 
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert

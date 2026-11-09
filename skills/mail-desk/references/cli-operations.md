@@ -148,6 +148,13 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Aufträge stoppen ohne lokale Writes; der geprüfte Snapshot wird per stdin an
    den Runner übergeben, der dieselben Gates erneut prüft. Das Eingabemanifest
    bleibt erhalten; keine automatische Freigabe.
+   `--data-dir` (relativ zu `--workspace` oder absolut) muss kanonisch exakt
+   `<workspace>/data/mail-desk` des per Lease geprüften Consumer-Workspaces sein.
+   Der Wrapper löst Symlinks/Junctions auf, gleicht mit der Runner-Root-Inferenz
+   (`workspace_root_from_data_dir`) ab und stoppt mit `WorkspacePathError` vor
+   Kindprozess/Read/Write bei externen Consumern, Escapes oder fehlendem Workspace.
+   Ein fehlendes `data/mail-desk` im geprüften Workspace bleibt zulässig (der Sync
+   legt es an); andere Ausgabepfade werden nicht pauschal eingeschränkt.
    Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
    Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen

@@ -154,6 +154,18 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Retry nach fehlgeschlagenem Fenster, alle drei Formen und die echte Account-Binding-Seam mit
   Offline-Workspace-Fixture ab.
 
+#### Fixed (achte Review-/Audit-Runde)
+
+- Der Wrapper bindet `--data-dir` jetzt kanonisch an den lease-geprüften `--workspace`: relativ oder
+  absolut muss der aufgelöste Pfad exakt `<workspace>/data/mail-desk` sein und der Runner-Root-Inferenz
+  (`workspace_root_from_data_dir`) entsprechen. Symlinks/Junctions werden aufgelöst; externe Consumer,
+  Escapes und fehlende Workspaces stoppen mit `WorkspacePathError` vor Child/Read/Write. Ein fehlendes
+  `data/mail-desk` im geprüften Workspace bleibt zulässig; andere Ausgabepfade werden nicht pauschal
+  eingeschränkt.
+- Tests decken relative/absolute Pfade, externes `--data-dir`, fehlenden Workspace, reale Verzeichnis-Links
+  (Symlink oder Windows-Junction, mit Skip wenn nicht verfügbar), fehlende/fremde Lease sowie `--since` und
+  Normalpfad ab. CLI-Operations, L1/L2, SKILL und Batch-Runner-Vertrag sind synchron.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from core.envelope import build_error, build_success, emit_json
 from core.batch_contract import validate_execute_contract
-from core.readiness import bind_workspace_account
+from core.readiness import bind_workspace_account, workspace_root_from_data_dir
 from core.quarantine.attachment_fetch import verify_workspace_lock
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -27,6 +27,39 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 def _absolute(data_dir: str, workspace: Path) -> str:
     path = Path(data_dir)
     return str(path if path.is_absolute() else workspace / path)
+
+
+def _resolve_bound_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Canonicalize the verified workspace and its bound ``data/mail-desk``.
+
+    The wrapper lease belongs to ``--workspace``; a ``--data-dir`` outside it
+    would let the runner bind and write another consumer without its lease.
+    Symlinks/junctions are resolved (escape detection) and the result must match
+    the runner's own workspace-root inference exactly. A non-existent workspace
+    fails closed; a missing ``data/mail-desk`` is allowed because sync creates it.
+    """
+    workspace = Path(args.workspace).expanduser()
+    try:
+        workspace = workspace.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"workspace does not exist or cannot be resolved: {exc}") from exc
+    if not workspace.is_dir():
+        raise ValueError("workspace must be an existing directory")
+
+    raw_data_dir = Path(args.data_dir).expanduser()
+    data_dir = (raw_data_dir if raw_data_dir.is_absolute() else workspace / raw_data_dir).resolve()
+    try:
+        inferred = workspace_root_from_data_dir(data_dir)
+    except ValueError as exc:
+        raise ValueError(
+            "--data-dir must be the verified workspace's canonical data/mail-desk directory"
+        ) from exc
+    expected = (workspace / "data" / "mail-desk").resolve()
+    if data_dir != expected or inferred != workspace:
+        raise ValueError(
+            "--data-dir resolves outside the verified workspace; refusing before child/read/write"
+        )
+    return workspace, data_dir
 
 
 def _positive_int(value: str) -> int:
@@ -222,7 +255,18 @@ def main() -> int:
     if args.count is None:
         args.count = 150 if args.mode == "sync-sent" else 10
 
-    workspace = Path(args.workspace).resolve()
+    try:
+        workspace, data_dir = _resolve_bound_paths(args)
+    except (OSError, ValueError) as exc:
+        emit_json(build_error(
+            "batch_cli", "Workspace/data-dir binding could not be verified.",
+            {"mode": args.mode}, error_type="WorkspacePathError",
+            error_details={"reason": str(exc)[:1000]},
+        ))
+        return 2
+    # All downstream paths use the canonical bound directory, exactly as the
+    # runner infers its workspace root from ``data_dir``.
+    args.data_dir = str(data_dir)
     try:
         verify_workspace_lock(
             workspace, lease_id=args.workspace_lease_id,
@@ -241,7 +285,7 @@ def main() -> int:
         from mail_desk_batch_runner import _build_parser, _load_configuration, MODE_ALIASES
 
         try:
-            dd = Path(_absolute(args.data_dir, workspace))
+            dd = data_dir
             runner_args = _build_parser().parse_args(_build_args(args, workspace)[1:-1])
             config, _ = _load_configuration(runner_args, dd)
             if not isinstance(config, dict) or MODE_ALIASES.get(str(config.get("mode", "execute")).lower()) != "execute":
