@@ -357,6 +357,21 @@ gelesen oder geschrieben, Datei unangetastet). Das alte `sent-sync-initial-start
 non-destruktiv in den State migriert (älterer `initial_start` bleibt erhalten, Schranke wird davor
 zurückgesetzt).
 
+**Recovery ohne State (Issue #88):** `sent_initial_state_required` wird nie über Punktdaten, Watermark oder
+CLI-Default aufgelöst. Der geprüfte Weg führt den Runner **ohne** direkten `--sync-sent`-Modus mit einem
+Manifest bzw. stdin aus:
+`{"mode":"sync_sent","since":"YYYY-MM-DD","count":150}` →
+`python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-sync-sent.json --keep-input`
+(oder `--stdin`). Der direkte `--sync-sent N` setzt den direkten Modus und ignoriert `--input`/`--stdin`;
+der Wrapper `sync-sent --count N` kann kein `since` führen. `since` muss ein verifizierter konservativer
+ISO-Start sein; der Wrapper prüft die Workspace-Lease, ein direkter Runner-Lauf setzt dieselbe gehaltene und
+verifizierte Lease voraus. Keine autonome Löschung.
+
+**`since`-Hinweis:** Ist `since` jünger als die bestehende Coverage, wird es nicht angewendet (kein
+Coverage-Skip); Envelope/CLI melden additiv `since_requested`, `since_ignored: true`,
+`since_ignored_reason: "coverage_starts_before_requested_since"` und `effective_coverage_start`. Älteres oder
+gleiches `since` wird angewendet (`since_ignored: false`).
+
 ### Handoff-Batches über 200
 
 Mehr als 200 neue Items werden deterministisch (älteste zuerst) in 200er-Batches committet: Handoff atomar,

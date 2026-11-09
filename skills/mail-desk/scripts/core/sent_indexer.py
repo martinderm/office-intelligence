@@ -635,6 +635,28 @@ def _validate_since(since: str | None, run_date: datetime) -> tuple[str, datetim
     return since_text, since_dt
 
 
+def _since_hint(
+    verified_since: tuple[str, datetime] | None, effective_coverage_start: str | None,
+) -> dict[str, Any]:
+    """Explain whether a requested ``since`` actually shaped the coverage start.
+
+    A younger ``since`` is deliberately ignored (coverage is never skipped); the
+    caller gets an explicit, additive hint instead of a silent no-op.
+    """
+    requested = verified_since[0] if verified_since is not None else None
+    ignored = bool(
+        requested is not None
+        and effective_coverage_start is not None
+        and requested > str(effective_coverage_start)
+    )
+    return {
+        "since_requested": requested,
+        "since_ignored": ignored,
+        "since_ignored_reason": "coverage_starts_before_requested_since" if ignored else None,
+        "effective_coverage_start": effective_coverage_start,
+    }
+
+
 def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[str]:
     """Expand ISO dates to the queried set, optionally including the following day."""
     expanded: set[str] = set()
@@ -695,7 +717,7 @@ def sync_sent_items_by_dates_report(
         return {
             "new_count": 0, "new_items": [], "handoff": None, "truncated": False,
             "deferred_count": 0, "next_start": None, "recovery": None,
-            "requested_dates": [],
+            "requested_dates": [], **_since_hint(verified_since, None),
         }
     earliest = requested[0]
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
@@ -778,6 +800,7 @@ def sync_sent_items_by_dates_report(
                                     - datetime.strptime(coverage_start, "%Y-%m-%d")).days + 1)
             if new_barrier is not None else 0,
             "coverage_complete": complete,
+            **_since_hint(verified_since, coverage_start),
         }
     committed = _commit_sent_candidates(dd, candidates, account=account)
     deferred_days = committed.get("deferred_days") or []
@@ -816,6 +839,7 @@ def sync_sent_items_by_dates_report(
                                 - datetime.strptime(coverage_start, "%Y-%m-%d")).days + 1)
         if new_barrier is not None else 0,
         "coverage_complete": bool(new_barrier is not None and new_barrier >= yesterday),
+        **_since_hint(verified_since, coverage_start),
     }
 
 
@@ -1495,6 +1519,7 @@ def _sync_sent_items_impl(
         "handoff": handoff,
         "truncated": truncated,
         **coverage,
+        **_since_hint(verified_since, coverage.get("coverage_start")),
         "truncated_days": truncated_days,
         "follow_up_hint": follow_up_hint,
     }

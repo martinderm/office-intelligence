@@ -1065,7 +1065,7 @@ Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-items
 `new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
 Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|written|pending|invalid`,
 `written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — Items der nächsten 200er-Batches,
-`headers_incomplete_count`, `file`) sowie `truncated`, `coverage_*`, `next_start`, `follow_up_hint`.
+`headers_incomplete_count`, `file`) sowie `truncated`, `coverage_*`, `next_start`, `follow_up_hint`, `since_*`.
 `headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).
 `new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei `write_state: unknown` ist `new_count: null`
 (und `new_items_unavailable: true`).
@@ -1101,7 +1101,7 @@ State fehlt + Index: fail-closed; `since` exakt; Erstlauf: Initialstart/`since`.
 spulen konservativ **vor** dem Read zurück, rücken nur zusammenhängenden Prefix und nie heute vor;
 Punktabfragen erzeugen keine jüngere Schranke. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery;
 Legacy-Marker non-destruktiv migriert. Seiten bis kurze/leere Seite; das Endsignal ist eine **Annahme** (nur
-implizit belegt), strikt klassifiziert, sonst fail-closed. Recovery:
+implizit), strikt klassifiziert, sonst fail-closed. Recovery:
 `..._report(..., include_next_day=False, max_pages=...)`; int-/Singular-API melden `handoff_deferred`.
 
 ---

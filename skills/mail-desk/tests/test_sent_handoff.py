@@ -1337,6 +1337,37 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual("2026-09-24", newer["coverage_start"])
         self.assertEqual("2026-09-24", sent_indexer._read_sync_state(self.dd)["initial_start"])
 
+    def test_dated_report_hints_older_equal_and_younger_since(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        cases = [
+            ("2026-09-10", False, "2026-09-10"),
+            ("2026-09-21", False, "2026-09-21"),
+            ("2026-09-22", True, "2026-09-21"),
+        ]
+        for since, ignored, effective in cases:
+            with self.subTest(since=since):
+                state_path.write_text(json.dumps({
+                    "schema_version": 1, "initial_start": "2026-09-01",
+                    "covered_through": "2026-09-20",
+                }), encoding="utf-8")
+                mailbox = _Mailbox()
+                run, read = mailbox.patches()
+                with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+                    report = sent_indexer.sync_sent_items_by_dates_report(
+                        [DAY], since=since, account="ACC", data_dir=self.dd,
+                        include_next_day=False,
+                    )
+                self.assertEqual(since, report["since_requested"])
+                self.assertEqual(ignored, report["since_ignored"])
+                self.assertEqual(effective, report["effective_coverage_start"])
+                if ignored:
+                    self.assertEqual(
+                        "coverage_starts_before_requested_since",
+                        report["since_ignored_reason"],
+                    )
+                else:
+                    self.assertIsNone(report["since_ignored_reason"])
+
     def test_requested_date_before_verified_since_fails_closed(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-20", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
@@ -1974,12 +2005,19 @@ class ReplyReresolutionTests(_Base):
 
 
 class ModeEnvelopeTests(_Base):
-    def run_mode(self, mailbox: _Mailbox) -> dict:
+    def run_mode(self, mailbox: _Mailbox, **overrides) -> dict:
+        config = {"mode": "sync_sent", "count": 150, "folder": "Sent Items"}
+        config.update(overrides)
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime()):
             return sync_sent_mode.run_sync_sent_mode(
-                {"mode": "sync_sent", "count": 150, "folder": "Sent Items"}, account="ACC", data_dir=self.dd
+                config, account="ACC", data_dir=self.dd
             )
+
+    def seed_state(self, initial: str, barrier: str) -> None:
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": initial, "covered_through": barrier,
+        }), encoding="utf-8")
 
     def test_success_envelope_has_new_count_items_and_handoff(self) -> None:
         envelope = self.run_mode(_Mailbox(_details(1, cc="c@example.test")))
@@ -1989,6 +2027,32 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual("written", envelope["handoff"]["state"])
         self.assertEqual(str(self.dd / HANDOFF_FILENAME), envelope["handoff"]["file"])
         json.dumps(envelope)
+
+    def test_older_since_shapes_the_envelope_coverage_start(self) -> None:
+        self.seed_state("2026-09-01", "2026-09-20")
+        envelope = self.run_mode(_Mailbox(), since="2026-09-10")
+        self.assertFalse(envelope["since_ignored"])
+        self.assertIsNone(envelope["since_ignored_reason"])
+        self.assertEqual("2026-09-10", envelope["since_requested"])
+        self.assertEqual("2026-09-10", envelope["effective_coverage_start"])
+        self.assertEqual("2026-09-10", envelope["coverage_start"])
+
+    def test_younger_since_is_ignored_with_an_explicit_hint(self) -> None:
+        self.seed_state("2026-09-01", "2026-09-20")
+        envelope = self.run_mode(_Mailbox(), since="2026-09-22")
+        self.assertTrue(envelope["since_ignored"])
+        self.assertEqual("coverage_starts_before_requested_since", envelope["since_ignored_reason"])
+        self.assertEqual("2026-09-22", envelope["since_requested"])
+        self.assertEqual("2026-09-21", envelope["effective_coverage_start"])
+        self.assertEqual("2026-09-21", envelope["coverage_start"])  # no coverage skip
+
+    def test_equal_since_is_applied_without_ignore_hint(self) -> None:
+        self.seed_state("2026-09-01", "2026-09-20")
+        envelope = self.run_mode(_Mailbox(), since="2026-09-21")
+        self.assertFalse(envelope["since_ignored"])
+        self.assertIsNone(envelope["since_ignored_reason"])
+        self.assertEqual("2026-09-21", envelope["since_requested"])
+        self.assertEqual("2026-09-21", envelope["effective_coverage_start"])
 
     def test_pending_handoff_is_a_failed_envelope_with_reason_code(self) -> None:
         self.run_mode(_Mailbox(_details(1)))

@@ -65,7 +65,8 @@ def _success_envelope(sync_result: Mapping[str, Any], folder: str, dd: Path) -> 
     # Coverage result (count is a day limit, not an item limit).
     envelope["truncated"] = bool(sync_result.get("truncated", False))
     for key in ("coverage_start", "coverage_end", "covered_days", "total_days",
-                "coverage_complete", "next_start"):
+                "coverage_complete", "next_start", "since_requested", "since_ignored",
+                "since_ignored_reason", "effective_coverage_start"):
         if key in sync_result:
             envelope[key] = sync_result[key]
     follow_up_hint = sync_result.get("follow_up_hint")

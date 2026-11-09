@@ -284,7 +284,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State
   bei bestehendem Index ist in allen Einstiegen fail-closed; ein verifiziertes `since` ist der exakte Start (nie
   der Watermark; leere Tage zählen; Erstlauf: persistierter Initialstart/`since`, nie über offener Coverage).
-  Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
+  Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`, `since_ignored_reason` und
+  `effective_coverage_start`. Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
   **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
   und nie über heute/Punktabfragen vor. Future `initial_start`/`covered_through`, malformed/null-both State,
   future `since`/`since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird

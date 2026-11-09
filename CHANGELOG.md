@@ -125,6 +125,20 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Repro-Fall (Watermark 2026-01-04, `dates=[2026-01-05]`, Start 2026-01-03) ab; Log-Schema, L1/L2, objects,
   effects, processes, SKILL und Batch-Runner-Vertrag sind synchron.
 
+#### Fixed (sechste Review-/Audit-Runde)
+
+- Recovery bei `sent_initial_state_required` ist exakt dokumentiert und geprüft: Runner ohne `--sync-sent` mit
+  `--input`/`--stdin`-Manifest `{"mode":"sync_sent","since":"YYYY-MM-DD","count":N}`, `--keep-input`, Pfade
+  unter `data/mail-desk/`. Der direkte `--sync-sent N` setzt den direkten Modus und ignoriert `--input`/`--stdin`;
+  der Wrapper `sync-sent --count N` kann kein `since` führen. Ein direkter Runner-Lauf setzt dieselbe gehaltene/
+  verifizierte Workspace-Lease voraus wie der Wrapper.
+- Ein jüngeres `since` bei bestehendem State wird nie angewendet (kein Coverage-Skip); der Erfolgs-Envelope und
+  die CLI-Summary melden additiv `since_requested`, `since_ignored: true`,
+  `since_ignored_reason: "coverage_starts_before_requested_since"` und `effective_coverage_start`. Älteres und
+  gleiches `since` wenden den Start an (`since_ignored: false`).
+- Tests prüfen den Manifest-/stdin-Aufruf offline über gemockte Konfiguration/Dispatch und den Ignore-Hinweis
+  (älter/gleich/jünger); `cli-operations.md`, Log-Schema, L1/L2 und SKILL sind synchron.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 import sys
@@ -292,6 +293,47 @@ class SyncSentModeTests(unittest.TestCase):
             },
             result,
         )
+
+
+class SyncSentInvocationTests(unittest.TestCase):
+    """The documented recovery path: a manifest by --input/--stdin, not --sync-sent."""
+
+    def test_direct_sync_sent_ignores_input_and_cannot_carry_since(self) -> None:
+        args = runner._build_parser().parse_args(
+            ["--sync-sent", "10", "--input", "does-not-exist.json"]
+        )
+        config, input_path = runner._load_configuration(args, Path("data"))
+        self.assertEqual({"mode": "sync_sent", "count": 10, "folder": "Sent Items"}, config)
+        self.assertIsNone(input_path)  # direct mode wins; --input is never read
+        self.assertNotIn("since", config)
+
+    def test_stdin_sync_sent_manifest_carries_since_and_dispatches(self) -> None:
+        payload = {"mode": "sync_sent", "since": "2026-09-01", "count": 7}
+        args = runner._build_parser().parse_args(["--stdin"])
+        with patch("sys.stdin", io.StringIO(json.dumps(payload))):
+            config, input_path = runner._load_configuration(args, Path("data"))
+        self.assertEqual(payload, config)
+        self.assertIsNone(input_path)
+        with patch.object(runner, "run_sync_sent_mode", return_value={"ok": True}) as dispatch:
+            result, operation = runner._dispatch(
+                config, account="ACC", data_dir=Path("data/mail-desk"),
+                index_path=Path("data/mail-desk/final-location-index.json"),
+            )
+        self.assertEqual("sync_sent", operation)
+        self.assertEqual({"ok": True}, result)
+        dispatch.assert_called_once_with(
+            config, account="ACC", data_dir=Path("data/mail-desk"),
+        )
+
+    def test_input_sync_sent_manifest_carries_since(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "batch-sync-sent.json"
+            payload = {"mode": "sync_sent", "since": "2026-09-01", "count": 7}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            args = runner._build_parser().parse_args(["--input", str(path)])
+            config, input_path = runner._load_configuration(args, Path(temporary) / "data")
+        self.assertEqual(payload, config)
+        self.assertEqual(path.resolve(), input_path)
 
 
 class ExecuteModeTests(unittest.TestCase):

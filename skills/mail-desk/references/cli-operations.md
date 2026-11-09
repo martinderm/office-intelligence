@@ -175,6 +175,46 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Die Beispiele setzen eine eigene Lease über die genannten Umgebungsvariablen
    voraus; alternativ die entsprechende ID explizit übergeben.
 
+   **Sent-Sync-Recovery bei fehlendem Coverage-State (`sent_initial_state_required`,
+   Issue #88):** Der Wrapper `sync-sent --count N` kann kein `since` führen und
+   setzt intern den direkten Modus `--sync-sent N`; dieser direkte Modus
+   ignoriert `--input`/`--stdin`. Für die Recovery daher **ohne** `--sync-sent`
+   einen Manifest-/stdin-Lauf starten, exakt:
+
+   ```json
+   {"mode": "sync_sent", "since": "YYYY-MM-DD", "count": 150}
+   ```
+
+   ```bash
+   # aus dem Workspace-Root; Manifest (--keep-input bewahrt die Datei nach Erfolg)
+   python3 scripts/mail_desk_batch_runner.py \
+       --input data/mail-desk/batch-sync-sent.json --keep-input
+   # alternativ stdin
+   python3 scripts/mail_desk_batch_runner.py --stdin < data/mail-desk/batch-sync-sent.json
+   ```
+
+   `--sync-sent` darf dabei **nicht** gesetzt sein: Es gewinnt als direkter Modus und
+   ignoriert das Manifest stillschweigend.
+
+   `since` ist der **verifizierte konservative Start** (ISO-Datum, nicht future,
+   kein Zeitanteil); er wird exakt übernommen, nicht mit dem Watermark gemischt.
+   `count` ist ein positives Item-Budget; Pfade bleiben unter dem Workspace
+   (`--data-dir`, Default `data/mail-desk/`): `sent-index.jsonl`,
+   `sent-sync-state.json`, `new-sent-items.json`. Der Lauf ist eine bewusste
+   Operator-Recovery, keine Live-Automatik; vorher State/Index prüfen und den
+   Start verifizieren. Ist `since` jünger als die bestehende Coverage, wird es
+   **nicht** angewendet (kein Coverage-Skip); der Envelope meldet
+   `since_ignored: true`, `since_ignored_reason:
+   "coverage_starts_before_requested_since"` und `effective_coverage_start`.
+
+   Der Wrapper prüft vor dem Kindprozess die Workspace-Lease
+   (`verify_workspace_lock`; `--workspace-lease-id`/`--workspace-conversation-id`
+   bzw. `WORKSPACE_LOCK_*`). Ein direkter Runner-Aufruf umgeht diese
+   Wrapper-Prüfung und akzeptiert für `sync_sent` keine Lease-Flags: Er ist nur
+   zulässig, solange der Aufrufer dieselbe Lease hält und verifiziert hat.
+   Sichere Aufrufe sind der Wrapper für normale Läufe und der obige
+   `--input`/`--stdin`-Manifest-Lauf ohne `--sync-sent` für die Recovery.
+
 8. **Katalog-Inspector (`catalog_inspect.py`):**
    Read-seitiges Gegenstück zum `catalog_validator.py`: liest
    `topics.json`, `projects.json` oder `mail-desk.json` aus dem Workspace und

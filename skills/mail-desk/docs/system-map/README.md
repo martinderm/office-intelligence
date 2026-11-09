@@ -2387,7 +2387,11 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   unabhängig von einem parsebaren `at`; eine bloße Quarantäne reicht nicht. Nur ein vom Operator verifiziertes
   `since` (exakter Start, nie `min(Watermark, since)`, keine Punktdaten/CLI-Defaults) oder ein
   wiederhergestellter valider State erlaubt den Resync; datierte APIs reichen `since` durch, Tage davor sind
-  fail-closed. Jeder originale State/Marker wird vor Merge auf Future
+  fail-closed. Recovery: Runner ohne `--sync-sent` mit `--input`/`--stdin`-Manifest
+  `{"mode":"sync_sent","since":"YYYY-MM-DD","count":N}` (direkter `--sync-sent` ignoriert `--input`; Wrapper
+  `sync-sent` kann kein `since` führen; ein direkter Lauf setzt die gehaltene Wrapper-Lease voraus). Ein
+  jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`, `since_ignored_reason` und
+  `effective_coverage_start`, älter/gleich wird angewendet. Jeder originale State/Marker wird vor Merge auf Future
   geprüft; `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Malformed/null/future
   State nur autorisierte Reparatur/Quarantäne (valides Schema-JSON, konservativer verifizierter älterer Start),
   kein `since`-Bypass eines malformed State; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim
@@ -2432,8 +2436,9 @@ Fehler-Injection (Handoff-Publish nach Replace, Append) mit `write_state: unknow
 abgerissenes UTF-8, Reply-Neuauflösung; zusätzlich Coverage-Schranke/Multi-Day-Deferral, alter Backfill mit
 jüngerem Watermark, 201/250-Batches, Batch-Crash/Retry, `since`/Initialmarker, Seiten-Pagination inkl.
 out-of-bound/Transportfehler, Item-Budget mit erreichbarer Recovery sowie fehlender State + bestehendem Index
-über alle Einstiege (auch unparsebares `at`), `since` älter/jünger als der Watermark, Start vor `since` und
-byte-gleicher pending Handoff) plus die bestehenden
+über alle Einstiege (auch unparsebares `at`), `since` älter/jünger als der Watermark, Start vor `since`,
+byte-gleicher pending Handoff, `since_ignored`-Envelope-Hinweis (älter/gleich/jünger) und der geprüfte
+`--input`/`--stdin`-Recovery-Aufruf) plus die bestehenden
 `test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).
