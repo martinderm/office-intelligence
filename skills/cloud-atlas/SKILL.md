@@ -379,6 +379,59 @@ in einem isolierten Kurzpfad-Staging ausgeführt. Das Ergebnis wird erst nach Pr
 und atomarer Promotion am vorgesehenen lokalen Derivatpfad sichtbar; temporäre Dateien
 werden bereinigt.
 
+#### 8. Einzeldatei-Modus (`convert_cloud_docs.py --only-file`, Issue #22)
+```bash
+python .agents/skills/cloud-atlas/scripts/convert_cloud_docs.py --topic-id <topic_id> --only-file data/cloud/<ORDNER>/<Pfad>/datei.pdf --json
+```
+Für große Maps (z. B. 2.000+ Einträge), in denen ein Voll-Scan unverhältnismäßig oder
+riskant ist: Der Modus konvertiert **genau eine** Quelle und erzeugt oder aktualisiert
+**genau einen** Eintrag einer **bestehenden** `filemap.json`. Er läuft in einem eigenen
+Pfad ohne Verzeichnis-Scan, ohne `retained_artifact_paths`-Walk, ohne Orphan-Cleanup und
+ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
+
+* **Pfadsemantik:** `--only-file` ist wie `--cloud-dir`, `--output-dir` und
+  `--filemap-json` **relativ zum Workspace-Root** und identisch mit dem Schlüssel in
+  `files`. Er muss unter dem Cloud-Verzeichnis liegen (`--cloud-dir` oder `scan_dir` des
+  Storages; bei `--subtopic-id` ausschließlich der Katalogpfad) und darf nicht in einem
+  `exclude_dirs`-Verzeichnis liegen. Absolute Pfade, Laufwerke, `..`, `:`-Segmente,
+  Verzeichnisse, versteckte/`~$`-Namen und nicht unterstützte Endungen werden abgewiesen.
+  Backslashes werden zu `/` normalisiert. Mehrere Storages erfordern `--storage-id`.
+* **Byte-Identität:** Die Filemap wird als Rohtext gespleißt. Alle anderen `files`-Einträge,
+  deren Reihenfolge, Formatierung (Einrückung, CRLF, Escapes, Zahlenschreibweise) und alle
+  Container-Felder inkl. `updated_at` bleiben Zeichen für Zeichen identisch. Ein neuer
+  Eintrag wird an der sortierten Position eingefügt (bei unsortierter Map am Ende) und im
+  Stil der Datei formatiert; ein bestehender wird an Ort und Stelle ersetzt. Vor dem
+  Schreiben beweist `verify_splice`, dass nur dieser Eintrag abweicht.
+* **Atomar und fail-closed:** Temporäre Geschwisterdatei + `os.replace`. Jeder Fehler —
+  Konvertierungsfehler, Timeout (`--file-timeout`), fehlender `.doc`-Konverter,
+  Schreib-/Replace-Fehler — rollt Mirror, Derivat und bei `enrich_source` auch die Quelle
+  auf den Zustand vor dem Lauf zurück und beendet mit Exit ≠ 0; die Filemap bleibt
+  unverändert. Es wird also auch kein `conversion_required`-Eintrag geschrieben.
+* **Idempotent:** Ein zweiter Lauf ohne `--force` schreibt weder Eintrag noch Artefakte noch
+  Filemap (keine geänderte mtime). `--force` und `--redo-ocr` wirken nur auf diese Datei.
+* **Abweisungen vor jeder Mutation:** fehlende oder nicht lesbare Filemap (sie wird nie
+  angelegt), ungültiges JSON, doppelte JSON-Schlüssel, `NaN`, BOM, Verstoß gegen den
+  Container-/Eintrags-Vertrag (Runtime-Subset von `gen_filemap.validate_filemap`, ohne
+  Datenträgerzugriff), abweichende `scan_dir`/`output_dir`, mehrere oder per Schreibweise
+  (casefold/NFC/Separator) abweichende Einträge derselben Quelle (`duplicate_source`),
+  Symlink-/Junction-/`realpath`-Ausbruch der Quelle, der Output-Zone oder der Filemap,
+  abweichende Pfad-Groß-/Kleinschreibung, Mirror-/Derivat-Ziele, die ein fremder Eintrag
+  beansprucht, bereits vorhandene Ziele ohne Besitz durch diesen Eintrag, geschützte
+  Namen (`filemap.md` usw.) und nicht auflösbare Mirror-Kollisionen.
+* **Inkompatible Flags:** `--extensions` (Scan-Filter) wird mit Exit 2 und
+  `phase: arguments` abgewiesen. `--jobs` hat bei einer Datei keine Wirkung.
+* **Envelope:** Der kanonische Envelope bleibt unverändert; `data.only_file` ergänzt
+  `source`, `action` (`created`/`updated`/`unchanged`/`none`), `entry_changed`,
+  `duplicate_source`, `artifacts_changed`, `rolled_back` (und `mirror`).
+  `data.storages[0]` trägt `counts` (`scanned: 1`) und `file_count`.
+* **Eintragsfelder:** Wie beim Voll-Scan inkl. `form_fields`, `derivative`, OCR-Feldern und
+  kuratierten Feldern/Overlay; zusätzlich `artifact_metadata` aus dem geschriebenen Mirror
+  (so wie der Generator es nachträglich ergänzt). Unveränderte Quellen übernehmen ihre
+  generierten Felder aus dem bestehenden Eintrag.
+* **Nicht Teil des Modus:** SHA-Rename-Adoption, Löschen verwaister Dateien oder
+  Einträge, Neuaufbau von `filemap.md`, Anlegen einer Filemap. Danach ist ein regulärer
+  Sync nötig, wenn diese Wirkungen gewünscht sind. Es gilt die Lock-Vorbedingung oben.
+
 ---
 
 ## 4. Operative Arbeitsregeln & Automatismen

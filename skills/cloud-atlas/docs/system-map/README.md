@@ -15,6 +15,12 @@ erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
 > **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand PR #51, 2026-10-23: 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
+**Issue #22 (Einzeldatei-Modus `--only-file`):** ergänzt `core/filemap_merge.py`,
+`core/artifact_txn.py` und `tests/test_convert_cloud_docs_only_file.py` (53 Tests, 2 davon
+nur ohne Symlink-Recht übersprungen); Gesamtsuite `skills/cloud-atlas/tests`: 310 bestanden,
+2 übersprungen, 136 Subtests (zuvor 259 bestanden).
+Die Metrik der Kopfzeile ist davon unberührt (Stand PR #51).
+
 Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
 PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
 Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz.
@@ -66,6 +72,7 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 | **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
 | **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen; kollidierende Quellen erhalten `original.ext.md`, nicht auflösbare case-only Kollisionen stoppen fail-closed. |
 | **Scan-Scope (Issue #2)** | `scripts/core/scan_scope.py` | Gemeinsame Normalisierung, case-insensitiver Komponentenvergleich und Pre-Traversal-Pruning von `exclude_dirs`; Inventar und Rename-Matching bleiben im selben Scope. |
+| **Einzeldatei-Merge (Issue #22)** | `scripts/core/filemap_merge.py`, `scripts/core/artifact_txn.py`, `convert_cloud_docs.py --only-file` | Roh-Splice genau eines Filemap-Eintrags (alle anderen Bytes identisch), strikte Parse-/Schema-Prüfung vor Mutation, atomares Schreiben und Artefakt-Rollback; kein Scan, kein Cleanup ([`processes.md`](processes.md) Phase 5, [`effects.md`](effects.md) §6). |
 
 ---
 
@@ -79,10 +86,11 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 
 ---
 
-## 4. Die 5 fundamentalen Cloud-Atlas-Invarianten
+## 4. Die 6 fundamentalen Cloud-Atlas-Invarianten
 
 1. **Unveränderlichkeit externer Originale:** Cloud-Speicher bleiben standardmäßig read-only. Modifikationen finden als lokale Markdown-Spiegel in der Workspace-Zone `memory/cloud/` statt.
 2. **OCR-Policy Disziplin:** Standard ist `local_derivative` (lokales Textderivat). `enrich_source` (In-Place OCR im Cloud-PDF) ist nur für un-signierte, beschreibbare PDFs mit voller Provenienz zulässig.
 3. **Zirkelfreies Payload-Hashing:** `artifact_sha256` im Frontmatter repräsentiert exakt die Bytes des reinen Markdown-Bodys, niemals der Datei inklusive Frontmatter (Ausschluss selbstreferenzieller Hash-Drifts).
 4. **Strikte Frontmatter-Konformität:** Erzeugte Markdown-Dateien erzwingen exakt die 12 kanonischen Pflichtfelder (`REQUIRED_CLOUD_FRONTMATTER_KEYS`).
-5. **Kuratierungs-Stabilität:** Manuelle Overrides in `filemap-curation.json` übersteuern automatisierte Heuristiken deterministisch.
+5. **Einzeldatei-Isolation (Issue #22):** `--only-file` verändert genau einen Filemap-Eintrag per Roh-Splice, scannt und löscht nichts und hinterlässt bei jedem Fehler (inkl. Timeout) weder Artefakt- noch Filemap-Änderungen.
+6. **Kuratierungs-Stabilität:** Manuelle Overrides in `filemap-curation.json` übersteuern automatisierte Heuristiken deterministisch.

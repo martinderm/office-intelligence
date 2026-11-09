@@ -100,6 +100,36 @@ Frontmatter wächst dabei nicht. `form_fields` ist ein **reserviertes generated 
 3. **Atomarer Write:** Schreiben via `tempfile` + `os.replace`.
 4. **Retention & Orphan-Cleanup:** Mirror und Derivate gelöschter Quellen werden entfernt. Bleibt eine Quelle inventarisiert, deren Konvertierung fehlschlug (`conversion_required` oder `failed`), werden ihr Mirror und ihr Derivat nicht gelöscht. Ein retained Mirror wird nur dann als aktuell geführt, wenn sein Frontmatter-`source_sha256` dem aktuellen Quellhash entspricht; sonst schreibt der Konverter `mirror_stale: true` und Phase 2 adoptiert ihn weder als `artifact_metadata` noch als `converted`, sondern behält `conversion_required` und den `conversion_error` bei.
 
+### Phase 5: Einzeldatei-Modus (`--only-file`, Issue #22)
+
+`run_conversion()` verzweigt bei gesetztem `--only-file` **vor** der Storage-Schleife in
+`run_only_file_conversion()`; der Voll-Scan-Code (Walk, Rename-Matching, Orphan-Cleanup,
+Filemap-Neuaufbau) wird nicht betreten. Ablauf:
+
+1. **Argumente:** Genau ein Storage (sonst `--storage-id`), `--extensions` ist unvereinbar
+   (Exit 2). Der Pfad ist workspace-relativ wie die übrigen Pfad-Flags.
+2. **Scope und Realpath:** lexikalisch unter `scan_dir` und außerhalb `exclude_dirs`;
+   `realpath` der Quelle muss exakt `realpath(cloud)/Rest` sein (kein Symlink/Junction/
+   Casing-Abweichung); Output-Zone und Filemap dürfen nicht über Links entweichen oder
+   die Cloud überlappen.
+3. **Filemap lesen und validieren:** `core/filemap_merge.parse_filemap` (strikt, keine
+   doppelten Schlüssel, keine Konstanten wie `NaN`) lokalisiert die Roh-Spans aller
+   Mitglieder; `validate_filemap_document` prüft Container und alle Einträge im Speicher.
+   Fehlende Filemap oder Schemafehler stoppen. `locate_source` weist mehrere/abweichend
+   geschriebene Einträge derselben Quelle ab (`duplicate_source`).
+4. **Zielplanung:** `plan_markdown_mirrors` nur über die Quelle und ihre kollidierende
+   Gruppe; Ziele, die fremde Einträge beanspruchen, geschützte Namen, nicht eigene
+   vorhandene Dateien und Link-Ausbrüche stoppen als `mirror-plan`.
+5. **Konvertieren:** gleiche Entscheidung (`determine_needs_conversion`) und gleicher
+   Worker/Timeout wie der Voll-Scan, aber eine Aufgabe unter `ArtifactTransaction`
+   (Backup von Mirror, Derivat, bei `enrich_source` Quelle; Verzeichnis-Snapshots).
+6. **Merge:** Eintrag bauen (`build_converted_file_entry` bzw. `build_unchanged_file_entry`,
+   dann `merge_curated_metadata`), validieren, `splice_entry` + `verify_splice`, schreiben
+   per Temp-Datei + `os.replace`. Identischer Eintrag → kein Schreiben der Filemap.
+7. **Fehler:** `ArtifactTransaction.rollback()` stellt alle Artefakte wieder her; Exit ≠ 0.
+   Nur Erfolg schreibt Artefakte und Eintrag; `conversion_required` wird gemeldet, nicht
+   persistiert.
+
 ---
 
 ## 3. Der Filemap-Generierungs-Lifecycle

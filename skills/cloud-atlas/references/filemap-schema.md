@@ -20,6 +20,15 @@ workspace-relativ sein; SHA-256-Werte werden als 64-stellige Hexwerte und
 Zeit-/Größenfelder in den bestehenden Filemap-Formaten geprüft. Unbekannte
 Dateieintragsfelder bleiben für manuell kuratierte Metadaten zulässig.
 
+## Einzeldatei-Merge (Issue #22)
+
+`convert_cloud_docs.py --only-file` erzeugt oder ersetzt genau ein `files`-Mitglied
+einer bestehenden Filemap per Roh-Splice; alle übrigen Mitglieder und Container-Felder
+(auch `updated_at`) bleiben Zeichen für Zeichen unverändert. Vor dem Schreiben gilt ein
+Runtime-Subset des Vertrags oben (Container, alle Einträge, keine doppelten JSON-Schlüssel,
+eindeutige Mirror-Ziele ohne Datenträgerzugriff). Der Eintrag trägt wie beim Generator
+`artifact_metadata` des geschriebenen Mirrors. Details: [SKILL.md](../SKILL.md).
+
 ## Scan-Provenienz: `exclude_dirs` (Issue #2)
 
 Neue Filemaps enthalten zusätzlich `exclude_dirs`: die normalisierten,

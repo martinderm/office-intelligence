@@ -75,3 +75,26 @@ Inventarübernahme (`mirror-plan`); auflösbare Kreuzgruppen-Kollisionen werden 
 Ohne Ausschlüsse gilt das bisherige Cleanup. Überlappende Quellwurzeln erfordern
 getrennte Output-Wurzeln und Filemaps je Storage. Keine automatische Übernahme
 von Ownership oder Entfernung zurückbehaltener Artefakte.
+
+## 6. Einzeldatei-Modus: Schreibgrenze und Rollback (Issue #22)
+
+`convert_cloud_docs.py --only-file` schreibt ausschließlich:
+
+| Ziel | Wann | Mechanismus |
+| :--- | :--- | :--- |
+| Markdown-Mirror der einen Quelle | nur bei Konvertierung | `atomic_write_text` (Temp + `os.replace`) |
+| Derivat der einen Quelle (`_derivatives/`) | `.doc`, PDF mit `local_derivative` | Worker-Staging/Promotion |
+| Cloud-Quelle selbst | nur `--ocr-policy enrich_source` | In-place-OCR, hier zusätzlich per Backup rückholbar |
+| `filemap.json` | nur wenn sich der eine Eintrag ändert | Roh-Splice + `write_text_atomic` (Temp + `fsync` + `os.replace`, Dateimodus erhalten) |
+
+Alles andere bleibt unangetastet: kein Walk, kein Löschen verwaister Mirrors/Derivate
+oder leerer Verzeichnisse, keine anderen Einträge, kein `filemap.md`, keine
+Katalogzeitstempel. Vor der ersten Mutation registriert `ArtifactTransaction`
+(`core/artifact_txn.py`) die Zielpfade: Dateien werden in ein privates Temp-Verzeichnis
+**außerhalb des Workspaces** gesichert, Zielverzeichnisse per Listing bzw. als „von uns
+angelegt" vermerkt. Bei jedem Fehler (Konvertierung, Timeout, Schreib-/Replace-Fehler,
+Abbruch) werden Dateien wiederhergestellt oder entfernt, neue Dateien in überwachten
+Verzeichnissen (z. B. `.ocr-stage-*`) gelöscht und angelegte Verzeichnisse entfernt.
+Misslingt der Rollback selbst, endet der Lauf mit `phase: rollback` und
+`only_file.rollback_errors`. Der Windows-Pfad bleibt über `get_safe_path` abgedeckt.
+Die Prozessgrenze bleibt die des Workers (`--file-timeout`, `terminate()`/`kill()`).

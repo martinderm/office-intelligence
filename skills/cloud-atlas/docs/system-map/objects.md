@@ -170,3 +170,28 @@ Alle Skripte (`gen_filemap.py`, `convert_cloud_docs.py`, `sync_project_cloud.py`
   "error": null
 }
 ```
+
+### 4.1 Einzeldatei-Ergänzung `data.only_file` (Issue #22)
+
+Nur bei `convert_cloud_docs.py --only-file` trägt `data` zusätzlich (Envelope-Schlüssel
+unverändert):
+
+```json
+"only_file": {
+  "source": "data/cloud/DEMO/g_neu.doc",
+  "action": "created",
+  "entry_changed": true,
+  "duplicate_source": false,
+  "artifacts_changed": true,
+  "rolled_back": false,
+  "mirror": "memory/cloud/topics/demo/g_neu.md"
+}
+```
+
+`action` ∈ `created` | `updated` | `unchanged` | `none` (Lauf vor einer Entscheidung
+gestoppt). `duplicate_source` ist bei mehrfachen/abweichend geschriebenen Einträgen der
+Quelle `true` (Lauf scheitert). `rolled_back` ist `true`, wenn nach begonnener
+Mutation zurückgerollt wurde; dann ggf. `rollback_errors`. Fehlerphasen: `only-file`,
+`filemap`, `mirror-plan`, `curation`, `conversion`, `rollback`, `runtime`. Der Eintrag selbst
+folgt dem Filemap-Objekt (1.); `artifact_metadata` entspricht dem geschriebenen
+Mirror-Frontmatter.
