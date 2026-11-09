@@ -325,7 +325,11 @@ per Message-ID). `partial` ist reserviert und wird nicht erzeugt. Fehler bedeute
 
 ### `sent-sync-state.json` (persistente Coverage-Schranke)
 
-`schema_version: 1`, `initial_start: "YYYY-MM-DD"|null`, `covered_through: "YYYY-MM-DD"|null`. `initial_start`
+`schema_version: 1`, `initial_start: "YYYY-MM-DD"` (Pflicht, nicht null), `covered_through:
+"YYYY-MM-DD"|null`; exakt diese drei Felder. Zukünftige Schranken, fehlende Felder, `initial_start:null`,
+ungültige Kalenderdaten oder ein `since` nach dem eingefrorenen Laufdatum werden **vor** jedem Read/Write
+abgewiesen (`sent_initial_state_invalid`/`sync_invalid_since`/`sync_invalid_date`); nur ein autorisierter
+Operator repariert oder quarantäniert die Datei, keine autonome Löschung/Überschreibung. `initial_start`
 wird vor dem ersten Read persistiert (auch bei explizitem `since`); ein Fehlversuch behält ihn über den
 Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag. Jede Rückspulung (explizite
 Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index dauerhaft geschrieben; nach dem Append darf

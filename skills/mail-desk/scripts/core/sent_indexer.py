@@ -565,13 +565,36 @@ def sync_sent_items_by_date(
 
 
 def _dedupe_iso_dates(dates: list[str]) -> list[str]:
-    """Normalize a date list to sorted unique ISO ``YYYY-MM-DD`` strings."""
+    """Normalize a date list to sorted unique valid calendar ISO dates."""
     unique_dates: set[str] = set()
     for d in dates:
-        d_clean = str(d).strip()[:10]
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", d_clean):
-            unique_dates.add(d_clean)
+        d_clean = str(d).strip()
+        if len(d_clean) != 10:
+            raise SentHandoffError(
+                "sync_invalid_date",
+                f"Invalid date {d!r}; expected YYYY-MM-DD. Nothing was read or written. "
+                "Recovery: correct the manifest/date value and rerun.",
+                {"value": str(d), "state": "none"},
+            )
+        try:
+            datetime.strptime(d_clean, "%Y-%m-%d")
+        except ValueError as error:
+            raise SentHandoffError(
+                "sync_invalid_date",
+                f"Invalid calendar date {d!r}; expected YYYY-MM-DD. Nothing was read or written. "
+                "Recovery: correct the manifest/date value and rerun.",
+                {"value": str(d), "state": "none"},
+            ) from error
+        unique_dates.add(d_clean)
     return sorted(unique_dates)
+
+
+def _require_account(account: str | None) -> None:
+    if account is None or not str(account).strip():
+        raise ValueError(
+            "Missing account: cannot bind sent-index entries to a mailbox without "
+            "a verified account. Bind an account before syncing Sent Items."
+        )
 
 
 def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[str]:
@@ -616,6 +639,8 @@ def sync_sent_items_by_dates_report(
     """
     dd = data_dir or resolve_data_dir()
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    _require_account(account)
+    expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
     state = _load_or_migrate_state(dd)
     initial, barrier = state["initial_start"], state["covered_through"]
     if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
@@ -627,7 +652,6 @@ def sync_sent_items_by_dates_report(
             {"reason": "barrier_in_future", "state": "invalid"},
         )
     watermark = _sent_index_watermark(dd)
-    expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
     requested = sorted(set(expanded))
     if not requested:
         return {
@@ -668,6 +692,8 @@ def sync_sent_items_by_dates_report(
         complete = bool(new_barrier is not None and new_barrier >= yesterday)
         next_start = (datetime.strptime(new_barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d") \
             if new_barrier is not None and new_barrier < yesterday else None
+        if not complete and next_start is None:
+            next_start = coverage_start
         recovery = None
         if not complete and next_start:
             recovery = (
@@ -798,19 +824,24 @@ def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
         return {"initial_start": None, "covered_through": None}
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(document, dict) or type(document.get("schema_version")) is not int \
-                or document.get("schema_version") != 1:
+        if not isinstance(document, dict) or set(document) != {
+            "schema_version", "initial_start", "covered_through",
+        }:
+            raise ValueError("exact schema keys required")
+        if type(document.get("schema_version")) is not int or document.get("schema_version") != 1:
             raise ValueError("unsupported schema_version")
-        return {
-            "initial_start": _iso_day(document.get("initial_start"), "initial_start"),
-            "covered_through": _iso_day(document.get("covered_through"), "covered_through"),
-        }
+        initial = _iso_day(document.get("initial_start"), "initial_start")
+        covered = _iso_day(document.get("covered_through"), "covered_through")
+        if initial is None:
+            raise ValueError("initial_start is required")
+        return {"initial_start": initial, "covered_through": covered}
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError) as error:
         raise SentHandoffError(
             "sent_initial_state_invalid",
             f"'{SYNC_STATE_FILENAME}' is not a valid coverage state ({type(error).__name__}: {error}); "
-            "nothing was read or written and no index/handoff was changed. Recovery: repair or remove "
-            "the file, then rerun; or pass an explicit since= for a fresh initial start.",
+            "nothing was read or written and no index/handoff was changed. Recovery: an authorized "
+            "operator must restore/repair the file or quarantine it; no automatic deletion or overwrite "
+            "and no explicit since= workaround.",
             {"reason": "unreadable_or_malformed", "state": "invalid"},
         ) from error
 
@@ -825,13 +856,17 @@ def _read_legacy_initial(data_dir: Path) -> str | None:
         if not isinstance(document, dict) or type(document.get("schema_version")) is not int \
                 or document.get("schema_version") != 1:
             raise ValueError("unsupported schema_version")
-        return _iso_day(document.get("initial_start"), "initial_start")
+        initial = _iso_day(document.get("initial_start"), "initial_start")
+        if initial is None:
+            raise ValueError("initial_start is required")
+        return initial
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError) as error:
         raise SentHandoffError(
             "sent_initial_state_invalid",
             f"Legacy '{LEGACY_INITIAL_FILENAME}' is not a valid initial marker "
-            f"({type(error).__name__}: {error}); nothing was read or written. Recovery: repair or remove "
-            "the legacy file (it is never overwritten automatically), then rerun.",
+            f"({type(error).__name__}: {error}); nothing was read or written. Recovery: an authorized "
+            "operator must restore/repair or quarantine the legacy file (it is never overwritten or "
+            "deleted automatically).",
             {"reason": "legacy_initial_invalid", "state": "invalid"},
         ) from error
 
@@ -1023,6 +1058,28 @@ def _sync_sent_items_impl(
     """
     dd = data_dir or resolve_data_dir()
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    _require_account(account)
+    requested_dates: list[str] | None = None
+    if dates:
+        requested_dates = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
+    if since is not None:
+        try:
+            since_dt = datetime.strptime(str(since)[:10], "%Y-%m-%d")
+        except (TypeError, ValueError) as error:
+            raise SentHandoffError(
+                "sync_invalid_since",
+                f"'since' is not a valid ISO calendar date ({since!r}); nothing was read or written. "
+                "Recovery: correct since to YYYY-MM-DD (not in the future) and rerun.",
+                {"invalid_field": "since", "state": "none"},
+            ) from error
+        if len(str(since)) != 10 or since_dt > run_date:
+            raise SentHandoffError(
+                "sync_invalid_since",
+                f"'since' {since!r} lies in the future of the frozen run date "
+                f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: use a date on/before "
+                "the run date and rerun.",
+                {"invalid_field": "since", "reason": "future", "state": "none"},
+            )
     follow_up_hint: str | None = None
     truncated = False
     state = _load_or_migrate_state(dd, state_tracker)  # validates before every read/write
@@ -1039,7 +1096,7 @@ def _sync_sent_items_impl(
         )
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
     if dates:
-        requested = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
+        requested = requested_dates or []
         earliest = min(requested) if requested else None
         if earliest is not None and initial_start is None and barrier is None:
             reference = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d") \
@@ -1202,7 +1259,7 @@ def _sync_sent_items_impl(
     current_barrier = current_state["covered_through"] or barrier
     if dates:
         new_barrier = _advance_days(
-            query_dates, coverage_start, deferred_days, run_date, current_barrier,
+            accepted_dates, coverage_start, deferred_days, run_date, current_barrier,
         )
         yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
         covered_days = 0

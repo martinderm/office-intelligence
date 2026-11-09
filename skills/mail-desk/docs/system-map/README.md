@@ -2342,8 +2342,8 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
   `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `handoff_deferred`, `ledger_invalid`,
-  `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sent_initial_state_invalid`,
-  `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
+  `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`,
+  `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
   `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
@@ -2380,7 +2380,9 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   bzw. jeder Rückspulung **vor** Handoff/Index geschrieben; nach dem Append rückt sie nur über einen
   zusammenhängenden angeforderten Prefix und nie über heute/Punktabfragen vor. Ein Crash davor lässt die
   konservative Schranke stehen. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen/Recovery;
-  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert. Das out-of-bound-Seitenende ist eine
+  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert. Future `since` und ungültige
+  Kalenderdaten werden vor jedem Read/Write abgewiesen, malformed/future State vor State-Writes (nur autorisierte
+  Reparatur/Quarantäne). Das out-of-bound-Seitenende ist eine
   offline nicht verifizierte Adapter-Annahme; Abweichungen bleiben fail-closed.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
@@ -2388,7 +2390,7 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
   `handoff_deferred`, `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`,
-  `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed`, `sync_failed`).
+  `sync_invalid_date`, `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed`, `sync_failed`).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,

@@ -638,16 +638,16 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual("2026-09-24", state["covered_through"])  # yesterday, today re-read
 
     def test_since_cannot_skip_forward_over_an_existing_watermark(self) -> None:
-        seed = {"schema_version": 1, "at": DAY, "message_id": "<seed@example.test>",
+        seed = {"schema_version": 1, "at": "2026-09-22", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
-        mailbox = _Mailbox(_details(1))  # on the watermark day
+        mailbox = _Mailbox(_details(1))  # on the frozen run day
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
             result = sent_indexer.sync_sent_items(
-                since="2026-09-30", account="ACC", data_dir=self.dd,
+                since="2026-09-24", account="ACC", data_dir=self.dd,
             )
-        self.assertEqual(("2026-09-24", "2026-09-24"), (result["coverage_start"], result["coverage_end"]))
+        self.assertEqual(("2026-09-22", "2026-09-24"), (result["coverage_start"], result["coverage_end"]))
         self.assertEqual(1, result["new_count"])
         self.assertEqual(["seed@example.test", "m1@example.test"], self.index_ids())
 
@@ -995,6 +995,99 @@ class MultiDateAndOverflowTests(_Base):
                 sent_indexer.sync_sent_items_by_date(DAY, account="ACC", data_dir=self.dd)
         self.assertEqual("handoff_deferred", caught.exception.reason_code)
         self.assertEqual(200, caught.exception.details["committed_count"])
+
+    def test_count_break_does_not_advance_over_unprocessed_days(self) -> None:
+        day1, day2, run_day = "2026-09-23", "2026-09-24", (2026, 9, 27)
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": day1, "covered_through": "2026-09-22",
+        }), encoding="utf-8")
+        mailbox = _Mailbox(
+            _details(1, _day=day1, date="Wed, 23 Sep 2026 10:00:00 +0200"),
+            _details(2, _day=day2, date="Thu, 24 Sep 2026 10:00:00 +0200"),
+        )
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime(run_day)):
+            first = sent_indexer.sync_sent_items(
+                dates=[day1, day2], count=1, account="ACC", data_dir=self.dd,
+            )
+            self.assertEqual(1, first["new_count"])
+            self.assertTrue(first["truncated"])
+            self.assertEqual((day1, day2), (first["coverage_end"], first["next_start"]))
+            self.assertEqual(["m1@example.test"], self.index_ids())
+            self.consume("m1@example.test")
+
+            second = sent_indexer.sync_sent_items(
+                dates=[day2], count=100, account="ACC", data_dir=self.dd,
+            )
+        self.assertEqual(1, second["new_count"])
+        self.assertEqual(["m1@example.test", "m2@example.test"], self.index_ids())
+
+    def test_future_since_is_rejected_before_any_state_write(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(since="2026-09-25", account="ACC", data_dir=self.dd)
+        self.assertEqual("sync_invalid_since", caught.exception.reason_code)
+        self.assertEqual(0, mailbox.calls)
+        self.assertFalse((self.dd / sent_indexer.SYNC_STATE_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+    def test_invalid_calendar_date_is_rejected_before_reads(self) -> None:
+        mailbox = _Mailbox(_details(1, date="Thu, 24 Sep 2026 10:00:00 +0200"))
+        run, read = mailbox.patches()
+        with run, read:
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items_by_dates_report(
+                    ["2026-02-30"], account="ACC", data_dir=self.dd, include_next_day=False,
+                )
+        self.assertEqual("sync_invalid_date", caught.exception.reason_code)
+        self.assertEqual(0, mailbox.calls)
+        self.assertFalse((self.dd / sent_indexer.SYNC_STATE_FILENAME).exists())
+        self.assertEqual([], self.index_ids())
+
+    def test_missing_state_fields_and_null_legacy_marker_fail_closed(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        state_path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("sent_initial_state_invalid", caught.exception.reason_code)
+        self.assertEqual(0, mailbox.calls)
+        state_path.unlink()
+
+        legacy = self.dd / sent_indexer.LEGACY_INITIAL_FILENAME
+        legacy.write_text(json.dumps({"schema_version": 1, "initial_start": None}), encoding="utf-8")
+        with self.assertRaises(SentHandoffError) as legacy_error:
+            sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("sent_initial_state_invalid", legacy_error.exception.reason_code)
+        self.assertTrue(legacy.exists())
+        self.assertEqual(0, mailbox.calls)
+
+    def test_report_requires_account_before_state_write(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(ValueError):
+            sent_indexer.sync_sent_items_by_dates_report(
+                [DAY], account=None, data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(0, mailbox.calls)
+        self.assertFalse((self.dd / sent_indexer.SYNC_STATE_FILENAME).exists())
+
+    def test_empty_point_window_names_the_open_gap_and_recovery(self) -> None:
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-09-10", "covered_through": None,
+        }), encoding="utf-8")
+        mailbox = _Mailbox()
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            report = sent_indexer.sync_sent_items_by_dates_report(
+                ["2026-09-20"], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertFalse(report["coverage_complete"])
+        self.assertEqual("2026-09-10", report["next_start"])
+        self.assertIn("2026-09-10", report["recovery"])
 
     def test_bounded_batch_still_commits_the_oldest_and_defers_the_rest(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",

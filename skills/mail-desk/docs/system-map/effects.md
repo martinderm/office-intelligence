@@ -285,7 +285,9 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen; Erstlauf: persistierter
   Initialstart/`since`, nie über offener Coverage). Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
   **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
-  und nie über heute/Punktabfragen vor. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery; das alte
+  und nie über heute/Punktabfragen vor. Future `since`, ungültige Kalenderdaten und malformed/future State werden
+  vor jedem Read/Write abgewiesen (keine autonome Löschung; autorisierte Reparatur/Quarantäne). Source-Fenster
+  statt Header-Datum bestimmt Grenzen/Recovery; das alte
   Marker-File wird non-destruktiv migriert. Seiten werden bis zur kurzen/leeren Seite paginiert; das
   dokumentierte „out of bound“-Ende ist eine offline nicht verifizierte **Annahme** und exakt klassifiziert,
   sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein

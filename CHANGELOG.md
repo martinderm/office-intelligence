@@ -76,14 +76,19 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Watermark nicht mehr über unvollständige Tage springen.
 - Source-Fenster (`window_date`) statt Mail-Header-Datum bestimmt Sortierung, Barrier und Recovery; fehlende,
   widersprüchliche oder unparsebare Header verschieben kein Item.
-- Singular-/plural-int-Datums-API melden `handoff_deferred` und laufen über den Report/State-Pfad; 200er-Batches
+- Singular-/plural-int-Datums-API melden `handoff_deferred` und laufen über den Report/State-Pfad; Account-
+  Bindung wird vor jedem State-Write geprüft, leere Punktfenster nennen `next_start`/Gap-Recovery. 200er-Batches
   (201/250, Crash/Retry) erzeugen alle IDs eventual. Explizite Datumsaufrufe erzeugen ohne Schranke keine
   jüngere `covered_through` und überspringen keinen Altbestand.
 - Legacy `sent-sync-initial-start.json` wird nur gelesen und non-destruktiv migriert; ein älterer `initial_start`
   bleibt erhalten und setzt die Schranke davor zurück.
-- `count`-Item-Budget blockiert schon den ersten nichtleeren Tag über Budget (kein Überschreiten); Recovery
-  tatsächlich erreichbar.
-- `since`/Initialmarker springen nie über offene Coverage; Erstlauf mit `since` persistiert den Marker.
+- `count`-Item-Budget blockiert schon den ersten nichtleeren Tag über Budget (kein Überschreiten); nur
+  tatsächlich gelesene/akzeptierte Tage rücken die Schranke vor, der blockierte Tag bleibt `next_start` mit
+  erreichbarer Recovery.
+- `since`/Initialmarker springen nie über offene Coverage; future `since` wird vor jeder Mutation abgewiesen,
+  der Erstlauf mit gültigem `since` persistiert den Marker. State-Schema ist exakt (drei Felder, nicht-null
+  `initial_start`); malformed/null/future State und ungültige Kalenderdaten werden vor Read/Write abgewiesen,
+  nur autorisierte Reparatur/Quarantäne, keine `since`-Workarounds.
 - Pagination beendet nur bei klassifiziertem `HimalayaInvocationError`/`himalaya_command_failed` mit exaktem
   „envelope page out of bound“ ab Seite 2 (offline nicht verifizierte **Annahme**); Transport-„buffer index out
   of bounds“ bleibt fail-closed.
