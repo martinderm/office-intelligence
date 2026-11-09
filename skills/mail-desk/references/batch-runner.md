@@ -1088,18 +1088,17 @@ Write ab.
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
-| `sent_window_truncated` | volle Seite nach `max_pages` ohne kurze/leere Seite; kein Watermark-Advance, nichts geschrieben |
-| `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, `failed_dates` |
+| `sent_window_truncated` | volle Seite nach `max_pages`; kein Watermark-Advance |
+| `sync_invalid_since` / `sync_invalid_max_pages` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/Initial ungültig oder Budget ohne Fortschritt; nichts geschrieben |
+| `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, gesamtes Originalfenster erneut abdecken |
 | `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
 
-Kein Zurückstellen: > 200 neue Items ⇒ `handoff_overflow` vor jedem Write. `count` ist ein **Item-Budget**
-(kein Tageslimit): erreicht es eine Tagesgrenze, stoppt der Lauf mit `truncated`, `coverage_*` und konkretem
-Recovery-Aufruf, ohne über unvollständig gedeckte Tage vorzurücken. Das Wasserzeichen-Alter blockiert nie:
-Coverage startet am Watermark-Tag (inklusive), leere Tage zählen; Erstlauf: eingefrorenes Laufdatum,
-60-Tage-Backfill bzw. `since`. Tages-Recovery nur über
-`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)`; `--sync-sent N`/`count` ist keine
-Gap-Recovery. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per Envelope-ID); eine nach
-`max_pages` weiterhin volle Seite ergibt `sent_window_truncated` mit höherem-`max_pages`-Recovery.
+`count` ist ein **Item-Budget**: erreicht es eine Tagesgrenze, stoppt der Lauf mit `truncated`/`coverage_*` und
+Recovery, ohne ungedeckte Tage zu überspringen. Wasserzeichen-Alter blockiert nie; Coverage ab Watermark-Tag,
+leere Tage zählen; Erstlauf: eingefrorener Initialstart bzw. `since` (nie über Watermark). Seiten werden bis zur
+kurzen/leeren Seite paginiert; nur verifiziertes „out of bound“ ab Seite 2 beendet; sonst fail-closed. Eine nach
+`max_pages` volle Seite ergibt `sent_window_truncated`. Recovery:
+`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)`; `count` ist keine Gap-Recovery.
 
 ---
 

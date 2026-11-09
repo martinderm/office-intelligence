@@ -131,7 +131,8 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Ein `handoff_overflow` schreibt nichts; Recovery nur über die Python-API
    `sync_sent_items_by_dates(dates=['D'], include_next_day=False, max_pages=...)`, nicht über
    `--count`/`--sync-sent N` (keine Datums-CLI).
-   Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state` und `handoff` (nur Zähler);
+   Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state`, `truncated`, `coverage_*`,
+   `next_start`, `follow_up_hint` und `handoff` (nur Zähler);
    die Items stehen im persistierten Runner-Envelope und im Handoff. Bei `write_state: unknown`
    fehlt `new_count` (nicht verifiziert).
    Es führt keine Send-/APPEND-Aktion aus.

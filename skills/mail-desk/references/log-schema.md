@@ -327,6 +327,13 @@ Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`c
 unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent per Message-ID).
 `partial` ist reserviert und wird nicht erzeugt. Fehler bedeuten also nie pauschal „null Writes“.
 
+### `sent-sync-initial-start.json` (Initial-Coverage-Marker)
+
+Persistiert vor dem ersten Read den Starttag der Erstlauf-Coverage (`schema_version: 1`,
+`initial_start: "YYYY-MM-DD"`). Ein fehlgeschlagener Erstlauf behält ihn über den Tageswechsel; nach
+vollständiger Coverage wird er entfernt. Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder
+geschrieben, Datei unangetastet); `since` springt nie über ein vorhandenes Watermark.
+
 ## Closing an item
 
 Do not add a separate closed row next to an open row for the same mail. Update the original item and then archive it.

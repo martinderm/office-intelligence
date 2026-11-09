@@ -2342,7 +2342,8 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
   `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`,
-  `sent_window_truncated`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
+  `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sent_initial_state_invalid`,
+  `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
   `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
@@ -2391,7 +2392,8 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   Handoff byte-gleich, 0 neue Items schreiben nichts.
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`, `sent_window_truncated`, `sync_window_failed`, `sync_failed`).
+  `handoff_overflow`, `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`,
+  `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed`, `sync_failed`).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,
