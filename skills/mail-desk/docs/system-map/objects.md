@@ -556,9 +556,11 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
 * **Schema:** exakt `schema_version: 1`, `initial_start` (ISO, Pflicht), `covered_through` (ISO|null).
   Altbestand `initial_start:null` mit `covered_through` ist nicht sicher migrierbar (Wasserzeichen beweist keine
   lückenlose Untergrenze) und fail-closed `unsafe_null_initial_migration`; Datei unangetastet. Fehlt bei
-  nichtleerem Sent-Index jede State-Datei, fail-closed `sent_initial_state_required`; eine bloße Quarantäne reicht
-  nicht, vor erneuter Synchronisierung muss ein autorisierter Operator einen verifizierten konservativen State oder
-  `since` anlegen (keine Wasserzeichen-Autoinitialisierung). Jeder originale State/Marker wird vor Merge auf Future
+  bestehendem Sent-Index jede State-Datei, fail-closed `sent_initial_state_required` in **allen** Einstiegen
+  (Default, `dates`, Report, Singular/Plural) und unabhängig von einem parsebaren `at`; eine bloße Quarantäne
+  reicht nicht. Nur ein verifiziertes `since` (exakter Start, nie `min(Watermark, since)`) oder ein
+  wiederhergestellter valider State erlaubt den Resync; datierte APIs reichen `since` durch, Tage davor sind
+  fail-closed. Jeder originale State/Marker wird vor Merge auf Future
   geprüft; `covered_through` gleich heute wird auf gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne, keine
   autonome Löschung; valider State siehe Log-Schema. `initial_start` wird
   vor dem ersten Read persistiert (auch bei `since`); jede Rückspulung vor Handoff/Index. `covered_through` ist

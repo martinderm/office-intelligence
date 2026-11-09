@@ -1097,7 +1097,7 @@ vor jedem Handoff-/Index-Write ab.
 `count` ist **Item-Budget**: der erste Tag über Budget; Stopp mit `truncated`/`coverage_*`, Recovery
 (`sync_sent_items_by_dates_report(dates=['D'], include_next_day=False)`). >200: älteste 200 committen, Rest
 unindexiert; atomare Coverage-Schranke nie hinter unvollständigen Tagen; nach Konsum erneut scannen.
-Wasserzeichen-Alter blockiert nie; Erstlauf: Initialstart/`since`, nie vor offener Coverage. Explizite Daten
+State fehlt + Index: fail-closed; `since` exakt; Erstlauf: Initialstart/`since`. Explizite Daten
 spulen konservativ **vor** dem Read zurück, rücken nur zusammenhängenden Prefix und nie heute vor;
 Punktabfragen erzeugen keine jüngere Schranke. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery;
 Legacy-Marker non-destruktiv migriert. Seiten bis kurze/leere Seite; das Endsignal ist eine **Annahme** (nur

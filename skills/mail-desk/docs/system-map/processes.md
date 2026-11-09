@@ -706,16 +706,19 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   ungültige Kalenderdaten werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
   geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
   `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
-  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); bloße Quarantäne
-  reicht nicht, vor Resync muss ein autorisierter Operator einen verifizierten State/`since` anlegen. Fehlt bei
-  nichtleerem Index jede State-Datei, fail-closed `sent_initial_state_required`. Nur autorisierte
+  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
+  reicht nicht. Fehlt bei bestehendem Index jede State-Datei, fail-closed `sent_initial_state_required` in
+  **allen** Einstiegen und unabhängig von einem parsebaren `at`; nur ein verifiziertes `since` (exakter Start,
+  nie `min(Watermark, since)`) oder ein wiederhergestellter valider State erlaubt den Resync, datierte APIs
+  reichen `since` durch. Nur autorisierte
   Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
   Draft-Sent-Sync nur als echte ISO-Datum/ISO-Datetime/RFC-2822-Daten akzeptiert (kein Fallback-Datum); der
   Draft-Pfad schluckt Sync-Ausnahmen wie bisher.
   Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
   `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
   (offline nicht verifizierte **Annahme**) Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
-  Watermark-Advance). Das Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage
-  zählen); `since`/Schranke springen nie über offene Coverage.
+  Watermark-Advance). Ein fehlender State bei bestehendem Index ist in allen Einstiegen fail-closed; ein
+  verifiziertes `since` ist der exakte Start (nie der Watermark); leere Tage zählen; `since`/Schranke springen
+  nie über offene Coverage.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

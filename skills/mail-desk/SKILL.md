@@ -191,9 +191,8 @@ zuerst, Rest nach Ledger-Konsum; `truncated`/Recovery, kein Skip/Verlust); Recov
 kurzen/leeren Seite paginiert; nur der klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit
 exakt „envelope page out of bound“ ab Seite 2 beendet (offline nicht verifizierte **Annahme**), sonst/ nach
 `max_pages` volle Seiten verweigern
-(`sent_window_truncated`, kein Watermark-Advance). Im expliziten
-Datums-Pfad blockiert das Wasserzeichen-Alter nicht (Coverage ab Watermark-Tag inklusive, leere Tage zählen);
-der Default-Pfad ohne State ist dagegen fail-closed. `count` ist ein
+(`sent_window_truncated`, kein Watermark-Advance). Ein fehlender State bei bestehendem Index ist in allen
+Einstiegen fail-closed; ein verifiziertes `since` ist der exakte Start (nie der Watermark). `count` ist ein
 Item-Budget (schon der erste nichtleere Tag über Budget stoppt), `truncated`/`coverage_*` plus Recovery; der
 Erstlauf persistiert `initial_start` in `sent-sync-state.json`, jede Rückspulung (explizite Daten/`since`/Legacy)
 vor Handoff/Index; `covered_through` rückt nur über zusammenhängende angeforderte Tage und nie über heute/
@@ -203,9 +202,10 @@ Coverage; future `since`, `since` mit Zeitanteil, future `initial_start`/`covere
 State werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge geprüft,
 `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand `initial_start:null` mit
 `covered_through` ist nicht sicher migrierbar und fail-closed (`unsafe_null_initial_migration`; Wasserzeichen
-beweist keine lückenlose Untergrenze); eine bloße Quarantäne reicht nicht, vor Resync muss ein autorisierter
-Operator einen verifizierten konservativen State/`since` anlegen. Fehlt bei nichtleerem Index jede State-Datei,
-fail-closed `sent_initial_state_required` (keine Wasserzeichen-Autoinitialisierung). Nur autorisierte
+beweist keine lückenlose Untergrenze); eine bloße Quarantäne reicht nicht. Fehlt bei bestehendem Index jede
+State-Datei, fail-closed `sent_initial_state_required` in **allen** Einstiegen und unabhängig von einem
+parsebaren `at`; nur ein verifiziertes `since` (exakter Start, nie `min(Watermark, since)`) oder ein
+wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since` durch. Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten
 akzeptiert (kein Fallback 2026-01-01); der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`

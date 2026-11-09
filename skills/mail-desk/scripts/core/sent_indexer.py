@@ -535,17 +535,19 @@ def sync_sent_items_by_date(
     data_dir: Path | None = None,
     *,
     max_pages: int = SENT_SYNC_MAX_PAGES,
+    since: str | None = None,
 ) -> int:
     """Fetch one specific date (YYYY-MM-DD); deferrals fail closed.
 
     Routes through the plural report path so coverage state, pagination and 200-item
     batching are never bypassed.  A deferred batch raises ``handoff_deferred`` with
     committed/deferred counts and a concrete report recovery; callers that need the
-    full result use ``sync_sent_items_by_dates_report``.
+    full result use ``sync_sent_items_by_dates_report``.  A missing state with
+    existing index entries requires a verified ``since``.
     """
     report = sync_sent_items_by_dates_report(
         [date_str], folder=folder, account=account, data_dir=data_dir,
-        include_next_day=False, max_pages=max_pages,
+        include_next_day=False, max_pages=max_pages, since=since,
     )
     if report["truncated"]:
         raise SentHandoffError(
@@ -597,6 +599,42 @@ def _require_account(account: str | None) -> None:
         )
 
 
+def _validate_since(since: str | None, run_date: datetime) -> tuple[str, datetime] | None:
+    """Validate an operator-supplied verified conservative start (bare ISO date).
+
+    A valid ``since`` is the explicit, verified lower bound used when no coverage
+    state exists.  It is never mixed with a watermark or point date.
+    """
+    if since is None:
+        return None
+    since_text = str(since)
+    if len(since_text) != 10 or re.fullmatch(r"\d{4}-\d{2}-\d{2}", since_text) is None:
+        raise SentHandoffError(
+            "sync_invalid_since",
+            f"'since' must be YYYY-MM-DD without a time part ({since_text!r}); nothing was read "
+            "or written. Recovery: use a bare date on/before the run date and rerun.",
+            {"invalid_field": "since", "reason": "format"},
+        )
+    try:
+        since_dt = datetime.strptime(since_text, "%Y-%m-%d")
+    except ValueError as error:
+        raise SentHandoffError(
+            "sync_invalid_since",
+            f"'since' must be a valid YYYY-MM-DD calendar date ({since_text!r}); nothing was read "
+            "or written. Recovery: correct since to a bare valid date and rerun.",
+            {"invalid_field": "since", "reason": "format"},
+        ) from error
+    if since_dt > run_date:
+        raise SentHandoffError(
+            "sync_invalid_since",
+            f"'since' {since!r} lies in the future of the frozen run date "
+            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: use a date on/before "
+            "the run date and rerun.",
+            {"invalid_field": "since", "reason": "future"},
+        )
+    return since_text, since_dt
+
+
 def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[str]:
     """Expand ISO dates to the queried set, optionally including the following day."""
     expanded: set[str] = set()
@@ -629,6 +667,7 @@ def sync_sent_items_by_dates_report(
     data_dir: Path | None = None,
     include_next_day: bool = True,
     max_pages: int = SENT_SYNC_MAX_PAGES,
+    since: str | None = None,
 ) -> dict[str, Any]:
     """Date-range sync with explicit coverage/batching, never a silent advance.
 
@@ -636,14 +675,21 @@ def sync_sent_items_by_dates_report(
     the coverage barrier is persisted **before** any mailbox read.  Point-date calls
     can only advance over a contiguous fully requested prefix and never mark today
     as complete; gaps leave the barrier untouched.
+
+    A missing coverage state with existing index entries fails closed unless an
+    explicit verified ``since`` is supplied; that value is used exactly as the
+    start and is never derived from point dates, the watermark or a CLI default.
     """
     dd = data_dir or resolve_data_dir()
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     _require_account(account)
+    verified_since = _validate_since(since, run_date)
     expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
     state = _load_or_migrate_state(dd, run_date=run_date)
     initial, barrier = state["initial_start"], state["covered_through"]
     watermark = _sent_index_watermark(dd)
+    has_index = _sent_index_has_entries(dd)
+    state_missing = initial is None and barrier is None
     requested = sorted(set(expanded))
     if not requested:
         return {
@@ -653,11 +699,41 @@ def sync_sent_items_by_dates_report(
         }
     earliest = requested[0]
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
-    if initial is None and barrier is None:
-        reference = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d") \
-            if watermark is not None else default_start
-        initial = min(earliest, reference)
+    if state_missing and has_index:
+        if verified_since is None:
+            raise SentHandoffError(
+                "sent_initial_state_required",
+                "A sent-index with existing entries has no coverage state; nothing was read or "
+                "written. Recovery: call sync_sent_items_by_dates_report(dates=[...], "
+                "since='YYYY-MM-DD', include_next_day=False) with an authorized verified "
+                "conservative start, or restore a valid state. Point dates, the newest watermark "
+                "and the CLI default are never used as a start; quarantining the state alone is "
+                "insufficient.",
+                {"reason": "missing_state_with_index", "index_entries_present": True},
+            )
+        initial, since_dt = verified_since
+        barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+        if earliest < initial:
+            raise SentHandoffError(
+                "sent_initial_state_required",
+                f"Requested date {earliest} lies before the verified since {initial}; nothing was "
+                "read or written and no start is inferred from point dates. Recovery: use a "
+                "verified conservative since on/before the requested date, or restore a valid "
+                "coverage state with that start.",
+                {"reason": "requested_before_verified_since",
+                 "since": initial, "requested": earliest},
+            )
+    elif state_missing:
+        # Empty index only: the earliest requested day is the explicit start; the
+        # watermark is never consulted for an existing index.
+        initial = min(earliest, default_start)
     coverage_start = _coverage_start(initial, barrier, watermark, run_date)
+    if verified_since is not None and not (state_missing and has_index):
+        since_day, since_dt = verified_since
+        if since_day < coverage_start:
+            initial = min([d for d in (initial, since_day) if d])
+            barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            coverage_start = since_day
     if earliest < coverage_start:
         initial = min([d for d in (initial, earliest) if d])
         barrier = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -750,15 +826,17 @@ def sync_sent_items_by_dates(
     data_dir: Path | None = None,
     include_next_day: bool = True,
     max_pages: int = SENT_SYNC_MAX_PAGES,
+    since: str | None = None,
 ) -> int:
     """Legacy int API: complete date syncs return their count; deferrals fail closed.
 
     Callers that need the batching/coverage result must use
     ``sync_sent_items_by_dates_report``; this wrapper never hides a deferred batch.
+    A missing state with existing index entries requires a verified ``since``.
     """
     report = sync_sent_items_by_dates_report(
         dates, folder=folder, account=account, data_dir=data_dir,
-        include_next_day=include_next_day, max_pages=max_pages,
+        include_next_day=include_next_day, max_pages=max_pages, since=since,
     )
     if report["truncated"]:
         raise SentHandoffError(
@@ -788,6 +866,26 @@ def _sent_index_watermark(data_dir: Path) -> datetime | None:
         if latest is None or parsed > latest:
             latest = parsed
     return latest
+
+
+def _sent_index_has_entries(data_dir: Path) -> bool:
+    """True when ``sent-index.jsonl`` exists with at least one non-blank line.
+
+    Deliberately independent of a parseable ``at`` value: an existing index with
+    corrupt/missing dates must never be mistaken for a fresh start.  An unreadable
+    existing file also counts as existing so the caller fails closed.
+    """
+    path = data_dir / "sent-index.jsonl"
+    try:
+        if not path.exists():
+            return False
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if line.strip():
+                    return True
+    except OSError:
+        return True
+    return False
 
 
 SYNC_STATE_FILENAME = "sent-sync-state.json"
@@ -1051,12 +1149,20 @@ def _derive_sent_sync_window(
         except (TypeError, ValueError) as error:
             raise ValueError("since must be an ISO date (YYYY-MM-DD)") from error
     else:
+        if _sent_index_has_entries(data_dir):
+            raise SentHandoffError(
+                "sent_initial_state_required",
+                "No verified start was supplied while sent-index entries exist; the window is "
+                "never derived from the watermark for an existing index. Recovery: pass a verified "
+                "conservative since or restore a valid coverage state.",
+                {"reason": "missing_start_with_index", "index_entries_present": True},
+            )
         watermark = _sent_index_watermark(data_dir)
         if watermark is None:
             start = run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
         else:
-            # The watermark day is re-read: new mails can arrive on an already
-            # partially indexed day, so coverage must start there (inclusive).
+            # Unreachable with a non-empty index, kept for the empty-file case: the
+            # watermark day is re-read inclusively if entries somehow appear later.
             start = datetime(watermark.year, watermark.month, watermark.day)
 
     if start > run_date:
@@ -1090,12 +1196,16 @@ def _sync_sent_items_impl(
 ) -> dict[str, Any]:
     """Sync Sent Items by explicit dates or by a coverage window.
 
-    The no-dates path freezes the run date once, then covers days oldest-first:
-    from ``since`` (ISO date), else the day after the sent-index watermark, else a
-    deterministic initial backfill of ``MAX_SYNC_WINDOW_DAYS`` days ending at the
-    frozen run date.  The watermark age never blocks.  ``count`` is an **item
-    budget** applied at day boundaries: the run never reads past a day that would
-    exceed it and reports ``truncated`` with a concrete per-day recovery call.
+    The no-dates path freezes the run date once, then covers days oldest-first from
+    the persisted coverage state, or an explicit verified ``since`` when no state
+    exists.  An existing sent-index without a coverage state fails closed
+    (``sent_initial_state_required``) unless that verified ``since`` is supplied;
+    point dates, the newest watermark and the CLI default are never used as a
+    start, and ``since`` is used exactly (never ``min(watermark, since)``).  Only a
+    genuinely empty index falls back to a deterministic initial backfill of
+    ``MAX_SYNC_WINDOW_DAYS`` days ending at the frozen run date.  ``count`` is an
+    **item budget** applied at day boundaries: the run never reads past a day that
+    would exceed it and reports ``truncated`` with a concrete per-day recovery call.
     Empty days never consume budget, so they cannot stall coverage.
 
     Every date is paginated (``--page``/``--page-size``) until a short or empty
@@ -1118,57 +1228,54 @@ def _sync_sent_items_impl(
     requested_dates: list[str] | None = None
     if dates:
         requested_dates = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
-    if since is not None:
-        since_text = str(since)
-        if len(since_text) != 10 or re.fullmatch(r"\d{4}-\d{2}-\d{2}", since_text) is None:
-            raise SentHandoffError(
-                "sync_invalid_since",
-                f"'since' must be YYYY-MM-DD without a time part ({since_text!r}); nothing was read "
-                "or written. Recovery: use a bare date on/before the run date and rerun.",
-                {"invalid_field": "since", "reason": "format"},
-            )
-        try:
-            since_dt = datetime.strptime(since_text, "%Y-%m-%d")
-        except ValueError as error:
-            raise SentHandoffError(
-                "sync_invalid_since",
-                f"'since' must be a valid YYYY-MM-DD calendar date ({since_text!r}); nothing was read "
-                "or written. Recovery: correct since to a bare valid date and rerun.",
-                {"invalid_field": "since", "reason": "format"},
-            ) from error
-        if since_dt > run_date:
-            raise SentHandoffError(
-                "sync_invalid_since",
-                f"'since' {since!r} lies in the future of the frozen run date "
-                f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: use a date on/before "
-                "the run date and rerun.",
-                {"invalid_field": "since", "reason": "future"},
-            )
+    verified_since = _validate_since(since, run_date)
     follow_up_hint: str | None = None
     truncated = False
     state = _load_or_migrate_state(dd, state_tracker, run_date=run_date)  # validates before every read/write
     initial_start = state["initial_start"]
     barrier = state["covered_through"]
     watermark = _sent_index_watermark(dd)
+    has_index = _sent_index_has_entries(dd)
+    state_missing = initial_start is None and barrier is None
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
-    if not dates and initial_start is None and barrier is None and watermark is not None and since is None:
+    if state_missing and has_index and verified_since is None:
+        # Any existing index entry (even with an unparseable ``at``) proves prior
+        # coverage; never initialise from point dates, the newest watermark or a
+        # CLI default.  Only an explicitly verified since= may supply the start.
         raise SentHandoffError(
             "sent_initial_state_required",
-            "A sent-index exists but no coverage state proves a safe lower bound; nothing was read "
-            "or written. Recovery: an authorized operator restores a valid "
-            '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null} with a verified '
-            "conservative older start, or reruns with a verified conservative since=; quarantining the "
-            "state alone is insufficient until a valid state is recreated. No autonomous deletion and "
-            "no watermark-based auto-initialisation.",
-            {"reason": "missing_state_with_index"},
+            "A sent-index with existing entries has no coverage state; nothing was read or written. "
+            "The index must never be initialised from point dates, the newest watermark or a CLI "
+            "default. Recovery: rerun with an authorized verified conservative since= via "
+            "sync_sent_items(since='YYYY-MM-DD', ...) or "
+            "sync_sent_items_by_dates_report(dates=[...], since='YYYY-MM-DD', include_next_day=False), "
+            "or restore "
+            '{"schema_version":1,"initial_start":"YYYY-MM-DD","covered_through":null} with that '
+            "verified start. Quarantining the state alone is insufficient; no autonomous deletion.",
+            {"reason": "missing_state_with_index", "index_entries_present": True},
         )
     if dates:
         requested = requested_dates or []
         earliest = min(requested) if requested else None
-        if earliest is not None and initial_start is None and barrier is None:
-            reference = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d") \
-                if watermark is not None else default_start
-            initial_start = min(earliest, reference)
+        if state_missing and has_index:
+            # verified_since is guaranteed by the guard above; use exactly the
+            # operator value, never min(watermark, since) or a point date.
+            initial_start, since_dt = verified_since
+            barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+            if earliest is not None and earliest < initial_start:
+                raise SentHandoffError(
+                    "sent_initial_state_required",
+                    f"Requested date {earliest} lies before the verified since {initial_start}; "
+                    "nothing was read or written and no start is inferred from point dates. "
+                    "Recovery: use a verified conservative since on/before the requested date, or "
+                    "restore a valid coverage state with that start.",
+                    {"reason": "requested_before_verified_since",
+                     "since": initial_start, "requested": earliest},
+                )
+        elif earliest is not None and state_missing:
+            # Empty index only: the earliest requested day is the explicit start;
+            # the watermark is never consulted for an existing index.
+            initial_start = min(earliest, default_start)
         coverage_start = _coverage_start(initial_start, barrier, watermark, run_date)
         if earliest is not None and earliest < coverage_start:
             initial_start = min([d for d in (initial_start, earliest) if d])
@@ -1181,20 +1288,27 @@ def _sync_sent_items_impl(
             "total_days": len(requested), "coverage_complete": False, "next_start": coverage_start,
         }
     else:
-        base_start = _coverage_start(initial_start, barrier, watermark, run_date)
-        if initial_start is None and barrier is None and watermark is None:
-            # No prior coverage: an explicit since is the deterministic initial
-            # start; otherwise the frozen 60-day backfill applies.
-            initial_start = str(since)[:10] if since else default_start
+        if state_missing and has_index:
+            # verified_since is guaranteed by the guard above; use exactly the
+            # operator value, never min(watermark, since).
+            initial_start, since_dt = verified_since
+            barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
             base_start = initial_start
-        if since is not None:
-            since_day = str(since)[:10]
-            if since_day < base_start:
-                initial_start = min([d for d in (initial_start, since_day) if d])
-                barrier = (datetime.strptime(since_day, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-                base_start = since_day
-        if initial_start is None:
-            initial_start = base_start
+        else:
+            base_start = _coverage_start(initial_start, barrier, watermark, run_date)
+            if initial_start is None and barrier is None and watermark is None:
+                # No prior coverage: an explicit since is the deterministic initial
+                # start; otherwise the frozen 60-day backfill applies.
+                initial_start = verified_since[0] if verified_since is not None else default_start
+                base_start = initial_start
+            if verified_since is not None:
+                since_day, since_dt = verified_since
+                if since_day < base_start:
+                    initial_start = min([d for d in (initial_start, since_day) if d])
+                    barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                    base_start = since_day
+            if initial_start is None:
+                initial_start = base_start
         _prewrite_state_if_changed(dd, initial_start, barrier, state, state_tracker)
         window_dates, truncated, follow_up_hint, coverage = _derive_sent_sync_window(
             count, dd, run_date=run_date, since=base_start,

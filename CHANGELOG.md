@@ -111,7 +111,19 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   RFC-2822-Header (kein Fallback 2026-01-01 bei „not a date“/unbekanntem Monat) und bricht keinen vollständigen
   Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert).
 
+#### Fixed (fünfte Review-/Audit-Runde)
 
+- Ein fehlender Coverage-State bei **irgendeinem** bestehenden Sent-Index-Eintrag (auch mit unparsebarem `at`)
+  fail-closed `sent_initial_state_required` in allen Einstiegen: Default, `dates`, Report, Singular- und
+  Plural-API. Punktdaten, der neueste Watermark und CLI-Defaults initialisieren nie mehr; Handoff/Index bleiben
+  unangetastet.
+- Datierte APIs reichen ein explizites verifiziertes `since` durch; es ist der exakte Start (kein stilles
+  `min(Watermark, since)`), wird vor jedem Read/Write validiert und erlaubt den Resync. Angeforderte Tage vor
+  `since` und ein `since` mit Zeitanteil/future sind fail-closed. Crash/Retry wiederholt dieselbe Ablehnung ohne
+  Writes; ein pending Handoff bleibt byte-gleich.
+- Tests decken alle Einstiege, unparsebares `at`, `since` älter/jünger als der Watermark sowie den
+  Repro-Fall (Watermark 2026-01-04, `dates=[2026-01-05]`, Start 2026-01-03) ab; Log-Schema, L1/L2, objects,
+  effects, processes, SKILL und Batch-Runner-Vertrag sind synchron.
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).

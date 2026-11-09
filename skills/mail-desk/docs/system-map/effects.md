@@ -281,18 +281,20 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `new_items`, `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler. Ein
   scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`,
   `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
-  stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Das Wasserzeichen-Alter
-  blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen; Erstlauf: persistierter
-  Initialstart/`since`, nie über offener Coverage). Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
+  stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State
+  bei bestehendem Index ist in allen Einstiegen fail-closed; ein verifiziertes `since` ist der exakte Start (nie
+  der Watermark; leere Tage zählen; Erstlauf: persistierter Initialstart/`since`, nie über offener Coverage).
+  Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
   **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
   und nie über heute/Punktabfragen vor. Future `initial_start`/`covered_through`, malformed/null-both State,
   future `since`/`since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird
   vor Merge geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
   `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
   (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
-  reicht nicht, vor Resync muss ein autorisierter Operator einen verifizierten State/`since` anlegen. Fehlt bei
-  nichtleerem Index jede State-Datei, fail-closed `sent_initial_state_required` (keine Autoinitialisierung). Nur
-  autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Source-Fenster
+  reicht nicht. Fehlt bei bestehendem Index jede State-Datei, fail-closed `sent_initial_state_required` in
+  **allen** Einstiegen und unabhängig von einem parsebaren `at`; nur ein verifiziertes `since` (exakter Start,
+  nie `min(Watermark, since)`) oder ein wiederhergestellter valider State erlaubt den Resync, datierte APIs
+  reichen `since` durch. Nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Source-Fenster
   statt Header-Datum bestimmt Grenzen/Recovery; ungültige Header werden beim optionalen Draft-Sent-Sync nur als
   echte ISO-Datetime/ISO-Datum/RFC-2822-Daten akzeptiert (kein Fallback-Datum) und brechen keinen vollständigen
   Sync ab (Draft-Pfad schluckt Sync-Ausnahmen wie bisher); das alte

@@ -664,8 +664,9 @@ schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count`
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
 Rest nach Konsum) und nach `max_pages`
 weiterhin volle Seiten `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery; sonst
-wird paginiert, kein sicherer Skip). Das Wasserzeichen-Alter blockiert nie: Coverage ab Watermark-Tag
-(inklusive), leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`
+wird paginiert, kein sicherer Skip). Ein fehlender State bei bestehendem Index ist in allen Einstiegen
+fail-closed `sent_initial_state_required`; ein verifiziertes `since` ist der exakte Start (nie der Watermark).
+Leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`
 ist ein Item-Budget; schon der erste nichtleere Tag über dem Budget stoppt mit `truncated`/`coverage_*` und
 Recovery-Aufruf. Recovery eines Tages nur über
 `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-/Singular-API melden
@@ -685,10 +686,12 @@ und `since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder origina
 geprüft, `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Altbestand
 `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
 (`unsafe_null_initial_migration`, Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
-reicht nicht, vor Resync muss ein autorisierter Operator einen verifizierten konservativen State/`since`
-anlegen. Fehlt bei nichtleerem Index jede State-Datei, fail-closed `sent_initial_state_required` (keine
-Wasserzeichen-Autoinitialisierung). Nur autorisierte
-Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
+reicht nicht. Fehlt bei bestehendem Sent-Index jede State-Datei, fail-closed `sent_initial_state_required` in
+**allen** Einstiegen (Default, `dates`, Report, Singular/Plural) und unabhängig von einem parsebaren `at`;
+nur ein vom Operator verifiziertes `since` (exakter Start, nie `min(Watermark, since)`, keine Punktdaten oder
+CLI-Defaults) bzw. ein wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since`
+durch und angeforderte Tage davor sind fail-closed. Nur autorisierte Reparatur/Quarantäne mit validem
+Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
 Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen
 vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster statt Header-Datum
 bestimmt Grenzen/Recovery. Nur der
