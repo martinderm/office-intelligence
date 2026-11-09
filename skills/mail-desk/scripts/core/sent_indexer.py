@@ -25,6 +25,7 @@ from .sent_handoff import (
     load_ledger,
     norm_id,
     read_handoff,
+    reject_static_aliases,
     resolve_thread_anchor,
     tolerant_jsonl_records,
     unconsumed,
@@ -155,6 +156,9 @@ def append_sent_index_entries(
 
     dd = data_dir or resolve_data_dir()
     sent_path = dd / "sent-index.jsonl"
+    reject_static_aliases(
+        sent_path, reason_code="sent_index_alias_invalid", label="sent-index",
+    )
     sent_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_mids: set[str] = set()
@@ -713,6 +717,8 @@ def sync_sent_items_by_dates_report(
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     _require_account(account)
     verified_since = _validate_since(since, run_date)
+    # Static alias preflight before state/index use, mailbox read or any write.
+    assert_append_aliases(dd)
     expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
     state = _load_or_migrate_state(dd, run_date=run_date)
     initial, barrier = state["initial_start"], state["covered_through"]
@@ -1260,6 +1266,8 @@ def _sync_sent_items_impl(
     if dates:
         requested_dates = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
     verified_since = _validate_since(since, run_date)
+    # Static alias preflight before state/index use, mailbox read or any write.
+    assert_append_aliases(dd)
     follow_up_hint: str | None = None
     truncated = False
     state = _load_or_migrate_state(dd, state_tracker, run_date=run_date)  # validates before every read/write

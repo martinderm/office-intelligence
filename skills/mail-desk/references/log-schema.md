@@ -269,15 +269,17 @@ verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungül
 - Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor** dem Ergebnis zu
   schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz liegt beim Consumer).
 
-**Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`):** Vor **jeder**
-Handoff-/Index-Mutation prüft der Sync den Index, das Ledger und beide `<datei>.torn`-Sidecars statisch auf
-Symlink-/Hardlink-Aliase. Ein Alias ist eine Dateisystem-Fehlkonfiguration, kein transienter Fehler:
-`write_state` bleibt `none` bzw. `state` (nur die Coverage-Schranke wurde vorher geschrieben), Handoff und Index
-bleiben unangetastet. Recovery ist ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en),
-keine automatische Löschung; ein bloßer Rerun ohne Korrektur scheitert identisch. Direktes
-`record_synthesized` prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`.
-Derselbe statische Check läuft im Append-Pfad; er ist keine Zusage gegen einen konkurrierenden Same-User-Mutator
-(Issue #91).
+**Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`):** In **allen**
+Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den Index, das
+Ledger und beide `<datei>.torn`-Sidecars statisch auf Symlink-/Hardlink-Aliase, **bevor** Index-/State-Inhalte
+genutzt, die Mailbox gelesen oder Handoff/Index/Coverage geschrieben wird. Ein Alias ist eine
+Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Preflight bleibt `write_state`
+`none`; ein erst später (nur durch Race) erkannter Alias kann `state` melden. Handoff und Index bleiben
+unangetastet. Fehler-Details heißen `alias_file`, `alias_kind`, `alias_label`; `handoff.file` bleibt der
+Handoff-Pfad. Recovery ist ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en), keine
+automatische Löschung; ein bloßer Rerun ohne Korrektur scheitert identisch. Direktes `record_synthesized`
+prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Der Check ist keine
+Zusage gegen einen konkurrierenden Same-User-Mutator (Issue #91).
 
 ### Absturzfenster (`sync-sent`)
 

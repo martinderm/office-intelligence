@@ -138,6 +138,38 @@ class BuildArgsTests(unittest.TestCase):
         self.assertIn("OTHER-ACC", joined)
 
 
+class SummaryAliasDetailsTests(unittest.TestCase):
+    def test_summary_keeps_handoff_file_when_alias_details_are_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            envelope_path = root / "sync-sent-envelope.json"
+            progress_path = root / "sync-sent-progress.log"
+            envelope_path.write_text(json.dumps({
+                "success": False,
+                "state": "Failed",
+                "message": "static alias",
+                "data": {
+                    "reason_code": "sent_index_alias_invalid",
+                    "handoff": {
+                        "state": "pending",
+                        "file": str(root / "data" / "mail-desk" / "new-sent-items.json"),
+                        "alias_file": "sent-index.jsonl",
+                        "alias_kind": "hardlink",
+                    },
+                },
+            }), encoding="utf-8")
+            progress_path.write_text("", encoding="utf-8")
+            summary = batch_cli._summary(
+                _base_args(mode="sync-sent"), envelope_path, progress_path,
+                subprocess.CompletedProcess(["runner"], 1),
+            )
+        self.assertEqual(
+            str(root / "data" / "mail-desk" / "new-sent-items.json"),
+            summary["handoff"]["file"],
+        )
+        self.assertNotIn("alias_file", summary["handoff"])
+
+
 class ReconcileApplyWrapperTests(unittest.TestCase):
     """Issue #65: ``reconcile --apply [--approved-by NAME]`` opt-in threading."""
 

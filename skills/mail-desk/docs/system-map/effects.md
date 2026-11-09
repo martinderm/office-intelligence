@@ -275,9 +275,10 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
   Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische
   Symlink-/Hardlink-Aliase von Index, Ledger oder deren `<datei>.torn`-Sidecars sind
-  `sent_index_alias_invalid`/`ledger_alias_invalid`, werden **vor** Handoff-/Index-Mutationen geprüft und
-  sind keine transienten Fehler: `write_state` bleibt `none`/`state`, Handoff/Index unangetastet, nur
-  manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur scheitert gleich. Mehr als 200 neue Items
+  `sent_index_alias_invalid`/`ledger_alias_invalid`, werden in allen Einstiegen **vor** Index-/State-Nutzung,
+  Mailbox-Read und Handoff-/Index-Mutationen geprüft und sind keine transienten Fehler: `write_state` bleibt
+  `none`/`state`, Handoff/Index unangetastet (`handoff.file` bleibt der Handoff-Pfad, `alias_file` separat),
+  nur manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur scheitert gleich. Mehr als 200 neue Items
   werden in 200er-Batches committet (älteste zuerst, Rest nach Konsum, `truncated`). Jede andere Störung wird
   `sync_failed`. `write_state` unterscheidet: `none` (kein Write), `state` (nur `sent-sync-state.json`/
   Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher

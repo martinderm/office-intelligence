@@ -208,6 +208,19 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   CLI-Operations und Batch-Runner-Vertrag synchronisiert; Tests decken Index- und Ledger-Aliase als Hauptdatei
   und Sidecar ab (Hardlink immer, Symlink wo verfügbar).
 
+#### Fixed (zwölfte Review-/Audit-Runde)
+
+- Der Alias-Preflight läuft jetzt in **allen** Einstiegen (Default, `dates`, Report, Singular/Plural und direkter
+  Append-API) **vor** Index-/State-Nutzung, Mailbox-Read und jedem Coverage-/Handoff-/Index-Write. Damit kann
+  der Report-Pfad bei leerer/dedupten Kandidatenliste keine Coverage mehr fortschreiben, bevor der Alias
+  erkannt wird; Index, externes Ziel, State und Handoff bleiben bytegleich, der Collector wird nicht gerufen.
+- Alias-Fehler-Details heißen `alias_file`/`alias_kind`/`alias_label`; sie überschreiben nicht mehr
+  `handoff.file`. Envelope- und Summary-Tests prüfen Index-/Ledger-/Sidecar-Aliase bei `handoff.state`
+  `pending` und `none`, inklusive unverändertem Handoff-Pfad.
+- Der Fehlertext behauptet nur noch, dass diese Operation keine Mailbox-, Index-/Ledger-, State-, Handoff- oder
+  Append-Ziel-Inhalte gelesen/geschrieben hat (bereits erfolgte Konfig-/Lease-Reads bleiben außen vor).
+  Die akzeptierte Same-User-Race-Grenze (#91) wird weiterhin nicht als gelöst dargestellt.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

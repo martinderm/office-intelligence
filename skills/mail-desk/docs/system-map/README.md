@@ -2359,7 +2359,8 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
   `effective_coverage_start`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `handoff_deferred`, `ledger_invalid`,
   `sent_index_alias_invalid`, `ledger_alias_invalid` (statische Index-/Ledger-/Sidecar-Aliase, Preflight vor
-  Handoff/Index), `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`,
+  Index-/State-Nutzung, Mailbox-Read und Handoff/Index), `sent_window_truncated`, `sync_invalid_since`,
+  `sync_invalid_max_pages`, `sync_invalid_date`,
   `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
@@ -2426,8 +2427,9 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   `sent_index_alias_invalid`, `ledger_alias_invalid`, `handoff_deferred`, `sent_window_truncated`,
   `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`, `sent_initial_state_invalid`,
   `sync_no_progress`, `sync_window_failed`, `sync_failed`). Statische Aliase von Index/Ledger und
-  `<datei>.torn`-Sidecars werden vor jedem Handoff-/Index-Write geprüft; `write_state` bleibt `none|state`, keine
-  automatische Löschung, ein Rerun ohne manuelle Reparatur scheitert identisch.
+  `<datei>.torn`-Sidecars werden in allen Einstiegen vor Index-/State-Nutzung, Mailbox-Read und jedem
+  Handoff-/Index-Write geprüft; `write_state` bleibt `none|state`, keine automatische Löschung, ein Rerun ohne
+  manuelle Reparatur scheitert identisch; `handoff.file` bleibt der Handoff-Pfad (`alias_file` separat).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,

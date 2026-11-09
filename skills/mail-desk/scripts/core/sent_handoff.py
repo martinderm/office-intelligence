@@ -302,15 +302,15 @@ def _reject_file_alias(path: Path, *, reason_code: str, label: str) -> None:
         return
     raise SentHandoffError(
         reason_code,
-        f"Static {alias} alias detected for '{path.name}' ({label}); nothing was written or "
-        "read through it. This is a filesystem misconfiguration, not a transient failure: "
-        "repair or quarantine the aliased file manually; a rerun without fixing it fails the "
-        "same way. No autonomous deletion.",
+        f"Static {alias} alias detected for '{path.name}' ({label}); no mailbox, sent-index/ledger "
+        "content, coverage state, handoff or append target was read or written by this operation. "
+        "This is a filesystem misconfiguration, not a transient failure: repair or quarantine the "
+        "aliased file manually; a rerun without fixing it fails the same way. No autonomous deletion.",
         {
             "reason": f"static_{alias}_alias",
-            "file": path.name,
-            "alias": alias,
-            "label": label,
+            "alias_file": path.name,
+            "alias_kind": alias,
+            "alias_label": label,
         },
     )
 
