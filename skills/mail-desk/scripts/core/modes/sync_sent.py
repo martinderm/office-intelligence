@@ -17,7 +17,7 @@ from ..sent_handoff import (
     SentSyncPartialFailure,
     peek_handoff_state,
 )
-from ..sent_indexer import sync_sent_items
+from ..sent_indexer import SENT_SYNC_MAX_PAGES, sync_sent_items
 
 #: Honesty of the ``ok: false`` envelope about write progress.  ``none``: the run
 #: refused or failed before any handoff/index write; ``partial``: the commit path
@@ -61,6 +61,12 @@ def _success_envelope(sync_result: Mapping[str, Any], folder: str, dd: Path) -> 
     truncated_days = sync_result.get("truncated_days")
     if truncated_days:
         envelope["truncated_days"] = list(truncated_days)
+    # Coverage result (count is a day limit, not an item limit).
+    envelope["truncated"] = bool(sync_result.get("truncated", False))
+    for key in ("coverage_start", "coverage_end", "covered_days", "total_days",
+                "coverage_complete", "next_start"):
+        if key in sync_result:
+            envelope[key] = sync_result[key]
     follow_up_hint = sync_result.get("follow_up_hint")
     if follow_up_hint:
         envelope["follow_up_hint"] = follow_up_hint
@@ -178,6 +184,25 @@ def run_sync_sent_mode(
             details={"error_type": type(error).__name__, "invalid_field": "count"},
         )
 
+    since = config.get("since")
+    if since is not None and not isinstance(since, str):
+        return failure_envelope(
+            dd, folder, "Sent sync refused: configuration field 'since' must be an ISO date (YYYY-MM-DD).",
+            "sync_invalid_since", details={"invalid_field": "since"},
+        )
+    raw_max_pages = config.get("max_pages", SENT_SYNC_MAX_PAGES)
+    try:
+        if isinstance(raw_max_pages, bool):
+            raise ValueError("max_pages must be a positive integer")
+        max_pages = int(raw_max_pages)
+        if max_pages < 1:
+            raise ValueError("max_pages must be a positive integer")
+    except (TypeError, ValueError) as error:
+        return failure_envelope(
+            dd, folder, f"Sent sync refused: configuration field 'max_pages' is invalid ({error}).",
+            "sync_invalid_max_pages", details={"invalid_field": "max_pages"},
+        )
+
     try:
         sync_result = sync_items(
             count=count,
@@ -185,6 +210,8 @@ def run_sync_sent_mode(
             account=account,
             data_dir=dd,
             workspace_root=workspace_root,
+            since=since,
+            max_pages=max_pages,
         )
     except SentHandoffError as error:
         return failure_envelope(

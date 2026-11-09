@@ -58,18 +58,26 @@ class _Mailbox:
     def __init__(self, *details: dict) -> None:
         self.details = {str(100 + i): d for i, d in enumerate(details, start=1)}
         self.fail_dates: set[str] = set()
+        self.fail_pages: dict[str, set[int]] = {}
+        self.repeat_pages = False
         self.calls = 0
 
     def run(self, args, account=None, timeout=30, max_retries=5):
         self.calls += 1
         date = next(a[len("date "):] for a in args if a.startswith("date "))
-        if date in self.fail_dates:
+        page = int(args[args.index("--page") + 1]) if "--page" in args else 1
+        size = int(args[args.index("-s") + 1])
+        if date in self.fail_dates or page in self.fail_pages.get(date, set()):
             raise RuntimeError("himalaya timeout")
         # A detail may carry ``_day`` to live on another day than DAY.
-        return json.dumps([
+        items = [
             {"id": eid, "subject": d["subject"]}
             for eid, d in self.details.items() if d.get("_day", DAY) == date
-        ])
+        ]
+        start = (page - 1) * size
+        if self.repeat_pages:
+            start = 0  # unstable adapter: every page repeats page 1
+        return json.dumps(items[start:start + size])
 
     def read(self, eid, *args, **kwargs):
         detail = self.details[str(eid)]
@@ -537,48 +545,86 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual(["m1@example.test"], [i["norm_message_id"] for i in retry["new_items"]])
         self.assertEqual(["m1@example.test"], self.index_ids())
 
-    def test_count_that_would_skip_days_is_refused_before_reading(self) -> None:
+    def test_item_budget_stops_at_a_day_boundary_and_names_recovery(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
-        mailbox = _Mailbox(_details(1))
+        mailbox = _Mailbox(
+            _details(1, _day="2026-09-22"),
+            _details(2, _day="2026-09-23"),
+            _details(3, _day="2026-09-24"),
+        )
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
-            with self.assertRaises(SentHandoffError) as caught:
-                sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
-        self.assertEqual("sent_count_gap", caught.exception.reason_code)
-        self.assertEqual((1, 4), (
-            caught.exception.details["requested_count"], caught.exception.details["gap_days"],
-        ))
-        self.assertEqual(0, mailbox.calls)
-        self.assertEqual(["seed@example.test"], self.index_ids())
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+            result = sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
+            self.assertTrue(result["truncated"])
+            self.assertEqual(("2026-09-22", "2026-09-23"), (
+                result["coverage_end"], result["next_start"],
+            ))
+            self.assertIn("sync_sent_items_by_dates(dates=['2026-09-23'], include_next_day=False)",
+                          result["follow_up_hint"])
+            self.assertEqual(["seed@example.test", "m1@example.test"], self.index_ids())
+            self.assertEqual(["m1@example.test"], self.handoff_ids())
 
-    def test_empty_index_count_below_the_backfill_is_refused(self) -> None:
-        mailbox = _Mailbox(_details(1))
+            # The named recovery call actually covers the blocked day after consuming.
+            self.consume("m1@example.test")
+            sent_indexer.sync_sent_items_by_dates(
+                ["2026-09-23"], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(["seed@example.test", "m1@example.test", "m2@example.test"], self.index_ids())
+        self.assertEqual(["m2@example.test"], self.handoff_ids())
+
+    def test_item_budget_smaller_than_one_day_blocks_that_day_with_recovery(self) -> None:
+        seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day="2026-09-22"), _details(2, _day="2026-09-22"))
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
-            with self.assertRaises(SentHandoffError) as caught:
-                sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
-        self.assertEqual("sent_count_gap", caught.exception.reason_code)
-        self.assertEqual(0, mailbox.calls)
-        self.assertEqual([], self.index_ids())
+            result = sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
+            self.assertTrue(result["truncated"])
+            self.assertEqual(("2026-09-21", "2026-09-22"), (result["coverage_end"], result["next_start"]))
+            self.assertEqual(0, result["new_count"])
+            self.assertEqual(["seed@example.test"], self.index_ids())
+            self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
-    def test_watermark_gap_beyond_the_window_is_refused_before_reading(self) -> None:
+            sent_indexer.sync_sent_items_by_dates(
+                ["2026-09-22"], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(2, len(self.index_ids()) - 1)
+
+    def test_empty_days_do_not_consume_the_item_budget(self) -> None:
+        seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day="2026-09-24"))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            result = sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
+        self.assertFalse(result["truncated"])
+        self.assertTrue(result["coverage_complete"])
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual(["seed@example.test", "m1@example.test"], self.index_ids())
+
+    def test_old_watermark_is_allowed_and_covers_every_day(self) -> None:
+        # 61 days old: the guard checks coverage, not age.  Empty days count and the
+        # run completes instead of blocking permanently.
         seed = {"schema_version": 1, "at": "2026-07-25", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
         (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
-        mailbox = _Mailbox(_details(1))
+        mailbox = _Mailbox()  # every day is empty
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
-            with self.assertRaises(SentHandoffError) as caught:
-                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+            result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
 
-        self.assertEqual("sent_window_gap", caught.exception.reason_code)
-        self.assertGreater(caught.exception.details["watermark_gap_days"], sent_indexer.MAX_SYNC_WINDOW_DAYS)
-        self.assertEqual(0, mailbox.calls)  # refused before reading any window
-        self.assertEqual(["seed@example.test"], self.index_ids())
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+        self.assertEqual(0, result["new_count"])
+        self.assertTrue(result["coverage_complete"])
+        self.assertFalse(result["truncated"])
+        self.assertEqual(("2026-07-25", "2026-09-24"), (
+            result["coverage_start"], result["coverage_end"],
+        ))
+        self.assertEqual(62, result["covered_days"])
+        self.assertEqual(62, mailbox.calls)  # one page per covered day, all empty
 
     def test_overflow_is_refused_even_with_a_newer_index_watermark(self) -> None:
         # The refusal never guesses reachability: the newer watermark is irrelevant.
@@ -629,40 +675,82 @@ class MultiDateAndOverflowTests(_Base):
 
 
 class WindowTruncationTests(_Base):
-    def test_full_envelope_page_is_refused_before_any_write(self) -> None:
-        mailbox = _Mailbox(*(_details(n) for n in range(1, 101)))  # exactly one full page
+    def test_exactly_full_page_with_empty_next_page_is_complete(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 101)))  # 100 mails
         run, read = mailbox.patches()
-        with run, read, self.assertRaises(SentHandoffError) as caught:
-            sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+        with run, read:
+            added = sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(100, added)
+        self.assertEqual(100, len(self.index_ids()))
+        self.assertEqual(2, mailbox.calls)  # page 1 full, page 2 empty
 
-        self.assertEqual("sent_window_truncated", caught.exception.reason_code)
-        self.assertEqual((DAY, 100, 100), (
-            caught.exception.details["date"],
-            caught.exception.details["page_size"],
-            caught.exception.details["envelopes_examined"],
-        ))
-        self.assertNotIn("state", caught.exception.details)  # never override the real peek state
-        self.assertEqual(1, mailbox.calls)  # no pagination loop, one fail-closed page
-        self.assertEqual([], self.index_ids())
-        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
-
-    def test_more_than_one_page_is_refused_instead_of_silently_returning_100(self) -> None:
+    def test_more_than_one_page_is_fully_paginated(self) -> None:
         mailbox = _Mailbox(*(_details(n) for n in range(1, 102)))  # 101 mails
         run, read = mailbox.patches()
-        with run, read, self.assertRaises(SentHandoffError) as caught:
-            sent_indexer.sync_sent_items_by_dates([DAY], account="ACC", data_dir=self.dd, include_next_day=False)
+        with run, read:
+            added = sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(101, added)
+        self.assertEqual(101, len(self.index_ids()))
+        self.assertEqual(2, mailbox.calls)  # 100 + 1
 
+    def test_multiple_pages_are_fully_paginated(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 151)))  # 150 mails
+        run, read = mailbox.patches()
+        with run, read:
+            added = sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual(150, added)
+        self.assertEqual(150, len(self.index_ids()))
+        self.assertEqual(2, mailbox.calls)  # 100 + 50
+
+    def test_page_limit_without_proof_of_completeness_is_fail_closed(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 101)))  # 100 mails
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False, max_pages=1,
+            )
         self.assertEqual("sent_window_truncated", caught.exception.reason_code)
-        self.assertEqual(101, caught.exception.details["envelopes_examined"])
+        self.assertIn("max_pages=2", str(caught.exception))
         self.assertEqual(1, mailbox.calls)
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
-    def test_just_below_the_page_limit_still_syncs(self) -> None:
-        mailbox = _Mailbox(*(_details(n) for n in range(1, 100)))  # 99 mails
+    def test_error_on_a_later_page_is_fail_closed_before_any_write(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 151)))  # 150 mails
+        mailbox.fail_pages = {DAY: {2}}
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(RuntimeError) as caught:
+            sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertIn("sync_sent_items_by_dates(dates=['2026-09-24']", str(caught.exception))
+        self.assertEqual([], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+    def test_repeated_page_ids_are_deduplicated_and_fail_closed(self) -> None:
+        mailbox = _Mailbox(*(_details(n) for n in range(1, 101)))
+        mailbox.repeat_pages = True
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.sync_sent_items_by_dates(
+                [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+            )
+        self.assertEqual("sent_window_truncated", caught.exception.reason_code)
+        self.assertEqual(100, caught.exception.details["envelopes_examined"])  # deduped
+        self.assertEqual([], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+    def test_empty_first_page_is_complete_with_zero(self) -> None:
+        mailbox = _Mailbox()
         result = self.sync(mailbox)
-        self.assertEqual(99, result["new_count"])
-        self.assertEqual(99, len(self.index_ids()))
+        self.assertEqual(0, result["new_count"])
+        self.assertFalse(result["truncated"])
 
 
 class PendingWriteContractTests(_Base):
@@ -1144,25 +1232,29 @@ class ModeEnvelopeTests(_Base):
 
     def test_truncated_window_reports_the_real_pending_handoff_state(self) -> None:
         self.run_mode(_Mailbox(_details(1), _details(2)))  # leaves two unconsumed handoff items
-        full = _Mailbox(*(_details(n, _day="2026-09-25") for n in range(1, 101)))
-        envelope = self.run_mode(full)
+        full = _Mailbox(*(_details(n) for n in range(1, 101)))  # full page on the watermark day
+        run, read = full.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime()):
+            envelope = sync_sent_mode.run_sync_sent_mode(
+                {"count": 150, "max_pages": 1}, account="ACC", data_dir=self.dd,
+            )
 
         self.assertFalse(envelope["ok"])
         self.assertEqual("sent_window_truncated", envelope["reason_code"])
         self.assertEqual("pending", envelope["handoff"]["state"])
         self.assertEqual(2, envelope["handoff"]["pending_count"])
-        self.assertEqual("2026-09-25", envelope["handoff"]["date"])
+        self.assertEqual(DAY, envelope["handoff"]["date"])
         self.assertEqual("none", envelope["write_state"])
         self.assertEqual(2, len(self.handoff_ids()))
 
     def test_failed_date_window_is_fail_closed_and_reports_failed_dates(self) -> None:
         mailbox = _Mailbox(_details(1))
-        mailbox.fail_dates = {"2026-09-25"}
+        mailbox.fail_dates = {DAY}
         envelope = self.run_mode(mailbox)
         self.assertFalse(envelope["ok"])
         self.assertEqual("sync_window_failed", envelope["reason_code"])
         self.assertEqual("none", envelope["write_state"])
-        self.assertEqual(["2026-09-25"], envelope["failed_dates"])
+        self.assertEqual([DAY], envelope["failed_dates"])
         self.assertEqual((0, []), (envelope["new_count"], envelope["new_items"]))
         self.assertEqual("none", envelope["handoff"]["state"])
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())

@@ -131,11 +131,9 @@ class WatermarkWindowTests(unittest.TestCase):
                 watermark_day + timedelta(days=i)
                 for i in range((frozen_today - watermark_day).days + 1)
             ]
-            expected = {
-                (day + timedelta(days=offset)).strftime("%Y-%m-%d")
-                for day in base_days
-                for offset in (0, 1)
-            }
+            # No-dates coverage freezes the run date and does NOT expand into the
+            # next day; the window is exactly watermark..frozen today (inclusive).
+            expected = {day.strftime("%Y-%m-%d") for day in base_days}
             self.assertEqual(
                 expected,
                 set(queried_dates),

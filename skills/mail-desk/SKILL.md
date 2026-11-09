@@ -187,11 +187,11 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden vollständig vor jedem Write verweigert
 (`handoff_overflow`, kein Zurückstellen); Recovery eines Tages nur über
 `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest;
-kein `--sync-sent N`/`count`, das bei heute endet). Eine volle 100-Envelope-Seite verweigert
-(`sent_window_truncated`, keine Pagination, kein sicherer Skip); ein scheiterndes Datumsfenster bricht den
-ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`), eine Wasserzeichen-Lücke > 60 Tage
-verweigert vor jedem Lesen (`sent_window_gap`), ebenso ein ältere Tage abschneidendes `count`
-(`sent_count_gap`); ein leerer Index startet mit dem vollen 60-Tage-Fenster (Retry erfasst Tag D). In
+kein `--sync-sent N`/`count`, das bei heute endet). Seiten werden bis zur kurzen/leeren Seite paginiert;
+erst nach `max_pages` volle Seiten verweigern (`sent_window_truncated`, kein Watermark-Advance). Das
+Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen); `count` ist ein
+Item-Budget, bei Erreichen `truncated`/`coverage_*` plus Recovery-Aufruf; der Erstlauf nutzt eingefrorenes
+Laufdatum und 60-Tage-Backfill bzw. `since`. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,

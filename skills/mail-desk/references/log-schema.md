@@ -306,8 +306,9 @@ wird übergeben, zurückgestellt oder indexiert. Details: `candidate_count`, `ma
 `candidates_per_day` (nicht parsebare Daten als `unparsed`). **Recovery ausschließlich über die Python-API**:
 einen einzelnen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` — `sync_sent_items(dates=[D])`
 liest D+1 mit —, älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery
-(Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI). Same-day > 200 und eine volle
-100-Envelope-Seite (`sent_window_truncated`, keine Pagination) sind harte Grenzen. Nach der Verweigerung wurde
+(Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI). Same-day > 200 bleibt
+`handoff_overflow`; volle Seiten werden paginiert, nur ein nach `max_pages` weiterhin voller Tag ergibt
+`sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery). Nach der Verweigerung wurde
 nichts geschrieben; ein Default-/CLI-Lauf holt die alten Tage nicht nach, die Items bleiben außerhalb von Index
 und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Python-API nutzen).
 
@@ -315,11 +316,12 @@ und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Pytho
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
 Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
 `failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Eine
-Wasserzeichen-Lücke über `MAX_SYNC_WINDOW_DAYS` (60) verweigert vor jedem Lesen (`sent_window_gap`), weil kein
-vollständiges Fenster garantiert ist; ebenso ein `count`, der ältere Tage abschneiden würde (`sent_count_gap`).
-Ein leerer Index startet mit dem vollen 60-Tage-Fenster, damit ein am ersten Tag gescheiterter Tag am Folgetag
-noch erfasst wird. Eine volle 100-Envelope-Seite blockiert den ganzen Lauf
-(`sent_window_truncated`, keine Pagination, kein sicherer Skip). `write_state` ist
+Wasserzeichen-Lücke über 60 Tage blockiert nicht: Coverage startet am Watermark-Tag (inklusive) und leere
+Tage zählen; der Erstlauf nutzt das eingefrorene Laufdatum und ein 60-Tage-Backfill bzw. `since`. `count` ist
+ein Item-Budget (kein Tageslimit); bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und Recovery-Aufruf,
+ohne über ungedeckte Tage vorzurücken. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per
+Envelope-ID); nach `max_pages` weiterhin volle Seite ⇒ `sent_window_truncated`, kein Watermark-Advance.
+`write_state` ist
 dann `none` (Ablehnung/Fehler vor jedem Write) oder `unknown` (Schreibversuch schlug fehl — auch ein
 Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
 unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent per Message-ID).

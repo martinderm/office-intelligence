@@ -42,6 +42,10 @@ MAX_SYNC_WINDOW_DAYS = 60
 #: Himalaya page size used for the per-date Sent-Items envelope query.
 SENT_SYNC_PAGE_SIZE = 100
 
+#: Maximum pages fetched per date.  A still-full last page is fail-closed (no
+#: watermark advance); the error names a higher-limit Python-API recovery call.
+SENT_SYNC_MAX_PAGES = 50
+
 
 # Re-exported canonical MD-ID1 identity defaults.  These are the same objects the
 # reply-heuristics owner defines -- imported, never duplicated -- so the sent-index
@@ -304,6 +308,8 @@ def _sync_sent_items_for_date(
     folder: str = "Sent Items",
     account: str | None = None,
     data_dir: Path | None = None,
+    *,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> dict[str, Any]:
     """Fetch one Sent-Items date, hand off and index its new items.
 
@@ -320,7 +326,8 @@ def _sync_sent_items_for_date(
     dd = data_dir or resolve_data_dir()
     known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
     candidates, stats = _collect_date_candidates(
-        date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+        date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids,
+        max_pages=max_pages,
     )
     stats = {**stats, "new_items": [], "handoff": None, "added": 0}
     if candidates:
@@ -336,12 +343,16 @@ def _collect_date_candidates(
     account: str | None,
     known_mids: set[str],
     known_eids: set[str],
+    max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Read one Sent-Items date (no writes) and return the not-yet-indexed candidates.
 
-    ``known_mids``/``known_eids`` are updated in place so overlapping dates of one
-    run never yield the same message twice.  Returns ``(candidates, stats)`` with
-    ``stats = {"envelopes_examined", "truncated"}``.
+    Envelopes are paginated (adapter convention ``--page``/``--page-size``) until a
+    short or empty page proves completeness; envelope ids are de-duplicated across
+    pages.  ``known_mids``/``known_eids`` are updated in place so overlapping dates
+    of one run never yield the same message twice.  A full page limit without proof
+    of completeness is fail-closed (``sent_window_truncated``) before any write and
+    names a concrete Python-API recovery call.
     """
     if account is None or not str(account).strip():
         raise ValueError(
@@ -349,44 +360,77 @@ def _collect_date_candidates(
             "a verified account. Bind an account before syncing Sent Items."
         )
 
-    # Date query via Himalaya (fast single-day filter); transport/parse errors
-    # are fail-closed and never collapse into a silent "0 new mails".
+    # Date query via Himalaya (fast single-day filter).  Pages are fetched until a
+    # short/empty page: this is the adapter convention `envelope list --page N`
+    # with `--page-size`.  Any page error is fail-closed, never a silent partial.
+    pages = 0
+    envs_by_id: dict[str, dict[str, Any]] = {}
     try:
-        out = run_himalaya(
-            ["-o", "json", "envelope", "list", "-f", folder, "-s", str(SENT_SYNC_PAGE_SIZE), f"date {date_str}"],
-            account=account,
-            timeout=30,
-        )
-        if "[" in out:
-            out = out[out.find("["):]
-        envs = json.loads(out)
+        while pages < max_pages:
+            pages += 1
+            out = run_himalaya(
+                ["-o", "json", "envelope", "list", "-f", folder,
+                 "-s", str(SENT_SYNC_PAGE_SIZE), "--page", str(pages), f"date {date_str}"],
+                account=account,
+                timeout=30,
+            )
+            if "[" in out:
+                out = out[out.find("["):]
+            page_envs = json.loads(out)
+            if not isinstance(page_envs, list):
+                raise RuntimeError("Himalaya returned a non-list envelope payload.")
+            new_envs = 0
+            for env in page_envs:
+                eid = str(env.get("id"))
+                if eid not in envs_by_id:
+                    envs_by_id[eid] = env
+                    new_envs += 1
+            if len(page_envs) < SENT_SYNC_PAGE_SIZE:
+                break
+            if new_envs == 0:  # full page without progress: fail closed, never silent
+                raise SentHandoffError(
+                    "sent_window_truncated",
+                    f"Sent sync for {date_str}: pagination made no progress on page {pages} "
+                    f"({len(page_envs)} repeated envelope ids); completeness is unproven. Nothing "
+                    "was handed off or indexed and the watermark did not advance. Recovery: inspect "
+                    f"the adapter paging for this day and rerun "
+                    f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False).",
+                    {"date": date_str, "page_size": SENT_SYNC_PAGE_SIZE, "page": pages,
+                     "envelopes_examined": len(envs_by_id)},
+                )
+        else:
+            # Every allowed page was full and no short/empty page proved the end.
+            raise SentHandoffError(
+                "sent_window_truncated",
+                f"Sent sync for {date_str} still returned full envelope pages after {max_pages} "
+                f"page(s) ({SENT_SYNC_PAGE_SIZE} each); completeness is unproven. Nothing was handed "
+                "off or indexed and the watermark did not advance. Recovery: rerun this day with a "
+                f"higher page limit via the Python API "
+                f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False, "
+                f"max_pages={max_pages * 2}).",
+                {
+                    "date": date_str,
+                    "page_size": SENT_SYNC_PAGE_SIZE,
+                    "pages": max_pages,
+                    "envelopes_examined": len(envs_by_id),
+                    "recovery": (
+                        f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False, "
+                        f"max_pages={max_pages * 2})"
+                    ),
+                },
+            )
+    except SentHandoffError:
+        raise
     except Exception as error:
         raise RuntimeError(
-            f"Sent sync failed for {date_str}: {type(error).__name__}: {error}"
+            f"Sent sync failed for {date_str} (page {pages}): {type(error).__name__}: {error}. "
+            "Nothing was handed off or indexed. Recovery: "
+            f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False, max_pages={max_pages})."
         ) from error
 
-    if not isinstance(envs, list):
-        raise RuntimeError(
-            f"Sent sync failed for {date_str}: Himalaya returned a non-list envelope payload."
-        )
-
+    envs = list(envs_by_id.values())
     envelopes_examined = len(envs)
-    # A full page may hide further envelopes.  We do not paginate: refuse the run
-    # before any write instead of silently returning the first 100 of >100 mails.
-    if envelopes_examined >= SENT_SYNC_PAGE_SIZE:
-        raise SentHandoffError(
-            "sent_window_truncated",
-            f"Sent sync for {date_str} returned a full envelope page ({envelopes_examined} >= "
-            f"{SENT_SYNC_PAGE_SIZE}); more envelopes may exist. Nothing was handed off or indexed. "
-            "This sync path does not paginate; a day with a full page is a documented window limit.",
-            {
-                "date": date_str,
-                "page_size": SENT_SYNC_PAGE_SIZE,
-                "envelopes_examined": envelopes_examined,
-            },
-        )
-    truncated = False
-    stats = {"envelopes_examined": envelopes_examined, "truncated": truncated}
+    stats = {"envelopes_examined": envelopes_examined, "pages": pages, "truncated": False}
     unhandled_envs = [e for e in envs if str(e.get("id")) not in known_eids]
     candidates: list[dict[str, Any]] = []
     now_iso = utc_now_iso()
@@ -493,6 +537,7 @@ def sync_sent_items_by_dates(
     account: str | None = None,
     data_dir: Path | None = None,
     include_next_day: bool = True,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> int:
     """Sync Sent Items for a list of ISO dates (e.g. ['2026-01-19', '2026-01-20']).
 
@@ -509,7 +554,8 @@ def sync_sent_items_by_dates(
         # own ID marks so no later window silently skips a mail.
         attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         date_candidates, _ = _collect_date_candidates(
-            d_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids
+            d_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids,
+            max_pages=max_pages,
         )
         known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
@@ -531,62 +577,52 @@ def _sent_index_watermark(data_dir: Path) -> datetime | None:
     return latest
 
 
-def _derive_sent_sync_window(count: int | None, data_dir: Path) -> tuple[list[str], str | None]:
-    """Derive the no-dates sync window from the sent-index watermark.
+def _derive_sent_sync_window(
+    count: int | None,
+    data_dir: Path,
+    *,
+    run_date: datetime,
+    since: str | None = None,
+) -> tuple[list[str], bool, str | None, dict[str, Any]]:
+    """Derive the no-dates coverage window from a frozen run date.
 
-    The window spans from the newest indexed sent date (watermark) through today
-    inclusive; an empty index yields today only.  It is capped at
-    ``MAX_SYNC_WINDOW_DAYS`` per run and bounded to the most recent ``count``
-    days when the gap exceeds ``count`` (today is always included).  When either
-    bound trims earlier gap days, the returned follow-up hint describes the
-    *final* end state: it names every bound that applied and counts the days
-    still unsynced from the final ``start``, so telemetry never overstates the
-    synced span (FR-26/MD-SE2).  ``start`` is resolved after both bounds before
-    the hint is built.
+    Coverage starts at the explicit ``since`` date, else the day after the newest
+    indexed Sent date, else a deterministic initial backfill of
+    ``MAX_SYNC_WINDOW_DAYS`` days ending at ``run_date``.  The watermark age never
+    blocks: older watermarks simply yield a longer day list.  ``count`` is an
+    **item** budget applied by the caller at day boundaries; this helper always
+    returns the full day window.
     """
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    watermark = _sent_index_watermark(data_dir)
-    if watermark is None:
-        # Empty index: backfill the full guaranteed window so a failed first day is
-        # still inside the window on the next day's retry instead of being skipped.
-        start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
+    if since:
+        try:
+            start = datetime.strptime(str(since)[:10], "%Y-%m-%d")
+        except (TypeError, ValueError) as error:
+            raise ValueError("since must be an ISO date (YYYY-MM-DD)") from error
     else:
-        start = datetime(watermark.year, watermark.month, watermark.day)
-    if start > today:
-        start = today
+        watermark = _sent_index_watermark(data_dir)
+        if watermark is None:
+            start = run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
+        else:
+            # The watermark day is re-read: new mails can arrive on an already
+            # partially indexed day, so coverage must start there (inclusive).
+            start = datetime(watermark.year, watermark.month, watermark.day)
 
-    original_start = start
-    gap_days = (today - start).days + 1
+    if start > run_date:
+        return [], False, None, {
+            "coverage_start": None, "coverage_end": None, "covered_days": 0,
+            "total_days": 0, "coverage_complete": True, "next_start": None,
+        }
 
-    cap_applied = gap_days > MAX_SYNC_WINDOW_DAYS
-    if cap_applied:
-        start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
-
-    count_applied = False
-    if count is not None and count > 0 and (today - start).days + 1 > count:
-        start = today - timedelta(days=count - 1)
-        count_applied = True
-
-    window_days = (today - start).days + 1
-    # Days between the watermark and the final start are the ones either bound
-    # left unsynced; compute them from the FINAL start, never the pre-bound one.
-    unsynced_days = (start - original_start).days
-
-    follow_up_hint: str | None = None
-    if unsynced_days > 0:
-        applied_bounds: list[str] = []
-        if cap_applied:
-            applied_bounds.append(f"MAX_SYNC_WINDOW_DAYS={MAX_SYNC_WINDOW_DAYS} cap")
-        if count_applied:
-            applied_bounds.append(f"count={count} bound")
-        follow_up_hint = (
-            f"Sent-index watermark gap of {gap_days} days; synced the most recent "
-            f"{window_days} day(s) ({' and '.join(applied_bounds)}). "
-            f"{unsynced_days} earlier day(s) remain unsynced (watermark gap)."
-        )
-
-    window = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(window_days)]
-    return window, follow_up_hint
+    total_days = (run_date - start).days + 1
+    window = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(total_days)]
+    return window, False, None, {
+        "coverage_start": start.strftime("%Y-%m-%d"),
+        "coverage_end": run_date.strftime("%Y-%m-%d"),
+        "covered_days": total_days,
+        "total_days": total_days,
+        "coverage_complete": True,
+        "next_start": None,
+    }
 
 
 def sync_sent_items(
@@ -596,88 +632,96 @@ def sync_sent_items(
     account: str | None = None,
     data_dir: Path | None = None,
     workspace_root: Path | None = None,
+    since: str | None = None,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
 ) -> dict[str, Any]:
-    """Sync Sent Items by explicit dates or by an index-watermark-derived window.
+    """Sync Sent Items by explicit dates or by a coverage window.
 
-    The no-dates path queries every day from the sent-index watermark through
-    today (capped at ``MAX_SYNC_WINDOW_DAYS``, optionally bounded to the most
-    recent ``count`` days) instead of a hardwired 7-day window.  An empty index
-    starts with the full 60-day window so a failed first day is retried on the
-    next day.  A watermark gap beyond ``MAX_SYNC_WINDOW_DAYS``
-    (``sent_window_gap``) or a ``count`` that would cut older days
-    (``sent_count_gap``) is refused before reading anything, because no complete
-    window can be guaranteed.
+    The no-dates path freezes the run date once, then covers days oldest-first:
+    from ``since`` (ISO date), else the day after the sent-index watermark, else a
+    deterministic initial backfill of ``MAX_SYNC_WINDOW_DAYS`` days ending at the
+    frozen run date.  The watermark age never blocks.  ``count`` is an **item
+    budget** applied at day boundaries: the run never reads past a day that would
+    exceed it and reports ``truncated`` with a concrete per-day recovery call.
+    Empty days never consume budget, so they cannot stall coverage.
 
-    All windows are read before the single commit.  If any window fails, the run
-    is fail-closed **before any write**: nothing is handed off or indexed and
-    ``SentSyncPartialFailure`` names the failing dates.  A day whose first
-    envelope page is full is refused as ``sent_window_truncated`` (no pagination,
-    no skip).  A successful run hands off *before* the sent-index grows (see
-    ``_commit_sent_candidates``); detection is relative to the previous index
-    state, so a repeated run yields no new items and no duplicate handoff.
+    Every date is paginated (``--page``/``--page-size``) until a short or empty
+    page proves completeness.  A still-full page limit is fail-closed
+    (``sent_window_truncated``) with a higher-limit recovery call and no watermark
+    advance.  All windows are read before the single commit; any window failure is
+    fail-closed **before any write** (``SentSyncPartialFailure``, nothing handed off
+    or indexed).  A successful run hands off before the sent-index grows.
 
     Returns ``{"date_windows_synced", "envelopes_examined",
-    "new_entries_indexed", "new_count", "new_items", "handoff",
-    "truncated_days", "follow_up_hint"}``.  ``truncated_days`` is reserved and
-    always empty because a truncated window aborts the run instead of being
-    reported as success.
+    "new_entries_indexed", "new_count", "new_items", "handoff", "truncated",
+    "coverage_start", "coverage_end", "covered_days", "total_days",
+    "coverage_complete", "next_start", "truncated_days", "follow_up_hint"}``.
+    ``truncated_days`` is reserved and always empty (pagination failures are
+    fail-closed, day-limit truncation is reported by ``truncated``).
     """
     dd = data_dir or resolve_data_dir()
+    run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     follow_up_hint: str | None = None
+    truncated = False
     if dates:
         window_dates = _dedupe_iso_dates(dates)
+        coverage: dict[str, Any] = {
+            "coverage_start": window_dates[0] if window_dates else None,
+            "coverage_end": window_dates[-1] if window_dates else None,
+            "covered_days": len(window_dates),
+            "total_days": len(window_dates),
+            "coverage_complete": True,
+            "next_start": None,
+        }
     else:
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        watermark = _sent_index_watermark(dd)
-        if watermark is None:
-            start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
-        else:
-            start = datetime(watermark.year, watermark.month, watermark.day)
-        if start > today:
-            start = today
-        gap_days = (today - start).days + 1
-        if watermark is not None and gap_days > MAX_SYNC_WINDOW_DAYS:
-            raise SentHandoffError(
-                "sent_window_gap",
-                f"Sent-index watermark gap of {gap_days} day(s) exceeds MAX_SYNC_WINDOW_DAYS "
-                f"({MAX_SYNC_WINDOW_DAYS}); a complete window cannot be guaranteed, so nothing "
-                "was read or written. Sync the missing days explicitly via "
-                "sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
-                "the handoff in between.",
-                {"watermark_gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
-            )
-        if count is not None and count > 0 and gap_days > count:
-            raise SentHandoffError(
-                "sent_count_gap",
-                f"count={count} would leave {gap_days - count} older day(s) unsynced and move the "
-                "watermark past them; nothing was read or written. Sync the missing days explicitly "
-                "via sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
-                "the handoff in between (count/--sync-sent is not a gap recovery).",
-                {"requested_count": count, "gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
-            )
-        window_dates, follow_up_hint = _derive_sent_sync_window(count, dd)
+        window_dates, truncated, follow_up_hint, coverage = _derive_sent_sync_window(
+            count, dd, run_date=run_date, since=since,
+        )
 
-    query_dates = _expand_sync_dates(window_dates, include_next_day=True)
+    query_dates = _expand_sync_dates(window_dates, include_next_day=bool(dates))
     envelopes_total = 0
     truncated_days: list[str] = []
     candidates: list[dict[str, Any]] = []
     failures: list[tuple[str, Exception]] = []
     known_mids, known_eids = _known_index_ids(dd)
+    accepted_dates: list[str] = []
+    budget = count if count is not None and count > 0 else None
     for date_str in query_dates:
         # Transactional per window: a failing date must not leak the IDs it already
         # marked as known into later windows (that would silently skip those mails).
         attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         try:
             date_candidates, date_stats = _collect_date_candidates(
-                date_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids
+                date_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids,
+                max_pages=max_pages,
             )
         except SentHandoffError:
             raise  # explicit fail-closed window refusal keeps its reason code
         except Exception as error:
             failures.append((date_str, error))
             continue
+        if budget is not None and len(candidates) + len(date_candidates) > budget:
+            # Item budget reached at a day boundary: never read past it, never
+            # advance coverage over it.  The blocked day keeps a concrete recovery.
+            truncated = True
+            blocked_later = len(query_dates) - len(accepted_dates)
+            follow_up_hint = (
+                f"Item budget count={count} reached before {date_str}; {blocked_later} later day(s) "
+                f"were not read. Watermark advances only over covered days "
+                f"({accepted_dates[-1] if accepted_dates else 'unchanged'}). Recovery: "
+                f"sync_sent_items_by_dates(dates=['{date_str}'], include_next_day=False) for the "
+                "blocked day, or rerun with a higher count."
+            )
+            coverage.update(
+                coverage_end=accepted_dates[-1] if accepted_dates else None,
+                covered_days=len(accepted_dates),
+                coverage_complete=False,
+                next_start=date_str,
+            )
+            break
         known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
+        accepted_dates.append(date_str)
         envelopes_total += int(date_stats.get("envelopes_examined", 0))
         if date_stats.get("truncated"):
             truncated_days.append(date_str)
@@ -687,18 +731,23 @@ def sync_sent_items(
         # the watermark past the failed older days and a default retry would never
         # see them again.  Nothing is handed off or indexed.
         failed_dates = ", ".join(date_str for date_str, _ in failures)
+        failed_list = ", ".join(f"'{date_str}'" for date_str, _ in failures)
         first_error = failures[0][1]
         raise SentSyncPartialFailure(
             f"Sent sync failed for {len(failures)} date(s): {failed_dates}. "
             f"First error: {type(first_error).__name__}: {first_error}. "
-            "Nothing was handed off or indexed (fail-closed); resolve the failing window(s) and rerun.",
+            "Nothing was handed off or indexed (fail-closed). Recovery: "
+            f"sync_sent_items_by_dates(dates=[{failed_list}], include_next_day=False) "
+            "with the failing day(s) fixed, oldest first.",
             {
-                "date_windows_synced": len(query_dates),
+                "date_windows_synced": len(accepted_dates) + len(failures),
                 "envelopes_examined": envelopes_total,
                 "new_entries_indexed": 0,
                 "new_count": 0,
                 "new_items": [],
                 "handoff": None,
+                "truncated": truncated,
+                **coverage,
                 "truncated_days": truncated_days,
                 "follow_up_hint": follow_up_hint,
             },
@@ -710,12 +759,14 @@ def sync_sent_items(
     handoff = committed["handoff"]
 
     result = {
-        "date_windows_synced": len(query_dates),
+        "date_windows_synced": len(accepted_dates),
         "envelopes_examined": envelopes_total,
         "new_entries_indexed": len(new_items),
         "new_count": len(new_items),
         "new_items": new_items,
         "handoff": handoff,
+        "truncated": truncated,
+        **coverage,
         "truncated_days": truncated_days,
         "follow_up_hint": follow_up_hint,
     }

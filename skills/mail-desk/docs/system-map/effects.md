@@ -278,14 +278,16 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `none` (kein Write) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer Publikation;
   Plattenstand unverifiziert; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
   `new_items`, `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler. Ein
-  scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`);
-  eine volle 100-Envelope-Seite ebenso (`sent_window_truncated`, keine Pagination, kein sicherer Skip), eine
-  Wasserzeichen-Lücke > 60 Tage vor jedem Lesen (`sent_window_gap`), ein ältere Tage abschneidendes `count`
-  ebenso (`sent_count_gap`); ein leerer Index startet mit dem vollen 60-Tage-Fenster (Retry erfasst Tag D).
+  scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`).
+  `count` ist ein Item-Budget (kein Tageslimit): bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und
+  konkretem Recovery-Aufruf, ohne über ungedeckte Tage vorzurücken. Das Wasserzeichen-Alter blockiert nie
+  (Coverage ab Watermark-Tag inklusive, leere Tage zählen; Erstlauf: eingefrorenes Laufdatum + 60-Tage-Backfill
+  bzw. `since`). Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per Envelope-ID); erst `max_pages`
+  volle Seiten ergeben `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery).
   Nichts wird still verworfen:
   ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen); Recovery eines Tages nur über
-  `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest),
-  nicht über `--sync-sent N`/`count`; same-day > 200 und eine volle Seite sind harte Grenzen. Gekürzte Felder
+  `sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` (nicht `sync_sent_items(dates=[D])`,
+  das D+1 liest), nicht über `--sync-sent N`/`count`. Gekürzte Felder
   stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
 * **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
   sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.

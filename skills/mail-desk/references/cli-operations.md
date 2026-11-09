@@ -118,17 +118,19 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Caller ausschließlich den Summary-Envelope übergibt.
 
    Modi: `draft`/`execute`/`reconcile`/`sync-sent`; kein beliebiger Runner-Passthrough.
-   `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150).
+   `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150). Bei `sync-sent` ist `count` ein
+   **Item-Budget** (kein Tageslimit); ein `since` (ISO-Datum) ist nur Manifest-/API-Feld, kein CLI-Flag.
    `sync-sent` delegiert ausschließlich an den bestehenden `--sync-sent`-Modus:
    Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
    `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
    Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
-   `ledger_invalid`/`handoff_overflow`/`sent_window_truncated`/`sent_window_gap`/`sync_window_failed`/`sync_failed`,
+   `ledger_invalid`/`handoff_overflow`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
    `write_state` `none`/`unknown` (`partial` reserviert):
    [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
    Ein `handoff_overflow` schreibt nichts; Recovery nur über die Python-API
-   `sync_sent_items(dates=[...])`, nicht über `--count`/`--sync-sent N` (keine Datums-CLI).
+   `sync_sent_items_by_dates(dates=['D'], include_next_day=False, max_pages=...)`, nicht über
+   `--count`/`--sync-sent N` (keine Datums-CLI).
    Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state` und `handoff` (nur Zähler);
    die Items stehen im persistierten Runner-Envelope und im Handoff. Bei `write_state: unknown`
    fehlt `new_count` (nicht verifiziert).

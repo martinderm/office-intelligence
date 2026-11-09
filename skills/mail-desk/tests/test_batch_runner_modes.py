@@ -263,6 +263,8 @@ class SyncSentModeTests(unittest.TestCase):
             account="primary",
             data_dir=data_dir,
             workspace_root=data_dir.parent.parent,
+            since=None,
+            max_pages=50,
         )
         self.assertEqual(
             {

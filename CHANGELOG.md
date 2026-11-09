@@ -20,7 +20,7 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
 - **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
   indexiert), `handoff_invalid`, `handoff_overflow` (Überhang > 200 wird vor jedem Write
-  verweigert), `sent_window_truncated`, `sent_window_gap`, `sent_count_gap`, `sync_window_failed`; Exit ≠ 0.
+  verweigert), `sent_window_truncated`, `sync_window_failed`; Exit ≠ 0.
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
@@ -55,10 +55,11 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - Datumsfenster arbeiten transaktional auf ID-Kopien; ein Lesefehler verwirft Kandidaten und ID-Marken, sodass
   eine später erneut gelistete Mail nicht still übersprungen wird. Ein scheiterndes Fenster bricht den ganzen
   Lauf vor jedem Write ab (`sync_window_failed`), damit das Wasserzeichen keine ältere Lücke überspringt.
-- Eine volle 100-Envelope-Seite wird fail-closed als `sent_window_truncated` verweigert (keine Pagination,
-  kein sicherer Skip, gesamter Lauf blockiert); eine Wasserzeichen-Lücke > 60 Tage als `sent_window_gap` vor
-  jedem Lesen, ein ältere Tage abschneidendes `count` als `sent_count_gap`; ein leerer Index startet mit dem
-  vollen 60-Tage-Fenster, damit ein am ersten Tag gescheiterter Tag am Folgetag noch erfasst wird.
+- Envelope-Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per ID); erst nach `max_pages` volle
+  Seiten ergeben `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery). Das
+  Wasserzeichen-Alter blockiert nie: Coverage ab Watermark-Tag (inklusive), leere Tage zählen; Erstlauf mit
+  eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count` ist ein Item-Budget; bei Erreichen
+  `truncated`/`coverage_*` plus Recovery-Aufruf.
 - Handoff-/Ledger-`schema_version` und `count` müssen exakt `int` sein (nicht `true`/`1.0`); tief
   verschachteltes JSON (`RecursionError`) ergibt `handoff_invalid`/`ledger_invalid` statt eines Absturzes.
 - Untrusted Ledger-/Handoff-Typen (`role`, `truncated_fields`, `match_type`) werden vor Mengenoperationen

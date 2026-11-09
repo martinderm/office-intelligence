@@ -661,12 +661,14 @@ Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pendi
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
-Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow`, eine volle
-100-Envelope-Seite `sent_window_truncated` (keine Pagination, kein sicherer Skip) und eine Wasserzeichen-Lücke
-> 60 Tage `sent_window_gap` bzw. ein ältere Tage abschneidendes `count` `sent_count_gap` (jeweils vollständig vor
-jedem Write/Lesen, kein Zurückstellen; ein leerer Index startet mit dem vollen 60-Tage-Fenster; Recovery
-eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)`, nicht über `--sync-sent N`/`count`
-oder `sync_sent_items(dates=[D])`, das D+1 mitliest; Datums-CLI bewusst nicht vorhanden). Scheitert ein
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` und nach `max_pages`
+weiterhin volle Seiten `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery; sonst
+wird paginiert, kein sicherer Skip). Das Wasserzeichen-Alter blockiert nie: Coverage ab Watermark-Tag
+(inklusive), leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`
+ist ein Item-Budget (kein Tageslimit); bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und
+Recovery-Aufruf. Recovery eines Tages nur über
+`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)`, nicht über `--sync-sent N`/`count`
+oder `sync_sent_items(dates=[D])`, das D+1 mitliest; Datums-CLI bewusst nicht vorhanden. Scheitert ein
 Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`, `failed_dates`), damit das
 Wasserzeichen keine ältere Lücke überspringt.
 `new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state` unterscheidet dort

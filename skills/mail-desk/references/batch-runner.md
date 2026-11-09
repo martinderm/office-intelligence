@@ -1088,18 +1088,18 @@ Write ab.
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
-| `sent_window_truncated` | volle 100-Envelope-Seite; keine Pagination/Skip, Lauf blockiert |
-| `sent_window_gap` | Wasserzeichen-Lücke > 60 Tage; nichts gelesen/geschrieben |
-| `sent_count_gap` | `count` würde ältere Tage abschneiden; nichts gelesen/geschrieben |
+| `sent_window_truncated` | volle Seite nach `max_pages` ohne kurze/leere Seite; kein Watermark-Advance, nichts geschrieben |
 | `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, `failed_dates` |
 | `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
 
-Kein Zurückstellen: > 200 neue Items ⇒ `handoff_overflow` vor jedem Write. **Recovery nur über die
-Python-API**: einen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
-`sync_sent_items(dates=[D])`, das D+1 mitliest), älteste zuerst, dazwischen konsumieren. `--sync-sent
-N`/`count` ist **keine** Recovery. Volle 100-Seite und > 200/Tag sind harte Grenzen. Ein leerer Index startet
-mit vollem 60-Tage-Fenster (Retry erfasst Tag D); ein abschneidendes `count` verweigert vor jedem Lesen
-(`sent_count_gap`). Nach der Verweigerung wurde nichts geschrieben.
+Kein Zurückstellen: > 200 neue Items ⇒ `handoff_overflow` vor jedem Write. `count` ist ein **Item-Budget**
+(kein Tageslimit): erreicht es eine Tagesgrenze, stoppt der Lauf mit `truncated`, `coverage_*` und konkretem
+Recovery-Aufruf, ohne über unvollständig gedeckte Tage vorzurücken. Das Wasserzeichen-Alter blockiert nie:
+Coverage startet am Watermark-Tag (inklusive), leere Tage zählen; Erstlauf: eingefrorenes Laufdatum,
+60-Tage-Backfill bzw. `since`. Tages-Recovery nur über
+`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)`; `--sync-sent N`/`count` ist keine
+Gap-Recovery. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per Envelope-ID); eine nach
+`max_pages` weiterhin volle Seite ergibt `sent_window_truncated` mit höherem-`max_pages`-Recovery.
 
 ---
 
