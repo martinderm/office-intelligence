@@ -479,7 +479,9 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    Zeilenlänge, Normalisierung zu CRLF (+ ein abschließendes CRLF) mit erneuter 10-MiB-Prüfung
    (`raw_eml_message_too_large`), strikter Header-Block, genau eine gültige Message-ID, `To` als
    RFC-5322-Adressliste (`raw_eml_address_invalid`; Kommas in Anführungszeichen und Kommentaren trennen
-   nichts, leere Elemente und Unicode-Whitespace außerhalb von Anführungszeichen werden abgewiesen), `Date`
+   nichts, leere Elemente werden abgewiesen; Unicode-Whitespace ist nur innerhalb von Kommentaren und
+   Anzeigenamen in Anführungszeichen erlaubt, sonst abgewiesen; eine leere Gruppe mit nachfolgendem
+   Leerraum/Kommentar bleibt wegen des Fehlers von Python 3.12 in `email.headerregistry` fail-closed abgewiesen), `Date`
    als RFC-5322-`date-time` mit ASCII-Ziffern (`raw_eml_date_invalid`), Singleton-Header und jedes
    `Content-*` höchstens einmal, MIME-Version, `Content-Type`/`Content-Disposition`/`Content-Transfer-Encoding`
    der Nachricht von einem eigenen strengen RFC 2045/RFC 2231-Parser gelesen (`raw_eml_mime_invalid`), Struktur
@@ -489,7 +491,9 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    Teil-Header geparst wird), Header-Block **jedes** Teils strikt zerlegt (`raw_eml_part_header_invalid`:
    Feldsyntax, Steuerzeichen, Feldgrenzen, doppelte oder widersprüchliche `Content-*`/`MIME-Version`) und
    seine MIME-Werte streng gelesen; erst dann ruft die Standardbibliothek die Teile ab, und beide Sichten
-   müssen übereinstimmen (Content-Type, Boundary, Dateiname, Teilezahl). Der Text darf nicht
+   müssen übereinstimmen (Content-Type, Boundary, Dateiname, Teilezahl). Parameterposition: `name` nur im
+   `Content-Type`, `filename` nur in der `Content-Disposition`, überall (Text und `multipart/mixed`-Container
+   tragen beides in keiner Position, Anhänge nur kanonisch). Der Text darf nicht
    `attachment` sein und keinen `name`/`filename` tragen; Anhänge brauchen `attachment` mit `filename`
    (und gleichem `name`, falls vorhanden). Danach Parser-Defekte,
    Anhänge (streng Base64, höchstens 5 mal 3 MiB, gültige eindeutige Namen). Ergebnis

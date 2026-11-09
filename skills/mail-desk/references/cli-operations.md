@@ -474,16 +474,28 @@ und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
   **außerhalb** von Anführungszeichen und Kommentaren: `"Doe, , John" <a@example.org>`,
   `a@example.org (Kommentar, , x)` und `"a, , b"@example.org` sind gültig, leere Elemente
   (`a@example.org,`, `,a@example.org`, `a@x,,b@x`, `Group: a@example.org,;`) und offene Anführungszeichen
-  oder Kommentare werden abgewiesen. Nur ASCII-Leerzeichen und Tab trennen Tokens: NBSP und anderes
-  Unicode-Whitespace außerhalb von Anführungszeichen (z. B. `a@x, b@x`) werden abgewiesen, innerhalb
-  eines Anzeigenamens in Anführungszeichen bleiben sie erlaubt. Andere Adress-Header werden erhalten und
+  oder Kommentare werden abgewiesen. **Whitespace:** Nur ASCII-Leerzeichen und Tab trennen Tokens.
+  Unicode-Whitespace (NBSP, EM SPACE, ...) ist **nur innerhalb von Kommentaren und innerhalb von
+  Anzeigenamen in Anführungszeichen** erlaubt (RFC-6532-Text); außerhalb davon - zwischen Tokens, am
+  Anfang oder Ende, in Domain oder Local-Part, zwischen Adresse und Kommentar (z. B. `a@x,<NBSP>b@x`) - wird
+  die Liste abgewiesen. Auch eine Adresse in Anführungszeichen (`"a<NBSP>b"@x`) bleibt wegen der
+  ASCII-`addr-spec`-Regel abgewiesen. **Leere Gruppe mit CFWS (dokumentierte Grenze, Python 3.12):**
+  `email.headerregistry` der Standardbibliothek wirft einen `AttributeError`, sobald auf eine leere Gruppe
+  Leerraum oder ein Kommentar folgt (`Group:; , a@example.org`, `a@example.org, Group:; , b@example.org`,
+  `Group:; (c), a@example.org`); der Parser wird nicht gepatcht, die Liste bleibt fail-closed abgewiesen
+  (`raw_eml_address_invalid`), obwohl sie nach RFC 5322 gültig wäre. Ohne CFWS (`Group:;`,
+  `Group:;, a@example.org`) und bei nichtleeren Gruppen mit CFWS wird sie angenommen; auf einem Interpreter
+  ohne diesen Fehler würde sie ebenfalls angenommen (die Tests springen dann). Andere Adress-Header werden erhalten und
   verglichen, aber nicht auf Grammatik geprüft. `Date` muss ein RFC-5322-`date-time` sein: optionaler
   Wochentag (muss zum Datum passen), 1-2-stelliger Tag, Monatsname, 4-stelliges Jahr 1900-9999, reales
   Kalenderdatum, Stunde 00-23, Minute 00-59, Sekunde 00-60 (optional), numerische Zone `±hhmm` (hh 00-23,
   mm 00-59), alles mit **ASCII-Ziffern** `0`-`9` (arabisch-indische oder Vollbreiten-Ziffern werden
-  abgewiesen) und ASCII-Leerzeichen; obsolete Formen (zweistelliges Jahr, `GMT`/`EST`) und
-  `Sat, 99 Foo 2026 99:99:99 +9999` werden mit `raw_eml_date_invalid` abgewiesen. Erlaubt ist höchstens
-  ein Trailing-Kommentar ohne Verschachtelung (`+0100 (CET)`).
+  abgewiesen) und ASCII-Leerzeichen zwischen den Feldern; obsolete Formen (zweistelliges Jahr, `GMT`/`EST`)
+  und `Sat, 99 Foo 2026 99:99:99 +9999` werden mit `raw_eml_date_invalid` abgewiesen. Erlaubt ist höchstens
+  ein Trailing-Kommentar ohne Verschachtelung (`+0100 (CET)`); sein Inhalt darf beliebige Zeichen außer
+  Klammern enthalten, auch Unicode-Whitespace (`(CET<NBSP>x)`), während Unicode-Whitespace außerhalb des
+  Kommentars (zwischen den Feldern, vor dem Kommentar, am Anfang oder Ende) mit `raw_eml_date_invalid`
+  abgewiesen wird.
 - **Teil-Header und MIME-Werte (`multipart/mixed`, Nachrichten- und Teil-Ebene):** Der Header-Block
   **jedes** MIME-Teils wird zuerst mit denselben strikten Regeln wie der Nachrichten-Header zerlegt
   (`raw_eml_part_header_invalid`): gültige Feldzeilen und Faltung, keine Steuer-/Trennzeichen außer Tab,
@@ -500,11 +512,16 @@ und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
   `%XX`), weil die Standardbibliothek selbst lange Dateinamen so schreibt. `boundary` muss genau einmal
   vorkommen und aus 1-70 gültigen Zeichen bestehen. Die Sicht des strengen Parsers muss mit der der
   Standardbibliothek übereinstimmen (Content-Type, Boundary, Dateiname, Anzahl der Teile), sonst
-  `raw_eml_mime_invalid`. Der Text (Nachricht oder erster Teil) darf weder `Content-Disposition:
-  attachment` noch einen `name`/`filename` tragen (`raw_eml_structure_unsupported`); `inline` ohne
-  Dateinamen ist erlaubt. Ein Anhang braucht `attachment` mit `filename`; `filename` und, falls vorhanden,
-  `name` müssen die Dateinamen-Regeln erfüllen (kein `/`, `\`, `:`, `..`, Gerätename, ...) und gleich sein
-  (`raw_eml_attachment_invalid`).
+  `raw_eml_mime_invalid`. **Parameterposition:** `name` gilt ausschließlich im `Content-Type`, `filename` ausschließlich in der
+  `Content-Disposition` - überall: in einer anderen Position (`Content-Type: ...; filename=...`,
+  `Content-Disposition: ...; name=...`, auch als `filename*`/`name*`) werden sie abgewiesen, ob sicher,
+  gleich oder pfadartig. Der Text (Nachricht oder erster Teil) darf weder `Content-Disposition: attachment`
+  noch einen `name`/`filename` in irgendeiner Position tragen (`raw_eml_structure_unsupported`); `inline`
+  ohne Dateinamen ist erlaubt. Ein `multipart/mixed`-Container trägt `name`/`filename` ebenfalls in keiner
+  Position (`raw_eml_structure_unsupported`). Ein Anhang braucht `attachment` mit `filename` in der
+  `Content-Disposition`; `filename` und, falls vorhanden, das `name` des `Content-Type` müssen die
+  Dateinamen-Regeln erfüllen (kein `/`, `\`, `:`, `..`, Gerätename, ...) und gleich sein; ein `filename` im
+  `Content-Type` oder ein `name` in der `Content-Disposition` ist ein Verstoß (`raw_eml_attachment_invalid`).
 - **Teile-Grenze:** Höchstens **64 MIME-Teile** (Textteil plus Anhangsteile) werden überhaupt gezählt: das
   65. Delimiter stoppt den Scan mit `raw_eml_part_count_exceeded`, **bevor** ein Teil-Header-Block
   geparst oder die Standardbibliothek aufgerufen wird. Das Produktlimit bleibt 5 Anhänge

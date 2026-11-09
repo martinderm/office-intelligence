@@ -130,6 +130,28 @@ class DocumentationContractTests(unittest.TestCase):
         self.assertNotIn("nur LF/CRLF-neutral", self.text("L2 objects"))
         self.assertIn(str(dre.MAX_MIME_PARTS), self.text("L1 README"))
 
+    def test_round_four_contract_points_are_documented(self) -> None:  # D1 (final-round findings 1-3)
+        cli = self.text("cli-operations")
+        for needle in ("Parameterposition", "Python 3.12", "Group:; , a@example.org", "Group:;, a@example.org",
+                       "Kommentaren", "Anzeigenamen in Anführungszeichen", "fail-closed", "AttributeError"):
+            self.assertIn(needle, cli, f"cli-operations lacks {needle}")
+        self.assertNotRegex(cli, r"Unicode-Whitespace\s+außerhalb von Anführungszeichen")
+        self.assertNotIn("und ASCII-Leerzeichen;", cli)
+        self.assertNotRegex(cli, r"darf weder `Content-Disposition:\s+attachment` noch einen `name`/`filename` tragen;")
+        for name, needles in {
+            "SKILL": ("Parameterposition", "Python 3.12", "Kommentaren"),
+            "L2 README": ("Parameterposition", "Python 3.12", "Kommentaren"),
+            "L2 processes": ("Parameterposition", "Python 3.12", "Kommentaren"),
+            "L1 README": ("Parameterposition", "Kommentaren", "Python 3.12"),
+        }.items():
+            text = self.text(name)
+            for needle in needles:
+                self.assertIn(needle, text, f"{name} lacks {needle}")
+        self.assertNotRegex(self.text("SKILL"), r"akzeptieren nur ASCII-Ziffern und ASCII-Leerraum")
+        self.assertNotRegex(self.text("L2 README"), r"außerhalb von Anführungszeichen abgewiesen")
+        self.assertNotRegex(self.text("L2 processes"), r"außerhalb von Anführungszeichen werden abgewiesen")
+        self.assertNotRegex(self.text("L1 README"), r"nur ASCII-Ziffern und\s+ASCII-Leerraum")
+
     def test_no_stale_uncommitted_wording_remains_in_the_l2_frame(self) -> None:  # D1 (finding 4)
         readme = self.text("L2 README")
         self.assertNotIn("ungestagten", readme)

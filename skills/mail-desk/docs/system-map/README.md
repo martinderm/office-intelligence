@@ -2250,8 +2250,12 @@ Pfad und `..`, RFC-2231-Fortsetzungen unterstützt, Text nie als `attachment` od
 `raw_eml_mime_invalid`/`raw_eml_structure_unsupported`/`raw_eml_attachment_invalid`; die Sicht der Standardbibliothek muss
 übereinstimmen), höchstens 64 MIME-Teile werden gezählt, bevor ein Teil-Header geparst oder die Standardbibliothek
 aufgerufen wird (`raw_eml_part_count_exceeded`; das Produktlimit bleibt 5 Anhänge), `To` mit Kommas in Anführungszeichen
-und Kommentaren als Nicht-Trenner und ohne leere Elemente, `To`/`Date` nur mit ASCII-Ziffern und ASCII-Leerraum
-(NBSP u. a. Unicode-Whitespace werden außerhalb von Anführungszeichen abgewiesen), Struktur
+und Kommentaren als Nicht-Trenner und ohne leere Elemente, `To`/`Date` nur mit ASCII-Ziffern (NBSP u. a.
+Unicode-Whitespace ist nur innerhalb von Kommentaren und Anzeigenamen in Anführungszeichen erlaubt, sonst abgewiesen;
+im `Date` nur innerhalb des einen Trailing-Kommentars), Parameterposition (`name` nur im `Content-Type`, `filename` nur
+in der `Content-Disposition`, auch bei Text und `multipart/mixed`-Container; sonst abgewiesen), eine leere `To`-Gruppe
+mit nachfolgendem Leerraum/Kommentar bleibt wegen eines Fehlers von Python 3.12 in `email.headerregistry` (`AttributeError`)
+fail-closed abgewiesen und der Parser wird nicht gepatcht, Struktur
 `text/plain` oder flaches `multipart/mixed` (Text zuerst, höchstens 5 streng-Base64-Anhänge von je höchstens
 3 MiB mit gültigem eindeutigem Namen). Nicht unterstützt und fail-closed: HTML/Alternative, verschachtelte oder
 `message/*`-Teile, Preamble/Epilog, Parser-Defekte, fremde Charsets, 8bit-Anhänge, `replace` für Rohmails.

@@ -398,5 +398,203 @@ class PartCountBoundTests(_Base):  # residual finding 4
         self.assertNotEqual("raw_eml_part_count_exceeded", raised.exception.reason_code)
 
 
+class CanonicalParameterPositionTests(_Base):  # final-round finding 1
+    """``name`` lives only in Content-Type, ``filename`` only in Content-Disposition -- everywhere."""
+
+    def test_filename_in_content_type_and_name_in_disposition_are_refused_for_text(self) -> None:  # F1
+        for value in ('"../x"', '"x.txt"', "x"):
+            with self.subTest(value):
+                self.assertRefused(
+                    "raw_eml_structure_unsupported",
+                    top_text(f"text/plain; charset=utf-8; filename={value}"),
+                )
+                self.assertRefused(
+                    "raw_eml_structure_unsupported",
+                    top_text("text/plain; charset=utf-8", f"Content-Disposition: inline; name={value}"),
+                )
+                self.assertRefused(
+                    "raw_eml_structure_unsupported", mixed([body(f"text/plain; charset=utf-8; filename={value}")])
+                )
+                self.assertRefused(
+                    "raw_eml_structure_unsupported", mixed([body(disposition=f"inline; name={value}")])
+                )
+
+    def test_rfc_2231_forms_in_the_wrong_header_are_refused_for_text(self) -> None:  # F1
+        self.assertRefused(
+            "raw_eml_structure_unsupported", top_text("text/plain; charset=utf-8; filename*=utf-8''x.txt")
+        )
+        self.assertRefused(
+            "raw_eml_structure_unsupported",
+            top_text("text/plain; charset=utf-8", "Content-Disposition: inline; name*=utf-8''x.txt"),
+        )
+        self.assertRefused("raw_eml_structure_unsupported", mixed([body("text/plain; charset=utf-8; filename*0=a; filename*1=b")]))
+
+    def test_text_with_an_attachment_disposition_is_refused(self) -> None:  # F1
+        for disposition in ("attachment", "attachment; filename=\"a.txt\"", "ATTACHMENT", "attachment; size=3"):
+            with self.subTest(disposition):
+                self.assertRefused(
+                    "raw_eml_structure_unsupported",
+                    top_text("text/plain; charset=utf-8", f"Content-Disposition: {disposition}"),
+                )
+                self.assertRefused("raw_eml_structure_unsupported", mixed([body(disposition=disposition)]))
+
+    def test_the_reviewer_reproductions_for_attachments_are_refused(self) -> None:  # F1
+        cases = {
+            "path filename in Content-Type": part(
+                content_type='application/pdf; filename="../x"', disposition='attachment; filename="a.pdf"'),
+            "safe equal filename in Content-Type": part(
+                content_type='application/pdf; filename="a.pdf"', disposition='attachment; filename="a.pdf"'),
+            "path name in Content-Disposition": part(disposition='attachment; filename="a.pdf"; name="../x"'),
+            "different name in Content-Disposition": part(disposition='attachment; filename="a.pdf"; name="b.pdf"'),
+            "safe equal name in Content-Disposition": part(disposition='attachment; filename="a.pdf"; name="a.pdf"'),
+            "extended filename in Content-Type": part(
+                content_type="application/pdf; filename*=utf-8''a.pdf", disposition='attachment; filename="a.pdf"'),
+            "extended name in Content-Disposition": part(disposition="attachment; filename=\"a.pdf\"; name*=utf-8''a.pdf"),
+            "filename only in the wrong header": part(content_type='application/pdf; filename="a.pdf"', disposition="attachment"),
+        }
+        for label, one in cases.items():
+            with self.subTest(label):
+                self.assertRefused("raw_eml_attachment_invalid", mixed([BODY_PART, one]))
+
+    def test_canonical_positions_with_equal_safe_names_are_still_accepted(self) -> None:  # F1
+        for content_type in ("application/pdf", 'application/pdf; name="a.pdf"'):
+            with self.subTest(content_type):
+                prepared = dre.validate_raw_eml(mixed([BODY_PART, part(content_type=content_type)]))
+                self.assertEqual("a.pdf", prepared.attachments[0].filename)
+
+    def test_multipart_containers_reject_name_and_filename_entirely(self) -> None:  # F1
+        cases = {
+            "filename in disposition": ("multipart/mixed; boundary=BOUND", 'Content-Disposition: attachment; filename="../x"'),
+            "safe filename in disposition": ("multipart/mixed; boundary=BOUND", 'Content-Disposition: inline; filename="a.txt"'),
+            "name in disposition": ("multipart/mixed; boundary=BOUND", 'Content-Disposition: inline; name="a.txt"'),
+            "name in Content-Type": ('multipart/mixed; boundary=BOUND; name="a.txt"', None),
+            "filename in Content-Type": ('multipart/mixed; boundary=BOUND; filename="a.txt"', None),
+            "extended name in Content-Type": ("multipart/mixed; boundary=BOUND; name*=utf-8''a.txt", None),
+        }
+        for label, (content_type, extra) in cases.items():
+            with self.subTest(label):
+                lines = [*headers(), "MIME-Version: 1.0", f"Content-Type: {content_type}"]
+                if extra:
+                    lines.append(extra)
+                lines += ["", "--BOUND", *BODY_PART, "--BOUND--"]
+                self.assertRefused("raw_eml_structure_unsupported", join_lines(lines))
+
+    def test_a_plain_container_without_file_name_parameters_is_accepted(self) -> None:  # F1
+        lines = [*headers(), "MIME-Version: 1.0", "Content-Type: multipart/mixed; boundary=BOUND", "Content-Disposition: inline",
+                 "", "--BOUND", *BODY_PART, "--BOUND--"]
+        self.assertEqual("mixed", dre.validate_raw_eml(join_lines(lines)).summary["structure"])
+
+    def test_error_texts_carry_no_parameter_values(self) -> None:  # F1
+        exc = self.assertRefused("raw_eml_structure_unsupported", top_text(f'text/plain; charset=utf-8; filename="{SECRET}"'))
+        self.assertNotIn(SECRET, str(exc))
+        exc = self.assertRefused(
+            "raw_eml_attachment_invalid",
+            mixed([BODY_PART, part(content_type=f'application/pdf; filename="{SECRET}"')]),
+        )
+        self.assertNotIn(SECRET, str(exc))
+
+
+def _stdlib_has_empty_group_bug() -> bool:
+    from email.policy import SMTPUTF8
+
+    try:
+        SMTPUTF8.header_factory("To", "Group:; , a@example.org")
+    except AttributeError:
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+class EmptyGroupCfwsTests(_Base):  # final-round finding 2
+    """Python 3.12 ``email.headerregistry`` raises ``AttributeError`` for an empty group followed by CFWS.
+
+    The profile does not patch the stdlib parser: such lists stay refused (fail closed) and the limitation
+    is documented.  Every other group shape keeps working.
+    """
+
+    def test_an_empty_group_followed_by_cfws_fails_closed(self) -> None:  # F2
+        if not _stdlib_has_empty_group_bug():
+            self.skipTest("this interpreter's email.headerregistry parses empty groups followed by CFWS")
+        for value in ("Group:; , a@example.org", "a@example.org, Group:; , b@example.org", "Group:; (c), a@example.org",
+                      "Group:;(c), a@example.org", "Group:; , Other:;"):
+            with self.subTest(value):
+                exc = self.assertRefused("raw_eml_address_invalid", plain(to=value))
+                self.assertNotIn("AttributeError", str(exc))
+
+    def test_other_group_shapes_keep_working(self) -> None:  # F2
+        good = ["Group:;", "Group:;, a@example.org", "Group: ;, a@example.org", "a@example.org, Group:;", "Group:;,Other:;",
+                "Group: a@example.org; , b@example.org", "Group: a@example.org; (c), b@example.org",
+                "undisclosed-recipients:;", "Team: a@example.org, b@example.org;"]
+        for value in good:
+            with self.subTest(value):
+                data = join_lines([*headers(to=value, extra=["MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit"]), "", "ok"])
+                self.assertEqual(value, dre.validate_raw_eml(data).summary["headers"][0][1])
+
+    def test_a_trailing_comma_or_text_after_an_empty_group_stays_refused(self) -> None:  # F2
+        for value in ("Group:;,", "Group:;, ,a@example.org", "Group:; a@example.org", "Group:;;"):
+            with self.subTest(value):
+                self.assertRefused("raw_eml_address_invalid", plain(to=value))
+
+
+class UnicodeWhitespaceContextTests(_Base):  # final-round finding 3
+    """Unicode whitespace: allowed inside comments and quoted display names, refused everywhere else."""
+
+    MIME = ["MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: 8bit"]
+
+    def to_message(self, value: str) -> bytes:
+        return join_lines([*headers(to=value, extra=self.MIME), "", "ok"])
+
+    def test_unicode_whitespace_inside_to_comments_is_accepted(self) -> None:  # F3
+        for char in (" ", " ", " ", "　", " "):
+            for value in (f"a@example.org (c{char}x)", f"Name <a@example.org> (c{char}x)", f"a@example.org (a (b{char}c) d)",
+                          f"a@example.org (c\\{char}x)", f"(c{char}x) a@example.org"):
+                with self.subTest(repr(char), value=value):
+                    self.assertEqual(value, dre.validate_raw_eml(self.to_message(value)).summary["headers"][0][1])
+
+    def test_unicode_whitespace_inside_quoted_display_names_is_accepted(self) -> None:  # F3
+        for char in (" ", " ", "　"):
+            value = f'"Doe{char}John" <a@example.org>'
+            with self.subTest(repr(char)):
+                self.assertEqual(value, dre.validate_raw_eml(self.to_message(value)).summary["headers"][0][1])
+
+    def test_unicode_whitespace_outside_comments_and_quotes_is_refused(self) -> None:  # F3
+        for char in (" ", " ", " ", "　"):
+            for value in (f"a@example.org,{char}b@example.org", f"{char}a@example.org", f"a@example.org{char}",
+                          f"Name{char}<a@example.org>", f"a@exa{char}mple.org", f"a@example.org{char}(comment)",
+                          f"(comment){char}a@example.org,{char}b@example.org"):
+                with self.subTest(repr(char), value=value):
+                    self.assertRefused("raw_eml_address_invalid", plain(to=value))
+
+    def test_unicode_whitespace_in_an_addr_spec_is_refused_even_when_quoted(self) -> None:  # F3
+        for value in ('"a b"@example.org', '"a b"@example.org', 'Name <"a b"@example.org>'):
+            with self.subTest(value):
+                self.assertRefused("raw_eml_address_invalid", plain(to=value))
+
+    def test_unicode_whitespace_inside_the_date_comment_is_accepted(self) -> None:  # F3
+        for char in (" ", " ", " ", "　"):
+            value = f"Sat, 07 Nov 2026 12:00:00 +0100 (CET{char}x)"
+            with self.subTest(repr(char)):
+                self.assertEqual(value, dre.validate_raw_eml(plain(date=value)).date)
+
+    def test_unicode_whitespace_in_the_date_outside_the_comment_is_refused(self) -> None:  # F3
+        for char in (" ", " ", " ", "　"):
+            for value in (f"Sat, 07 Nov 2026 12:00:00 +0100{char}(CET)", f"Sat, 07 Nov 2026{char}12:00:00 +0100",
+                          f"Sat, 07 Nov 2026 12:00:00 +0100 (CET){char}", f"{char}Sat, 07 Nov 2026 12:00:00 +0100",
+                          f"Sat, 07 Nov 2026 12:00:00 +0100 (CET) {char}"):
+                with self.subTest(repr(char), value=value):
+                    self.assertRefused("raw_eml_date_invalid", plain(date=value))
+
+    def test_a_nested_or_unclosed_date_comment_stays_refused(self) -> None:  # F3
+        for value in ("Sat, 07 Nov 2026 12:00:00 +0100 (a (b))", "Sat, 07 Nov 2026 12:00:00 +0100 (a", "Sat, 07 Nov 2026 12:00:00 +0100 (a) (b)"):
+            with self.subTest(value):
+                self.assertRefused("raw_eml_date_invalid", plain(date=value))
+
+    def test_comment_whitespace_stays_significant_in_the_readback(self) -> None:  # F3
+        a = self.to_message("a@example.org (c x)")
+        b = self.to_message("a@example.org (c x)")
+        self.assertEqual(["header:to"], dre.compare_stored_raw(b, dre.validate_raw_eml(a)))
+
+
 if __name__ == "__main__":
     unittest.main()

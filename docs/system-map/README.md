@@ -631,10 +631,13 @@ Zurücklesen genau einer gespeicherten Mail wie bei Builder-Entwürfen
 Profil (alles andere fail-closed, `raw_eml_*`): höchstens 10 MiB als Datei und normalisiert, UTF-8,
 Zeilen höchstens 998 Oktette, strikter RFC-5322-Header, genau eine Message-ID `<dot-atom@hostname>`,
 `To`/`Date` Pflicht, flaches `text/plain` oder `multipart/mixed` mit höchstens 5 Base64-Anhängen von je
-höchstens 3 MiB; `To` und `Date` werden gegen die strikte RFC-5322-Grammatik geprüft (nur ASCII-Ziffern und
-ASCII-Leerraum, Kommas in Anführungszeichen und Kommentaren trennen nichts), `Content-Type`/`-Disposition`/
+höchstens 3 MiB; `To` und `Date` werden gegen die strikte RFC-5322-Grammatik geprüft (nur ASCII-Ziffern;
+Unicode-Whitespace ist nur innerhalb von Kommentaren und Anzeigenamen in Anführungszeichen erlaubt; Kommas in
+Anführungszeichen und Kommentaren trennen nichts; eine leere Gruppe mit nachfolgendem Leerraum/Kommentar bleibt wegen
+eines Fehlers von Python 3.12 in `email.headerregistry` fail-closed abgewiesen), `Content-Type`/`-Disposition`/
 `-Transfer-Encoding` von einem eigenen strengen RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine
-doppelten Parameter, Dateinamen ohne Pfad und `..`, Text nie als `attachment`), der Header-Block jedes MIME-Teils
+doppelten Parameter, Dateinamen ohne Pfad und `..`, Text nie als `attachment`; Parameterposition: `name` nur im
+`Content-Type`, `filename` nur in der `Content-Disposition`, auch bei Text und `multipart/mixed`-Container), der Header-Block jedes MIME-Teils
 strikt zerlegt, doppelte oder widersprüchliche `Content-*` abgewiesen und höchstens 64 MIME-Teile gezählt, bevor ein
 Teil-Header geparst wird (`raw_eml_part_count_exceeded`; das Produktlimit bleibt 5 Anhänge). Fehlende oder
 doppelte Message-ID, Fremdkodierung, Limitüberschreitung, ungültige Adresse oder ungültiges Datum stoppen vor

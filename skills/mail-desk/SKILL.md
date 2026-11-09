@@ -347,7 +347,11 @@ Entwurf in den Drafts-Ordner legt.
   RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine doppelten Parameter, `name`/
   `filename` ohne Pfad und `..`, Text nie als `attachment`; `raw_eml_mime_invalid`); höchstens 64 MIME-Teile
   werden gezählt, bevor ein Teil-Header geparst wird (`raw_eml_part_count_exceeded`); `To` kennt Kommas in
-  Anführungszeichen/Kommentaren, `To`/`Date` akzeptieren nur ASCII-Ziffern und ASCII-Leerraum; Struktur `text/plain` (UTF-8/US-ASCII) oder flach `multipart/mixed`
+  Anführungszeichen/Kommentaren; `To`/`Date` akzeptieren nur ASCII-Ziffern, Unicode-Whitespace ist nur innerhalb von
+  Kommentaren und Anzeigenamen in Anführungszeichen erlaubt, sonst abgewiesen; Parameterposition: `name` gilt nur im
+  `Content-Type`, `filename` nur in der `Content-Disposition` (überall, auch bei Text und `multipart/mixed`-Container,
+  sonst abgewiesen); eine leere `To`-Gruppe mit nachfolgendem Leerraum/Kommentar (`Group:; , a@x`) bleibt wegen eines
+  Fehlers von Python 3.12 in `email.headerregistry` fail-closed abgewiesen; Struktur `text/plain` (UTF-8/US-ASCII) oder flach `multipart/mixed`
   mit Text zuerst und höchstens **5** Base64-`attachment`-Teilen von je höchstens **3 MiB**
   (dekodiert) mit gültigem, eindeutigem Dateinamen; kein HTML/Alternative, keine geschachtelten
   oder `message/*`-Teile, keine Preamble/Epilog, kein Parser-Defekt. Fehlende oder doppelte

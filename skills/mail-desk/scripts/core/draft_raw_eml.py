@@ -615,12 +615,23 @@ def _boundary_of(top: _Mime) -> str:
     return boundary
 
 
+def _has_file_name_parameter(mime: _Mime) -> bool:
+    """Whether ``name`` or ``filename`` occurs in *either* header (canonical position or not)."""
+    return any(key in params for params in (mime.type_params, mime.disposition_params) for key in ("name", "filename"))
+
+
 def _check_text_entity(mime: _Mime) -> None:
-    """A plain-text body (message or first part) is inline text: no file name, never an attachment."""
-    if "name" in mime.type_params or "filename" in mime.disposition_params:
-        raise _unsupported("the text body carries a file name")
+    """A plain-text body (message or first part) is inline text: no file name anywhere, never an attachment."""
+    if _has_file_name_parameter(mime):
+        raise _unsupported("the text body carries a file name parameter")
     if mime.disposition not in (None, "inline"):
         raise _unsupported("the text body is not inline")
+
+
+def _check_container(mime: _Mime) -> None:
+    """A multipart container names no file: ``name`` / ``filename`` are refused in either header."""
+    if _has_file_name_parameter(mime):
+        raise _unsupported("the multipart container carries a file name parameter")
 
 
 def _decode_text(part: Any, mime: _Mime) -> str:
@@ -643,6 +654,9 @@ def _decode_attachment(part: Any, mime: _Mime, index: int) -> da.DraftAttachment
         raise _unsupported("nested or embedded message part")
     if mime.disposition != "attachment":
         raise _invalid_attachment(index, "not an attachment part")
+    # Canonical positions only: ``name`` belongs to Content-Type, ``filename`` to Content-Disposition.
+    if "filename" in mime.type_params or "name" in mime.disposition_params:
+        raise _invalid_attachment(index, "file name parameter in the wrong header")
     filename = mime.disposition_params.get("filename")
     if filename is None:
         raise _invalid_attachment(index, "no file name")
@@ -702,6 +716,7 @@ def _analyse_structure(
     if layout == "text":
         _check_text_entity(top)
         return layout, _exact_text(_decode_text(message, top)), ()
+    _check_container(top)
     if message.get_content_type() != top.content_type or message.get_boundary() != top.type_params.get("boundary"):
         raise _mime_invalid("strict and tolerant MIME views differ")
     if (message.preamble or "").strip() or (message.epilogue or "").strip():
