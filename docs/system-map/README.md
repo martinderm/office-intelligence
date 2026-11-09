@@ -690,10 +690,10 @@ reicht nicht. Fehlt bei bestehendem Sent-Index jede State-Datei, fail-closed `se
 **allen** Einstiegen (Default, `dates`, Report, Singular/Plural) und unabhängig von einem parsebaren `at`;
 nur ein vom Operator verifiziertes `since` (exakter Start, nie `min(Watermark, since)`, keine Punktdaten oder
 CLI-Defaults) bzw. ein wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since`
-durch und angeforderte Tage davor sind fail-closed. Recovery: Runner ohne `--sync-sent` mit
-`--input`/`--stdin`-Manifest `{"mode":"sync_sent","since":"YYYY-MM-DD","count":N}` (direkter `--sync-sent`
-ignoriert `--input`; Wrapper `sync-sent` kann kein `since` führen; ein direkter Lauf setzt die gehaltene
-Wrapper-Lease voraus). Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`,
+durch und angeforderte Tage davor sind fail-closed. Recovery bevorzugt über den Wrapper
+`sync-sent --since ... --account ...` (maschinelle `verify_workspace_lock`-Prüfung vor Read/Write, stdin-Manifest);
+nur ohne Wrapper direkt mit `--input`/`--stdin`, explizitem Account, ohne `--sync-sent` und unter derselben
+gehaltenen/verifizierten Lease. Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`,
 `since_ignored_reason` und `effective_coverage_start`, älter/gleich wird angewendet. Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
 Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen

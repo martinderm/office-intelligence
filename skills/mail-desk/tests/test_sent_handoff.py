@@ -1337,6 +1337,65 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual("2026-09-24", newer["coverage_start"])
         self.assertEqual("2026-09-24", sent_indexer._read_sync_state(self.dd)["initial_start"])
 
+    def test_dates_since_rewinds_existing_barrier_and_retries(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        state_path.write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2026-09-01", "covered_through": "2026-09-20",
+        }), encoding="utf-8")
+        mailbox = _Mailbox(_details(1, _day=DAY))
+        mailbox.fail_dates = {DAY}
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentSyncPartialFailure):
+                sent_indexer.sync_sent_items(
+                    dates=[DAY], since="2026-09-04", account="ACC", data_dir=self.dd,
+                )
+        state = sent_indexer._read_sync_state(self.dd)
+        self.assertEqual(("2026-09-01", "2026-09-03"), (
+            state["initial_start"], state["covered_through"],
+        ))  # older start stays; the verified since sets the barrier
+
+        mailbox.fail_dates = set()
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            result = sent_indexer.sync_sent_items(
+                dates=[DAY], since="2026-09-04", account="ACC", data_dir=self.dd,
+            )
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual("2026-09-04", result["since_requested"])
+        self.assertFalse(result["since_ignored"])
+        self.assertEqual("2026-09-04", result["effective_coverage_start"])
+
+    def test_dates_since_older_equal_younger_hints(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        cases = [
+            ("2026-09-04", False, "2026-09-04"),
+            ("2026-09-21", False, "2026-09-21"),
+            ("2026-09-22", True, "2026-09-21"),
+        ]
+        for since, ignored, effective in cases:
+            with self.subTest(since=since):
+                state_path.write_text(json.dumps({
+                    "schema_version": 1, "initial_start": "2026-09-01",
+                    "covered_through": "2026-09-20",
+                }), encoding="utf-8")
+                mailbox = _Mailbox()
+                run, read = mailbox.patches()
+                with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+                    result = sent_indexer.sync_sent_items(
+                        dates=[DAY], since=since, account="ACC", data_dir=self.dd,
+                    )
+                self.assertEqual(since, result["since_requested"])
+                self.assertEqual(ignored, result["since_ignored"])
+                self.assertEqual(effective, result["effective_coverage_start"])
+                if ignored:
+                    self.assertEqual(
+                        "coverage_starts_before_requested_since",
+                        result["since_ignored_reason"],
+                    )
+                else:
+                    self.assertIsNone(result["since_ignored_reason"])
+
     def test_dated_report_hints_older_equal_and_younger_since(self) -> None:
         state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
         cases = [

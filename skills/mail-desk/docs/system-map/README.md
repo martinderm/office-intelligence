@@ -689,8 +689,10 @@ Workspace-Lock-Ownership wird vor Wrapper-Dateien/Pruning ohne Legacy-Bypass
 geprüft. Explizite Lease-/Conversation-IDs gehen bei `draft` unverändert an den
 Runner; in anderen Modi dienen sie nur der Wrapper-Ownership (Runner akzeptiert
 die Flags dort nicht). Backend-/Account-/Review-Gates unverändert.
-`sync-sent` ist nur mailbox-lesend: Sent-Index, Runner-Ergebnis und Wrapper-Logs
-werden lokal geschrieben. Summary führt Sent-Zähler und propagiert Fehler
+`sync-sent` ist nur mailbox-lesend: Sent-Index sowie Wrapper-Envelope/Progress
+unter `tmp/mail-batch/` werden lokal geschrieben. `--since ... --account ...` sendet
+ein verifiziertes Recovery-Manifest per stdin (kein direkter `--sync-sent`-Modus).
+Summary führt Sent-Zähler und propagiert Fehler
 einschließlich defektem Runner-Envelope mit Nichtnull-Exit. Regressionen in
 `tests/test_batch_cli_wrapper.py`; historische Abnahmezahlen unten sind alte Frames.
 
@@ -2340,13 +2342,15 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py): `get_single_email_details` gibt `cc` zurück (das
   Cc wurde bisher abgefragt, aber verworfen) und `headers_complete` (nur additiv, Inbound-Semantik unverändert).
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
-  `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
+  `new_items`, `handoff`, `write_state`, `since_requested`, `since_ignored`, `since_ignored_reason`,
+  `effective_coverage_start`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `handoff_deferred`, `ledger_invalid`,
   `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`,
   `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
-  `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
+  `write_state`, `since_*` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`). `sync-sent
+  --since ... --account ...` prüft die Lease und sendet ein stdin-Recovery-Manifest, kein direkter Modus.
 
 **Zustandsautomat (Handoff-Item):** `neu erkannt` → *Handoff schreiben* → `pending` (Handoff **und** Index) →
 *Consumer: Ledger-Zeile* → `consumed` (abgeleitet; die Datei wird erst beim nächsten Handoff mit neuen Items ersetzt). Ledger-bekannte Message-IDs
@@ -2387,11 +2391,12 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   unabhängig von einem parsebaren `at`; eine bloße Quarantäne reicht nicht. Nur ein vom Operator verifiziertes
   `since` (exakter Start, nie `min(Watermark, since)`, keine Punktdaten/CLI-Defaults) oder ein
   wiederhergestellter valider State erlaubt den Resync; datierte APIs reichen `since` durch, Tage davor sind
-  fail-closed. Recovery: Runner ohne `--sync-sent` mit `--input`/`--stdin`-Manifest
-  `{"mode":"sync_sent","since":"YYYY-MM-DD","count":N}` (direkter `--sync-sent` ignoriert `--input`; Wrapper
-  `sync-sent` kann kein `since` führen; ein direkter Lauf setzt die gehaltene Wrapper-Lease voraus). Ein
-  jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`, `since_ignored_reason` und
-  `effective_coverage_start`, älter/gleich wird angewendet. Jeder originale State/Marker wird vor Merge auf Future
+  fail-closed. Recovery bevorzugt über den Wrapper `sync-sent --since ... --account ...` (maschinelle
+  `verify_workspace_lock`-Prüfung vor Read/Write, stdin-Manifest); nur ohne Wrapper direkt mit
+  `--input`/`--stdin`, explizitem Account, ohne `--sync-sent` und unter derselben gehaltenen/verifizierten
+  Lease. Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`,
+  `since_ignored_reason` und `effective_coverage_start`, älter/gleich wird angewendet. Jeder originale
+  State/Marker wird vor Merge auf Future
   geprüft; `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Malformed/null/future
   State nur autorisierte Reparatur/Quarantäne (valides Schema-JSON, konservativer verifizierter älterer Start),
   kein `since`-Bypass eines malformed State; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim

@@ -139,6 +139,21 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - Tests prüfen den Manifest-/stdin-Aufruf offline über gemockte Konfiguration/Dispatch und den Ignore-Hinweis
   (älter/gleich/jünger); `cli-operations.md`, Log-Schema, L1/L2 und SKILL sind synchron.
 
+#### Fixed (siebte Review-/Audit-Runde)
+
+- Der bestehende Wrapper kann jetzt `sync-sent --since YYYY-MM-DD --account <verifiziert>`; er leitet ein
+  stdin-Manifest an den Runner und führt die vorhandene maschinelle `verify_workspace_lock`-Prüfung **vor**
+  jedem Read/Write aus. Fehlende/fremde Lease stoppt ohne lokale Writes oder Kindprozess. Der direkte
+  Runner-Fallback verlangt expliziten Account und dieselbe gehaltene/verifizierte Lease; `--sync-sent`
+  bleibt dabei ungesetzt.
+- Dokumentation ist portabel (`$MAIL_DESK_SKILL/scripts/...`, kein Workspace-Root-Pfad) und trennt das
+  optionale Eingabe-Manifest `batch-sync-sent.json` vom Wrapper-Envelope/Progress unter `tmp/mail-batch/`.
+- `sync_sent_items(dates=[...], since=...)` wendet ein älteres `since` nun mit derselben konservativen
+  Rewind-Logik wie der Report vor Reads/Commit an; älter/gleich/jünger werden korrekt als
+  `since_ignored: false`/`true` samt `effective_coverage_start` gemeldet. Tests decken Barrier-Rewind,
+  Retry nach fehlgeschlagenem Fenster, alle drei Formen und die echte Account-Binding-Seam mit
+  Offline-Workspace-Fixture ab.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

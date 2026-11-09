@@ -358,14 +358,17 @@ non-destruktiv in den State migriert (älterer `initial_start` bleibt erhalten, 
 zurückgesetzt).
 
 **Recovery ohne State (Issue #88):** `sent_initial_state_required` wird nie über Punktdaten, Watermark oder
-CLI-Default aufgelöst. Der geprüfte Weg führt den Runner **ohne** direkten `--sync-sent`-Modus mit einem
-Manifest bzw. stdin aus:
-`{"mode":"sync_sent","since":"YYYY-MM-DD","count":150}` →
-`python3 scripts/mail_desk_batch_runner.py --input data/mail-desk/batch-sync-sent.json --keep-input`
-(oder `--stdin`). Der direkte `--sync-sent N` setzt den direkten Modus und ignoriert `--input`/`--stdin`;
-der Wrapper `sync-sent --count N` kann kein `since` führen. `since` muss ein verifizierter konservativer
-ISO-Start sein; der Wrapper prüft die Workspace-Lease, ein direkter Runner-Lauf setzt dieselbe gehaltene und
-verifizierte Lease voraus. Keine autonome Löschung.
+CLI-Default aufgelöst. Der geprüfte Weg nutzt bevorzugt den Wrapper, der die maschinelle
+`verify_workspace_lock`-Prüfung **vor** jedem Read/Write ausführt:
+`python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" sync-sent --count 150 --since YYYY-MM-DD
+--account VERIFIED --workspace <consumer> --workspace-lease-id <lease>`.
+Der Wrapper sendet dem Runner ein stdin-Manifest
+`{"mode":"sync_sent","folder":"Sent Items","since":"YYYY-MM-DD","count":150,"account":"VERIFIED"}`;
+der direkte `--sync-sent`-Modus wird dabei nicht gesetzt. Nur ohne Wrapper direkt: Runner mit
+`--input data/mail-desk/batch-sync-sent.json --keep-input` (oder `--stdin`), Manifest mit **explizitem**
+Account und derselben gehaltenen/verifizierten Lease; `--sync-sent` darf dabei nicht gesetzt sein, weil der
+direkte Modus `--input`/`--stdin` ignoriert. `$MAIL_DESK_SKILL` ist das installierte Skill-Verzeichnis, nicht
+der Workspace-Root. Keine autonome Löschung.
 
 **`since`-Hinweis:** Ist `since` jünger als die bestehende Coverage, wird es nicht angewendet (kein
 Coverage-Skip); Envelope/CLI melden additiv `since_requested`, `since_ignored: true`,

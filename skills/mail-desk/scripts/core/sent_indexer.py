@@ -1301,6 +1301,14 @@ def _sync_sent_items_impl(
             # the watermark is never consulted for an existing index.
             initial_start = min(earliest, default_start)
         coverage_start = _coverage_start(initial_start, barrier, watermark, run_date)
+        if verified_since is not None and not (state_missing and has_index):
+            # Same conservative rewind as the report API: an older verified since
+            # must shape the start before any read/commit, never be silently unused.
+            since_day, since_dt = verified_since
+            if since_day < coverage_start:
+                initial_start = min([d for d in (initial_start, since_day) if d])
+                barrier = (since_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+                coverage_start = since_day
         if earliest is not None and earliest < coverage_start:
             initial_start = min([d for d in (initial_start, earliest) if d])
             barrier = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")

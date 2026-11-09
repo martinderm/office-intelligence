@@ -119,10 +119,11 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
 
    Modi: `draft`/`execute`/`reconcile`/`sync-sent`; kein beliebiger Runner-Passthrough.
    `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150). Bei `sync-sent` ist `count` ein
-   **Item-Budget** (kein Tageslimit); ein `since` (ISO-Datum) ist nur Manifest-/API-Feld, kein CLI-Flag.
-   `sync-sent` delegiert ausschließlich an den bestehenden `--sync-sent`-Modus:
-   Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
-   `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
+   **Item-Budget** (kein Tageslimit). `--since YYYY-MM-DD` ist der verifizierte Recovery-Start und
+   erfordert `--account`; ohne `since` läuft `sync-sent` im bestehenden direkten `--sync-sent`-Modus.
+   Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Wrapper-Envelope/Progress unter
+   `tmp/mail-batch/`; `batch-sync-sent.json` ist nur ein optionales **Eingabe**-Manifest für die
+   Auto-Discovery, kein Ergebnis) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
    Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
    `ledger_invalid`/`handoff_deferred`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
@@ -165,36 +166,53 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `--apply` sind Argumentfehler.
 
    ```bash
-   python3 scripts/mail_desk_batch_cli.py draft --count 10
-   python3 scripts/mail_desk_batch_cli.py execute
-   python3 scripts/mail_desk_batch_cli.py reconcile
-   python3 scripts/mail_desk_batch_cli.py reconcile --apply --approved-by operator
-   python3 scripts/mail_desk_batch_cli.py sync-sent --count 150
+   MAIL_DESK_SKILL=/path/to/installed/mail-desk   # installiertes Skill-Verzeichnis
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" draft --count 10
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" execute
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" reconcile
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" reconcile --apply --approved-by operator
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" sync-sent --count 150
    ```
 
    Die Beispiele setzen eine eigene Lease über die genannten Umgebungsvariablen
    voraus; alternativ die entsprechende ID explizit übergeben.
 
    **Sent-Sync-Recovery bei fehlendem Coverage-State (`sent_initial_state_required`,
-   Issue #88):** Der Wrapper `sync-sent --count N` kann kein `since` führen und
-   setzt intern den direkten Modus `--sync-sent N`; dieser direkte Modus
-   ignoriert `--input`/`--stdin`. Für die Recovery daher **ohne** `--sync-sent`
-   einen Manifest-/stdin-Lauf starten, exakt:
+   Issue #88):** Bevorzugt über den Wrapper, weil dieser die maschinelle
+   `verify_workspace_lock`-Prüfung **vor** jedem Read/Write ausführt:
+
+   ```bash
+   MAIL_DESK_SKILL=/path/to/installed/mail-desk   # installiertes Skill-Verzeichnis, nicht der Workspace
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" sync-sent \
+       --count 150 --since 2026-09-01 --account ACC \
+       --workspace "$PWD" --workspace-lease-id "$WORKSPACE_LOCK_LEASE_ID"
+   ```
+
+   `--since` erfordert `--account` und übergibt dem Runner ein stdin-Manifest
+   `{"mode":"sync_sent","folder":"Sent Items","count":150,"since":"...","account":"..."}`;
+   dabei wird bewusst **nicht** der direkte `--sync-sent`-Modus gesetzt. Fehlt
+   oder fremd ist die Lease, stoppt der Wrapper mit `WorkspaceLockError` vor
+   jedem Read/Write. Normale Läufe bleiben `... sync-sent --count 150` ohne `since`.
+
+   Nur falls der Wrapper nicht verfügbar ist, den Runner direkt starten; dann
+   muss der Aufrufer dieselbe Lease bereits halten und verifiziert haben (der
+   Runner prüft sie für `sync_sent` nicht selbst). Manifest mit **explizitem**
+   Account:
 
    ```json
-   {"mode": "sync_sent", "since": "YYYY-MM-DD", "count": 150}
+   {"mode":"sync_sent","folder":"Sent Items","since":"YYYY-MM-DD","count":150,"account":"VERIFIED-ACCOUNT"}
    ```
 
    ```bash
-   # aus dem Workspace-Root; Manifest (--keep-input bewahrt die Datei nach Erfolg)
-   python3 scripts/mail_desk_batch_runner.py \
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_runner.py" \
        --input data/mail-desk/batch-sync-sent.json --keep-input
-   # alternativ stdin
-   python3 scripts/mail_desk_batch_runner.py --stdin < data/mail-desk/batch-sync-sent.json
+   # oder
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_runner.py" --stdin < data/mail-desk/batch-sync-sent.json
    ```
 
    `--sync-sent` darf dabei **nicht** gesetzt sein: Es gewinnt als direkter Modus und
-   ignoriert das Manifest stillschweigend.
+   ignoriert das Manifest stillschweigend. `$MAIL_DESK_SKILL` ist das installierte
+   Skill-Verzeichnis (im Bundle `skills/mail-desk`), nicht der Workspace-Root.
 
    `since` ist der **verifizierte konservative Start** (ISO-Datum, nicht future,
    kein Zeitanteil); er wird exakt übernommen, nicht mit dem Watermark gemischt.

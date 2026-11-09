@@ -37,6 +37,7 @@ def _base_args(**overrides):
         "keep": 10,
         "workspace_lease_id": None,
         "workspace_conversation_id": None,
+        "since": None,
     }
     defaults.update(overrides)
     ns = type("Args", (), {})()
@@ -74,6 +75,18 @@ class BuildArgsTests(unittest.TestCase):
         self.assertEqual(argv[argv.index("--sync-sent") + 1], "42")
         for flag in ("--reconcile", "--input", "--folder", "--skip-known", "--draft"):
             self.assertNotIn(flag, argv)
+
+    def test_sync_sent_since_becomes_a_stdin_manifest_without_direct_mode(self):
+        args = _base_args(
+            mode="sync-sent", count=42, since="2026-09-01", account="ACC",
+        )
+        argv = batch_cli._build_args(args, Path("/ws"))
+        self.assertNotIn("--sync-sent", argv)
+        self.assertEqual("ACC", argv[argv.index("--account") + 1])
+        self.assertEqual({
+            "mode": "sync_sent", "folder": "Sent Items", "count": 42,
+            "since": "2026-09-01", "account": "ACC",
+        }, batch_cli._sync_sent_manifest(args))
 
     def test_exact_delegation_only_for_draft(self):
         for mode in ("draft", "execute", "reconcile", "sync-sent"):
@@ -244,6 +257,52 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["type"], "WorkspaceLockError")
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        run.assert_not_called()
+
+    def test_failed_guard_blocks_since_recovery_before_read_or_write(self):
+        with patch.object(batch_cli, "verify_workspace_lock", side_effect=RuntimeError("foreign")), \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code, result = self.call(
+                extra=("--since", "2026-09-01", "--account", "ACC", "--workspace-lease-id", "foreign"),
+            )
+        self.assertEqual(code, 2)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["type"], "WorkspaceLockError")
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        run.assert_not_called()
+
+    def test_sync_sent_since_dispatches_verified_manifest_through_stdin(self):
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+            code, result = self.call(
+                extra=("--since", "2026-09-01", "--account", "ACC", "--workspace-lease-id", "mine"),
+            )
+        self.assertEqual(0, code)
+        self.assertTrue(result["success"])
+        guard.assert_called_once_with(self.workspace, lease_id="mine", conversation_id=None)
+        self.assertIn("--stdin", self.command)
+        self.assertNotIn("--sync-sent", self.command)
+        self.assertEqual(
+            {
+                "mode": "sync_sent", "folder": "Sent Items", "count": 150,
+                "since": "2026-09-01", "account": "ACC",
+            },
+            json.loads(self.child_options["input"]),
+        )
+
+    def test_sync_sent_since_requires_the_verified_account(self):
+        stream = io.StringIO()
+        argv = [
+            "batch-cli", "sync-sent", "--since", "2026-09-01",
+            "--workspace", str(self.workspace),
+        ]
+        with patch.object(sys, "argv", argv), patch.object(batch_cli.subprocess, "run") as run, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr, \
+                self.assertRaises(SystemExit) as raised:
+            batch_cli.main()
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn("--since requires --account", stderr.getvalue())
         self.assertEqual(list(self.workspace.iterdir()), [])
         run.assert_not_called()
 

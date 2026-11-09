@@ -160,8 +160,10 @@ Execute-Aufträge prüft er zusätzlich vor Wrapper-Logs/Pruning gegen den beste
 H2-Vertrag und übergibt nur den geprüften Snapshot per stdin an den Runner.
 Explizite `--workspace-lease-id`/`--workspace-conversation-id` werden bei `draft` zusätzlich
 unverändert an den Runner delegiert, nicht bei anderen Modi. `sync-sent` liest
-die Mailbox, schreibt jedoch lokal Sent-Index, Runner-Ergebnis und Wrapper-Logs;
-es ist keine schreibfreie Operation.
+die Mailbox, schreibt jedoch lokal Sent-Index, Wrapper-Envelope/Progress unter
+`tmp/mail-batch/`; es ist keine schreibfreie Operation. `sync-sent --since ... --account ...`
+leitet ein verifiziertes Recovery-Manifest per stdin an den Runner, ohne den
+direkten `--sync-sent`-Modus.
 
 **SOP-Guard (leerer Posteingang, Vorlage für Consumer-Pipelines):** Meldet `draft`
 `is_empty: true`/`inbox_zero: true` (bzw. `total_drafted == 0`), ist der Lauf ein
@@ -205,11 +207,11 @@ State werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird 
 beweist keine lückenlose Untergrenze); eine bloße Quarantäne reicht nicht. Fehlt bei bestehendem Index jede
 State-Datei, fail-closed `sent_initial_state_required` in **allen** Einstiegen und unabhängig von einem
 parsebaren `at`; nur ein verifiziertes `since` (exakter Start, nie `min(Watermark, since)`) oder ein
-wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since` durch. Recovery: Runner
-ohne `--sync-sent` mit `--input`/`--stdin`-Manifest `{"mode":"sync_sent","since":"YYYY-MM-DD","count":N}`
-(direkter `--sync-sent` ignoriert `--input`; Wrapper `sync-sent` kann kein `since`; direkter Lauf setzt die
-gehaltene Wrapper-Lease voraus); ein jüngeres `since` wird nicht angewendet und meldet `since_ignored`,
-`since_ignored_reason` und `effective_coverage_start`. Nur autorisierte
+wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since` durch. Recovery bevorzugt
+über den Wrapper `sync-sent --since ... --account ...` (maschinelle Lease-Prüfung vor Read/Write,
+stdin-Manifest); nur ohne Wrapper direkt mit `--input`/`--stdin`, explizitem Account, ohne `--sync-sent` und
+unter derselben gehaltenen/verifizierten Lease. Ein jüngeres `since` wird nicht angewendet und meldet
+`since_ignored`, `since_ignored_reason` und `effective_coverage_start`. Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten
 akzeptiert (kein Fallback 2026-01-01); der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`

@@ -335,6 +335,30 @@ class SyncSentInvocationTests(unittest.TestCase):
         self.assertEqual(payload, config)
         self.assertEqual(path.resolve(), input_path)
 
+    def test_sync_sent_recovery_binds_account_from_workspace_fixture(self) -> None:
+        # Only the mailbox sync is mocked: the real account-binding seam runs
+        # against an offline workspace backend fixture.
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            data_dir = workspace / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            (workspace / ".agents").mkdir()
+            (workspace / ".agents" / "mail-desk-backend.json").write_text(
+                json.dumps({"schema_version": 1, "backend": "himalaya", "account": "BOUND"}),
+                encoding="utf-8",
+            )
+            sync_items = Mock(return_value={"ok": True, "new_count": 0})
+            with patch.object(runner, "sync_sent_items", sync_items):
+                result = runner.run_sync_sent_mode(
+                    {"mode": "sync_sent", "count": 3, "since": "2026-09-01"},
+                    account=None, data_dir=data_dir,
+                )
+        self.assertTrue(result["ok"])
+        sync_items.assert_called_once_with(
+            count=3, folder="Sent Items", account="BOUND", data_dir=data_dir,
+            workspace_root=workspace, since="2026-09-01", max_pages=50,
+        )
+
 
 class ExecuteModeTests(unittest.TestCase):
     def test_execute_preserves_copy_verify_delete_and_persistence_order(self) -> None:

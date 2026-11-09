@@ -40,6 +40,17 @@ def _positive_int(value: str) -> int:
     return number
 
 
+def _iso_date(value: str) -> str:
+    """Argparse type enforcing a bare ``YYYY-MM-DD`` verified recovery start."""
+    if len(value) != 10:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected a valid YYYY-MM-DD date, got {value!r}") from exc
+    return value
+
+
 def _resolve_account(args: argparse.Namespace) -> str | None:
     """Return the explicit account override, or ``None`` to let the runner bind.
 
@@ -81,7 +92,12 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
             if approved_by:
                 argv += ["--approved-by", approved_by]
     elif args.mode == "sync-sent":
-        argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
+        if getattr(args, "since", None) is not None:
+            # Recovery carries since in a stdin manifest; the direct --sync-sent
+            # mode would win and silently ignore it.
+            argv = [runner, "--data-dir", data_dir]
+        else:
+            argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
     else:
         raise ValueError(f"Unsupported wrapper mode: {args.mode}")
     account = _resolve_account(args)
@@ -96,6 +112,24 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
                 argv += ["--" + name.replace("_", "-"), value]
     argv.append(f"--keep {args.keep}")
     return argv
+
+
+def _sync_sent_manifest(args: argparse.Namespace) -> dict[str, object] | None:
+    """Build the verified sent-recovery manifest sent to the runner via stdin.
+
+    Only ``sync-sent`` with ``--since`` uses a manifest; normal runs keep the
+    direct ``--sync-sent`` mode. The verified account is mandatory for recovery.
+    """
+    since = getattr(args, "since", None)
+    if args.mode != "sync-sent" or since is None:
+        return None
+    return {
+        "mode": "sync_sent",
+        "folder": "Sent Items",
+        "count": args.count,
+        "since": since,
+        "account": _resolve_account(args),
+    }
 
 
 def _prune_output_dir(run_dir: Path, keep: int) -> None:
@@ -163,6 +197,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("mode", choices=("draft", "execute", "reconcile", "sync-sent"))
     parser.add_argument("--count", "-c", type=_positive_int, default=None, help="draft candidates (default 10) or recent Sent Items (default 150)")
+    parser.add_argument(
+        "--since", type=_iso_date, default=None,
+        help="verified conservative start (YYYY-MM-DD) for sync-sent recovery; requires --account",
+    )
     parser.add_argument("--account", default=None, help="optional account override; default: workspace backend binding")
     parser.add_argument("--data-dir", default="data/mail-desk", help="mail-desk data dir relative to --workspace")
     parser.add_argument("--workspace", default=".", help="workspace root (default: current directory)")
@@ -177,6 +215,10 @@ def main() -> int:
         parser.error("--apply requires the reconcile mode")
     if args.approved_by is not None and not args.apply:
         parser.error("--approved-by requires --apply")
+    if args.since is not None and args.mode != "sync-sent":
+        parser.error("--since requires the sync-sent mode")
+    if args.since is not None and not (args.account and args.account.strip()):
+        parser.error("--since requires --account with the verified account")
     if args.count is None:
         args.count = 150 if args.mode == "sync-sent" else 10
 
@@ -243,8 +285,12 @@ def main() -> int:
     command = [sys.executable, str(SCRIPTS_DIR / runner_argv[0]), *runner_argv[1:]]
     child_input = {}
     if execute_input is not None:
-        command.append("--stdin")
         child_input["input"] = execute_input
+    sync_sent_manifest = _sync_sent_manifest(args)
+    if sync_sent_manifest is not None:
+        child_input["input"] = json.dumps(sync_sent_manifest, ensure_ascii=False).encode("utf-8")
+    if child_input:
+        command.append("--stdin")
 
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
