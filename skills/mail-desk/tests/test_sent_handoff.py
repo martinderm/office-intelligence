@@ -530,6 +530,22 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
+    def test_window_failure_recovery_reconvers_the_full_original_window(self) -> None:
+        mailbox = _Mailbox(_details(1, _day="2026-09-24"), _details(2, _day="2026-09-25"))
+        mailbox.fail_dates = {"2026-09-25"}
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 26))):
+            with self.assertRaises(SentSyncPartialFailure) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+            self.assertIn("start=2026-07-29 end=2026-09-26", str(caught.exception))
+            self.assertIn("sync_sent_items(since='2026-07-29')", str(caught.exception))
+            self.assertEqual([], self.index_ids())
+
+            mailbox.fail_dates = set()  # fixed: the default run re-covers the full window
+            retry = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual(["m1@example.test", "m2@example.test"], [i["norm_message_id"] for i in retry["new_items"]])
+        self.assertEqual(["m1@example.test", "m2@example.test"], self.index_ids())
+
     def test_empty_index_first_day_failure_is_retried_on_the_next_day(self) -> None:
         mailbox = _Mailbox(_details(1))
         mailbox.fail_dates = {DAY}
