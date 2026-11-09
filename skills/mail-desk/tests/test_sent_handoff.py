@@ -519,6 +519,51 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
+    def test_empty_index_first_day_failure_is_retried_on_the_next_day(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        mailbox.fail_dates = {DAY}
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentSyncPartialFailure) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual([DAY], caught.exception.failed_dates)
+        self.assertEqual([], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+        mailbox.fail_dates = set()  # day D fixed; retry on D+1 must still include D
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 25))):
+            retry = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual(["m1@example.test"], [i["norm_message_id"] for i in retry["new_items"]])
+        self.assertEqual(["m1@example.test"], self.index_ids())
+
+    def test_count_that_would_skip_days_is_refused_before_reading(self) -> None:
+        seed = {"schema_version": 1, "at": "2026-09-21", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
+        self.assertEqual("sent_count_gap", caught.exception.reason_code)
+        self.assertEqual((1, 4), (
+            caught.exception.details["requested_count"], caught.exception.details["gap_days"],
+        ))
+        self.assertEqual(0, mailbox.calls)
+        self.assertEqual(["seed@example.test"], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
+    def test_empty_index_count_below_the_backfill_is_refused(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(count=1, account="ACC", data_dir=self.dd)
+        self.assertEqual("sent_count_gap", caught.exception.reason_code)
+        self.assertEqual(0, mailbox.calls)
+        self.assertEqual([], self.index_ids())
+
     def test_watermark_gap_beyond_the_window_is_refused_before_reading(self) -> None:
         seed = {"schema_version": 1, "at": "2026-07-25", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
@@ -964,7 +1009,7 @@ class ModeEnvelopeTests(_Base):
         run, read = mailbox.patches()
         with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime()):
             return sync_sent_mode.run_sync_sent_mode(
-                {"mode": "sync_sent", "count": 3, "folder": "Sent Items"}, account="ACC", data_dir=self.dd
+                {"mode": "sync_sent", "count": 150, "folder": "Sent Items"}, account="ACC", data_dir=self.dd
             )
 
     def test_success_envelope_has_new_count_items_and_handoff(self) -> None:

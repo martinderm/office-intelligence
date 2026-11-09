@@ -696,6 +696,8 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen endet bei heute, überspringt ältere Tage; keine
   Datums-CLI). Same-day > 200 und eine volle 100-Envelope-Seite (`sent_window_truncated`, keine Pagination,
   kein sicherer Skip) sind harte Grenzen; eine Wasserzeichen-Lücke > 60 Tage verweigert vor jedem Lesen
-  (`sent_window_gap`). Nach der Verweigerung wurde nichts geschrieben, ein Default-Lauf holt alte Tage nicht nach.
+  (`sent_window_gap`) und ein ältere Tage abschneidendes `count` (`sent_count_gap`); ein leerer Index startet
+  mit dem vollen 60-Tage-Fenster. Nach der Verweigerung wurde nichts geschrieben, ein Default-Lauf holt alte
+  Tage nicht nach.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

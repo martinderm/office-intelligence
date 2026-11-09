@@ -663,7 +663,8 @@ kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres 
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow`, eine volle
 100-Envelope-Seite `sent_window_truncated` (keine Pagination, kein sicherer Skip) und eine Wasserzeichen-Lücke
-> 60 Tage `sent_window_gap` (jeweils vollständig vor jedem Write/Lesen, kein Zurückstellen; Recovery
+> 60 Tage `sent_window_gap` bzw. ein ältere Tage abschneidendes `count` `sent_count_gap` (jeweils vollständig vor
+jedem Write/Lesen, kein Zurückstellen; ein leerer Index startet mit dem vollen 60-Tage-Fenster; Recovery
 eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)`, nicht über `--sync-sent N`/`count`
 oder `sync_sent_items(dates=[D])`, das D+1 mitliest; Datums-CLI bewusst nicht vorhanden). Scheitert ein
 Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`, `failed_dates`), damit das

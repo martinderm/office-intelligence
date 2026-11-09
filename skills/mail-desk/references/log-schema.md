@@ -316,7 +316,9 @@ und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Pytho
 Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
 `failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Eine
 Wasserzeichen-Lücke über `MAX_SYNC_WINDOW_DAYS` (60) verweigert vor jedem Lesen (`sent_window_gap`), weil kein
-vollständiges Fenster garantiert ist; eine volle 100-Envelope-Seite blockiert den ganzen Lauf
+vollständiges Fenster garantiert ist; ebenso ein `count`, der ältere Tage abschneiden würde (`sent_count_gap`).
+Ein leerer Index startet mit dem vollen 60-Tage-Fenster, damit ein am ersten Tag gescheiterter Tag am Folgetag
+noch erfasst wird. Eine volle 100-Envelope-Seite blockiert den ganzen Lauf
 (`sent_window_truncated`, keine Pagination, kein sicherer Skip). `write_state` ist
 dann `none` (Ablehnung/Fehler vor jedem Write) oder `unknown` (Schreibversuch schlug fehl — auch ein
 Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand

@@ -1088,17 +1088,18 @@ Write ab.
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
-| `sent_window_truncated` | Sent-Tag lieferte eine volle 100-Envelope-Seite; keine Pagination, kein sicherer Skip, ganzer Lauf blockiert, nichts geschrieben |
-| `sent_window_gap` | Wasserzeichen-Lücke > `MAX_SYNC_WINDOW_DAYS`; kein vollständiges Fenster, nichts gelesen/geschrieben |
+| `sent_window_truncated` | volle 100-Envelope-Seite; keine Pagination/Skip, Lauf blockiert |
+| `sent_window_gap` | Wasserzeichen-Lücke > 60 Tage; nichts gelesen/geschrieben |
+| `sent_count_gap` | `count` würde ältere Tage abschneiden; nichts gelesen/geschrieben |
 | `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, `failed_dates` |
-| `sync_failed` | Vorab-Fehler (`write_state: none`) oder Schreibfehler nach möglicher Publikation (Handoff-Replace/Append; `unknown`, `new_count: null`, `new_items_unavailable: true`) |
+| `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
 
 Kein Zurückstellen: > 200 neue Items ⇒ `handoff_overflow` vor jedem Write. **Recovery nur über die
 Python-API**: einen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
-`sync_sent_items(dates=[D])`, das D+1 mitliest), älteste Tage zuerst, dazwischen konsumieren. `--sync-sent
-N`/`count` ist **keine** Recovery (endet bei heute, überspringt ältere Tage; keine Datums-CLI).
-Same-day > 200 und volle 100-Seite sind harte Grenzen. Nach der Verweigerung wurde nichts
-geschrieben; ein Default-/CLI-Lauf holt alte Tage nicht nach.
+`sync_sent_items(dates=[D])`, das D+1 mitliest), älteste zuerst, dazwischen konsumieren. `--sync-sent
+N`/`count` ist **keine** Recovery. Volle 100-Seite und > 200/Tag sind harte Grenzen. Ein leerer Index startet
+mit vollem 60-Tage-Fenster (Retry erfasst Tag D); ein abschneidendes `count` verweigert vor jedem Lesen
+(`sent_count_gap`). Nach der Verweigerung wurde nichts geschrieben.
 
 ---
 

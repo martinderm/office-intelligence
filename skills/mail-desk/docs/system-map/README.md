@@ -2342,7 +2342,7 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
   `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
   `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`,
-  `sent_window_truncated`, `sent_window_gap`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
+  `sent_window_truncated`, `sent_window_gap`, `sent_count_gap`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
 - [`scripts/mail_desk_batch_cli.py`](../../scripts/mail_desk_batch_cli.py): Summary nennt `new_count`, `reason_code`,
   `write_state` und `handoff`-Zähler (keine Items; `new_count` fehlt bei `unknown`).
@@ -2381,7 +2381,9 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   `--sync-sent N`/`count` ist **keine** Recovery, weil das Wasserzeichen-Fenster bei heute endet und ältere Tage
   überspringt; eine Datums-CLI gibt es bewusst nicht. Same-day > 200 und eine volle 100-Envelope-Seite
   (`sent_window_truncated`, keine Pagination, kein sicherer Skip) sind harte Grenzen; eine Wasserzeichen-Lücke
-  > 60 Tage verweigert vor jedem Lesen (`sent_window_gap`). Nach der Verweigerung wurde nichts geschrieben;
+  > 60 Tage (`sent_window_gap`) und ein ältere Tage abschneidendes `count` (`sent_count_gap`) verweigern vor
+  jedem Lesen; ein leerer Index startet mit dem vollen 60-Tage-Fenster (Retry erfasst Tag D). Nach der
+  Verweigerung wurde nichts geschrieben;
   ein Default-/CLI-Wiederanlauf holt die alten Tage nicht nach (laut verweigert, aber Betreiber muss die API
   nutzen).
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
@@ -2389,7 +2391,7 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   Handoff byte-gleich, 0 neue Items schreiben nichts.
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`, `sent_window_truncated`, `sent_window_gap`, `sync_window_failed`, `sync_failed`).
+  `handoff_overflow`, `sent_window_truncated`, `sent_window_gap`, `sent_count_gap`, `sync_window_failed`, `sync_failed`).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
   erweitert nichts, Überlängen sind `handoff_invalid`; Ledger-Zeilen strikt gegen das Schema (`load_ledger`,

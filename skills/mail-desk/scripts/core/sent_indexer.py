@@ -547,7 +547,9 @@ def _derive_sent_sync_window(count: int | None, data_dir: Path) -> tuple[list[st
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     watermark = _sent_index_watermark(data_dir)
     if watermark is None:
-        start = today
+        # Empty index: backfill the full guaranteed window so a failed first day is
+        # still inside the window on the next day's retry instead of being skipped.
+        start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
     else:
         start = datetime(watermark.year, watermark.month, watermark.day)
     if start > today:
@@ -599,9 +601,12 @@ def sync_sent_items(
 
     The no-dates path queries every day from the sent-index watermark through
     today (capped at ``MAX_SYNC_WINDOW_DAYS``, optionally bounded to the most
-    recent ``count`` days) instead of a hardwired 7-day window.  A watermark gap
-    beyond ``MAX_SYNC_WINDOW_DAYS`` is refused before reading anything
-    (``sent_window_gap``), because no complete window can be guaranteed.
+    recent ``count`` days) instead of a hardwired 7-day window.  An empty index
+    starts with the full 60-day window so a failed first day is retried on the
+    next day.  A watermark gap beyond ``MAX_SYNC_WINDOW_DAYS``
+    (``sent_window_gap``) or a ``count`` that would cut older days
+    (``sent_count_gap``) is refused before reading anything, because no complete
+    window can be guaranteed.
 
     All windows are read before the single commit.  If any window fails, the run
     is fail-closed **before any write**: nothing is handed off or indexed and
@@ -622,19 +627,34 @@ def sync_sent_items(
     if dates:
         window_dates = _dedupe_iso_dates(dates)
     else:
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         watermark = _sent_index_watermark(dd)
-        if watermark is not None:
-            gap_days = (datetime.now().date() - watermark.date()).days + 1
-            if gap_days > MAX_SYNC_WINDOW_DAYS:
-                raise SentHandoffError(
-                    "sent_window_gap",
-                    f"Sent-index watermark gap of {gap_days} day(s) exceeds MAX_SYNC_WINDOW_DAYS "
-                    f"({MAX_SYNC_WINDOW_DAYS}); a complete window cannot be guaranteed, so nothing "
-                    "was read or written. Sync the missing days explicitly via "
-                    "sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
-                    "the handoff in between.",
-                    {"watermark_gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
-                )
+        if watermark is None:
+            start = today - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)
+        else:
+            start = datetime(watermark.year, watermark.month, watermark.day)
+        if start > today:
+            start = today
+        gap_days = (today - start).days + 1
+        if watermark is not None and gap_days > MAX_SYNC_WINDOW_DAYS:
+            raise SentHandoffError(
+                "sent_window_gap",
+                f"Sent-index watermark gap of {gap_days} day(s) exceeds MAX_SYNC_WINDOW_DAYS "
+                f"({MAX_SYNC_WINDOW_DAYS}); a complete window cannot be guaranteed, so nothing "
+                "was read or written. Sync the missing days explicitly via "
+                "sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
+                "the handoff in between.",
+                {"watermark_gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
+            )
+        if count is not None and count > 0 and gap_days > count:
+            raise SentHandoffError(
+                "sent_count_gap",
+                f"count={count} would leave {gap_days - count} older day(s) unsynced and move the "
+                "watermark past them; nothing was read or written. Sync the missing days explicitly "
+                "via sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
+                "the handoff in between (count/--sync-sent is not a gap recovery).",
+                {"requested_count": count, "gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
+            )
         window_dates, follow_up_hint = _derive_sent_sync_window(count, dd)
 
     query_dates = _expand_sync_dates(window_dates, include_next_day=True)
