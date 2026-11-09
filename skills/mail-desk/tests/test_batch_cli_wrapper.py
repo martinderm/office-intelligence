@@ -261,6 +261,10 @@ class MainTests(unittest.TestCase):
             self.command[self.command.index("--data-dir") + 1],
             str((self.workspace / "data" / "mail-desk").resolve()),
         )
+        self.assertEqual(
+            Path(result["data"]["envelope_file"]).resolve().parent,
+            (self.workspace / "tmp" / "mail-batch").resolve(),
+        )
         self.assertTrue(Path(result["data"]["envelope_file"]).is_file())
         self.assertEqual(Path(result["data"]["progress_file"]).read_text(), "synthetic progress\n")
 
@@ -298,6 +302,44 @@ class MainTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertEqual("WorkspacePathError", result["error"]["type"])
         run.assert_not_called()
+
+    def _assert_external_output_untouched(self, old: Path, external: Path, extra=()) -> None:
+        before = {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()}
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as child, \
+                patch.object(batch_cli, "_prune_output_dir") as prune:
+            code, result = self.call("reconcile", extra=("--keep", "1", *extra))
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        child.assert_not_called()
+        prune.assert_not_called()
+        self.assertEqual(before, {
+            p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()
+        })
+        self.assertEqual(b"{}", old.read_bytes())
+
+    def test_tmp_junction_escape_is_rejected_before_output_mutation(self):
+        external = self.workspace.parent / (self.workspace.name + "-tmp-external")
+        (external / "mail-batch").mkdir(parents=True)
+        old = external / "mail-batch" / "reconcile-20260101-000000-envelope.json"
+        old.write_bytes(b"{}")
+        self.addCleanup(lambda: shutil.rmtree(external, ignore_errors=True))
+        if not _make_dir_link(self.workspace / "tmp", external):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_external_output_untouched(old, external)
+
+    def test_mail_batch_symlink_escape_is_rejected_before_output_mutation(self):
+        external = self.workspace.parent / (self.workspace.name + "-batch-external")
+        target = external / "mail-batch"
+        target.mkdir(parents=True)
+        old = target / "reconcile-20260101-000000-envelope.json"
+        old.write_bytes(b"{}")
+        self.addCleanup(lambda: shutil.rmtree(external, ignore_errors=True))
+        (self.workspace / "tmp").mkdir()
+        if not _make_dir_link(self.workspace / "tmp" / "mail-batch", target):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_external_output_untouched(old, external)
 
     def test_symlink_or_junction_data_dir_escape_is_rejected(self):
         data = self.workspace / "data"

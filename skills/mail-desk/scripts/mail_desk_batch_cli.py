@@ -62,6 +62,23 @@ def _resolve_bound_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     return workspace, data_dir
 
 
+def _resolve_run_dir(workspace: Path) -> Path:
+    """Bind the wrapper's output directory to its canonical workspace path.
+
+    ``tmp`` or ``tmp/mail-batch`` may be symlinks/junctions; the canonical path
+    must be exactly ``<workspace>/tmp/mail-batch`` so pruning/writes cannot touch
+    another consumer's files without its lease. Missing internal paths are fine.
+    """
+    expected = workspace / "tmp" / "mail-batch"
+    resolved = expected.resolve()
+    if resolved != expected:
+        raise ValueError(
+            "workspace tmp/mail-batch resolves outside or away from the canonical output "
+            "directory; refusing before mkdir/prune/child"
+        )
+    return resolved
+
+
 def _positive_int(value: str) -> int:
     """Argparse type enforcing ``keep >= 1`` (fail loud instead of guessing)."""
     try:
@@ -268,6 +285,15 @@ def main() -> int:
     # runner infers its workspace root from ``data_dir``.
     args.data_dir = str(data_dir)
     try:
+        run_dir = _resolve_run_dir(workspace)
+    except (OSError, ValueError) as exc:
+        emit_json(build_error(
+            "batch_cli", "Workspace output directory could not be verified.",
+            {"mode": args.mode}, error_type="WorkspacePathError",
+            error_details={"reason": str(exc)[:1000]},
+        ))
+        return 2
+    try:
         verify_workspace_lock(
             workspace, lease_id=args.workspace_lease_id,
             conversation_id=args.workspace_conversation_id,
@@ -310,7 +336,6 @@ def main() -> int:
             emit_json(build_error("batch_cli", "Execute preflight failed.",
                                   {"mode": "execute"}, error_type=type(exc).__name__))
             return 1
-    run_dir = workspace / "tmp" / "mail-batch"
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

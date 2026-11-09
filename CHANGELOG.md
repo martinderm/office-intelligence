@@ -160,11 +160,22 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   absolut muss der aufgelöste Pfad exakt `<workspace>/data/mail-desk` sein und der Runner-Root-Inferenz
   (`workspace_root_from_data_dir`) entsprechen. Symlinks/Junctions werden aufgelöst; externe Consumer,
   Escapes und fehlende Workspaces stoppen mit `WorkspacePathError` vor Child/Read/Write. Ein fehlendes
-  `data/mail-desk` im geprüften Workspace bleibt zulässig; andere Ausgabepfade werden nicht pauschal
-  eingeschränkt.
+  `data/mail-desk` im geprüften Workspace bleibt zulässig; nicht vom Wrapper verwendete Pfade bleiben
+  unberührt.
 - Tests decken relative/absolute Pfade, externes `--data-dir`, fehlenden Workspace, reale Verzeichnis-Links
   (Symlink oder Windows-Junction, mit Skip wenn nicht verfügbar), fehlende/fremde Lease sowie `--since` und
   Normalpfad ab. CLI-Operations, L1/L2, SKILL und Batch-Runner-Vertrag sind synchron.
+
+#### Fixed (neunte Review-/Audit-Runde)
+
+- Auch das Wrapper-Ausgabeverzeichnis `<workspace>/tmp/mail-batch` wird vor jedem `mkdir`, Prune und Child
+  kanonisch an denselben lease-geprüften Workspace gebunden. Zeigen `tmp` oder `mail-batch` per
+  Symlink/Junction aus dem Workspace, stoppt der Wrapper mit `WorkspacePathError`, ohne fremde Dateien
+  anzulegen, zu überschreiben oder zu löschen; fehlende interne Pfade bleiben zulässig.
+- Tests reproduzieren die Lock-Lücke mit realen Links auf beiden Ebenen (`tmp` und `mail-batch`), bestehenden
+  externen reconcile-Dateien und `--keep 1`: Dateien bleiben byte-gleich, Guard/Child/Prune werden nicht
+  gerufen. Normale Pfade schreiben weiterhin unter `<workspace>/tmp/mail-batch`; CLI-Operations, L1/L2,
+  SKILL und Batch-Runner-Vertrag sind aktualisiert.
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).

@@ -166,7 +166,9 @@ leitet ein verifiziertes Recovery-Manifest per stdin an den Runner, ohne den
 direkten `--sync-sent`-Modus. `--data-dir` muss kanonisch exakt
 `<workspace>/data/mail-desk` des lease-geprüften Workspaces sein; der Wrapper löst
 Symlinks/Junctions auf, gleicht mit der Runner-Root-Inferenz ab und stoppt mit
-`WorkspacePathError` vor Child/Read/Write bei externen Consumern/Escapes.
+`WorkspacePathError` vor Child/Read/Write bei externen Consumern/Escapes. Auch
+`<workspace>/tmp/mail-batch` wird vor mkdir/Prune/Child kanonisch gebunden; `tmp`
+oder `mail-batch` dürfen nicht aus dem Workspace herauszeigen.
 
 **SOP-Guard (leerer Posteingang, Vorlage für Consumer-Pipelines):** Meldet `draft`
 `is_empty: true`/`inbox_zero: true` (bzw. `total_drafted == 0`), ist der Lauf ein
