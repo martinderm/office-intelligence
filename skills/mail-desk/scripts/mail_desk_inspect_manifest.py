@@ -275,6 +275,10 @@ def main() -> int:
         return 0
 
     except Exception as e:
+        reason_code = getattr(e, "reason_code", None)
+        details = {"reason": str(e)[:1000]}
+        if reason_code is not None:
+            details["reason_code"] = reason_code
         if output_json or json_requested:
             emit_json(
                 build_error(
@@ -282,7 +286,7 @@ def main() -> int:
                     "Manifest inspection failed.",
                     {"operation": "inspect"},
                     error_type=type(e).__name__,
-                    error_details={"reason": str(e)[:1000]},
+                    error_details=details,
                 )
             )
         else:

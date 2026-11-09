@@ -11,6 +11,7 @@ from ..common import resolve_data_dir
 from ..sent_handoff import (
     HANDOFF_FILENAME,
     HANDOFF_STATES,
+    STATIC_ALIAS_REASON_CODES,
     MAX_HANDOFF_ITEMS,
     SentHandoffError,
     SentHandoffPublishError,
@@ -243,9 +244,7 @@ def run_sync_sent_mode(
     except SentHandoffError as error:
         # Static alias refusals must not peek at the rejected ledger/handoff:
         # report an explicitly unknown state instead of a false none/0.
-        alias_error = error.reason_code in {
-            "sent_index_alias_invalid", "ledger_alias_invalid",
-        }
+        alias_error = error.reason_code in STATIC_ALIAS_REASON_CODES
         return failure_envelope(
             dd,
             folder,

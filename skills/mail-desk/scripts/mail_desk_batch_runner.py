@@ -63,6 +63,7 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.sent_handoff import SentHandoffError
 from core.batch_contract import validate_execute_contract
 from core.telemetry import empty_telemetry
 from core.synthesis_handoff import empty_synthesis_handoff
@@ -1448,6 +1449,12 @@ def main() -> int:
         return 2
     except FileNotFoundError as exc:
         _emit(_failure_envelope(str(exc), error_type="InputNotFound", operation="input_load", state="NotFound"))
+        return 1
+    except SentHandoffError as exc:
+        _emit(_failure_envelope(
+            str(exc), error_type="SentHandoffError", operation="runtime", state="Failed",
+            details={"reason_code": exc.reason_code, **exc.details},
+        ))
         return 1
     except Exception as exc:  # noqa: BLE001 - every CLI failure must retain the envelope contract
         _emit(

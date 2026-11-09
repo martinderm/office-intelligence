@@ -272,21 +272,24 @@ verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungül
   (`handoff_allows_noop`). Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor**
   dem Ergebnis zu schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz beim Consumer).
 
-**Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`):** In **allen**
-Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den Index, das
-Ledger und beide `<datei>.torn`-Sidecars statisch auf Symlink-/Hardlink-Aliase, **bevor** Index-/State-Inhalte
-genutzt, die Mailbox gelesen oder Handoff/Index/Coverage geschrieben wird. Ein Alias ist eine
-Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Preflight bleibt `write_state`
-`none`; ein erst später (nur durch Race) erkannter Alias kann `state` melden. Handoff und Index bleiben
-unangetastet. Fehler-Details heißen `alias_file`, `alias_kind`, `alias_label`; `handoff.file` bleibt der
-Handoff-Pfad. Recovery ist ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en), keine
-automatische Löschung; ein bloßer Rerun ohne Korrektur scheitert identisch. Direktes `record_synthesized`
-prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Auch `load_ledger`,
-`load_pending_handoff` und `load_sent_index` prüfen ihre Zieldateien statisch **vor** dem Lesen und
-fail-closed; ein fremdes Hardlink-Ledger kann so keine Konsumentscheidung verfälschen. Auch der diagnostische
-Handoff-Peek in Fehler-Envelopes prüft das Ledger statisch und meldet `unknown`/`null` statt eines falschen
-`none`/`0`; statische Aliasfehler überspringen den Peek ganz. Der Check ist keine Zusage gegen einen
-konkurrierenden Same-User-Mutator (Issue #91).
+**Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`):**
+In **allen** Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den
+Index, das Ledger, beide `<datei>.torn`-Sidecars und das Handoff-Dokument statisch auf Symlink-/Hardlink-Aliase,
+**bevor** Index-/State-Inhalte genutzt, die Mailbox gelesen oder Handoff/Index/Coverage geschrieben wird. Ein
+Alias ist eine Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Preflight bleibt
+`write_state` `none`; ein erst später (nur durch Race) erkannter Alias kann `state` melden. Handoff und Index
+bleiben unangetastet. Fehler-Details heißen `alias_file`, `alias_kind`, `alias_label`; `handoff.file` bleibt der
+Handoff-Pfad. `alias_kind: "unverifiable"` (`reason: alias_unverifiable`) bedeutet, dass `lstat` wegen
+Permission/IO nicht prüfen konnte: ebenfalls fail-closed, `unknown`/`null`, nie „kein Alias“. Recovery ist
+ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en), keine automatische Löschung; ein bloßer
+Rerun ohne Korrektur scheitert identisch. Direktes `record_synthesized` prüft das Ledger samt Sidecar vor dem
+Lesen/Append. Auch `load_ledger`, `load_pending_handoff`, `load_sent_index` und `read_handoff` prüfen ihre
+Zieldateien statisch **vor** dem Lesen und fail-closed; ein fremdes Hardlink-Ledger/-Handoff kann so keine
+Konsumentscheidung verfälschen. Der Classifier propagiert `sent_index_alias_invalid` ausdrücklich, statt den
+fehlenden Lookup als „nicht beantwortet“ (`needs_reply: true`) umzudeuten. Der diagnostische Handoff-Peek
+prüft Ledger und Handoff statisch und meldet `unknown`/`null` statt eines falschen `none`/`0`; statische
+Aliasfehler überspringen den Peek ganz. Der Check ist keine Zusage gegen einen konkurrierenden Same-User-Mutator
+(Issue #91).
 
 ### Absturzfenster (`sync-sent`)
 

@@ -55,6 +55,7 @@ from .matching.topic_matching import (
     materialize_topic_details,
     select_topic_match,
 )
+from .sent_handoff import STATIC_ALIAS_REASON_CODES
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
@@ -352,7 +353,11 @@ def classify_email(
     if sent_lookup is None:
         try:
             sent_lookup = load_sent_index(ws / "data" / "mail-desk")
-        except Exception:
+        except Exception as error:
+            if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                # An aliased sent index is a deterministic filesystem fault, not
+                # "no lookup": never reinterpret it as "not replied".
+                raise
             sent_lookup = None
 
     if final_index is None:
@@ -971,11 +976,14 @@ def draft_manifest(
                 batch_dates = _sent_sync_batch_dates(emails)
                 if batch_dates:
                     sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws, account=account)
-            except Exception:
-                pass
+            except Exception as error:
+                if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                    raise
         try:
             sent_lookup = load_sent_index(dd)
-        except Exception:
+        except Exception as error:
+            if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                raise
             sent_lookup = None
 
     items: list[dict[str, Any]] = []

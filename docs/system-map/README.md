@@ -672,11 +672,12 @@ verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selbe
 Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
-schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger oder
-`<datei>.torn`-Sidecars `sent_index_alias_invalid`/`ledger_alias_invalid` (Preflight in allen Einstiegen **vor**
-Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Write, `write_state none|state`, keine automatische
-Löschung, Rerun ohne Reparatur scheitert gleich; auch Consumer-Reads `load_ledger`/`load_pending_handoff`/
-`load_sent_index` fail-closed), ein Manifest mit
+schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger/Handoff oder
+`<datei>.torn`-Sidecars `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid` (Preflight in
+allen Einstiegen **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Write, `write_state none|state`,
+keine automatische Löschung, Rerun ohne Reparatur scheitert gleich; `alias_kind: unverifiable` bei
+Permission/IO ebenfalls fail-closed; Consumer-Reads `load_ledger`/`load_pending_handoff`/`load_sent_index`/
+`read_handoff` fail-closed; Classifier propagiert Index-Alias statt `needs_reply: true`), ein Manifest mit
 ungültigem `count` `sync_invalid_count`, eine fehlende
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
 Rest nach Konsum) und nach `max_pages`

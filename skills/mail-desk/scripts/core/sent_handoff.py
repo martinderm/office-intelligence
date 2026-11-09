@@ -54,6 +54,9 @@ MAX_SUBJECT_CHARS = 1000
 
 #: ``handoff.state`` values reported in every sync envelope (success and failure).
 HANDOFF_STATES = ("none", "written", "pending", "invalid", "unknown")
+STATIC_ALIAS_REASON_CODES = frozenset({
+    "sent_index_alias_invalid", "ledger_alias_invalid", "handoff_alias_invalid",
+})
 
 _ITEM_STRING_FIELDS = (
     "message_id", "norm_message_id", "date", "subject", "from", "in_reply_to",
@@ -78,9 +81,9 @@ class SentHandoffError(RuntimeError):
     ``handoff_overflow`` (legacy producer refusals; current sync batches instead),
     ``handoff_deferred`` (legacy int date API saw a deferred bounded batch),
     ``ledger_invalid`` (a ledger line violates the documented schema),
-    ``sent_index_alias_invalid``/``ledger_alias_invalid`` (static symlink/hardlink
-    alias on the JSONL target or its ``.torn`` sidecar; a misconfiguration, not a
-    transient rerun).
+    ``sent_index_alias_invalid``/``ledger_alias_invalid``/``handoff_alias_invalid``
+    (static symlink/hardlink alias on the JSONL target or its ``.torn`` sidecar, or
+    the handoff document; a misconfiguration, not a transient rerun).
     ``details["state"]`` is the ``handoff.state``.
     """
 
@@ -705,6 +708,9 @@ def read_handoff(data_dir: Path) -> list[dict[str, Any]]:
     consumed or rewritten.
     """
     path = data_dir / HANDOFF_FILENAME
+    reject_static_aliases(
+        path, reason_code="handoff_alias_invalid", label="handoff",
+    )
     if not path.exists():
         return []
 
@@ -797,6 +803,9 @@ def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
     reject_static_aliases(
         data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
     )
+    reject_static_aliases(
+        data_dir / HANDOFF_FILENAME, reason_code="handoff_alias_invalid", label="handoff",
+    )
     ledger = load_ledger(data_dir)
     items = read_handoff(data_dir)
     pending = unconsumed(items, ledger)
@@ -851,6 +860,9 @@ def peek_handoff_state(data_dir: Path) -> dict[str, Any]:
     try:
         reject_static_aliases(
             data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
+        )
+        reject_static_aliases(
+            data_dir / HANDOFF_FILENAME, reason_code="handoff_alias_invalid", label="handoff",
         )
     except (SentHandoffError, OSError):
         return {"state": "unknown", "pending_count": None}

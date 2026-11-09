@@ -246,6 +246,20 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `none`/`written`; `unknown`/`invalid` oder `pending_count: null` blockieren Synthese **und** No-op bis zur
   manuellen Behebung. SKILL, Batch-Runner, L1/L2, Log-Schema und Effects sind synchronisiert.
 
+#### Fixed (fünfzehnte Review-/Audit-Runde)
+
+- Der Classifier verschluckt `sent_index_alias_invalid` nicht mehr: Einzelklassifikation und Draft propagieren
+  den strukturierten Fehler, statt den fehlenden Lookup als `needs_reply: true` zu deuten. Der Runner gibt ihn
+  ohne Traceback mit `reason_code`/Alias-Details aus; der reguläre Nicht-Alias-Reply (`replied_via_sent`) bleibt
+  unverändert.
+- `load_pending_handoff`/`read_handoff` prüfen auch das Handoff-Dokument statisch (`handoff_alias_invalid`) vor
+  dem Lesen; `peek_handoff_state` prüft Ledger **und** Handoff und liefert bei Alias `unknown`/`null`.
+  Tests mit echtem Pending- und leerem Handoff-Hardlink belegen keine Lese-/Schreib-/Promotion-Aufrufe und
+  bytegleiche externe Dateien.
+- `lstat`-Permission-/IO-Fehler werden als `alias_kind: unverifiable` (`reason: alias_unverifiable`) fail-closed
+  behandelt; Log-Schema, Batch-Runner, Effects, L1/L2, SKILL und CLI dokumentieren `unknown`/`null`. Die
+  Same-User-Race-Grenze (#91) bleibt unverändert außerhalb des kooperativen Scope.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

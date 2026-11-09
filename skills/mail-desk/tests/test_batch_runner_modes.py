@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -358,6 +359,27 @@ class SyncSentInvocationTests(unittest.TestCase):
             count=3, folder="Sent Items", account="BOUND", data_dir=data_dir,
             workspace_root=workspace, since="2026-09-01", max_pages=50,
         )
+
+
+class SentAliasRunnerTests(unittest.TestCase):
+    def test_alias_error_is_exposed_without_traceback(self) -> None:
+        stream = io.StringIO()
+        payload = json.dumps({"mode": "sync_sent", "count": 1})
+        error = runner.SentHandoffError(
+            "sent_index_alias_invalid", "Static alias detected.",
+            {"alias_file": "sent-index.jsonl", "alias_kind": "hardlink"},
+        )
+        with patch.object(sys, "argv", ["runner", "--stdin"]), \
+                patch("sys.stdin", io.StringIO(payload)), \
+                patch.object(runner, "_dispatch", side_effect=error), \
+                contextlib.redirect_stdout(stream):
+            code = runner.main()
+        envelope = json.loads(stream.getvalue())
+        self.assertEqual(1, code)
+        self.assertFalse(envelope["success"])
+        self.assertEqual("sent_index_alias_invalid",
+                         envelope["error"]["details"]["reason_code"])
+        self.assertNotIn("Traceback", envelope["message"])
 
 
 class ExecuteModeTests(unittest.TestCase):

@@ -274,19 +274,22 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
 * **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
   Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische
-  Symlink-/Hardlink-Aliase von Index, Ledger oder deren `<datei>.torn`-Sidecars sind
-  `sent_index_alias_invalid`/`ledger_alias_invalid`, werden in allen Einstiegen **vor** Index-/State-Nutzung,
-  Mailbox-Read und Handoff-/Index-Mutationen geprüft und sind keine transienten Fehler: `write_state` bleibt
-  `none`/`state`, Handoff/Index unangetastet (`handoff.file` bleibt der Handoff-Pfad, `alias_file` separat),
-  nur manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur scheitert gleich. Mehr als 200 neue Items
+  Symlink-/Hardlink-Aliase von Index, Ledger, Handoff oder deren `<datei>.torn`-Sidecars sind
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`, werden in allen Einstiegen
+  **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Mutationen geprüft und sind keine transienten
+  Fehler: `write_state` bleibt `none`/`state`, Handoff/Index unangetastet (`handoff.file` bleibt der
+  Handoff-Pfad, `alias_file` separat), nur manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur
+  scheitert gleich. `alias_kind: "unverifiable"` (Permission/IO bei `lstat`) ist ebenfalls fail-closed und
+  liefert `unknown`/`null`, nie „kein Alias“. Mehr als 200 neue Items
   werden in 200er-Batches committet (älteste zuerst, Rest nach Konsum, `truncated`). Jede andere Störung wird
   `sync_failed`. `write_state` unterscheidet: `none` (kein Write), `state` (nur `sent-sync-state.json`/
   Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher
   atomarer Publikation; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
   `new_items`, `handoff` mit `state ∈ none|written|pending|invalid|unknown` und die dokumentierten Zähler;
   statische Aliasfehler melden `unknown`/`pending_count: null`, weil der abgewiesene Pfad nicht gelesen wird.
-  Consumer-Reads (`load_ledger`, `load_pending_handoff`, `load_sent_index`) prüfen ihre Zieldateien statisch
-  vor dem Lesen und fail-closed. Ein
+  Consumer-Reads (`load_ledger`, `load_pending_handoff`, `load_sent_index`, `read_handoff`) prüfen ihre
+  Zieldateien statisch vor dem Lesen und fail-closed; der Classifier propagiert einen Index-Alias, statt
+  `needs_reply` fälschlich auf `true` zu setzen. Ein
   scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`,
   `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
   stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State
