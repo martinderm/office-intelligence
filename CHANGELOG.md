@@ -95,6 +95,17 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 - `write_state` unterscheidet `none`/`state`/`unknown` inklusive State-Publish-Fehler und `sync_no_progress`;
   Doku/L1/L2/objects bereinigt.
 
+#### Fixed (vierte Review-/Audit-Runde)
+
+- State-`initial_start`/`covered_through` werden gegen das eingefrorene Laufdatum geprüft; future Werte,
+  malformed/null-both State und future `since`/`since` mit Zeitanteil fail-closed vor Read/Write. Altbestand
+  `initial_start:null` mit gültigem `covered_through` wird konservativ `initial=covered` migriert; nur
+  autorisierte Reparatur/Quarantäne, keine autonome Löschung.
+- Validierungsfehler setzen keinen synthetischen Handoff-State mehr; der echte Peek-Zustand/pending_count bleibt.
+- Count-Break rückt nur tatsächlich akzeptierte Tage vor; ungültige Kalenderdaten und Account-Bindung werden vor
+  State-Writes geprüft. Ungültige Mail-Header verschieben kein Item und brechen keinen vollständigen Sync ab;
+  der Draft-Pfad schluckt Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert).
+
 
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots

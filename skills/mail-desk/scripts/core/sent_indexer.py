@@ -574,7 +574,7 @@ def _dedupe_iso_dates(dates: list[str]) -> list[str]:
                 "sync_invalid_date",
                 f"Invalid date {d!r}; expected YYYY-MM-DD. Nothing was read or written. "
                 "Recovery: correct the manifest/date value and rerun.",
-                {"value": str(d), "state": "none"},
+                {"value": str(d)},
             )
         try:
             datetime.strptime(d_clean, "%Y-%m-%d")
@@ -583,7 +583,7 @@ def _dedupe_iso_dates(dates: list[str]) -> list[str]:
                 "sync_invalid_date",
                 f"Invalid calendar date {d!r}; expected YYYY-MM-DD. Nothing was read or written. "
                 "Recovery: correct the manifest/date value and rerun.",
-                {"value": str(d), "state": "none"},
+                {"value": str(d)},
             ) from error
         unique_dates.add(d_clean)
     return sorted(unique_dates)
@@ -641,16 +641,8 @@ def sync_sent_items_by_dates_report(
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     _require_account(account)
     expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
-    state = _load_or_migrate_state(dd)
+    state = _load_or_migrate_state(dd, run_date=run_date)
     initial, barrier = state["initial_start"], state["covered_through"]
-    if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
-        raise SentHandoffError(
-            "sent_initial_state_invalid",
-            f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
-            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
-            f"'{SYNC_STATE_FILENAME}' and rerun (the file is never overwritten automatically).",
-            {"reason": "barrier_in_future", "state": "invalid"},
-        )
     watermark = _sent_index_watermark(dd)
     requested = sorted(set(expanded))
     if not requested:
@@ -832,8 +824,8 @@ def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
             raise ValueError("unsupported schema_version")
         initial = _iso_day(document.get("initial_start"), "initial_start")
         covered = _iso_day(document.get("covered_through"), "covered_through")
-        if initial is None:
-            raise ValueError("initial_start is required")
+        if initial is None and covered is None:
+            raise ValueError("initial_start or covered_through is required")
         return {"initial_start": initial, "covered_through": covered}
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError) as error:
         raise SentHandoffError(
@@ -842,7 +834,7 @@ def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
             "nothing was read or written and no index/handoff was changed. Recovery: an authorized "
             "operator must restore/repair the file or quarantine it; no automatic deletion or overwrite "
             "and no explicit since= workaround.",
-            {"reason": "unreadable_or_malformed", "state": "invalid"},
+            {"reason": "unreadable_or_malformed"},
         ) from error
 
 
@@ -867,33 +859,62 @@ def _read_legacy_initial(data_dir: Path) -> str | None:
             f"({type(error).__name__}: {error}); nothing was read or written. Recovery: an authorized "
             "operator must restore/repair or quarantine the legacy file (it is never overwritten or "
             "deleted automatically).",
-            {"reason": "legacy_initial_invalid", "state": "invalid"},
+            {"reason": "legacy_initial_invalid"},
         ) from error
 
 
 def _load_or_migrate_state(
-    data_dir: Path, tracker: dict[str, bool] | None = None,
+    data_dir: Path, tracker: dict[str, bool] | None = None, *, run_date: datetime,
 ) -> dict[str, str | None]:
-    """Read the state and non-destructively migrate the legacy initial marker.
+    """Read/validate the state and migrate legacy/null-start states non-destructively.
 
-    The legacy file is only ever read, never rewritten or deleted.  If it carries an
-    older ``initial_start`` than the new state, the coverage barrier is rewound
-    before it (or cleared) before any mailbox read.
+    Missing ``initial_start`` is upgraded to ``covered_through`` (contiguous proven
+    coverage); the legacy marker is merged conservatively and never rewritten or
+    deleted.  Future initial/barrier values fail closed before any read/write.
     """
     state = _read_sync_state(data_dir)
     legacy = _read_legacy_initial(data_dir)
-    if legacy is None:
-        return state
     initial, barrier = state["initial_start"], state["covered_through"]
-    merged_initial = min([d for d in (initial, legacy) if d]) if (initial or legacy) else None
-    merged_barrier = barrier
-    if merged_initial != initial:
-        if barrier is not None and merged_initial is not None and barrier >= merged_initial:
-            merged_barrier = (datetime.strptime(merged_initial, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-        _write_sync_state(data_dir, initial_start=merged_initial, covered_through=merged_barrier)
+    changed = False
+    if initial is None and barrier is not None:
+        # Backward-compatible safe migration: the barrier proves contiguous coverage;
+        # start the interval at the last proven day (next run starts barrier+1).  A
+        # barrier equal to the frozen run day is rewound to yesterday (today is never final).
+        initial = barrier
+        today = run_date.strftime("%Y-%m-%d")
+        if barrier >= today:
+            barrier = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        changed = True
+    if legacy is not None:
+        merged_initial = min([d for d in (initial, legacy) if d])
+        if merged_initial != initial:
+            initial = merged_initial
+            if barrier is not None and barrier >= initial:
+                barrier = (datetime.strptime(initial, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            changed = True
+    if initial is not None and datetime.strptime(initial, "%Y-%m-%d") > run_date:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"Coverage state initial_start '{initial}' lies in the future of the frozen run date "
+            f"{run_date:%Y-%m-%d}; nothing was read or written. The state schema requires "
+            "schema_version, initial_start and covered_through. Recovery: an authorized operator must "
+            "restore/correct the file (or quarantine it); no automatic deletion, overwrite or "
+            "since= workaround.",
+            {"reason": "initial_start_in_future"},
+        )
+    if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"Coverage state covered_through '{barrier}' lies in the future of the frozen run date "
+            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: an authorized operator must "
+            "restore/correct or quarantine the file; no automatic deletion/overwrite.",
+            {"reason": "barrier_in_future"},
+        )
+    if changed:
+        _write_sync_state(data_dir, initial_start=initial, covered_through=barrier)
         if tracker is not None:
             tracker["state_written"] = True
-    return {"initial_start": merged_initial, "covered_through": merged_barrier}
+    return {"initial_start": initial, "covered_through": barrier}
 
 
 def _write_sync_state(
@@ -1063,37 +1084,37 @@ def _sync_sent_items_impl(
     if dates:
         requested_dates = _expand_sync_dates(_dedupe_iso_dates(dates), include_next_day=True)
     if since is not None:
-        try:
-            since_dt = datetime.strptime(str(since)[:10], "%Y-%m-%d")
-        except (TypeError, ValueError) as error:
+        since_text = str(since)
+        if len(since_text) != 10 or re.fullmatch(r"\d{4}-\d{2}-\d{2}", since_text) is None:
             raise SentHandoffError(
                 "sync_invalid_since",
-                f"'since' is not a valid ISO calendar date ({since!r}); nothing was read or written. "
-                "Recovery: correct since to YYYY-MM-DD (not in the future) and rerun.",
-                {"invalid_field": "since", "state": "none"},
+                f"'since' must be YYYY-MM-DD without a time part ({since_text!r}); nothing was read "
+                "or written. Recovery: use a bare date on/before the run date and rerun.",
+                {"invalid_field": "since", "reason": "format"},
+            )
+        try:
+            since_dt = datetime.strptime(since_text, "%Y-%m-%d")
+        except ValueError as error:
+            raise SentHandoffError(
+                "sync_invalid_since",
+                f"'since' must be a valid YYYY-MM-DD calendar date ({since_text!r}); nothing was read "
+                "or written. Recovery: correct since to a bare valid date and rerun.",
+                {"invalid_field": "since", "reason": "format"},
             ) from error
-        if len(str(since)) != 10 or since_dt > run_date:
+        if since_dt > run_date:
             raise SentHandoffError(
                 "sync_invalid_since",
                 f"'since' {since!r} lies in the future of the frozen run date "
                 f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: use a date on/before "
                 "the run date and rerun.",
-                {"invalid_field": "since", "reason": "future", "state": "none"},
+                {"invalid_field": "since", "reason": "future"},
             )
     follow_up_hint: str | None = None
     truncated = False
-    state = _load_or_migrate_state(dd, state_tracker)  # validates before every read/write
+    state = _load_or_migrate_state(dd, state_tracker, run_date=run_date)  # validates before every read/write
     initial_start = state["initial_start"]
     barrier = state["covered_through"]
     watermark = _sent_index_watermark(dd)
-    if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
-        raise SentHandoffError(
-            "sent_initial_state_invalid",
-            f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
-            f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
-            f"'{SYNC_STATE_FILENAME}' and rerun (the file is never overwritten automatically).",
-            {"reason": "barrier_in_future", "state": "invalid"},
-        )
     default_start = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
     if dates:
         requested = requested_dates or []

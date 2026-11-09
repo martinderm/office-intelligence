@@ -198,8 +198,11 @@ Erstlauf persistiert `initial_start` in `sent-sync-state.json`, jede Rückspulun
 vor Handoff/Index; `covered_through` rückt nur über zusammenhängende angeforderte Tage und nie über heute/
 Punktabfragen vor. Source-Fenster statt Header-Datum bestimmt Grenzen; das Legacy-Marker-File wird
 non-destruktiv migriert. `since` springt nie über offene
-Coverage; future `since`, ungültige Kalenderdaten und malformed/future State werden vor jedem Read/Write
-abgewiesen (nur autorisierte Reparatur/Quarantäne, keine autonome Löschung). In
+Coverage; future `since`, `since` mit Zeitanteil, future `initial_start`/`covered_through`, malformed/null-both
+State werden vor jedem Read/Write abgewiesen (Altbestand `initial_start:null` mit gültigem `covered_through`
+wird konservativ migriert; nur autorisierte Reparatur/Quarantäne, keine autonome Löschung). Ungültige
+Header-Daten verschieben kein Item und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt
+Sync-Ausnahmen wie bisher. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,

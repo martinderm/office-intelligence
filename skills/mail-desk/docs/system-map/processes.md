@@ -702,8 +702,11 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   atomare Coverage-Schranke steht nie hinter einem unvollständigen Tag; Rückspulung (explizite Daten/`since`/
   Legacy) wird **vor** Handoff/Index dauerhaft geschrieben, rückt nur zusammenhängend und nie über heute/Punkt-
   abfragen vor; Source-Fenster statt Header-Datum bestimmt Grenzen; Legacy-Marker wird non-destruktiv migriert.
-  Future `since`, ungültige Kalenderdaten und malformed/future State werden vor jedem Read/Write abgewiesen
-  (autorisierte Reparatur/Quarantäne, keine autonome Löschung).
+  Future `initial_start`/`covered_through`, malformed/null-both State, future `since`/`since` mit Zeitanteil und
+  ungültige Kalenderdaten werden vor jedem Read/Write abgewiesen; Altbestand `initial_start:null` mit gültigem
+  `covered_through` wird konservativ (`initial=covered`) migriert. Nur autorisierte Reparatur/Quarantäne, keine
+  autonome Löschung. Ungültige Header verschieben kein Item und brechen keinen vollständigen Sync ab; der
+  Draft-Pfad schluckt Sync-Ausnahmen wie bisher.
   Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
   `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
   (offline nicht verifizierte **Annahme**) Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein

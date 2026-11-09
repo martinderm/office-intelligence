@@ -325,20 +325,25 @@ per Message-ID). `partial` ist reserviert und wird nicht erzeugt. Fehler bedeute
 
 ### `sent-sync-state.json` (persistente Coverage-Schranke)
 
-`schema_version: 1`, `initial_start: "YYYY-MM-DD"` (Pflicht, nicht null), `covered_through:
-"YYYY-MM-DD"|null`; exakt diese drei Felder. Zukünftige Schranken, fehlende Felder, `initial_start:null`,
-ungültige Kalenderdaten oder ein `since` nach dem eingefrorenen Laufdatum werden **vor** jedem Read/Write
-abgewiesen (`sent_initial_state_invalid`/`sync_invalid_since`/`sync_invalid_date`); nur ein autorisierter
-Operator repariert oder quarantäniert die Datei, keine autonome Löschung/Überschreibung. `initial_start`
+`schema_version: 1`, `initial_start: "YYYY-MM-DD"` (Pflicht), `covered_through: "YYYY-MM-DD"|null`;
+exakt diese drei Felder. Ein Altbestand mit `initial_start:null` und gültigem `covered_through` wird
+konservativ migriert (`initial_start = covered_through`, Start am Folgetag); beides null ist ungültig.
+Zukünftige `initial_start`/`covered_through`, fehlende Felder, ungültige Kalenderdaten oder ein `since` nach
+dem eingefrorenen Laufdatum werden **vor** jedem Read/Write abgewiesen
+(`sent_initial_state_invalid`/`sync_invalid_since`/`sync_invalid_date`); ein `since` mit Zeitanteil ist ein
+Formatfehler („YYYY-MM-DD“, nicht future). Nur ein autorisierter Operator repariert oder quarantäniert die
+Datei, keine autonome Löschung/Überschreibung und kein `since`-Workaround. `initial_start`
 wird vor dem ersten Read persistiert (auch bei explizitem `since`); ein Fehlversuch behält ihn über den
 Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag. Jede Rückspulung (explizite
 Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index dauerhaft geschrieben; nach dem Append darf
 sie nur über einen zusammenhängend angeforderten Prefix vorrücken, nie über eine Punktabfrage und nie über den
 heutigen Tag. Das Source-Fenster (`window_date`) statt des Header-Datums bestimmt Grenzen/Recovery; fehlende
-oder unparsebare Header verschieben kein Item. Ein Crash vor dem finalen State lässt die konservative Schranke
-stehen (sicherer Re-Read). Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder geschrieben,
-Datei unangetastet). Das alte `sent-sync-initial-start.json` wird nur gelesen und non-destruktiv in den State
-migriert (älterer `initial_start` bleibt erhalten, Schranke wird davor zurückgesetzt).
+oder unparsebare Header verschieben kein Item und brechen einen vollständigen Sync nicht ab (der Draft-Pfad
+schluckt Sync-Ausnahmen wie bisher, Inbound-Semantik unverändert). Ein Crash vor dem finalen State lässt die
+konservative Schranke stehen (sicherer Re-Read). Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts
+gelesen oder geschrieben, Datei unangetastet). Das alte `sent-sync-initial-start.json` wird nur gelesen und
+non-destruktiv in den State migriert (älterer `initial_start` bleibt erhalten, Schranke wird davor
+zurückgesetzt).
 
 ### Handoff-Batches über 200
 

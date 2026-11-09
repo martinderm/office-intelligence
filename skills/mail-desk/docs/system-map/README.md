@@ -2380,9 +2380,12 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   bzw. jeder Rückspulung **vor** Handoff/Index geschrieben; nach dem Append rückt sie nur über einen
   zusammenhängenden angeforderten Prefix und nie über heute/Punktabfragen vor. Ein Crash davor lässt die
   konservative Schranke stehen. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen/Recovery;
-  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert. Future `since` und ungültige
-  Kalenderdaten werden vor jedem Read/Write abgewiesen, malformed/future State vor State-Writes (nur autorisierte
-  Reparatur/Quarantäne). Das out-of-bound-Seitenende ist eine
+  das Legacy-`sent-sync-initial-start.json` wird non-destruktiv migriert. Future `initial_start`/`covered_through`
+  werden vor jedem Read/Write abgewiesen; Altbestand `initial_start:null` mit gültigem `covered_through` wird
+  konservativ migriert (`initial=covered`). Malformed/null-both/future State nur autorisierte
+  Reparatur/Quarantäne, kein `since`-Workaround; `since` mit Zeitanteil ist ein Formatfehler. Ungültige
+  Mail-Header verschieben kein Item und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt
+  Sync-Ausnahmen wie bisher (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine
   offline nicht verifizierte Adapter-Annahme; Abweichungen bleiben fail-closed.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den

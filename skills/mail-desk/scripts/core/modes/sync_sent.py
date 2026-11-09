@@ -189,19 +189,25 @@ def run_sync_sent_mode(
 
     since = config.get("since")
     if since is not None:
-        if not isinstance(since, str):
+        if not isinstance(since, str) or len(since) != 10:
             return failure_envelope(
-                dd, folder, "Sent sync refused: 'since' must be an ISO date (YYYY-MM-DD). "
+                dd, folder, "Sent sync refused: 'since' must be YYYY-MM-DD without a time part. "
                 "Recovery: correct since or omit it and rerun.",
                 "sync_invalid_since", details={"invalid_field": "since"},
             )
         try:
-            datetime.strptime(since[:10], "%Y-%m-%d")
+            since_date = datetime.strptime(since, "%Y-%m-%d")
         except ValueError:
             return failure_envelope(
-                dd, folder, "Sent sync refused: 'since' is not a valid ISO date (YYYY-MM-DD). "
-                "Recovery: correct since or omit it and rerun.",
+                dd, folder, "Sent sync refused: 'since' must be a valid YYYY-MM-DD date without a "
+                "time part. Recovery: correct since or omit it and rerun.",
                 "sync_invalid_since", details={"invalid_field": "since"},
+            )
+        if since_date.date() > datetime.now().date():
+            return failure_envelope(
+                dd, folder, f"Sent sync refused: 'since' {since!r} lies in the future. "
+                "Recovery: use a date on/before today and rerun.",
+                "sync_invalid_since", details={"invalid_field": "since", "reason": "future"},
             )
     raw_max_pages = config.get("max_pages", SENT_SYNC_MAX_PAGES)
     try:

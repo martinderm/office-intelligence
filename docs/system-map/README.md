@@ -680,8 +680,11 @@ unverifiziert; dann `new_count: null`); `partial` ist reserviert. Die persistent
 (`initial_start`, `covered_through`) wird vor dem ersten Read bzw. jeder Rückspulung **vor** Handoff/Index
 geschrieben, steht nie hinter einem unvollständigen Tag, rückt nur über einen zusammenhängenden angeforderten
 Prefix und nie über heute/Punktabfragen vor; `since` springt nie über offene Coverage, das Legacy-Marker-File
-wird non-destruktiv migriert. Future `since`, ungültige Kalenderdaten und malformed/future State werden vor
-jedem Read/Write abgewiesen (keine autonome Löschung; autorisierte Reparatur/Quarantäne). Das Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery. Nur der
+wird non-destruktiv migriert. Future `initial_start`/`covered_through`, malformed/null-both State, future `since`
+und `since` mit Zeitanteil werden vor jedem Read/Write abgewiesen (Altbestand `initial_start:null` mit gültigem
+`covered_through` wird konservativ `initial=covered` migriert; nur autorisierte Reparatur/Quarantäne, keine
+autonome Löschung). Ungültige Header-Daten verschieben kein Item und brechen keinen vollständigen Sync ab; der
+Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery. Nur der
 klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
 Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahme**, sonst fail-closed. Doppelte
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag

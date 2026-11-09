@@ -1089,6 +1089,65 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual("2026-09-10", report["next_start"])
         self.assertIn("2026-09-10", report["recovery"])
 
+    def test_future_initial_start_is_rejected_before_reads_and_writes(self) -> None:
+        state_path = self.dd / sent_indexer.SYNC_STATE_FILENAME
+        state_path.write_text(json.dumps({
+            "schema_version": 1, "initial_start": "2099-01-01", "covered_through": None,
+        }), encoding="utf-8")
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+            self.assertEqual("sent_initial_state_invalid", caught.exception.reason_code)
+            self.assertEqual(0, mailbox.calls)
+            with self.assertRaises(SentHandoffError):
+                sent_indexer.sync_sent_items_by_dates_report(
+                    [DAY], account="ACC", data_dir=self.dd, include_next_day=False,
+                )
+        self.assertEqual(0, mailbox.calls)
+
+    def test_null_initial_with_valid_barrier_migrates_conservatively(self) -> None:
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": None, "covered_through": "2026-09-20",
+        }), encoding="utf-8")
+        mailbox = _Mailbox()
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("2026-09-21", result["coverage_start"])
+        state = sent_indexer._read_sync_state(self.dd)
+        self.assertEqual("2026-09-20", state["initial_start"])
+
+    def test_null_initial_with_barrier_on_run_day_rewinds_today(self) -> None:
+        (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+            "schema_version": 1, "initial_start": None, "covered_through": "2026-09-24",
+        }), encoding="utf-8")
+        mailbox = _Mailbox()
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            result = sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+        self.assertEqual("2026-09-24", result["coverage_start"])
+        state = sent_indexer._read_sync_state(self.dd)
+        self.assertEqual(("2026-09-24", "2026-09-23"), (state["initial_start"], state["covered_through"]))
+
+    def test_since_with_time_part_reports_format_not_future(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(since="2026-09-24T12:00:00", account="ACC", data_dir=self.dd)
+        self.assertEqual("sync_invalid_since", caught.exception.reason_code)
+        self.assertIn("YYYY-MM-DD", str(caught.exception))
+        self.assertNotIn("future", str(caught.exception).lower())
+        self.assertEqual(0, mailbox.calls)
+
+    def test_invalid_header_date_does_not_abort_a_complete_sync(self) -> None:
+        mailbox = _Mailbox(_details(1, date="garbage-date"))
+        result = self.sync(mailbox)
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual(["m1@example.test"], self.index_ids())
+
     def test_bounded_batch_still_commits_the_oldest_and_defers_the_rest(self) -> None:
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",
                 "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
@@ -1704,6 +1763,17 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual("state", envelope["write_state"])
         self.assertEqual(0, envelope["new_count"])
         self.assertEqual([], self.index_ids())
+
+    def test_validation_failure_keeps_real_pending_handoff_state(self) -> None:
+        self.run_mode(_Mailbox(_details(1), _details(2)))  # two pending handoff items
+        envelope = sync_sent_mode.run_sync_sent_mode(
+            {"count": 150, "since": "2099-01-01"}, account="ACC", data_dir=self.dd,
+        )
+        self.assertFalse(envelope["ok"])
+        self.assertEqual("sync_invalid_since", envelope["reason_code"])
+        self.assertEqual("pending", envelope["handoff"]["state"])
+        self.assertEqual(2, envelope["handoff"]["pending_count"])
+        self.assertEqual("none", envelope["write_state"])
 
     def test_invalid_since_and_float_max_pages_are_shaped_refusals(self) -> None:
         for config, reason in (
