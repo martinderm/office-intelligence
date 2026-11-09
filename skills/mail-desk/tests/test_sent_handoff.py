@@ -10,6 +10,7 @@ No mailbox, network or consumer access.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -280,6 +281,34 @@ class IdempotenceAndCrashWindowTests(_Base):
                 sent_handoff.write_handoff(self.dd, [])
         self.assertEqual(before, (self.dd / HANDOFF_FILENAME).read_bytes())
         self.assertEqual([], [p.name for p in self.dd.iterdir() if p.name.endswith(".tmp")])
+
+    def test_hardlinked_sent_index_alias_is_refused_without_external_write(self) -> None:
+        external = self.dd.parent / "external-sent-index.jsonl"
+        external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / "sent-index.jsonl")
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(OSError):
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual(before, external.read_bytes())
+
+    def test_symlinked_sent_index_alias_is_refused_without_external_write(self) -> None:
+        external = self.dd.parent / "external-sent-index.jsonl"
+        external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            (self.dd / "sent-index.jsonl").symlink_to(external)
+        except (OSError, NotImplementedError):
+            self.skipTest("file symlinks are unavailable")
+        with self.assertRaises(OSError):
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual(before, external.read_bytes())
 
     def test_torn_index_line_is_repaired_before_append(self) -> None:
         path = self.dd / "sent-index.jsonl"

@@ -177,6 +177,23 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   gerufen. Normale Pfade schreiben weiterhin unter `<workspace>/tmp/mail-batch`; CLI-Operations, L1/L2,
   SKILL und Batch-Runner-Vertrag sind aktualisiert.
 
+#### Hardened, aber verbleibender Designkonflikt (zehnte Review-/Audit-Runde)
+
+- Statische Härtung: Jede vorhandene Symlink-/Junction-/Reparse-Point-Komponente in `data`, `data/mail-desk`,
+  `tmp` oder `tmp/mail-batch` wird vor mkdir/Prune/Child abgewiesen, auch intern, gebrochen oder
+  selbstreferenziell. `durable_append_jsonl` lehnt statische Symlink-/Hardlink-Aliase der Index-/Ledger-Datei
+  ab, bevor sie geöffnet wird.
+- **Nicht behoben (echter Blocker, nicht heruntergestuft):** Ein konkurrierender Prozess mit Schreibrechten im
+  selben Workspace kann Pfade zwischen statischer Prüfung und Zugriff austauschen (TOCTOU) oder nach der
+  Prüfung Hardlink-/Symlink-Aliase anlegen. Mit Python-Mitteln ist das plattformübergreifend nicht vollständig
+  verhinderbar; die Lease ist eine kooperative Ownership-Grenze, kein Schutz gegen denselben OS-Benutzer.
+  Eine vollständige Lösung erfordert OS-Isolation (separater Benutzer/Namespace/Container/ACL) oder eine
+  grundlegende fd-/handle-basierte Neuarchitektur aller Runner-Schreibpfade. Die Dokumentation nennt diese
+  Trust-Grenze ausdrücklich, statt Race-Sicherheit zu behaupten.
+- Tests: reale interne/externe Junctions, gebrochene und selbstreferenzielle Symlinks, Hardlink-/Symlink-Alias
+  der Sent-Index-Datei mit byte-gleicher externer Datei; Race-Injection wird bewusst nicht als „sicher“
+  getestet, solange keine belastbare handle-basierte Verankerung existiert.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

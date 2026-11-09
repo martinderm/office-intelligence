@@ -155,10 +155,20 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Kindprozess/Read/Write bei externen Consumern, Escapes oder fehlendem Workspace.
    Ein fehlendes `data/mail-desk` im geprüften Workspace bleibt zulässig (der Sync
    legt es an). Der Wrapper bindet auch sein Ausgabeverzeichnis `<workspace>/tmp/mail-batch`
-   vor jedem `mkdir`/Prune/Child kanonisch an denselben Workspace; zeigen `tmp` oder
-   `mail-batch` per Symlink/Junction nach außen, stoppt er mit `WorkspacePathError`, ohne
-   fremde Dateien zu schreiben oder zu löschen. Nicht vom Wrapper verwendete Pfade bleiben
-   unberührt.
+   vor jedem `mkdir`/Prune/Child kanonisch an denselben Workspace. Jede vorhandene
+   Symlink-/Junction-/Reparse-Point-Komponente in `data`, `data/mail-desk`, `tmp` oder
+   `tmp/mail-batch` wird abgewiesen (auch intern, gebrochen oder selbstreferenziell); der Lauf
+   stoppt mit `WorkspacePathError`, bevor fremde Dateien angelegt, überschrieben oder gelöscht
+   werden. Nicht vom Wrapper verwendete Pfade bleiben unberührt.
+
+   **Trust-Grenze (bewusst, verbleibender Designkonflikt):** Diese Prüfungen sind statisch.
+   Ein konkurrierender Prozess mit Schreibrechten im selben Workspace kann Pfade zwischen
+   Prüfung und Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase für Zieldateien
+   anlegen; mit Python-Mitteln ist das plattformübergreifend nicht vollständig verhinderbar.
+   Die Workspace-Lease ist eine kooperative Ownership-Grenze, kein Schutz gegen denselben
+   Benutzer. Vollständige Isolation erfordert separaten OS-Benutzer, Namespace/Container oder
+   ACLs; bis dahin gibt es keine Zusage „vor jeder Mutation sicher“ gegen einen feindlichen
+   Mutator.
    Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
    Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen

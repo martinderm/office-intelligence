@@ -126,10 +126,12 @@ bestehende äußere Dossier-Receipt; keine Ausnahme und keine automatische Freig
 Receipt-Formate und Hash-Kanonisierung bleiben unverändert.
 Der CLI-Wrapper prüft denselben Vertrag vor eigenen Logs/Pruning und übergibt den
 geprüften Snapshot per stdin (Runner revalidiert). Er bindet `--data-dir` kanonisch an den
-lease-geprüften `--workspace` (`<workspace>/data/mail-desk`, inkl. Symlink-/Junction-Auflösung)
-und ebenso sein Ausgabeverzeichnis `<workspace>/tmp/mail-batch` vor mkdir/Prune/Child; bei
-externen Consumern, Escapes oder fehlendem Workspace stoppt er mit `WorkspacePathError` vor
-Child/Read/Write.
+lease-geprüften `--workspace` (`<workspace>/data/mail-desk`) und ebenso sein Ausgabeverzeichnis
+`<workspace>/tmp/mail-batch` vor mkdir/Prune/Child; jede Symlink-/Junction-/Reparse-Komponente
+(auch intern/gebrochen) sowie externe Consumer oder ein fehlender Workspace stoppen mit
+`WorkspacePathError` vor Child/Read/Write. Die Prüfung ist statisch: ein konkurrierender
+Same-User-Mutator (TOCTOU/Hardlink) bleibt außerhalb der kooperativen Lease-Grenze und erfordert
+OS-Isolation.
 Details: Mail-Desk-L2 und [`Batch-Vertrag`](../../skills/mail-desk/references/batch-runner.md#review-gebundene-kandidatenzahl).
 
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert

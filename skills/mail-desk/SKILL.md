@@ -167,8 +167,10 @@ direkten `--sync-sent`-Modus. `--data-dir` muss kanonisch exakt
 `<workspace>/data/mail-desk` des lease-geprüften Workspaces sein; der Wrapper löst
 Symlinks/Junctions auf, gleicht mit der Runner-Root-Inferenz ab und stoppt mit
 `WorkspacePathError` vor Child/Read/Write bei externen Consumern/Escapes. Auch
-`<workspace>/tmp/mail-batch` wird vor mkdir/Prune/Child kanonisch gebunden; `tmp`
-oder `mail-batch` dürfen nicht aus dem Workspace herauszeigen.
+`<workspace>/tmp/mail-batch` wird vor mkdir/Prune/Child kanonisch gebunden; jede
+Symlink-/Junction-/Reparse-Komponente (auch intern/gebrochen) wird abgewiesen. Die
+Prüfung ist statisch; ein konkurrierender Same-User-Mutator (TOCTOU/Hardlink) bleibt
+außerhalb der kooperativen Lease-Grenze und erfordert OS-Isolation.
 
 **SOP-Guard (leerer Posteingang, Vorlage für Consumer-Pipelines):** Meldet `draft`
 `is_empty: true`/`inbox_zero: true` (bzw. `total_drafted == 0`), ist der Lauf ein

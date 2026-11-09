@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -27,6 +28,30 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 def _absolute(data_dir: str, workspace: Path) -> str:
     path = Path(data_dir)
     return str(path if path.is_absolute() else workspace / path)
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Static detection of symlinks, junctions and other reparse points."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = getattr(info, "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _reject_linked_components(workspace: Path, relative: Path, label: str) -> None:
+    """Reject any existing symlink/junction/reparse component (internal or broken)."""
+    current = workspace
+    for part in relative.parts:
+        current = current / part
+        if _is_link_or_reparse(current):
+            raise ValueError(
+                f"{label} contains a symlink/junction/reparse point at '{current.name}'; "
+                "refusing before child/read/write"
+            )
 
 
 def _resolve_bound_paths(args: argparse.Namespace) -> tuple[Path, Path]:
@@ -46,6 +71,7 @@ def _resolve_bound_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     if not workspace.is_dir():
         raise ValueError("workspace must be an existing directory")
 
+    _reject_linked_components(workspace, Path("data") / "mail-desk", "--data-dir")
     raw_data_dir = Path(args.data_dir).expanduser()
     data_dir = (raw_data_dir if raw_data_dir.is_absolute() else workspace / raw_data_dir).resolve()
     try:
@@ -69,6 +95,7 @@ def _resolve_run_dir(workspace: Path) -> Path:
     must be exactly ``<workspace>/tmp/mail-batch`` so pruning/writes cannot touch
     another consumer's files without its lease. Missing internal paths are fine.
     """
+    _reject_linked_components(workspace, Path("tmp") / "mail-batch", "tmp/mail-batch")
     expected = workspace / "tmp" / "mail-batch"
     resolved = expected.resolve()
     if resolved != expected:

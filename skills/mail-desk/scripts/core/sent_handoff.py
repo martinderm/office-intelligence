@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from datetime import datetime
 from email.utils import getaddresses
 from pathlib import Path
@@ -304,11 +305,34 @@ def _repair_torn_tail(path: Path) -> None:
         os.fsync(handle.fileno())
 
 
+def _reject_file_alias(path: Path) -> None:
+    """Refuse static symlink/hardlink aliases before following the append path.
+
+    This is a static pre-check, not a defence against a concurrent filesystem
+    mutator (see the documented trust boundary).
+    """
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(info.st_mode):
+        raise OSError(
+            f"Refusing to append through symlink alias '{path.name}'; nothing was written."
+        )
+    links = getattr(info, "st_nlink", 1)
+    if links != 1:
+        raise OSError(
+            f"Refusing to append through hardlink alias '{path.name}' ({links} links); "
+            "nothing was written."
+        )
+
+
 def durable_append_jsonl(path: Path, entries: Iterable[dict[str, Any]]) -> int:
     """Append JSON lines (LF) and fsync; repair a torn final line first (see ``_repair_torn_tail``)."""
     lines = [json.dumps(entry, ensure_ascii=False) + "\n" for entry in entries]
     if not lines:
         return 0
+    _reject_file_alias(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     _repair_torn_tail(path)
     with path.open("a", encoding="utf-8", newline="\n") as handle:

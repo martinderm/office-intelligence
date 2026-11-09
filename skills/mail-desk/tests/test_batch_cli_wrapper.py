@@ -341,6 +341,46 @@ class MainTests(unittest.TestCase):
             self.skipTest("directory symlinks/junctions are unavailable")
         self._assert_external_output_untouched(old, external)
 
+    def _assert_workspace_path_error(self) -> None:
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as child:
+            code, result = self.call()
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        child.assert_not_called()
+
+    def test_internal_tmp_junction_is_rejected(self):
+        (self.workspace / "real-tmp").mkdir()
+        if not _make_dir_link(self.workspace / "tmp", self.workspace / "real-tmp"):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_internal_data_junction_is_rejected(self):
+        (self.workspace / "real-data" / "mail-desk").mkdir(parents=True)
+        if not _make_dir_link(self.workspace / "data", self.workspace / "real-data"):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_broken_mail_batch_symlink_is_rejected(self):
+        (self.workspace / "tmp").mkdir()
+        link = self.workspace / "tmp" / "mail-batch"
+        try:
+            link.symlink_to(self.workspace / "missing-target", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("file symlinks are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_self_referential_mail_batch_symlink_is_rejected(self):
+        tmp = self.workspace / "tmp"
+        tmp.mkdir()
+        link = tmp / "mail-batch"
+        try:
+            link.symlink_to(link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("self-referential symlinks are unavailable")
+        self._assert_workspace_path_error()
+
     def test_symlink_or_junction_data_dir_escape_is_rejected(self):
         data = self.workspace / "data"
         data.mkdir()
