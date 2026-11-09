@@ -1076,27 +1076,28 @@ offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bund
 `load_pending_handoff` und schreibt über `record_synthesized`.
 
 **Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
-jedem Handoff-/Index-Write; `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert (Handoff ggf.
-geschrieben, Index ggf. teilweise; `new_count: null`). `partial` ist reserviert und wird nicht mehr erzeugt:
-ein scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab.
+jedem Write; `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert (Handoff ggf. geschrieben,
+Index ggf. teilweise; `new_count: null`). `partial` ist reserviert; ein scheiterndes Fenster bricht vor jedem
+Write ab.
 
 | `reason_code` | Ursache |
 |---|---|
-| `sync_invalid_count` | Manifest-`count` ist kein positiver Integer; nichts gelesen oder geschrieben |
-| `backend_binding` | Backend-/Account-Bindung fehlt oder passt nicht; nichts gelesen oder geschrieben |
+| `sync_invalid_count` | Manifest-`count` ist kein positiver Integer; nichts gelesen/geschrieben |
+| `backend_binding` | Backend-/Account-Bindung fehlt oder passt nicht; nichts gelesen/geschrieben |
 | `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
-| `sent_window_truncated` | Sent-Tag lieferte eine volle 100-Envelope-Seite; keine Pagination, nichts geschrieben |
+| `sent_window_truncated` | Sent-Tag lieferte eine volle 100-Envelope-Seite; keine Pagination, kein sicherer Skip, ganzer Lauf blockiert, nichts geschrieben |
+| `sent_window_gap` | Wasserzeichen-Lücke > `MAX_SYNC_WINDOW_DAYS`; kein vollständiges Fenster, nichts gelesen/geschrieben |
 | `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, `failed_dates` |
-| `sync_failed` | Vorab-Fehler (`write_state: none`) oder Schreibfehler nach möglicher Publikation (Handoff-Replace/Append; `unknown`, `new_count: null`, `new_items_unavailable: true`); Wiederholung idempotent |
+| `sync_failed` | Vorab-Fehler (`write_state: none`) oder Schreibfehler nach möglicher Publikation (Handoff-Replace/Append; `unknown`, `new_count: null`, `new_items_unavailable: true`) |
 
-Kein Zurückstellen: mehr als 200 neue Items ⇒ `handoff_overflow` vor jedem Write. **Recovery nur über die
-Python-API**: einen einzelnen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
+Kein Zurückstellen: > 200 neue Items ⇒ `handoff_overflow` vor jedem Write. **Recovery nur über die
+Python-API**: einen Tag eng über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
 `sync_sent_items(dates=[D])`, das D+1 mitliest), älteste Tage zuerst, dazwischen konsumieren. `--sync-sent
-N`/`count` ist **keine** Recovery (Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI).
-Same-day > 200 und eine volle 100-Envelope-Seite sind harte Grenzen. Nach der Verweigerung wurde nichts
+N`/`count` ist **keine** Recovery (endet bei heute, überspringt ältere Tage; keine Datums-CLI).
+Same-day > 200 und volle 100-Seite sind harte Grenzen. Nach der Verweigerung wurde nichts
 geschrieben; ein Default-/CLI-Lauf holt alte Tage nicht nach.
 
 ---

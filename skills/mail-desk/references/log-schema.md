@@ -314,7 +314,10 @@ und Handoff (keine stille Lücke durch Writes, aber der Betreiber muss die Pytho
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
 Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
-`failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). `write_state` ist
+`failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Eine
+Wasserzeichen-Lücke über `MAX_SYNC_WINDOW_DAYS` (60) verweigert vor jedem Lesen (`sent_window_gap`), weil kein
+vollständiges Fenster garantiert ist; eine volle 100-Envelope-Seite blockiert den ganzen Lauf
+(`sent_window_truncated`, keine Pagination, kein sicherer Skip). `write_state` ist
 dann `none` (Ablehnung/Fehler vor jedem Write) oder `unknown` (Schreibversuch schlug fehl — auch ein
 Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
 unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent per Message-ID).

@@ -694,7 +694,8 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
 * **Overflow-/Fenster-Recovery:** einen Tag eng nur über `sync_sent_items_by_dates(..., include_next_day=False)`
   (nicht `sync_sent_items(dates=[D])`, das D+1 mitliest), älteste Tage zuerst, dazwischen konsumieren.
   `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen endet bei heute, überspringt ältere Tage; keine
-  Datums-CLI). Same-day > 200 und eine volle 100-Envelope-Seite (`sent_window_truncated`, keine Pagination) sind
-  harte Grenzen; nach der Verweigerung wurde nichts geschrieben, ein Default-Lauf holt alte Tage nicht nach.
+  Datums-CLI). Same-day > 200 und eine volle 100-Envelope-Seite (`sent_window_truncated`, keine Pagination,
+  kein sicherer Skip) sind harte Grenzen; eine Wasserzeichen-Lücke > 60 Tage verweigert vor jedem Lesen
+  (`sent_window_gap`). Nach der Verweigerung wurde nichts geschrieben, ein Default-Lauf holt alte Tage nicht nach.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

@@ -279,7 +279,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   Plattenstand unverifiziert; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
   `new_items`, `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler. Ein
   scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`);
-  eine volle 100-Envelope-Seite ebenso (`sent_window_truncated`, keine Pagination). Nichts wird still verworfen:
+  eine volle 100-Envelope-Seite ebenso (`sent_window_truncated`, keine Pagination, kein sicherer Skip), eine
+  Wasserzeichen-Lücke > 60 Tage vor jedem Lesen (`sent_window_gap`). Nichts wird still verworfen:
   ein Überhang > 200 wird als Ganzes verweigert (kein Zurückstellen); Recovery eines Tages nur über
   `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest),
   nicht über `--sync-sent N`/`count`; same-day > 200 und eine volle Seite sind harte Grenzen. Gekürzte Felder

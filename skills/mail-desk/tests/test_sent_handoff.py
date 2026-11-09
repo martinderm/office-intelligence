@@ -519,6 +519,22 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
 
+    def test_watermark_gap_beyond_the_window_is_refused_before_reading(self) -> None:
+        seed = {"schema_version": 1, "at": "2026-07-25", "message_id": "<seed@example.test>",
+                "sent_envelope_id": "900", "subject": "seed", "to": [], "references": []}
+        (self.dd / "sent-index.jsonl").write_text(json.dumps(seed) + "\n", encoding="utf-8")
+        mailbox = _Mailbox(_details(1))
+        run, read = mailbox.patches()
+        with run, read, patch.object(sent_indexer, "datetime", _frozen_datetime((2026, 9, 24))):
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer.sync_sent_items(account="ACC", data_dir=self.dd)
+
+        self.assertEqual("sent_window_gap", caught.exception.reason_code)
+        self.assertGreater(caught.exception.details["watermark_gap_days"], sent_indexer.MAX_SYNC_WINDOW_DAYS)
+        self.assertEqual(0, mailbox.calls)  # refused before reading any window
+        self.assertEqual(["seed@example.test"], self.index_ids())
+        self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
+
     def test_overflow_is_refused_even_with_a_newer_index_watermark(self) -> None:
         # The refusal never guesses reachability: the newer watermark is irrelevant.
         seed = {"schema_version": 1, "at": "2026-09-30", "message_id": "<seed@example.test>",
@@ -580,7 +596,7 @@ class WindowTruncationTests(_Base):
             caught.exception.details["page_size"],
             caught.exception.details["envelopes_examined"],
         ))
-        self.assertEqual("none", caught.exception.details["state"])
+        self.assertNotIn("state", caught.exception.details)  # never override the real peek state
         self.assertEqual(1, mailbox.calls)  # no pagination loop, one fail-closed page
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
@@ -1080,6 +1096,19 @@ class ModeEnvelopeTests(_Base):
         self.assertEqual((0, []), (envelope["data"]["new_count"], envelope["data"]["new_items"]))
         self.assertEqual("none", envelope["data"]["handoff"]["state"])
         self.assertIn("backend_binding", envelope["data"])
+
+    def test_truncated_window_reports_the_real_pending_handoff_state(self) -> None:
+        self.run_mode(_Mailbox(_details(1), _details(2)))  # leaves two unconsumed handoff items
+        full = _Mailbox(*(_details(n, _day="2026-09-25") for n in range(1, 101)))
+        envelope = self.run_mode(full)
+
+        self.assertFalse(envelope["ok"])
+        self.assertEqual("sent_window_truncated", envelope["reason_code"])
+        self.assertEqual("pending", envelope["handoff"]["state"])
+        self.assertEqual(2, envelope["handoff"]["pending_count"])
+        self.assertEqual("2026-09-25", envelope["handoff"]["date"])
+        self.assertEqual("none", envelope["write_state"])
+        self.assertEqual(2, len(self.handoff_ids()))
 
     def test_failed_date_window_is_fail_closed_and_reports_failed_dates(self) -> None:
         mailbox = _Mailbox(_details(1))

@@ -383,7 +383,6 @@ def _collect_date_candidates(
                 "date": date_str,
                 "page_size": SENT_SYNC_PAGE_SIZE,
                 "envelopes_examined": envelopes_examined,
-                "state": "none",
             },
         )
     truncated = False
@@ -600,26 +599,42 @@ def sync_sent_items(
 
     The no-dates path queries every day from the sent-index watermark through
     today (capped at ``MAX_SYNC_WINDOW_DAYS``, optionally bounded to the most
-    recent ``count`` days) instead of a hardwired 7-day window.  Per-date
-    Himalaya/parse failures are collected and re-raised fail-closed with the
-    failing dates named, so the caller never sees a silent ``ok``.
+    recent ``count`` days) instead of a hardwired 7-day window.  A watermark gap
+    beyond ``MAX_SYNC_WINDOW_DAYS`` is refused before reading anything
+    (``sent_window_gap``), because no complete window can be guaranteed.
 
-    The date windows are read first (no writes); the new items are then handed
-    off to ``new-sent-items.json`` *before* the sent-index grows (see
-    ``_commit_sent_candidates``).  Detection is relative to the previous index
+    All windows are read before the single commit.  If any window fails, the run
+    is fail-closed **before any write**: nothing is handed off or indexed and
+    ``SentSyncPartialFailure`` names the failing dates.  A day whose first
+    envelope page is full is refused as ``sent_window_truncated`` (no pagination,
+    no skip).  A successful run hands off *before* the sent-index grows (see
+    ``_commit_sent_candidates``); detection is relative to the previous index
     state, so a repeated run yields no new items and no duplicate handoff.
 
     Returns ``{"date_windows_synced", "envelopes_examined",
     "new_entries_indexed", "new_count", "new_items", "handoff",
-    "truncated_days", "follow_up_hint"}``.  ``SentHandoffError`` (pending/invalid
-    handoff) is raised before any write; date failures raise
-    ``SentSyncPartialFailure`` after the successful dates were committed.
+    "truncated_days", "follow_up_hint"}``.  ``truncated_days`` is reserved and
+    always empty because a truncated window aborts the run instead of being
+    reported as success.
     """
     dd = data_dir or resolve_data_dir()
     follow_up_hint: str | None = None
     if dates:
         window_dates = _dedupe_iso_dates(dates)
     else:
+        watermark = _sent_index_watermark(dd)
+        if watermark is not None:
+            gap_days = (datetime.now().date() - watermark.date()).days + 1
+            if gap_days > MAX_SYNC_WINDOW_DAYS:
+                raise SentHandoffError(
+                    "sent_window_gap",
+                    f"Sent-index watermark gap of {gap_days} day(s) exceeds MAX_SYNC_WINDOW_DAYS "
+                    f"({MAX_SYNC_WINDOW_DAYS}); a complete window cannot be guaranteed, so nothing "
+                    "was read or written. Sync the missing days explicitly via "
+                    "sync_sent_items_by_dates(..., include_next_day=False), oldest first, consuming "
+                    "the handoff in between.",
+                    {"watermark_gap_days": gap_days, "max_window_days": MAX_SYNC_WINDOW_DAYS},
+                )
         window_dates, follow_up_hint = _derive_sent_sync_window(count, dd)
 
     query_dates = _expand_sync_dates(window_dates, include_next_day=True)

@@ -20,7 +20,7 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
 - **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
   indexiert), `handoff_invalid`, `handoff_overflow` (Überhang > 200 wird vor jedem Write
-  verweigert), `sent_window_truncated`, `sync_window_failed`; Exit ≠ 0.
+  verweigert), `sent_window_truncated`, `sent_window_gap`, `sync_window_failed`; Exit ≠ 0.
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
@@ -56,7 +56,8 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   eine später erneut gelistete Mail nicht still übersprungen wird. Ein scheiterndes Fenster bricht den ganzen
   Lauf vor jedem Write ab (`sync_window_failed`), damit das Wasserzeichen keine ältere Lücke überspringt.
 - Eine volle 100-Envelope-Seite wird fail-closed als `sent_window_truncated` verweigert (keine Pagination,
-  keine stille 100/101-Kürzung).
+  kein sicherer Skip, gesamter Lauf blockiert); eine Wasserzeichen-Lücke > 60 Tage als `sent_window_gap` vor
+  jedem Lesen, weil kein vollständiges Fenster garantiert ist.
 - Handoff-/Ledger-`schema_version` und `count` müssen exakt `int` sein (nicht `true`/`1.0`); tief
   verschachteltes JSON (`RecursionError`) ergibt `handoff_invalid`/`ledger_invalid` statt eines Absturzes.
 - Untrusted Ledger-/Handoff-Typen (`role`, `truncated_fields`, `match_type`) werden vor Mengenoperationen

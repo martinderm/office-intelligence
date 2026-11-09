@@ -661,8 +661,9 @@ Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pendi
 indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
-Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` und eine volle
-100-Envelope-Seite `sent_window_truncated` (jeweils vollständig vor jedem Write, kein Zurückstellen; Recovery
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow`, eine volle
+100-Envelope-Seite `sent_window_truncated` (keine Pagination, kein sicherer Skip) und eine Wasserzeichen-Lücke
+> 60 Tage `sent_window_gap` (jeweils vollständig vor jedem Write/Lesen, kein Zurückstellen; Recovery
 eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)`, nicht über `--sync-sent N`/`count`
 oder `sync_sent_items(dates=[D])`, das D+1 mitliest; Datums-CLI bewusst nicht vorhanden). Scheitert ein
 Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`, `failed_dates`), damit das

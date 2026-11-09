@@ -188,8 +188,9 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 (`handoff_overflow`, kein Zurückstellen); Recovery eines Tages nur über
 `sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest;
 kein `--sync-sent N`/`count`, das bei heute endet). Eine volle 100-Envelope-Seite verweigert
-(`sent_window_truncated`); ein scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Write ab
-(`sync_window_failed`, `failed_dates`). In
+(`sent_window_truncated`, keine Pagination, kein sicherer Skip); ein scheiterndes Datumsfenster bricht den
+ganzen Lauf vor jedem Write ab (`sync_window_failed`, `failed_dates`), eine Wasserzeichen-Lücke > 60 Tage
+verweigert vor jedem Lesen (`sent_window_gap`). In
 Fehler-Envelopes unterscheidet `write_state` `none`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,
