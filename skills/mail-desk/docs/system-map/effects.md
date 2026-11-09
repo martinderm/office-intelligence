@@ -283,7 +283,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `sync_failed`. `write_state` unterscheidet: `none` (kein Write), `state` (nur `sent-sync-state.json`/
   Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher
   atomarer Publikation; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
-  `new_items`, `handoff` mit `state ∈ none|written|pending|invalid` und die dokumentierten Zähler. Ein
+  `new_items`, `handoff` mit `state ∈ none|written|pending|invalid|unknown` und die dokumentierten Zähler;
+  statische Aliasfehler melden `unknown`/`pending_count: null`, weil der abgewiesene Pfad nicht gelesen wird. Ein
   scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`,
   `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
   stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State

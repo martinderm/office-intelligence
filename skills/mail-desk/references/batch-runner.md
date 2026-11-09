@@ -1063,7 +1063,7 @@ Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-items
 
 **Envelope-Felder (`data`), in jedem Sync-Ergebnis, auch Fehler/Legacy:** `new_count` (= `new_entries_indexed`),
 `new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
-Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|written|pending|invalid`,
+Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|written|pending|invalid|unknown`,
 `written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — Items der nächsten 200er-Batches,
 `headers_incomplete_count`, `file`) sowie `truncated`, `coverage_*`, `next_start`, `follow_up_hint`, `since_*`.
 `headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).

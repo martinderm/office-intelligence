@@ -101,23 +101,29 @@ def failure_envelope(
     details: Mapping[str, Any] | None = None,
     new_count: int | None = 0,
     new_items: list[dict[str, Any]] | None = None,
+    peek_handoff: bool = True,
 ) -> dict[str, Any]:
     """``ok: false`` result that always carries ``new_count``/``new_items``/``handoff``.
 
-    ``handoff.state`` is one of ``none|written|pending|invalid``; the refusal itself
-    is ``reason_code``.  Pending counts come from a read-only peek that never raises.
+    ``handoff.state`` is one of ``none|written|pending|invalid|unknown``; the refusal
+    itself is ``reason_code``.  Pending counts come from a read-only peek that never
+    raises, unless ``peek_handoff`` is false: static alias refusals deliberately
+    report ``unknown``/``null`` instead of reading a rejected path.
     ``write_state`` distinguishes a pre-write refusal (``none``) from a run that
     only persisted the coverage state/marker (``state``, no handoff/index write), a
     confirmed partial commit (``partial``) and unverified progress after a failed
     write (``unknown``); only ``unknown`` reports ``new_count: null``.
     """
-    peek = peek_handoff_state(dd)
     handoff = _default_handoff(dd)
-    # Peek-derived state first, so refusal-specific details (e.g. the exact
-    # pending_count of handoff_pending) can override it.
-    handoff.update(state=peek["state"], pending_count=peek["pending_count"])
+    if peek_handoff:
+        peek = peek_handoff_state(dd)
+        # Peek-derived state first, so refusal-specific details (e.g. the exact
+        # pending_count of handoff_pending) can override it.
+        handoff.update(state=peek["state"], pending_count=peek["pending_count"])
+    else:
+        handoff.update(state="unknown", pending_count=None)
     handoff.update({key: value for key, value in (details or {}).items() if key != "state"})
-    handoff["state"] = state if state in HANDOFF_STATES else peek["state"]
+    handoff["state"] = state if state in HANDOFF_STATES else handoff["state"]
     envelope: dict[str, Any] = {
         "ok": False,
         "mode": "sync_sent",
@@ -235,6 +241,11 @@ def run_sync_sent_mode(
             max_pages=max_pages,
         )
     except SentHandoffError as error:
+        # Static alias refusals must not peek at the rejected ledger/handoff:
+        # report an explicitly unknown state instead of a false none/0.
+        alias_error = error.reason_code in {
+            "sent_index_alias_invalid", "ledger_alias_invalid",
+        }
         return failure_envelope(
             dd,
             folder,
@@ -243,6 +254,7 @@ def run_sync_sent_mode(
             state=error.details.get("state"),
             write_state=getattr(error, "write_state", "none"),
             details={key: value for key, value in error.details.items() if key != "state"},
+            peek_handoff=not alias_error,
         )
     except SentSyncPartialFailure as error:
         # Fail-closed: if any date window failed, nothing was handed off or indexed.

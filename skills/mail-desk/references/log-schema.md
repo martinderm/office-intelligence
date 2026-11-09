@@ -278,8 +278,10 @@ Dateisystem-Fehlkonfiguration, kein transienter Fehler: beim vorgezogenen Prefli
 unangetastet. Fehler-Details heißen `alias_file`, `alias_kind`, `alias_label`; `handoff.file` bleibt der
 Handoff-Pfad. Recovery ist ausschließlich manuelle Reparatur/Quarantäne der betroffenen Datei(en), keine
 automatische Löschung; ein bloßer Rerun ohne Korrektur scheitert identisch. Direktes `record_synthesized`
-prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Der Check ist keine
-Zusage gegen einen konkurrierenden Same-User-Mutator (Issue #91).
+prüft das Ledger samt Sidecar vor dem Lesen/Append und meldet `ledger_alias_invalid`. Auch der diagnostische
+Handoff-Peek in Fehler-Envelopes prüft das Ledger statisch und meldet `unknown`/`null` statt eines falschen
+`none`/`0`; statische Aliasfehler überspringen den Peek ganz. Der Check ist keine Zusage gegen einen
+konkurrierenden Same-User-Mutator (Issue #91).
 
 ### Absturzfenster (`sync-sent`)
 
@@ -321,7 +323,9 @@ bleibt `handoff_pending` (fail-closed); Crash-Vertrag Handoff-vor-Index bleibt. 
 `sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` nach dem Konsum.
 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
-`pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
+`pending`, `invalid` (Handoff oder Ledger nicht interpretierbar) oder `unknown`; die Ursache steht in
+`reason_code`. Statische Index-/Ledger-/Sidecar-Aliasfehler setzen bewusst `unknown` und `pending_count: null`,
+weil der abgewiesene Ledger-/Handoff-Pfad nicht gelesen werden darf (kein falsches `none`/`0`).
 Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert (`sync_window_failed`,
 `failed_dates`; nichts committet, damit das Wasserzeichen keine ältere Lücke überspringt). Ein fehlender
 State bei bestehendem Index ist in allen Einstiegen fail-closed (`sent_initial_state_required`), unabhängig

@@ -221,6 +221,18 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Append-Ziel-Inhalte gelesen/geschrieben hat (bereits erfolgte Konfig-/Lease-Reads bleiben außen vor).
   Die akzeptierte Same-User-Race-Grenze (#91) wird weiterhin nicht als gelöst dargestellt.
 
+#### Fixed (dreizehnte Review-/Audit-Runde)
+
+- Statische Alias-Fehler lesen den abgewiesenen Pfad nicht mehr für Diagnosen: `failure_envelope` überspringt den
+  Handoff-Peek und meldet `handoff.state: unknown` mit `pending_count: null`; auch `peek_handoff_state` prüft das
+  Ledger statisch und liest einen Alias nicht. Ein fremdes Hardlink-Ledger kann damit kein falsches `none`/`0`
+  mehr vortäuschen.
+- `append_sent_index_entries` prüft als direkte API jetzt alle vier Ziele (Index, Ledger und beide
+  `.torn`-Sidecars) vor Index-Read/Write; ebenso die private Einzel-Datum-API vor `_known_index_ids`.
+  Tests decken Ledger-/Sidecar-Hardlinks für den Direkt-Append und die private API ab.
+- `handoff.state` erlaubt additiv `unknown`; Log-Schema, Effects, Objects, L1/L2, SKILL, CLI und Batch-Runner
+  sind synchronisiert. Die Same-User-Race-Grenze (#91) bleibt unverändert außerhalb des kooperativen Scope.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

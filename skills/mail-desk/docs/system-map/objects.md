@@ -549,7 +549,7 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
   nur wenn nichts Unkonsumiertes pending ist (kein Überschreiben, Erweitern oder Ausräumen von Pending-Items).
 * **Lesen:** vollständig validiert (Kopf, `count`/Schranke, Feldtypen, Identität, Thread-Schlüssel, Anker-Kandidaten,
   `anchored_to`, Dubletten, unbekannte Felder); jede Abweichung ⇒ `handoff_invalid`, Datei unangetastet.
-  `handoff.state ∈ none|written|pending|invalid`.
+  `handoff.state ∈ none|written|pending|invalid|unknown`.
 
 ### 10.3 Coverage-State (`sent-sync-state.json`)
 * **Rolle:** persistente, atomare Coverage-Schranke für den Default-Lauf; kein Referenzwissen.

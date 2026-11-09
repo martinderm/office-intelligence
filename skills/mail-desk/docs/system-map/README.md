@@ -2422,7 +2422,7 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.
-- *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
+- *`handoff.state`:* in allen Envelopes `none|written|pending|invalid|unknown`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
   `sent_index_alias_invalid`, `ledger_alias_invalid`, `handoff_deferred`, `sent_window_truncated`,
   `sync_invalid_since`, `sync_invalid_max_pages`, `sync_invalid_date`, `sent_initial_state_invalid`,

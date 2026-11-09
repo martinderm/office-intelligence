@@ -53,7 +53,7 @@ MAX_RECIPIENTS = 100
 MAX_SUBJECT_CHARS = 1000
 
 #: ``handoff.state`` values reported in every sync envelope (success and failure).
-HANDOFF_STATES = ("none", "written", "pending", "invalid")
+HANDOFF_STATES = ("none", "written", "pending", "invalid", "unknown")
 
 _ITEM_STRING_FIELDS = (
     "message_id", "norm_message_id", "date", "subject", "from", "in_reply_to",
@@ -302,10 +302,10 @@ def _reject_file_alias(path: Path, *, reason_code: str, label: str) -> None:
         return
     raise SentHandoffError(
         reason_code,
-        f"Static {alias} alias detected for '{path.name}' ({label}); no mailbox, sent-index/ledger "
-        "content, coverage state, handoff or append target was read or written by this operation. "
-        "This is a filesystem misconfiguration, not a transient failure: repair or quarantine the "
-        "aliased file manually; a rerun without fixing it fails the same way. No autonomous deletion.",
+        f"Static {alias} alias detected for '{path.name}' ({label}); no handoff/index/coverage "
+        "mutation was performed and the alias was not used for a write. This is a filesystem "
+        "misconfiguration, not a transient failure: repair or quarantine the aliased file "
+        "manually; a rerun without fixing it fails the same way. No autonomous deletion.",
         {
             "reason": f"static_{alias}_alias",
             "alias_file": path.name,
@@ -805,7 +805,17 @@ def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
 
 
 def peek_handoff_state(data_dir: Path) -> dict[str, Any]:
-    """Read-only ``{"state", "pending_count"}`` for error envelopes; never raises."""
+    """Read-only ``{"state", "pending_count"}`` for error envelopes; never raises.
+
+    A statically aliased ledger is never read: the state is explicitly ``unknown``
+    instead of a potentially false ``none``/``0`` from a foreign file.
+    """
+    try:
+        reject_static_aliases(
+            data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
+        )
+    except SentHandoffError:
+        return {"state": "unknown", "pending_count": None}
     try:
         pending = len(unconsumed(read_handoff(data_dir), load_ledger(data_dir)))
     except Exception:  # noqa: BLE001 - diagnostics must never mask the real failure

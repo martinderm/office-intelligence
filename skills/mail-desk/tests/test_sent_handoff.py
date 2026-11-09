@@ -369,6 +369,23 @@ class IdempotenceAndCrashWindowTests(_Base):
         self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
         self.assertEqual(before, external.read_bytes())
 
+    def test_peek_handoff_state_marks_aliased_ledger_unknown_without_read(self) -> None:
+        external = self.dd.parent / "external-peek-ledger.jsonl"
+        external.write_text(json.dumps({
+            "schema_version": 1, "message_id": "m1@example.test",
+            "role": "primary", "recorded_at": "2026-09-24T10:00:00Z",
+        }) + "\n", encoding="utf-8")
+        try:
+            os.link(external, self.dd / sent_handoff.LEDGER_FILENAME)
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with patch.object(sent_handoff, "load_ledger") as ledger_load, \
+                patch.object(sent_handoff, "read_handoff") as handoff_read:
+            state = sent_handoff.peek_handoff_state(self.dd)
+        self.assertEqual({"state": "unknown", "pending_count": None}, state)
+        ledger_load.assert_not_called()
+        handoff_read.assert_not_called()
+
     def test_ledger_hardlink_alias_is_refused_by_record_synthesized(self) -> None:
         external = self.dd.parent / "external-ledger.jsonl"
         external.write_text("", encoding="utf-8")
@@ -443,6 +460,55 @@ class IdempotenceAndCrashWindowTests(_Base):
                 self.assertEqual(state.encode(), state_path.read_bytes())
                 self.assertEqual(external_before, external.read_bytes())
                 self.assertFalse((dd / HANDOFF_FILENAME).exists())
+
+    def test_direct_append_preflights_ledger_alias(self) -> None:
+        external = self.dd.parent / "external-direct-ledger.jsonl"
+        external.write_text("", encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / sent_handoff.LEDGER_FILENAME)
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(before, external.read_bytes())
+
+    def test_direct_append_preflights_ledger_sidecar_alias(self) -> None:
+        external = self.dd.parent / "external-direct-ledger-torn"
+        external.write_text("external\n", encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / (sent_handoff.LEDGER_FILENAME + ".torn"))
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        with self.assertRaises(SentHandoffError) as caught:
+            sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-24"}], self.dd,
+            )
+        self.assertEqual("ledger_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(before, external.read_bytes())
+
+    def test_private_single_date_api_preflights_alias_before_index_read(self) -> None:
+        external = self.dd.parent / "external-private-index.jsonl"
+        external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
+        before = external.read_bytes()
+        try:
+            os.link(external, self.dd / "sent-index.jsonl")
+        except (OSError, NotImplementedError):
+            self.skipTest("hardlinks are unavailable")
+        mailbox = _Mailbox(_details(1, _day=DAY))
+        run, read = mailbox.patches()
+        with run, read:
+            with self.assertRaises(SentHandoffError) as caught:
+                sent_indexer._sync_sent_items_for_date(
+                    DAY, account="ACC", data_dir=self.dd,
+                )
+        self.assertEqual("sent_index_alias_invalid", caught.exception.reason_code)
+        self.assertEqual(0, mailbox.calls)
+        self.assertEqual(before, external.read_bytes())
 
     def test_index_alias_preflight_blocks_before_handoff_publication(self) -> None:
         (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
@@ -2295,12 +2361,12 @@ class ModeEnvelopeTests(_Base):
         self.run_mode(_Mailbox(_details(1, _day=DAY)))
         self.assertTrue((self.dd / HANDOFF_FILENAME).exists())
 
-    def assert_alias_envelope(self, envelope: dict, *, reason: str, handoff_state: str,
-                              alias_file: str) -> None:
+    def assert_alias_envelope(self, envelope: dict, *, reason: str, alias_file: str) -> None:
         self.assertFalse(envelope["ok"])
         self.assertEqual(reason, envelope["reason_code"])
         self.assertNotEqual("unknown", envelope["write_state"])
-        self.assertEqual(handoff_state, envelope["handoff"]["state"])
+        self.assertEqual("unknown", envelope["handoff"]["state"])
+        self.assertIsNone(envelope["handoff"]["pending_count"])
         self.assertEqual(str(self.dd / HANDOFF_FILENAME), envelope["handoff"]["file"])
         self.assertEqual(alias_file, envelope["handoff"]["alias_file"])
         self.assertEqual("hardlink", envelope["handoff"]["alias_kind"])
@@ -2315,22 +2381,28 @@ class ModeEnvelopeTests(_Base):
             self.skipTest("hardlinks are unavailable")
         envelope = self.run_mode(_Mailbox(_details(1, _day=DAY)))
         self.assert_alias_envelope(
-            envelope, reason="sent_index_alias_invalid", handoff_state="none",
-            alias_file="sent-index.jsonl",
+            envelope, reason="sent_index_alias_invalid", alias_file="sent-index.jsonl",
         )
 
-    def test_ledger_alias_envelope_keeps_handoff_file_with_pending_handoff(self) -> None:
+    def test_ledger_alias_envelope_is_unknown_and_does_not_peek(self) -> None:
         self.seed_pending_handoff()
         external = self.dd.parent / "external-envelope-ledger.jsonl"
-        external.write_text("", encoding="utf-8")
+        # A foreign ledger that would fake a consumed item must never be peeked.
+        external.write_text(json.dumps({
+            "schema_version": 1, "message_id": "m1@example.test",
+            "role": "primary", "recorded_at": "2026-09-24T10:00:00Z",
+        }) + "\n", encoding="utf-8")
         try:
             os.link(external, self.dd / sent_handoff.LEDGER_FILENAME)
         except (OSError, NotImplementedError):
             self.skipTest("hardlinks are unavailable")
-        envelope = self.run_mode(_Mailbox(_details(2, _day=DAY)))
+        with patch.object(sent_handoff, "load_ledger") as ledger_load, \
+                patch.object(sent_handoff, "read_handoff") as handoff_read:
+            envelope = self.run_mode(_Mailbox(_details(2, _day=DAY)))
+        ledger_load.assert_not_called()
+        handoff_read.assert_not_called()
         self.assert_alias_envelope(
-            envelope, reason="ledger_alias_invalid", handoff_state="pending",
-            alias_file=sent_handoff.LEDGER_FILENAME,
+            envelope, reason="ledger_alias_invalid", alias_file=sent_handoff.LEDGER_FILENAME,
         )
 
     def test_index_sidecar_alias_envelope_keeps_handoff_file_with_pending_handoff(self) -> None:
@@ -2343,7 +2415,7 @@ class ModeEnvelopeTests(_Base):
             self.skipTest("hardlinks are unavailable")
         envelope = self.run_mode(_Mailbox(_details(2, _day=DAY)))
         self.assert_alias_envelope(
-            envelope, reason="sent_index_alias_invalid", handoff_state="pending",
+            envelope, reason="sent_index_alias_invalid",
             alias_file="sent-index.jsonl.torn",
         )
 
@@ -2357,11 +2429,11 @@ class ModeEnvelopeTests(_Base):
             self.skipTest("hardlinks are unavailable")
         envelope = self.run_mode(_Mailbox(_details(2, _day=DAY)))
         self.assert_alias_envelope(
-            envelope, reason="ledger_alias_invalid", handoff_state="pending",
+            envelope, reason="ledger_alias_invalid",
             alias_file=sent_handoff.LEDGER_FILENAME + ".torn",
         )
 
-    def test_index_alias_is_a_static_failure_envelope_not_unknown(self) -> None:
+    def test_index_alias_is_a_static_failure_envelope_with_unknown_handoff(self) -> None:
         self.seed_state("2026-09-01", "2026-09-20")
         external = self.dd.parent / "external-envelope-index.jsonl"
         external.write_text('{"message_id": "<keep@example.test>"}\n', encoding="utf-8")
@@ -2374,7 +2446,8 @@ class ModeEnvelopeTests(_Base):
         self.assertFalse(envelope["ok"])
         self.assertEqual("sent_index_alias_invalid", envelope["reason_code"])
         self.assertNotEqual("unknown", envelope["write_state"])
-        self.assertEqual("none", envelope["handoff"]["state"])
+        self.assertEqual("unknown", envelope["handoff"]["state"])
+        self.assertIsNone(envelope["handoff"]["pending_count"])
         self.assertEqual(before, external.read_bytes())
 
     def test_equal_since_is_applied_without_ignore_hint(self) -> None:

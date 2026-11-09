@@ -25,7 +25,6 @@ from .sent_handoff import (
     load_ledger,
     norm_id,
     read_handoff,
-    reject_static_aliases,
     resolve_thread_anchor,
     tolerant_jsonl_records,
     unconsumed,
@@ -156,9 +155,7 @@ def append_sent_index_entries(
 
     dd = data_dir or resolve_data_dir()
     sent_path = dd / "sent-index.jsonl"
-    reject_static_aliases(
-        sent_path, reason_code="sent_index_alias_invalid", label="sent-index",
-    )
+    assert_append_aliases(dd)
     sent_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_mids: set[str] = set()
@@ -366,6 +363,7 @@ def _sync_sent_items_for_date(
     rather than a hardcoded mailbox.
     """
     dd = data_dir or resolve_data_dir()
+    assert_append_aliases(dd)
     known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
     candidates, stats = _collect_date_candidates(
         date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids,
