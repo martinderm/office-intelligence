@@ -478,12 +478,20 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
 3. **Profilprüfung (`validate_raw_eml`, rein, ohne Dateisystem/Mailbox):** UTF-8 / NUL / einzelnes CR /
    Zeilenlänge, Normalisierung zu CRLF (+ ein abschließendes CRLF) mit erneuter 10-MiB-Prüfung
    (`raw_eml_message_too_large`), strikter Header-Block, genau eine gültige Message-ID, `To` als
-   RFC-5322-Adressliste (`raw_eml_address_invalid`), `Date` als RFC-5322-`date-time` (`raw_eml_date_invalid`),
-   Singleton-Header und jedes `Content-*` höchstens einmal, MIME-Version, Struktur `text/plain` | flaches
-   `multipart/mixed`; bei `multipart/mixed` wird der Header-Block **jedes** Teils vor der tolerant
-   parsenden Standardbibliothek strikt zerlegt (`raw_eml_part_header_invalid`: Feldsyntax, Steuerzeichen,
-   Feldgrenzen, doppelte oder widersprüchliche `Content-*`/`MIME-Version`; Teilezahl muss mit dem Parser
-   übereinstimmen), danach Parser-Defekte,
+   RFC-5322-Adressliste (`raw_eml_address_invalid`; Kommas in Anführungszeichen und Kommentaren trennen
+   nichts, leere Elemente und Unicode-Whitespace außerhalb von Anführungszeichen werden abgewiesen), `Date`
+   als RFC-5322-`date-time` mit ASCII-Ziffern (`raw_eml_date_invalid`), Singleton-Header und jedes
+   `Content-*` höchstens einmal, MIME-Version, `Content-Type`/`Content-Disposition`/`Content-Transfer-Encoding`
+   der Nachricht von einem eigenen strengen RFC 2045/RFC 2231-Parser gelesen (`raw_eml_mime_invalid`), Struktur
+   `text/plain` | flaches `multipart/mixed`; bei `multipart/mixed` läuft die **strenge, begrenzte Sicht zuerst**
+   (vor der tolerant parsenden Standardbibliothek): Boundary aus dem strengen Parameter, Zählen der
+   Delimiter mit hartem Stopp beim 65. (`raw_eml_part_count_exceeded`, höchstens 64 MIME-Teile, bevor ein
+   Teil-Header geparst wird), Header-Block **jedes** Teils strikt zerlegt (`raw_eml_part_header_invalid`:
+   Feldsyntax, Steuerzeichen, Feldgrenzen, doppelte oder widersprüchliche `Content-*`/`MIME-Version`) und
+   seine MIME-Werte streng gelesen; erst dann ruft die Standardbibliothek die Teile ab, und beide Sichten
+   müssen übereinstimmen (Content-Type, Boundary, Dateiname, Teilezahl). Der Text darf nicht
+   `attachment` sein und keinen `name`/`filename` tragen; Anhänge brauchen `attachment` mit `filename`
+   (und gleichem `name`, falls vorhanden). Danach Parser-Defekte,
    Anhänge (streng Base64, höchstens 5 mal 3 MiB, gültige eindeutige Namen). Ergebnis
    `PreparedRawEml` (normalisierte Bytes, Message-ID, Datum, Anhänge, Summary, SHA-256 von Quelle
    und Normalform). Jeder Fehler endet **vor** jedem Mailbox-Kontakt und jedem Journal-Eintrag.
@@ -494,7 +502,8 @@ nicht-leere `attachments` (save) bzw. eine ausdrücklich übergebene Liste inkl.
    `lines()`/CRLF-Join-Normalisierung stellt exakt die normalisierte Mail her.
 6. **Rücklesen:** genau eine Envelope zur Message-ID, `message export`; `compare_stored_raw` validiert die
    gespeicherte Mail mit demselben Profil und vergleicht die Summary (Struktur, Header-Folge je Name,
-   `header_order`, Text samt abschließenden Zeilenumbrüchen, Anhangsanzahl, Name/Typ/Größe/SHA-256); sonst `appended_unverified` und
+   `header_order`, Teil-Header-Werte jedes MIME-Teils (`part[n]:header:<name>`, `part[n]:header_order`),
+   Text samt abschließenden Zeilenumbrüchen, Anhangsanzahl, Name/Typ/Größe/SHA-256); sonst `appended_unverified` und
    `draft_verification_failed`.
 7. **Ende:** `saved_verified` plus Draft-Journal-Item (`action = save_raw_draft`); Ergebnis wie ein
    Builder-Entwurf plus `source`. Kein Replace für Rohmails.

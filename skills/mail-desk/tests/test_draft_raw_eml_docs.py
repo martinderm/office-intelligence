@@ -38,6 +38,7 @@ RAW_EML_CODES = (
     "raw_eml_message_id_invalid", "raw_eml_mime_invalid", "raw_eml_structure_unsupported",
     "raw_eml_attachment_invalid", "raw_eml_attachment_count_exceeded", "raw_eml_attachment_too_large",
     "raw_eml_part_header_invalid", "raw_eml_address_invalid", "raw_eml_date_invalid",
+    "raw_eml_part_count_exceeded",
 )
 
 
@@ -105,6 +106,29 @@ class DocumentationContractTests(unittest.TestCase):
                 self.assertIn(needle, text, f"{name} lacks {needle}")
         self.assertIn("raw_eml_date_invalid", self.text("L2 processes"))
         self.assertIn("raw_eml_address_invalid", self.text("L2 processes"))
+
+    def test_round_three_contract_points_are_documented(self) -> None:  # D1 (residual findings 1-4)
+        cli = self.text("cli-operations")
+        for needle in ("64 MIME-Teile", "RFC 2231", "Anführungszeichen", "Unicode-Whitespace", "ASCII-Ziffern",
+                       "part[n]:header:<name>", "part[n]:header_order", "streng geparster Content-Type",
+                       "Teil-Header-Werte", "`name`", "`filename`", "`boundary`", "`charset`", "`inline`"):
+            self.assertIn(needle, cli, f"cli-operations lacks {needle}")
+        for stale in ("ein Kommentar erlaubt", "gültiger Content-Type (`raw_eml_attachment_invalid`"):
+            self.assertNotIn(stale, cli, f"cli-operations still says: {stale}")
+        self.assertNotRegex(cli, r"Alle Header, auch `Bcc`/`X-Unsent`, bleiben erhalten\s+und werden verglichen;")
+        for name, needles in {
+            "SKILL": ("64", "RFC 2231", "Teil-Header-Werte", "part[n]"),
+            "L2 README": ("Teil-Header-Werte", "64 MIME-Teile", "RFC 2231", "ASCII-Ziffern"),
+            "L2 processes": ("Teil-Header-Werte", "raw_eml_part_count_exceeded", "ASCII-Ziffern", "Anführungszeichen"),
+            "L2 objects": ("MAX_MIME_PARTS", "parts", "Teil-Header"),
+            "L1 README": ("64 MIME-Teile", "Teil-Header-Werte"),
+        }.items():
+            text = self.text(name)
+            for needle in needles:
+                self.assertIn(needle, text, f"{name} lacks {needle}")
+        self.assertNotIn("nicht des Rücklesens", self.text("L2 README"))
+        self.assertNotIn("nur LF/CRLF-neutral", self.text("L2 objects"))
+        self.assertIn(str(dre.MAX_MIME_PARTS), self.text("L1 README"))
 
     def test_no_stale_uncommitted_wording_remains_in_the_l2_frame(self) -> None:  # D1 (finding 4)
         readme = self.text("L2 README")

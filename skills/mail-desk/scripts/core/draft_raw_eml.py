@@ -42,6 +42,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from email.policy import SMTPUTF8
 from typing import Any
+from urllib.parse import unquote_to_bytes
 
 from . import draft_attachments as da
 from .common import normalize_message_id
@@ -55,6 +56,11 @@ MAX_LINE_BYTES = 998
 #: Header budget (fields and bytes of the whole header block).
 MAX_HEADER_FIELDS = 100
 MAX_HEADER_BLOCK_BYTES = 64 * 1024
+
+#: Hard structural bound on MIME parts (body part + attachment parts), enforced while the boundary
+#: delimiters are counted -- before any part header block is parsed or the stdlib parser runs.  The
+#: attachment limit (``MAX_ATTACHMENTS``) stays the product limit; this only bounds the work.
+MAX_MIME_PARTS = 64
 
 RAW_EML_SUFFIX = ".eml"
 _LABEL = "raw EML file"
@@ -114,8 +120,12 @@ class PreparedRawEml:
 # Bytes -> normalized text
 # ---------------------------------------------------------------------------
 
+_ASCII_WSP_RE = re.compile(r"[ \t]+")
+
+
 def _squash(value: str) -> str:
-    return " ".join(value.split())
+    """Collapse runs of ASCII space / tab only: Unicode whitespace (NBSP, ...) stays significant."""
+    return _ASCII_WSP_RE.sub(" ", value).strip(" \t")
 
 
 def _decode_and_normalize(data: Any) -> tuple[str, str]:
@@ -203,6 +213,8 @@ def _split_parts(body_lines: list[str], boundary: str) -> list[list[str]]:
 
     A delimiter is a line that is exactly ``--boundary`` (``--boundary--`` closes), optionally followed by
     spaces / tabs; anything before the first delimiter or after the closing one is not part content.
+    The number of parts is bounded by ``MAX_MIME_PARTS`` while delimiters are counted: the 65th
+    delimiter stops the scan (``raw_eml_part_count_exceeded``) before another part is collected.
     """
     delimiter, closing = "--" + boundary, "--" + boundary + "--"
     parts: list[list[str]] = []
@@ -216,20 +228,28 @@ def _split_parts(body_lines: list[str], boundary: str) -> list[list[str]]:
         if stripped == delimiter:
             if current is not None:
                 parts.append(current)
+            if len(parts) >= MAX_MIME_PARTS:
+                raise _fail(
+                    "raw_eml_part_count_exceeded",
+                    f"The {_LABEL} has more than {MAX_MIME_PARTS} MIME parts; refusing before any part is parsed.",
+                )
             current = []
         elif current is not None:
             current.append(line)
     raise _mime_invalid("closing boundary missing")
 
 
-def _check_part_headers(part_blocks: list[list[str]]) -> None:
-    """Strict structural rules for every MIME part header block (fail closed, content-free)."""
-    for block in part_blocks:
+def _scan_parts(body_lines: list[str], boundary: str) -> list["_Mime"]:
+    """Bounded split, strict header block and strict MIME header values of every part."""
+    mimes: list[_Mime] = []
+    for block in _split_parts(body_lines, boundary):
         fields, _ = _parse_header_block(block, part=True)
         counts = Counter(name.casefold() for name, _ in fields)
         for name, count in counts.items():
             if count > 1 and (name.startswith("content-") or name == "mime-version"):
                 raise _header_invalid("a Content-* header occurs more than once", part=True)
+        mimes.append(_mime_of(fields))
+    return mimes
 
 
 def _validate_message_id(value: str) -> str:
@@ -242,12 +262,60 @@ def _validate_message_id(value: str) -> str:
     return normalize_message_id(text)
 
 
+def _check_list_syntax(text: str, invalid: RawEmlError) -> None:
+    """Quote / comment aware scan of an address list: empty elements and stray whitespace.
+
+    Commas, colons and semicolons inside a quoted string or a (nested) comment are ordinary text.
+    Outside them an element must not be empty (leading, doubled or trailing comma, ``,;`` in a group)
+    and only ASCII space / tab may separate tokens (NBSP and other Unicode whitespace are refused).
+    Quotes and comments must be closed.
+    """
+    index, length, depth, in_quote = 0, len(text), 0, False
+    last = "start"  # kind of the previous significant token: start | comma | colon | other
+    while index < length:
+        char = text[index]
+        if in_quote or depth:
+            if char == "\\":
+                index += 2
+                continue
+            if in_quote and char == '"':
+                in_quote = False
+            elif depth and char == "(":
+                depth += 1
+            elif depth and char == ")":
+                depth -= 1
+            index += 1
+            continue
+        if char == '"':
+            in_quote, last = True, "other"
+        elif char == "(":
+            depth = 1
+        elif char in " \t":
+            pass
+        elif char.isspace() or unicodedata.category(char).startswith("Z"):
+            raise invalid
+        elif char == ",":
+            if last != "other":
+                raise invalid
+            last = "comma"
+        elif char == ":":
+            last = "colon"
+        elif char == ";":
+            if last == "comma":
+                raise invalid
+            last = "other"
+        else:
+            last = "other"
+        index += 1
+    if in_quote or depth or last in ("start", "comma"):
+        raise invalid
+
+
 def _validate_address_list(value: str) -> None:
     """``To`` must be a well-formed RFC 5322 address list (mailboxes and groups), ASCII addr-specs."""
     invalid = _fail("raw_eml_address_invalid", "The 'to' header is not a valid RFC 5322 address list; refusing.")
-    text = value.strip()
-    if text.startswith(",") or text.endswith(",") or re.search(r",\s*,", text):
-        raise invalid
+    text = value.strip(" \t")
+    _check_list_syntax(text, invalid)
     try:
         header = SMTPUTF8.header_factory("To", text)
         groups = list(header.groups)
@@ -265,8 +333,9 @@ def _validate_address_list(value: str) -> None:
 _WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _MONTHS = ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec")
 _DATE_RE = re.compile(
-    r"(?:(?P<dow>[A-Za-z]{3}),[ ]?)?(?P<day>\d{1,2}) (?P<mon>[A-Za-z]{3}) (?P<year>\d{4}) "
-    r"(?P<hour>\d{2}):(?P<minute>\d{2})(?::(?P<second>\d{2}))? (?P<sign>[+-])(?P<zh>\d{2})(?P<zm>\d{2})"
+    r"(?:(?P<dow>[A-Za-z]{3}),[ ]?)?(?P<day>[0-9]{1,2}) (?P<mon>[A-Za-z]{3}) (?P<year>[0-9]{4}) "
+    r"(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2})(?::(?P<second>[0-9]{2}))? "
+    r"(?P<sign>[+-])(?P<zh>[0-9]{2})(?P<zm>[0-9]{2})"
     r"(?: \((?:[^()\\]|\\.)*\))?"
 )
 
@@ -278,7 +347,7 @@ def _validate_date(value: str) -> None:
     comment must be a single unnested parenthesis group.  Years 1900-9999.
     """
     invalid = _fail("raw_eml_date_invalid", "The 'date' header is not a valid RFC 5322 date-time; refusing.")
-    match = _DATE_RE.fullmatch(value.strip())
+    match = _DATE_RE.fullmatch(value.strip(" \t"))
     if match is None:
         raise invalid
     month = _MONTHS.index(match["mon"].lower()) + 1 if match["mon"].lower() in _MONTHS else 0
@@ -315,6 +384,199 @@ def _check_required_headers(fields: list[tuple[str, str]]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Strict MIME header values (RFC 2045 / RFC 2231), independent of the tolerant stdlib getters
+# ---------------------------------------------------------------------------
+
+_TOKEN_SPECIALS = frozenset('()<>@,;:\\"/[]?=')
+_BOUNDARY_RE = re.compile(r"[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]")
+_PARAM_NAME_RE = re.compile(r"([^*]+)(?:\*(0|[1-9][0-9]{0,2}))?(\*)?")
+_PCT_RE = re.compile(r"(?:[^%]|%[0-9A-Fa-f]{2})*")
+_EXTENDED_CHARSETS = frozenset({"utf-8", "us-ascii"})
+_MIME_VALUE_HEADERS = ("content-type", "content-disposition", "content-transfer-encoding")
+
+
+def _value_invalid() -> RawEmlError:
+    return _mime_invalid("malformed MIME header value")
+
+
+def _is_token_char(char: str) -> bool:
+    return "!" <= char <= "~" and char not in _TOKEN_SPECIALS
+
+
+def _parse_structured(value: str, *, with_subtype: bool) -> tuple[str, list[tuple[str, str]]]:
+    """Parse ``primary *( ";" name "=" value )`` strictly; returns ``(lower-case primary, [(name, value)])``.
+
+    ``primary`` is ``type/subtype`` (``with_subtype``) or one token.  Values are tokens or quoted strings
+    (backslash escapes); whitespace is allowed around ``;`` only (never around ``=``); comments, a dangling
+    ``;``, a missing value, a second type and any trailing text are refused.
+    """
+    length = len(value)
+
+    def skip(index: int) -> int:
+        while index < length and value[index] in " \t":
+            index += 1
+        return index
+
+    def token(index: int) -> int:
+        while index < length and _is_token_char(value[index]):
+            index += 1
+        return index
+
+    start = skip(0)
+    end = token(start)
+    if end == start:
+        raise _value_invalid()
+    primary, index = value[start:end], end
+    if with_subtype:
+        if index >= length or value[index] != "/":
+            raise _value_invalid()
+        end = token(index + 1)
+        if end == index + 1:
+            raise _value_invalid()
+        primary, index = primary + "/" + value[index + 1:end], end
+    params: list[tuple[str, str]] = []
+    while True:
+        index = skip(index)
+        if index >= length:
+            break
+        if value[index] != ";":
+            raise _value_invalid()
+        index = skip(index + 1)
+        end = token(index)
+        if end == index or end >= length or value[end] != "=":
+            raise _value_invalid()
+        name, index = value[index:end].lower(), end + 1
+        if index < length and value[index] == '"':
+            index += 1
+            chars: list[str] = []
+            while True:
+                if index >= length:
+                    raise _value_invalid()
+                char = value[index]
+                if char == "\\":
+                    if index + 1 >= length:
+                        raise _value_invalid()
+                    chars.append(value[index + 1])
+                    index += 2
+                elif char == '"':
+                    index += 1
+                    break
+                else:
+                    chars.append(char)
+                    index += 1
+            params.append((name, "".join(chars)))
+        else:
+            end = token(index)
+            if end == index:
+                raise _value_invalid()
+            params.append((name, value[index:end]))
+            index = end
+    return primary.lower(), params
+
+
+def _decode_extended(value: str, with_charset: bool) -> tuple[str | None, bytes]:
+    charset = None
+    if with_charset:
+        pieces = value.split("'", 2)
+        if len(pieces) != 3:
+            raise _value_invalid()
+        charset, language, value = pieces[0].lower(), pieces[1], pieces[2]
+        if charset not in _EXTENDED_CHARSETS or not all(_is_token_char(char) for char in language):
+            raise _value_invalid()
+    if _PCT_RE.fullmatch(value) is None:
+        raise _value_invalid()
+    return charset, unquote_to_bytes(value)
+
+
+def _strict_decode(data: bytes, charset: str) -> str:
+    try:
+        return data.decode(charset)
+    except (UnicodeDecodeError, LookupError):
+        raise _value_invalid() from None
+
+
+def _resolve_params(raw: list[tuple[str, str]]) -> dict[str, str]:
+    """Parameter dictionary with RFC 2231 ``name*`` / ``name*N`` / ``name*N*`` resolved; duplicates refused."""
+    entries: dict[str, dict[str, Any]] = {}
+    for name, value in raw:
+        match = _PARAM_NAME_RE.fullmatch(name)
+        if match is None:
+            raise _value_invalid()
+        base, section, star = match.groups()
+        entry = entries.setdefault(base, {"plain": None, "extended": None, "sections": {}})
+        if section is None and star is None:
+            if entry["plain"] is not None:
+                raise _value_invalid()
+            entry["plain"] = value
+        elif section is None:
+            if entry["extended"] is not None:
+                raise _value_invalid()
+            entry["extended"] = value
+        else:
+            if int(section) in entry["sections"]:
+                raise _value_invalid()
+            entry["sections"][int(section)] = (star is not None, value)
+    result: dict[str, str] = {}
+    for base, entry in entries.items():
+        kinds = (entry["plain"] is not None) + (entry["extended"] is not None) + bool(entry["sections"])
+        if kinds != 1:
+            raise _value_invalid()  # the same parameter given twice, plainly and/or extended
+        if entry["plain"] is not None:
+            result[base] = entry["plain"]
+        elif entry["extended"] is not None:
+            charset, data = _decode_extended(entry["extended"], True)
+            result[base] = _strict_decode(data, charset or "utf-8")
+        else:
+            sections = entry["sections"]
+            if sorted(sections) != list(range(len(sections))):
+                raise _value_invalid()
+            charset, chunks = None, []
+            for number in range(len(sections)):
+                extended, value = sections[number]
+                if extended:
+                    found, data = _decode_extended(value, number == 0)
+                    if number == 0:
+                        charset = found
+                    elif charset is None:
+                        raise _value_invalid()
+                    chunks.append(data)
+                else:
+                    chunks.append(value.encode("utf-8"))
+            result[base] = _strict_decode(b"".join(chunks), charset or "utf-8")
+    return result
+
+
+@dataclass(frozen=True)
+class _Mime:
+    """Strictly parsed MIME header values of one entity (message or part) plus its raw header fields."""
+
+    fields: tuple[tuple[str, str], ...]
+    content_type: str = "text/plain"
+    type_params: dict[str, str] = field(default_factory=dict)
+    disposition: str | None = None
+    disposition_params: dict[str, str] = field(default_factory=dict)
+    encoding: str | None = None
+
+
+def _mime_of(fields: list[tuple[str, str]]) -> _Mime:
+    """Strict MIME view of a header block whose ``Content-*`` names are already known to be unique."""
+    values = {name.casefold(): value for name, value in fields if name.casefold() in _MIME_VALUE_HEADERS}
+    kwargs: dict[str, Any] = {}
+    if "content-type" in values:
+        primary, raw = _parse_structured(values["content-type"], with_subtype=True)
+        kwargs.update(content_type=primary, type_params=_resolve_params(raw))
+    if "content-disposition" in values:
+        primary, raw = _parse_structured(values["content-disposition"], with_subtype=False)
+        kwargs.update(disposition=primary, disposition_params=_resolve_params(raw))
+    if "content-transfer-encoding" in values:
+        primary, raw = _parse_structured(values["content-transfer-encoding"], with_subtype=False)
+        if raw:
+            raise _value_invalid()
+        kwargs.update(encoding=primary)
+    return _Mime(fields=tuple(fields), **kwargs)
+
+
+# ---------------------------------------------------------------------------
 # MIME structure
 # ---------------------------------------------------------------------------
 
@@ -330,12 +592,42 @@ def _invalid_attachment(index: int, detail: str) -> RawEmlError:
     return _fail("raw_eml_attachment_invalid", f"attachment #{index} is invalid ({detail}).")
 
 
-def _decode_text_part(part: Any) -> str:
-    charset = (part.get_content_charset() or "us-ascii").lower()
+def _top_mime(fields: list[tuple[str, str]], values: dict[str, str]) -> tuple[_Mime, str]:
+    """Strict top-level MIME view and layout (``text`` | ``mixed``)."""
+    version = values.get("mime-version")
+    has_content_header = any(name.casefold().startswith("content-") for name, _ in fields)
+    if version is not None and version != "1.0":
+        raise _mime_invalid("MIME-Version")
+    if version is None and has_content_header:
+        raise _mime_invalid("Content-* header without MIME-Version")
+    top = _mime_of(fields)
+    if top.content_type == "text/plain":
+        return top, "text"
+    if top.content_type == "multipart/mixed":
+        return top, "mixed"
+    raise _unsupported("top-level content type")
+
+
+def _boundary_of(top: _Mime) -> str:
+    boundary = top.type_params.get("boundary")
+    if boundary is None or _BOUNDARY_RE.fullmatch(boundary) is None:
+        raise _mime_invalid("multipart boundary missing or invalid")
+    return boundary
+
+
+def _check_text_entity(mime: _Mime) -> None:
+    """A plain-text body (message or first part) is inline text: no file name, never an attachment."""
+    if "name" in mime.type_params or "filename" in mime.disposition_params:
+        raise _unsupported("the text body carries a file name")
+    if mime.disposition not in (None, "inline"):
+        raise _unsupported("the text body is not inline")
+
+
+def _decode_text(part: Any, mime: _Mime) -> str:
+    charset = mime.type_params.get("charset", "us-ascii").lower()
     if charset not in _ALLOWED_BODY_CHARSETS:
         raise _mime_invalid("body charset")
-    encoding = str(part.get("Content-Transfer-Encoding") or "7bit").strip().lower()
-    if encoding not in _BODY_ENCODINGS:
+    if (mime.encoding or "7bit") not in _BODY_ENCODINGS:
         raise _mime_invalid("body transfer encoding")
     try:
         payload = part.get_payload(decode=True)
@@ -346,21 +638,28 @@ def _decode_text_part(part: Any) -> str:
         raise _mime_invalid("body text") from None
 
 
-def _decode_attachment(part: Any, index: int) -> da.DraftAttachment:
-    if part.is_multipart() or part.get_content_maintype() in ("multipart", "message"):
+def _decode_attachment(part: Any, mime: _Mime, index: int) -> da.DraftAttachment:
+    if part.is_multipart() or mime.content_type.split("/", 1)[0] in ("multipart", "message"):
         raise _unsupported("nested or embedded message part")
-    if part.get_content_disposition() != "attachment":
+    if mime.disposition != "attachment":
         raise _invalid_attachment(index, "not an attachment part")
-    filename = part.get_filename()
+    filename = mime.disposition_params.get("filename")
     if filename is None:
         raise _invalid_attachment(index, "no file name")
+    name = mime.type_params.get("name")
     try:
         da.validate_filename(filename, index=index - 1)
-        content_type = da.validate_content_type(part.get_content_type(), index=index - 1)
+        if name is not None:
+            da.validate_filename(name, index=index - 1)
+        content_type = da.validate_content_type(mime.content_type, index=index - 1)
     except da.DraftAttachmentError:
         raise _invalid_attachment(index, "file name or content type") from None
-    if str(part.get("Content-Transfer-Encoding") or "").strip().lower() != "base64":
+    if name is not None and name != filename:
+        raise _invalid_attachment(index, "name and filename differ")
+    if mime.encoding != "base64":
         raise _invalid_attachment(index, "transfer encoding is not base64")
+    if part.get_filename() != filename or part.get_content_type() != content_type:
+        raise _mime_invalid("strict and tolerant MIME views differ")
     payload = part.get_payload()
     compact = payload.replace("\r\n", "") if isinstance(payload, str) else ""
     if _BASE64_RE.fullmatch(compact) is None:
@@ -391,57 +690,39 @@ def _exact_text(value: str) -> str:
 
 
 def _analyse_structure(
-    message: Any, values: dict[str, str], body_lines: list[str]
+    message: Any, layout: str, top: _Mime, part_mimes: list[_Mime]
 ) -> tuple[str, str, tuple[da.DraftAttachment, ...]]:
     """Return ``(layout, body text, attachments)`` of the profile or fail closed.
 
-    ``body_lines`` are the lines after the message header block; for ``multipart/mixed`` every part
-    header block is parsed strictly from them before the tolerant stdlib parser's view is trusted.
+    ``top`` and ``part_mimes`` are the strict views (bounded part scan already done); the tolerant stdlib
+    ``message`` only supplies payload decoding and must agree with them.
     """
-    version = values.get("mime-version")
-    has_content_header = any(str(key).lower().startswith("content-") for key in message.keys())
-    if version is not None and version != "1.0":
-        raise _mime_invalid("MIME-Version")
-    if version is None and has_content_header:
-        raise _mime_invalid("Content-* header without MIME-Version")
-    content_type = message.get_content_type()
-    if content_type == "text/plain":
-        layout = "text"
-    elif content_type == "multipart/mixed":
-        layout = "mixed"
-    else:
-        raise _unsupported("top-level content type")
-    part_blocks: list[list[str]] = []
-    if layout == "mixed":
-        boundary = message.get_boundary()
-        if not boundary:
-            raise _mime_invalid("multipart boundary missing")
-        part_blocks = _split_parts(body_lines, boundary)
-        _check_part_headers(part_blocks)
     if da._all_defects(message):
         raise _mime_invalid("parser defect")
     if layout == "text":
-        return layout, _exact_text(_decode_text_part(message)), ()
+        _check_text_entity(top)
+        return layout, _exact_text(_decode_text(message, top)), ()
+    if message.get_content_type() != top.content_type or message.get_boundary() != top.type_params.get("boundary"):
+        raise _mime_invalid("strict and tolerant MIME views differ")
     if (message.preamble or "").strip() or (message.epilogue or "").strip():
         raise _mime_invalid("text outside the MIME parts")
     parts = message.get_payload()
-    if not isinstance(parts, list) or not parts or len(parts) != len(part_blocks):
+    if not isinstance(parts, list) or not parts or len(parts) != len(part_mimes):
         raise _mime_invalid("MIME part structure")
     body_part, attachment_parts = parts[0], parts[1:]
-    if (
-        body_part.is_multipart()
-        or body_part.get_content_type() != "text/plain"
-        or body_part.get_content_disposition() == "attachment"
-        or body_part.get_filename() is not None
-    ):
+    if body_part.is_multipart() or part_mimes[0].content_type != "text/plain":
         raise _unsupported("the first part is not a plain-text body")
+    _check_text_entity(part_mimes[0])
     if len(attachment_parts) > da.MAX_ATTACHMENTS:
         raise _fail(
             "raw_eml_attachment_count_exceeded",
             f"at most {da.MAX_ATTACHMENTS} attachments are allowed.",
         )
-    body = _exact_text(_decode_text_part(body_part))
-    attachments = tuple(_decode_attachment(part, index) for index, part in enumerate(attachment_parts, start=1))
+    body = _exact_text(_decode_text(body_part, part_mimes[0]))
+    attachments = tuple(
+        _decode_attachment(part, mime, index)
+        for index, (part, mime) in enumerate(zip(attachment_parts, part_mimes[1:]), start=1)
+    )
     seen: set[str] = set()
     for index, attachment in enumerate(attachments, start=1):
         key = attachment.filename.casefold()
@@ -471,14 +752,19 @@ def validate_raw_eml(data: Any) -> PreparedRawEml:
     message_id = _validate_message_id(next(value for name, value in fields if name.casefold() == "message-id"))
     _validate_address_list(values["to"])
     _validate_date(values["date"])
+    top, layout = _top_mime(fields, values)
+    # Strict, bounded view first: the part bound fires before any part header block is parsed and
+    # before the tolerant stdlib parser materializes the message.
+    part_mimes = _scan_parts(lines[separator + 1:], _boundary_of(top)) if layout == "mixed" else []
     message = da._parse(normalized.encode("utf-8"))
-    layout, body, attachments = _analyse_structure(message, values, lines[separator + 1:])
+    layout, body, attachments = _analyse_structure(message, layout, top, part_mimes)
     if da._all_defects(message):  # defects found while decoding the parts
         raise _mime_invalid("parser defect")
     normalized_bytes = normalized.encode("utf-8")
     summary = {
         "structure": layout,
         "headers": [(name.lower(), _squash(value)) for name, value in fields],
+        "parts": [[(name.lower(), _squash(value)) for name, value in mime.fields] for mime in part_mimes],
         "body": body,
         "attachments": [da.attachment_meta(item) for item in attachments],
     }
@@ -543,6 +829,13 @@ def compare_stored_raw(stored: bytes, prepared: PreparedRawEml) -> list[str]:
             problems.append(f"header:{name}")
     if not problems and expected["headers"] != actual["headers"]:
         problems.append("header_order")
+    if len(expected["parts"]) == len(actual["parts"]):
+        for number, (want_part, got_part) in enumerate(zip(expected["parts"], actual["parts"]), start=1):
+            want_names, got_names = grouped(want_part), grouped(got_part)
+            differing = [name for name in sorted(set(want_names) | set(got_names)) if want_names.get(name) != got_names.get(name)]
+            problems.extend(f"part[{number}]:header:{name}" for name in differing)
+            if not differing and want_part != got_part:
+                problems.append(f"part[{number}]:header_order")
     if expected["body"] != actual["body"]:
         problems.append("body:text")
     if len(expected["attachments"]) != len(actual["attachments"]):
@@ -559,6 +852,7 @@ __all__ = [
     "MAX_HEADER_BLOCK_BYTES",
     "MAX_HEADER_FIELDS",
     "MAX_LINE_BYTES",
+    "MAX_MIME_PARTS",
     "MAX_RAW_EML_BYTES",
     "PreparedRawEml",
     "RAW_EML_SUFFIX",

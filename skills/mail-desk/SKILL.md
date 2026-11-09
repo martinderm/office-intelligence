@@ -342,7 +342,12 @@ Entwurf in den Drafts-Ordner legt.
   `raw_eml_date_invalid`); Singleton-Header (`From`, `To`, `Cc`, `Bcc`, `Subject`, `Date`, `Sender`,
   `Reply-To`, `In-Reply-To`, `References`, `MIME-Version` und **jedes** `Content-*`) höchstens einmal;
   **Teil-Header:** der Header-Block jedes MIME-Teils wird strikt zerlegt (`raw_eml_part_header_invalid`),
-  doppelte oder widersprüchliche `Content-*` im Teil und Steuerzeichen werden abgewiesen; Struktur `text/plain` (UTF-8/US-ASCII) oder flach `multipart/mixed`
+  doppelte oder widersprüchliche `Content-*` im Teil und Steuerzeichen werden abgewiesen; dazu werden
+  `Content-Type`, `Content-Disposition` und `Content-Transfer-Encoding` mit einem eigenen strengen
+  RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine doppelten Parameter, `name`/
+  `filename` ohne Pfad und `..`, Text nie als `attachment`; `raw_eml_mime_invalid`); höchstens 64 MIME-Teile
+  werden gezählt, bevor ein Teil-Header geparst wird (`raw_eml_part_count_exceeded`); `To` kennt Kommas in
+  Anführungszeichen/Kommentaren, `To`/`Date` akzeptieren nur ASCII-Ziffern und ASCII-Leerraum; Struktur `text/plain` (UTF-8/US-ASCII) oder flach `multipart/mixed`
   mit Text zuerst und höchstens **5** Base64-`attachment`-Teilen von je höchstens **3 MiB**
   (dekodiert) mit gültigem, eindeutigem Dateinamen; kein HTML/Alternative, keine geschachtelten
   oder `message/*`-Teile, keine Preamble/Epilog, kein Parser-Defekt. Fehlende oder doppelte
@@ -351,8 +356,9 @@ Entwurf in den Drafts-Ordner legt.
   mit CRLF zusammen und entfernt jedes `\r`; deshalb wird die Mail **vor** dem APPEND auf kanonisches
   CRLF normalisiert (genau ein abschließendes CRLF falls fehlend, Leerzeilen am Ende bleiben) und
   die Journal-/Ergebnis-Angabe `source` nennt Zeilenende-Form sowie SHA-256 von Quelle und
-  Normalform. Der Nachweis ist semantisch (Header-Folge, Text **mit** abschließenden Zeilenumbrüchen,
-  Anhang-Name/Typ/Größe/SHA-256), nicht bytegleich. Offline modelliert, kein Live-Nachweis.
+  Normalform. Der Nachweis ist semantisch (Header-Folge, Teil-Header-Werte je MIME-Teil
+  [`part[n]:header:<name>`], Text **mit** abschließenden Zeilenumbrüchen, Anhang-Name/Typ/Größe/SHA-256),
+  nicht bytegleich. Offline modelliert, kein Live-Nachweis.
 
 Details: [`references/cli-operations.md`](references/cli-operations.md),
 [`references/backends/himalaya.md`](references/backends/himalaya.md).

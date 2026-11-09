@@ -287,11 +287,16 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 * **`PreparedRawEml` (nur im Speicher, [`scripts/core/draft_raw_eml.py`](../../scripts/core/draft_raw_eml.py)):**
   `data`/`text` (normalisierte Mail, nicht in `repr`), `message_id` (normalisiert), `subject`, `to`, `date`,
   `attachments` (`DraftAttachment`), `summary` (`structure`, `headers` als Folge `(name, wert)`, `body`
-  - Text mit allen abschließenden Zeilenumbrüchen, nur LF/CRLF-neutral -, `attachments`), `line_endings`, `source_sha256`, `normalized_sha256`, `size_bytes`, `source_path`.
+  - Text mit allen abschließenden Zeilenumbrüchen, neutral nur gegenüber der Zeilenende-Form
+  (LF / CRLF / einzelnes CR nach dem Dekodieren) -, `parts` (je MIME-Teil die Folge `(name, wert)` seiner
+  Teil-Header, ASCII-whitespace-normalisiert; leer bei reinem Text), `attachments`), `line_endings`,
+  `source_sha256`, `normalized_sha256`, `size_bytes`, `source_path`.
   Grenzen `MAX_RAW_EML_BYTES = 10 MiB`, `MAX_LINE_BYTES = 998`, `MAX_HEADER_FIELDS = 100`,
-  `MAX_HEADER_BLOCK_BYTES = 64 KiB`; Fehlerklasse `RawEmlError` (Unterklasse von
+  `MAX_HEADER_BLOCK_BYTES = 64 KiB`, `MAX_MIME_PARTS = 64` (Teile-Grenze, `raw_eml_part_count_exceeded`;
+  das Produktlimit bleibt 5 Anhänge). Die Teil-Header-Werte sind Teil des Rücklesevergleichs
+  (`part[n]:header:<name>`, `part[n]:header_order`); Fehlerklasse `RawEmlError` (Unterklasse von
   `DraftAttachmentError`/`DraftError`, Reason-Codes `raw_eml_*`, u. a. `raw_eml_part_header_invalid`,
-  `raw_eml_address_invalid`, `raw_eml_date_invalid`; auch im Namespace `core` als `RawEmlError` re-exportiert).
+  `raw_eml_address_invalid`, `raw_eml_date_invalid`, `raw_eml_part_count_exceeded`; auch im Namespace `core` als `RawEmlError` re-exportiert).
 * **Ergebnis von `save_raw_draft`:** Envelope wie ein Anhangs-Entwurf (`envelope_id`, `folder`,
   `subject`, `to`, `date`, `message_id`, `attachment_count`, `attachments`, `size_bytes`,
   `verified = "content"`) plus `source` (`path`, `line_endings`, `normalized`, `source_sha256`,

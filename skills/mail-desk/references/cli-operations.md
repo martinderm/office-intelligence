@@ -463,34 +463,61 @@ und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
   Nicht-ASCII-Hosts werden abgewiesen); `To` und `Date` nicht leer; `From`, `Sender`, `Reply-To`,
   `To`, `Cc`, `Bcc`, `Subject`, `Date`, `In-Reply-To`, `References`, `MIME-Version` und **jedes**
   `Content-*` (auch `Content-ID`, `Content-Description`, `Content-Language`, `Content-Location`) höchstens
-  einmal (Groß-/Kleinschreibung egal). Alle Header, auch `Bcc`/`X-Unsent`, bleiben erhalten
-  und werden verglichen; die Datei wird nie verändert außer durch die Zeilenende-Normalisierung.
+  einmal (Groß-/Kleinschreibung egal). Alle Header, auch `Bcc`/`X-Unsent`, bleiben erhalten; die
+  Nachrichten-Header **und** die Header-Blöcke aller MIME-Teile werden im Rücklesen Name für Name
+  verglichen (siehe Nachweis). Die Datei wird nie verändert außer durch die Zeilenende-Normalisierung.
 - **Adresse und Datum (strikte RFC-5322-Grammatik):** `To` muss eine wohlgeformte Adressliste sein
-  (Mailboxen und Gruppen, Anzeigename in UTF-8 oder RFC-2047 erlaubt, ein Kommentar erlaubt;
-  ASCII-`addr-spec`, kein leeres Listenelement, kein überzähliger Text, kein Parser-Defekt):
-  `raw_eml_address_invalid` (z. B. `not-an-address`, `a@`, `Doe, John <j@example.org>`, `a@example..org`).
-  Andere Adress-Header werden erhalten und verglichen, aber nicht auf Grammatik geprüft. `Date` muss ein
-  RFC-5322-`date-time` sein: optionaler Wochentag (muss zum Datum passen), 1-2-stelliger Tag, Monatsname,
-  4-stelliges Jahr 1900-9999, reales Kalenderdatum, Stunde 00-23, Minute 00-59, Sekunde 00-60 (optional),
-  numerische Zone `±hhmm` (hh 00-23, mm 00-59); obsolete Formen (zweistelliges Jahr, `GMT`/`EST`) und
+  (Mailboxen und Gruppen; Anzeigename in UTF-8 oder RFC 2047 erlaubt; Kommentare erlaubt, soweit der
+  Standardbibliotheks-Parser sie ohne Defekt annimmt, auch mehrere und verschachtelte; ASCII-`addr-spec`;
+  kein überzähliger Text; kein Parser-Defekt): `raw_eml_address_invalid` (z. B. `not-an-address`, `a@`,
+  `Doe, John <j@example.org>`, `a@example..org`). Ein eigener Scan trennt Listenelemente nur an Kommas
+  **außerhalb** von Anführungszeichen und Kommentaren: `"Doe, , John" <a@example.org>`,
+  `a@example.org (Kommentar, , x)` und `"a, , b"@example.org` sind gültig, leere Elemente
+  (`a@example.org,`, `,a@example.org`, `a@x,,b@x`, `Group: a@example.org,;`) und offene Anführungszeichen
+  oder Kommentare werden abgewiesen. Nur ASCII-Leerzeichen und Tab trennen Tokens: NBSP und anderes
+  Unicode-Whitespace außerhalb von Anführungszeichen (z. B. `a@x, b@x`) werden abgewiesen, innerhalb
+  eines Anzeigenamens in Anführungszeichen bleiben sie erlaubt. Andere Adress-Header werden erhalten und
+  verglichen, aber nicht auf Grammatik geprüft. `Date` muss ein RFC-5322-`date-time` sein: optionaler
+  Wochentag (muss zum Datum passen), 1-2-stelliger Tag, Monatsname, 4-stelliges Jahr 1900-9999, reales
+  Kalenderdatum, Stunde 00-23, Minute 00-59, Sekunde 00-60 (optional), numerische Zone `±hhmm` (hh 00-23,
+  mm 00-59), alles mit **ASCII-Ziffern** `0`-`9` (arabisch-indische oder Vollbreiten-Ziffern werden
+  abgewiesen) und ASCII-Leerzeichen; obsolete Formen (zweistelliges Jahr, `GMT`/`EST`) und
   `Sat, 99 Foo 2026 99:99:99 +9999` werden mit `raw_eml_date_invalid` abgewiesen. Erlaubt ist höchstens
   ein Trailing-Kommentar ohne Verschachtelung (`+0100 (CET)`).
-- **Teil-Header (`multipart/mixed`):** Der Header-Block **jedes** MIME-Teils wird zuerst mit denselben
-  strikten Regeln wie der Nachrichten-Header zerlegt (`raw_eml_part_header_invalid`): gültige Feldzeilen
-  und Faltung, keine Steuer-/Trennzeichen außer Tab, höchstens 100 Felder / 64 KiB, Trennzeile Pflicht.
-  Doppelte oder widersprüchliche `Content-Disposition`, `Content-Type`, `Content-Transfer-Encoding` und
-  jedes weitere `Content-*` sowie `MIME-Version` im selben Teil werden abgewiesen, bevor die tolerante
-  Standardbibliothek die Teile interpretiert; Zahl der zerlegten Teile und der Parser-Teile müssen
-  übereinstimmen (`raw_eml_mime_invalid`).
+- **Teil-Header und MIME-Werte (`multipart/mixed`, Nachrichten- und Teil-Ebene):** Der Header-Block
+  **jedes** MIME-Teils wird zuerst mit denselben strikten Regeln wie der Nachrichten-Header zerlegt
+  (`raw_eml_part_header_invalid`): gültige Feldzeilen und Faltung, keine Steuer-/Trennzeichen außer Tab,
+  höchstens 100 Felder / 64 KiB, Trennzeile Pflicht. Doppelte oder widersprüchliche `Content-Disposition`,
+  `Content-Type`, `Content-Transfer-Encoding` und jedes weitere `Content-*` sowie `MIME-Version` im selben
+  Teil werden abgewiesen. Danach werden `Content-Type`, `Content-Disposition` und
+  `Content-Transfer-Encoding` von einem eigenen strengen Parser gelesen (RFC 2045/2231,
+  `raw_eml_mime_invalid`) - **nicht** über die toleranten Getter der Standardbibliothek: genau ein
+  `type/subtype` (`text/html, text/plain` und jedes nachfolgende Zeichen werden abgewiesen), Parameter als
+  Token oder Anführungszeichen-String mit `\`-Escapes, Leerraum nur um `;` (nie um `=`), kein Kommentar,
+  kein hängendes `;`; derselbe Parametername (`filename`, `name`, `charset`, `boundary`, ...) höchstens
+  einmal, auch nicht gleichzeitig als `name` und `name*`. RFC 2231 wird unterstützt (`name*=utf-8''...`,
+  `name*0=`/`name*0*=`-Fortsetzungen, nur Charsets UTF-8/US-ASCII, lückenlose Abschnitte, gültige
+  `%XX`), weil die Standardbibliothek selbst lange Dateinamen so schreibt. `boundary` muss genau einmal
+  vorkommen und aus 1-70 gültigen Zeichen bestehen. Die Sicht des strengen Parsers muss mit der der
+  Standardbibliothek übereinstimmen (Content-Type, Boundary, Dateiname, Anzahl der Teile), sonst
+  `raw_eml_mime_invalid`. Der Text (Nachricht oder erster Teil) darf weder `Content-Disposition:
+  attachment` noch einen `name`/`filename` tragen (`raw_eml_structure_unsupported`); `inline` ohne
+  Dateinamen ist erlaubt. Ein Anhang braucht `attachment` mit `filename`; `filename` und, falls vorhanden,
+  `name` müssen die Dateinamen-Regeln erfüllen (kein `/`, `\`, `:`, `..`, Gerätename, ...) und gleich sein
+  (`raw_eml_attachment_invalid`).
+- **Teile-Grenze:** Höchstens **64 MIME-Teile** (Textteil plus Anhangsteile) werden überhaupt gezählt: das
+  65. Delimiter stoppt den Scan mit `raw_eml_part_count_exceeded`, **bevor** ein Teil-Header-Block
+  geparst oder die Standardbibliothek aufgerufen wird. Das Produktlimit bleibt 5 Anhänge
+  (`raw_eml_attachment_count_exceeded`); die 64 begrenzen nur die Arbeit.
 - **Struktur:** `text/plain` (Charset UTF-8 oder US-ASCII, Encoding 7bit/8bit/quoted-printable/
   base64; ohne MIME-Header gilt US-ASCII, ein Text mit Umlauten braucht `MIME-Version: 1.0` und
   `Content-Type: text/plain; charset=utf-8`) oder flach `multipart/mixed` mit dem Text als erstem Teil
   und höchstens **5** `attachment`-Teilen, je Base64 (streng, nur das Alphabet), dekodiert 1 Byte bis
-  **3 MiB**, gültiger und eindeutiger Dateiname (Regeln der Anhangsliste), gültiger Content-Type
+  **3 MiB**, gültiger und eindeutiger Dateiname (Regeln der Anhangsliste), streng geparster Content-Type
   (`raw_eml_attachment_invalid` / `raw_eml_attachment_count_exceeded` / `raw_eml_attachment_too_large`).
   Nicht unterstützt (`raw_eml_structure_unsupported` / `raw_eml_mime_invalid`): HTML, `multipart/
-  alternative|related`, geschachtelte oder `message/*`-Teile, Preamble/Epilog-Text, `inline`,
-  jeder MIME-Parser-Defekt, fremde Charsets.
+  alternative|related`, geschachtelte oder `message/*`-Teile, Preamble/Epilog-Text, ein Anhang mit
+  `inline`, jeder MIME-Parser-Defekt, fremde Charsets.
 - **CRLF-Normalisierung (Himalaya):** Himalaya 1.2.0 liest die stdin-Nachricht mit Rust `lines()`,
   entfernt jedes `\r` und verbindet mit CRLF, ohne finales Zeilenende. Die Datei wird deshalb **vor**
   dem APPEND zu kanonischen CRLF-Zeilen (LF und CRLF gemischt erlaubt, einzelnes CR nicht), mit genau
@@ -502,8 +529,14 @@ und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
   semantischen Vergleich mit der vorbereiteten Mail: Header-Folge (Name und whitespace-normalisierter
   Wert; zusätzliche, fehlende, geänderte oder umgestellte Header ergeben `header:<name>`/
   `header_order`), dekodierter Text **einschließlich seiner abschließenden Zeilenumbrüche**
-  (`Text\r\n\r\n\r\n` und `Text\r\n` sind verschieden, `body:text`; nur die Form des Zeilenendes LF/CRLF
-  ist neutral), Anhangsanzahl und je Anhang Name, Typ, Größe und SHA-256.
+  (`Text\r\n\r\n\r\n` und `Text\r\n` sind verschieden, `body:text`; neutral ist nur die Form des
+  Zeilenendes LF/CRLF/einzelnes CR, auch nach dem Dekodieren), die **Teil-Header-Werte** jedes MIME-Teils
+  (`Content-ID`, `Content-Description`, `Content-Transfer-Encoding`, `Content-Type` samt `charset`,
+  `Content-Disposition`, `Content-Language`, `Content-Location`, jeder weitere Teil-Header: Name und
+  ASCII-whitespace-normalisierter Wert, geänderte, fehlende, zusätzliche oder umgestellte Header ergeben
+  `part[n]:header:<name>` bzw. `part[n]:header_order`, `n` ab 1 mit dem Textteil als erstem Teil),
+  Anhangsanzahl und je Anhang Name, Typ, Größe und SHA-256. Unicode-Whitespace bleibt in allen
+  Vergleichswerten signifikant (nur ASCII-Leerzeichen/Tab werden zusammengefasst).
   Abweichung, Duplikat oder Nichtauffindbarkeit: `draft_verification_failed` (`appended_unverified`
   im Journal), kein Erfolg. Das ist keine Byte-Gleichheit beliebiger Rohmails.
 - **Fehlercodes (neu):** `raw_eml_path_invalid`, `raw_eml_path_forbidden`, `raw_eml_extension_invalid`,
@@ -513,7 +546,7 @@ und kein `--attach`. Ein `replace` für Rohmails gehört nicht zu diesem Umfang.
   `raw_eml_header_missing`, `raw_eml_header_duplicate`, `raw_eml_message_id_invalid`,
   `raw_eml_mime_invalid`, `raw_eml_structure_unsupported`, `raw_eml_attachment_invalid`,
   `raw_eml_attachment_count_exceeded`, `raw_eml_attachment_too_large`, `raw_eml_part_header_invalid`,
-  `raw_eml_address_invalid`, `raw_eml_date_invalid`; dazu die bestehenden
+  `raw_eml_address_invalid`, `raw_eml_date_invalid`, `raw_eml_part_count_exceeded`; dazu die bestehenden
   `draft_binding_failed`, `draft_lock_missing`, `draft_message_id_not_unique`,
   `draft_journal_write_failed`, `draft_save_failed`, `draft_append_outcome_unknown`,
   `draft_verification_failed`. Ein Validierungsfehler führt zu **keinem** Mailbox-Kontakt und keinem

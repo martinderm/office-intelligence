@@ -2244,7 +2244,14 @@ Zeilen höchstens 998 Oktette, strikter RFC-5322-Header (höchstens 100 Felder /
 Message-ID `<dot-atom@hostname>`, `To` (strikte RFC-5322-Adresslisten-Grammatik, `raw_eml_address_invalid`) und `Date`
 (strikter RFC-5322-`date-time`, `raw_eml_date_invalid`) Pflicht, Singleton-Header und jedes `Content-*` höchstens einmal,
 Header-Block jedes MIME-Teils strikt zerlegt (`raw_eml_part_header_invalid`; doppelte oder widersprüchliche `Content-*`
-und Steuerzeichen werden abgewiesen), Struktur
+und Steuerzeichen werden abgewiesen), `Content-Type`/`Content-Disposition`/`Content-Transfer-Encoding` von einem eigenen
+strengen RFC 2045/RFC 2231-Parser gelesen (genau ein Typ, keine Resttexte, keine doppelten Parameter, `name`/`filename` ohne
+Pfad und `..`, RFC-2231-Fortsetzungen unterstützt, Text nie als `attachment` oder mit Dateinamen;
+`raw_eml_mime_invalid`/`raw_eml_structure_unsupported`/`raw_eml_attachment_invalid`; die Sicht der Standardbibliothek muss
+übereinstimmen), höchstens 64 MIME-Teile werden gezählt, bevor ein Teil-Header geparst oder die Standardbibliothek
+aufgerufen wird (`raw_eml_part_count_exceeded`; das Produktlimit bleibt 5 Anhänge), `To` mit Kommas in Anführungszeichen
+und Kommentaren als Nicht-Trenner und ohne leere Elemente, `To`/`Date` nur mit ASCII-Ziffern und ASCII-Leerraum
+(NBSP u. a. Unicode-Whitespace werden außerhalb von Anführungszeichen abgewiesen), Struktur
 `text/plain` oder flaches `multipart/mixed` (Text zuerst, höchstens 5 streng-Base64-Anhänge von je höchstens
 3 MiB mit gültigem eindeutigem Namen). Nicht unterstützt und fail-closed: HTML/Alternative, verschachtelte oder
 `message/*`-Teile, Preamble/Epilog, Parser-Defekte, fremde Charsets, 8bit-Anhänge, `replace` für Rohmails.
@@ -2252,8 +2259,9 @@ und Steuerzeichen werden abgewiesen), Struktur
 **Module und Verträge:**
 - [`scripts/core/draft_raw_eml.py`](../../scripts/core/draft_raw_eml.py) (neu): `validate_raw_eml` (rein),
   `load_raw_eml` (Pfad, `.eml`, gemeinsamer Leser), `compare_stored_raw` (semantischer Vergleich,
-  Codes `structure`, `header:<name>`, `header_order`, `body:text`, `attachment_count:<n>!=<m>`,
-  `attachment[i]:<feld>`, `stored:<reason>`), `PreparedRawEml`, `RawEmlError`.
+  Codes `structure`, `header:<name>`, `header_order`, `part[n]:header:<name>`, `part[n]:header_order`,
+  `body:text`, `attachment_count:<n>!=<m>`, `attachment[i]:<feld>`, `stored:<reason>`), `PreparedRawEml`,
+  `RawEmlError`, `MAX_MIME_PARTS = 64`.
 - [`scripts/core/draft_attachments.py`](../../scripts/core/draft_attachments.py): der begrenzte Dateileser
   wurde zu `read_zone_file` und die Pfadprüfung zu `validate_zone_path` verallgemeinert
   (`prefix`/`error` wählen Reason-Code-Familie und Ausnahme); das Anhangsverhalten und seine Codes
@@ -2272,8 +2280,12 @@ abschließenden CRLF; Leerzeilen am Ende bleiben. Das eine Transport-CRLF des be
 Ergebnis und Journal weisen Zeilenende-Form sowie SHA-256 von Quelle und Normalform aus; ein von der Quelle
 abweichender gespeicherter Bytestrom ist damit erwartet, ein von der Normalform abweichender nicht.
 Der Textvergleich im Rücklesen behält abschließende Zeilenumbrüche (`Text\r\n\r\n\r\n` ≠ `Text\r\n`); nur die Form
-des Zeilenendes (LF/CRLF) ist neutral. Teil-Header-Prüfung und Adress-/Datumsgrammatik sind Teil des Profils, nicht
-des Rücklesens: sie gelten identisch für die Quelle und die gespeicherte Mail (`stored:<reason>`).
+des Zeilenendes (LF/CRLF/einzelnes CR, auch nach dem Dekodieren) ist neutral. Die Teil-Header-Werte jedes MIME-Teils
+(`Content-ID`, `Content-Description`, `Content-Transfer-Encoding`, `Content-Type` samt `charset`, `Content-Disposition`,
+`Content-Language`, `Content-Location`, jeder weitere Teil-Header) sind Teil des Rücklesevergleichs
+(`part[n]:header:<name>`, `part[n]:header_order`). Zusätzlich gilt das gesamte Profil - Teil-Header-Prüfung, MIME-Werte,
+Adress-/Datumsgrammatik, Teile-Grenze - identisch für die gespeicherte Mail: ein Verstoß ergibt `stored:<reason>`.
+Unicode-Whitespace bleibt in allen Vergleichswerten signifikant (nur ASCII-Leerzeichen/Tab werden zusammengefasst).
 
 **Zustandsautomat:** wie §41 ohne Replace: Bindung → Pfad → Lesen → Profil/Normalisierung → Eindeutigkeit vorab
 → Journal `append_started` → genau ein APPEND → `append_failed` | `append_outcome_unknown` | Rücklesen →
