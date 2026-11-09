@@ -131,7 +131,7 @@ lease-geprüften `--workspace` (`<workspace>/data/mail-desk`) und ebenso sein Au
 (auch intern/gebrochen) sowie externe Consumer oder ein fehlender Workspace stoppen mit
 `WorkspacePathError` vor Child/Read/Write. Die Prüfung ist statisch: ein konkurrierender
 Same-User-Mutator (TOCTOU/Hardlink) bleibt außerhalb der kooperativen Lease-Grenze und erfordert
-OS-Isolation.
+OS-Isolation (Issue #91).
 Details: Mail-Desk-L2 und [`Batch-Vertrag`](../../skills/mail-desk/references/batch-runner.md#review-gebundene-kandidatenzahl).
 
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert
@@ -339,6 +339,12 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
    - **Leseort, keine Datenzone (Issue #52 P7):** `memory/operations/` ist **ausschließlich** Leseort für Beleg-Referenzen in Korrekturdateien; Schreiboperationen bleiben auf die vier Data-Zones beschränkt.
 4. **Dual Evidence Prinzip:** Trennung von operativer Evidenz (Mails, Transkripte, Downloads) und konsolidierter Referenz (Kataloge, Notizen, Action Items).
 5. **Structured CLI Envelopes:** Skriptausgaben erfolgen ausnahmslos als parsebares JSON über standardisierte Hüllkurven mit deterministischen Stopcodes.
+
+**Trust-Grenze (Issue #91):** Die Workspace-Lease koordiniert kooperierende Harnesses/Prozesse; sie ist
+**keine OS-Sicherheitsgrenze** gegen einen Same-User-Adversar. Ein solcher kann Pfade zwischen Prüfung und
+Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase anlegen. Statische Symlink-/Junction-/Hardlink-
+Härtung bleibt bestehen; vollständige Isolation erfordert OS-Mittel (separater Benutzer, Namespace/Container
+oder ACLs) und ist Issue #91, nicht Teil dieses Bundles.
 
 ---
 

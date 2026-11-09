@@ -161,14 +161,15 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    stoppt mit `WorkspacePathError`, bevor fremde Dateien angelegt, überschrieben oder gelöscht
    werden. Nicht vom Wrapper verwendete Pfade bleiben unberührt.
 
-   **Trust-Grenze (bewusst, verbleibender Designkonflikt):** Diese Prüfungen sind statisch.
+   **Trust-Grenze (bewusst; Same-User-Adversar außerhalb des kooperativen Lease-Scope, Issue #91):**
+   Diese Prüfungen sind statisch.
    Ein konkurrierender Prozess mit Schreibrechten im selben Workspace kann Pfade zwischen
    Prüfung und Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase für Zieldateien
    anlegen; mit Python-Mitteln ist das plattformübergreifend nicht vollständig verhinderbar.
    Die Workspace-Lease ist eine kooperative Ownership-Grenze, kein Schutz gegen denselben
    Benutzer. Vollständige Isolation erfordert separaten OS-Benutzer, Namespace/Container oder
-   ACLs; bis dahin gibt es keine Zusage „vor jeder Mutation sicher“ gegen einen feindlichen
-   Mutator.
+   ACLs (Issue #91); bis dahin gibt es keine Zusage „vor jeder Mutation sicher“ gegen einen
+   feindlichen Mutator.
    Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
    Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen
@@ -251,7 +252,7 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    bzw. `WORKSPACE_LOCK_*`). Ein direkter Runner-Aufruf umgeht diese
    Wrapper-Prüfung und akzeptiert für `sync_sent` keine Lease-Flags: Er ist nur
    zulässig, solange der Aufrufer dieselbe Lease hält und verifiziert hat.
-   Sichere Aufrufe sind der Wrapper für normale Läufe und der obige
+   Zulässige Aufrufe sind der Wrapper für normale Läufe und der obige
    `--input`/`--stdin`-Manifest-Lauf ohne `--sync-sent` für die Recovery.
 
 8. **Katalog-Inspector (`catalog_inspect.py`):**

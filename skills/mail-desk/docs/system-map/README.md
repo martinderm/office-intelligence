@@ -283,6 +283,12 @@ Siehe [Ablauf](processes.md#phase-2-review-gate) und
 4. **Schema 1 Quarantäne-, Dispositions- & Journal-Integrität:** Der Quarantäne-Index erzwingt in Schema 1 exakt 17 kanonische Basisfelder und erlaubt bis zu 6 optionale additive Coverage-Felder (`analysis_completeness`, `truncation_reason`, `truncation_stage`, `handoff_character_count`, `analysis_character_budget`, `source_character_count`), strikt positive `size_bytes > 0` und deterministische 64-Hex `attachment_id`s. `analysis_status: "completed"` bezeichnet ausschließlich den technischen Abschluss, niemals die inhaltliche Vollständigkeit. Bei Altdaten ohne Coverage-Felder liefert `lookup_quarantine_entry()` in-memory `analysis_completeness: "unknown"`, während die Datei auf Disk unverändert und byte-identisch bleibt. Das Dispositionslog erzwingt deterministische `decision_id`s und Hash-Bindung an den Index. Das Discard-Journal erzwingt monotone Zustandsübergänge (`prepared` bis `completed`) und exakte Übereinstimmung von `history[-1]` mit Top-Level-Status. Unbekannte oder widersprüchliche Felder führen zum sofortigen Abbruch (`AttachmentIndexSchemaError`, `DispositionSchemaError`, `RecoveryJournalCorruptedError`).
 5. **Fail-Closed Drift-Abbruch:** Jede Diskrepanz zwischen physischer Datei, Inventar-Hash, Index, Dispositionslog und Recovery-Journal stoppt sofort als Drift-Fehler.
 
+**Trust-Grenze (Issue #91):** Die Workspace-Lease koordiniert kooperierende Harnesses/Prozesse; sie ist
+**keine OS-Sicherheitsgrenze** gegen einen Same-User-Adversar. Ein solcher kann Pfade zwischen Prüfung und
+Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase anlegen. Statische Symlink-/Junction-/Hardlink-
+Härtung bleibt bestehen; vollständige Isolation erfordert OS-Mittel (separater Benutzer, Namespace/Container
+oder ACLs) und ist Issue #91, nicht Teil dieses Skills.
+
 ---
 
 ## 5. FR-15/MD-E2-T01 + T02 + T03 + T04 — Draft-Integration, Neuklassifikation und opt-in inspect-Vorschlag
@@ -699,7 +705,7 @@ kanonisch gebunden; jede Symlink-/Junction-/Reparse-Komponente (auch intern/gebr
 abgewiesen. Externe Consumer, Escapes und fehlende Workspaces stoppen mit `WorkspacePathError`
 vor Child/Read/Write; ein fehlendes `data/mail-desk` im geprüften Workspace bleibt zulässig. Die
 Prüfung ist statisch; ein konkurrierender Same-User-Mutator (TOCTOU/Hardlink) bleibt außerhalb
-der kooperativen Lease-Grenze und erfordert OS-Isolation. Summary führt Sent-Zähler und propagiert Fehler
+der kooperativen Lease-Grenze und erfordert OS-Isolation (Issue #91). Summary führt Sent-Zähler und propagiert Fehler
 einschließlich defektem Runner-Envelope mit Nichtnull-Exit. Regressionen in
 `tests/test_batch_cli_wrapper.py`; historische Abnahmezahlen unten sind alte Frames.
 
