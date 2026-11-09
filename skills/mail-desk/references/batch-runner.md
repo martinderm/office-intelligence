@@ -1061,14 +1061,14 @@ Indexstand neu ist, als begrenzten Handoff `data/mail-desk/new-sent-items.json` 
 lesen → alle Ablehnungsprüfungen → Handoff atomar schreiben → erst dann Index. Schema, Validierung,
 Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
 
-**Envelope-Felder (`data`), in jedem Sync-Ergebnis auch bei Fehlern und im Legacy-Tupel:** `new_count` (= `new_entries_indexed`),
+**Envelope-Felder (`data`), in jedem Sync-Ergebnis, auch Fehler/Legacy:** `new_count` (= `new_entries_indexed`),
 `new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
-Anker, `headers_complete`, `already_synthesized`) und `handoff` (`state` ∈ `none|written|pending|invalid`,
-`written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — aus Kompatibilität immer 0,
-`headers_incomplete_count`, `file`). `headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt
-(Item wird wie bisher indexiert). `new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei
-`write_state: unknown` ist `new_count: null` (und `new_items_unavailable: true`), weil der Lauf den
-Fortschritt nach einem fehlgeschlagenen Schreibversuch nicht kennen kann.
+Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|written|pending|invalid`,
+`written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — Items der nächsten 200er-Batches,
+`headers_incomplete_count`, `file`) sowie `truncated`, `coverage_*`, `next_start`, `follow_up_hint`.
+`headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).
+`new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei `write_state: unknown` ist `new_count: null`
+(und `new_items_unavailable: true`).
 
 **Trigger für den Consumer:** `handoff.pending_count > 0`, nicht `new_count` (nach einem Absturz ist `new_count`
 0, obwohl Items offen sind). Die Synthese-Phase darf bei `inbox_zero` nur No-op sein, wenn auch nichts
@@ -1076,9 +1076,10 @@ offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bund
 `load_pending_handoff` und schreibt über `record_synthesized`.
 
 **Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
-jedem Write; `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert (Handoff ggf. geschrieben,
-Index ggf. teilweise; `new_count: null`). `partial` ist reserviert; ein scheiterndes Fenster bricht vor jedem
-Write ab.
+jedem Write; `state` = nur Coverage-Marker/-Schranke (`sent-sync-state.json`) wurde persistiert, kein
+Handoff/Index-Eintrag; `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert (Handoff ggf.
+geschrieben, Index ggf. teilweise; `new_count: null`). `partial` ist reserviert; ein scheiterndes Fenster bricht
+vor jedem Handoff-/Index-Write ab.
 
 | `reason_code` | Ursache |
 |---|---|
@@ -1086,19 +1087,22 @@ Write ab.
 | `backend_binding` | Backend-/Account-Bindung fehlt oder passt nicht; nichts gelesen/geschrieben |
 | `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
 | `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
+| `handoff_deferred` | int-Datums-API traf einen Batch; nutze `..._report` |
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
-| `sent_window_truncated` | volle Seite nach `max_pages`; kein Watermark-Advance |
-| `sync_invalid_since` / `sync_invalid_max_pages` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/Initial ungültig oder Budget ohne Fortschritt; nichts geschrieben |
-| `sync_window_failed` | Datumsfenster scheiterten; ganzer Lauf vor jedem Write verweigert, gesamtes Originalfenster erneut abdecken |
+| `sent_window_truncated` | volle Seite nach `max_pages` |
+| `sync_invalid_since` / `sync_invalid_max_pages` / `sent_initial_state_invalid` / `sync_no_progress` | Manifest/Initial ungültig oder Budget ohne Fortschritt |
+| `sync_window_failed` | Datumsfenster scheiterten; Lauf vor jedem Write verweigert, Originalfenster erneut abdecken |
 | `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach möglicher Publikation (Handoff/Append; `unknown`, `new_count: null`) |
 
-`count` ist ein **Item-Budget**: erreicht es eine Tagesgrenze, stoppt der Lauf mit `truncated`/`coverage_*` und
-Recovery, ohne ungedeckte Tage zu überspringen. Mehr als 200: älteste 200 committen, Rest erst nach
-Ledger-Konsum erneut scannen (`truncated`/Recovery). Wasserzeichen-Alter blockiert nie; Coverage ab Watermark-Tag,
-leere Tage zählen; Erstlauf: eingefrorener Initialstart bzw. `since` (nie über Watermark). Seiten werden bis zur
-kurzen/leeren Seite paginiert; nur verifiziertes „out of bound“ ab Seite 2 beendet; sonst fail-closed. Eine nach
-`max_pages` volle Seite ergibt `sent_window_truncated`. Recovery:
-`sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)`; `count` ist keine Gap-Recovery.
+`count` ist **Item-Budget**: auch der erste Tag über Budget wird nicht gelesen; Stopp mit
+`truncated`/`coverage_*` und Recovery (`sync_sent_items_by_dates_report(dates=['D'],
+include_next_day=False)`). >200 neue Items: älteste 200 committen, Rest unindexiert; die atomare
+Coverage-Schranke steht nie hinter unvollständigen Tagen; nach Konsum wird der Tag erneut gescannt.
+Wasserzeichen-Alter blockiert nie; Erstlauf: persistierter Initialstart/`since`, nie vor offener Coverage.
+Seiten werden bis kurze/leere Seite paginiert; nur der klassifizierte `HimalayaInvocationError` mit exakt
+`Himalaya failed: Error: envelope page out of bound` ab Seite 2 ist Ende; sonst fail-closed.
+Recovery: `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-API meldet
+`handoff_deferred`).
 
 ---
 

@@ -551,6 +551,15 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
   `anchored_to`, Dubletten, unbekannte Felder); jede Abweichung ⇒ `handoff_invalid`, Datei unangetastet.
   `handoff.state ∈ none|written|pending|invalid`.
 
+### 10.3 Coverage-State (`sent-sync-state.json`)
+* **Rolle:** persistente, atomare Coverage-Schranke für den Default-Lauf; kein Referenzwissen.
+* **Schema:** `schema_version: 1`, `initial_start` (ISO|null), `covered_through` (ISO|null). `initial_start` wird
+  vor dem ersten Read persistiert (auch bei `since`); `covered_through` nach dem Index-Append. Der heutige Tag
+  wird nie vollständig markiert; `since`/Schranke springen nie über offene Coverage.
+* **Validierung:** unlesbar/ungültig ⇒ `sent_initial_state_invalid`, nichts gelesen/geschrieben.
+* **Batching:** > 200 neue Items: älteste 200 committen, Suffix ab erstem Deferred unindexiert, Schranke davor;
+  nach Ledger-Konsum wird derselbe Tag erneut gescannt (kein ID-Skip).
+
 ### 10.2 Ledger (`sent-synthesis-ledger.jsonl`)
 * **Rolle:** Konsum-Status, Dedupe-Quelle und Thread-Anker-Quelle. Append-only, Schreiber ist der Consumer.
 * **Zeile (Schema 1, strikt geprüft, sonst `ledger_invalid`):** Pflicht `schema_version`, `message_id`

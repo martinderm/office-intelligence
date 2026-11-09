@@ -186,13 +186,17 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 `handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden in 200er-Batches committet (älteste
 zuerst, Rest nach Ledger-Konsum; `truncated`/Recovery, kein Skip/Verlust); Recovery eines Tages nur über
-`sync_sent_items_by_dates(..., include_next_day=False)` (nicht `sync_sent_items(dates=[D])`, das D+1 liest;
-kein `--sync-sent N`/`count`, das bei heute endet). Seiten werden bis zur kurzen/leeren Seite paginiert;
-erst nach `max_pages` volle Seiten verweigern (`sent_window_truncated`, kein Watermark-Advance). Das
+`sync_sent_items_by_dates_report(..., include_next_day=False)` (int-API meldet `handoff_deferred`; nicht
+`sync_sent_items(dates=[D])`, das D+1 liest; kein `--sync-sent N`/`count`). Seiten werden bis zur
+kurzen/leeren Seite paginiert; nur der klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit
+exakt „envelope page out of bound“ ab Seite 2 beendet, sonst/ nach `max_pages` volle Seiten verweigern
+(`sent_window_truncated`, kein Watermark-Advance). Das
 Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen); `count` ist ein
-Item-Budget, bei Erreichen `truncated`/`coverage_*` plus Recovery-Aufruf; der Erstlauf nutzt eingefrorenes
-Laufdatum und 60-Tage-Backfill bzw. `since`. In
-Fehler-Envelopes unterscheidet `write_state` `none`/`unknown` (`partial` reserviert); bei `unknown`
+Item-Budget (schon der erste nichtleere Tag über Budget stoppt), `truncated`/`coverage_*` plus Recovery; der
+Erstlauf persistiert `initial_start` in `sent-sync-state.json`, `covered_through` wird atomar nach dem
+Index-Append geschrieben und steht nie hinter einem unvollständigen Tag; `since` springt nie über offene
+Coverage. In
+Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,
 Vorfahren zuerst) und schreibt über `record_synthesized`. Die Synthese selbst und das

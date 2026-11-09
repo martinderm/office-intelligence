@@ -125,11 +125,11 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `batch-sync-sent.json` und Wrapper-Logs) sowie den Synthese-Handoff
    `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
    Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
-   `ledger_invalid`/`handoff_overflow`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
-   `write_state` `none`/`unknown` (`partial` reserviert):
+   `ledger_invalid`/`handoff_deferred`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`,
+   `write_state` `none`/`state`/`unknown` (`partial` reserviert):
    [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
-   Ein `handoff_overflow` schreibt nichts; Recovery nur über die Python-API
-   `sync_sent_items_by_dates(dates=['D'], include_next_day=False, max_pages=...)`, nicht über
+   Ein Batch > 200 wird committet, der Rest bleibt für den nächsten Lauf; Recovery über
+   `sync_sent_items_by_dates_report(dates=['D'], include_next_day=False, max_pages=...)`, nicht über
    `--count`/`--sync-sent N` (keine Datums-CLI).
    Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state`, `truncated`, `coverage_*`,
    `next_start`, `follow_up_hint` und `handoff` (nur Zähler);

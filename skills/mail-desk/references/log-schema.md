@@ -317,18 +317,30 @@ Tage zählen; der Erstlauf nutzt das eingefrorene Laufdatum und ein 60-Tage-Back
 ein Item-Budget (kein Tageslimit); bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und Recovery-Aufruf,
 ohne über ungedeckte Tage vorzurücken. Seiten werden bis zur kurzen/leeren Seite paginiert (Dedupe per
 Envelope-ID); nach `max_pages` weiterhin volle Seite ⇒ `sent_window_truncated`, kein Watermark-Advance.
-`write_state` ist
-dann `none` (Ablehnung/Fehler vor jedem Write) oder `unknown` (Schreibversuch schlug fehl — auch ein
-Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
-unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent per Message-ID).
-`partial` ist reserviert und wird nicht erzeugt. Fehler bedeuten also nie pauschal „null Writes“.
+`write_state` ist dann `none` (Ablehnung/Fehler vor jedem Write), `state` (nur
+`sent-sync-state.json`/Coverage-Schranke wurde geschrieben, kein Handoff/Index) oder `unknown` (Schreibversuch
+schlug fehl — auch ein Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` —
+Plattenstand unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, Wiederholung idempotent
+per Message-ID). `partial` ist reserviert und wird nicht erzeugt. Fehler bedeuten also nie pauschal „null Writes“.
 
-### `sent-sync-initial-start.json` (Initial-Coverage-Marker)
+### `sent-sync-state.json` (persistente Coverage-Schranke)
 
-Persistiert vor dem ersten Read den Starttag der Erstlauf-Coverage (`schema_version: 1`,
-`initial_start: "YYYY-MM-DD"`). Ein fehlgeschlagener Erstlauf behält ihn über den Tageswechsel; nach
-vollständiger Coverage wird er entfernt. Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder
-geschrieben, Datei unangetastet); `since` springt nie über ein vorhandenes Watermark.
+`schema_version: 1`, `initial_start: "YYYY-MM-DD"|null`, `covered_through: "YYYY-MM-DD"|null`. `initial_start`
+wird vor dem ersten Read persistiert (auch bei explizitem `since`); ein Fehlversuch behält ihn über den
+Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag und wird atomar **nach** dem
+Index-Append geschrieben; ein Crash davor lässt die ältere Schranke stehen (sicherer Re-Read). Der heutige Tag
+wird nie als vollständig markiert. Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts gelesen oder
+geschrieben, Datei unangetastet); `since` und die Schranke springen nie über offene Coverage. Explizite
+Datumsläufe (`sync_sent_items_by_dates*`) setzen die Schranke konservativ vor den frühesten angeforderten Tag
+zurück, damit ein späterer Default-Lauf keine Lücke überspringt.
+
+### Handoff-Batches über 200
+
+Mehr als 200 neue Items werden deterministisch (älteste zuerst) in 200er-Batches committet: Handoff atomar,
+dann Index, dann Coverage-Schranke. Der Suffix ab dem ersten deferred Item bleibt unindexiert; die Schranke
+steht davor. Nach Ledger-Konsum wird derselbe Tag erneut gescannt und der nächste Batch erzeugt — alle IDs werden
+eventual erreichbar, ohne Skip. `sync_sent_items_by_dates_report` zeigt `truncated`/`deferred_count`/`next_start`/
+`recovery`; die int-API `sync_sent_items_by_dates` meldet `handoff_deferred` statt still abzuschneiden.
 
 ## Closing an item
 

@@ -25,7 +25,7 @@ from ..sent_indexer import SENT_SYNC_MAX_PAGES, sync_sent_items
 #: completed for the successful date windows and the reported counts are
 #: authoritative (some windows failed); ``unknown``: a write was attempted and
 #: failed, so the on-disk progress is unverified (a rerun merges idempotently).
-WRITE_STATES = ("none", "partial", "unknown")
+WRITE_STATES = ("none", "state", "partial", "unknown")
 
 
 def _dependency(
@@ -105,10 +105,10 @@ def failure_envelope(
 
     ``handoff.state`` is one of ``none|written|pending|invalid``; the refusal itself
     is ``reason_code``.  Pending counts come from a read-only peek that never raises.
-    ``write_state`` distinguishes a pre-write refusal (``none``) from a confirmed
-    partial commit (``partial``) and from unverified progress after a failed write
-    (``unknown``); only ``unknown`` reports ``new_count: null`` because the run
-    cannot know how many entries reached the disk.
+    ``write_state`` distinguishes a pre-write refusal (``none``) from a run that
+    only persisted the coverage state/marker (``state``, no handoff/index write), a
+    confirmed partial commit (``partial``) and unverified progress after a failed
+    write (``unknown``); only ``unknown`` reports ``new_count: null``.
     """
     peek = peek_handoff_state(dd)
     handoff = _default_handoff(dd)
@@ -155,10 +155,11 @@ def run_sync_sent_mode(
 ) -> dict[str, Any]:
     """Fetch recent Sent Items, hand off the new ones and index them into sent-index.jsonl.
 
-    A refused handoff (``handoff_pending``/``handoff_invalid``/``handoff_overflow``),
-    an invalid manifest (``sync_invalid_count``), a truncated Sent window
-    (``sent_window_truncated``) or any failed date window (``sync_window_failed``)
-    is returned as ``ok: False`` with ``write_state: none``: nothing was written.
+    A refused handoff (``handoff_pending``/``handoff_invalid``), an invalid manifest
+    (``sync_invalid_count``), a truncated Sent window (``sent_window_truncated``) or
+    any failed date window (``sync_window_failed``) is returned as ``ok: False`` with
+    ``write_state`` ``none``/``state``: no handoff or index was written (only the
+    coverage state may have been persisted).
     An unexpected failure during the write path is ``sync_failed`` with
     ``write_state: unknown``: the handoff may already be persisted and the index
     may have grown, so the envelope never claims that nothing was written.
@@ -229,7 +230,7 @@ def run_sync_sent_mode(
             str(error),
             error.reason_code,
             state=error.details.get("state"),
-            write_state="none",
+            write_state=getattr(error, "write_state", "none"),
             details={key: value for key, value in error.details.items() if key != "state"},
         )
     except SentSyncPartialFailure as error:
@@ -240,7 +241,7 @@ def run_sync_sent_mode(
             folder,
             str(error),
             "sync_window_failed",
-            write_state="none",
+            write_state=getattr(error, "write_state", "none"),
             details={"error_type": "DateWindowFailure"},
             new_count=0,
         )

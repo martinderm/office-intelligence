@@ -19,16 +19,16 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   `sent-synthesis-ledger.jsonl` mit Thread-Ankern (`core/sent_handoff.py`).
   `get_single_email_details` liefert zusätzlich `cc` und `headers_complete`.
 - **Fail-closed:** `handoff_pending` (unkonsumierter Handoff + weitere neue Items, nichts
-  indexiert), `handoff_invalid`, `handoff_overflow` (Überhang > 200 wird vor jedem Write
-  verweigert), `sent_window_truncated`, `sync_window_failed`; Exit ≠ 0.
+  indexiert), `handoff_invalid`, `sent_window_truncated`, `sync_window_failed`; Exit ≠ 0. >200 neue Items
+  werden in 200er-Batches committet (Rest nach Konsum).
 - Nicht enthalten: Synthese/LLM-Logik und die Consumer-Pipeline (extern). Issue #88 bleibt
   offen. Vertrag: [L2 §43](skills/mail-desk/docs/system-map/README.md).
 
 #### Fixed (Review-/Audit-Findings zum Erstcommit)
 
 - `sync_sent_items_by_dates` committet einmal statt je Tag (Selbstblockade durch `handoff_pending`).
-- Überhang > 200: in der zweiten Runde durch die vollständige Verweigerung vor jedem Write ersetzt
-  (siehe unten); kein Prune-Write (konsumierte Reste werden abgeleitet ignoriert).
+- Überhang > 200: in der dritten Runde durch deterministische 200er-Batches ersetzt (siehe unten); kein
+  Prune-Write (konsumierte Reste werden abgeleitet ignoriert).
 - `handoff.state` ist überall `none|written|pending|invalid`; `new_count`/`new_items`/`handoff` auch im
   Legacy-Tupel und in allen Fehler-Envelopes (`sync_failed` statt Erfolg/ungeformtem Fehler).
 - Handoff voll schema- und identitätskonsistent validiert, Ledger strikt gegen das Schema (`ledger_invalid`),
@@ -38,9 +38,8 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 #### Fixed (zweite Review-/Audit-Runde)
 
-- Überhang über 200 wird nicht mehr zurückgestellt: der Lauf wird vor jedem Write vollständig als
-  `handoff_overflow` verweigert (keine Erreichbarkeits-Annahme; unparsebare Daten als `unparsed`).
-  Recovery eines Tages nur über `sync_sent_items_by_dates(..., include_next_day=False)` (nicht
+- Überhang > 200 wird in 200er-Batches committet (älteste zuerst, Rest nach Ledger-Konsum, kein ID-Skip).
+  Recovery eines Tages nur über `sync_sent_items_by_dates_report(..., include_next_day=False)` (nicht
   `sync_sent_items(dates=[D])`, das D+1 mitliest) und nicht über `--sync-sent N`/`count`.
 - Fehler-/Legacy-Envelope vollständig: `reason_code`, `handoff` (inkl. `written_count`/`pending_count`/
   `deferred_count`/`file`) und `write_state` auch bei Bindungs- und Legacy-Fällen; `sync_invalid_count` für
@@ -68,7 +67,21 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Dubletten-Regel (erste Zeile je Message-ID) zu verletzen.
 - L1/L2-Maps, Vertrag, Log-Schema, CLI-Referenz und SKILL synchron aktualisiert.
 
-### 2026-10-18 — Historische FR-Ledger eingefroren
+#### Fixed (dritte Review-/Audit-Runde)
+
+- Persistente, atomare Coverage-Schranke `sent-sync-state.json` (`initial_start`, `covered_through`), geschrieben
+  vor dem ersten Read bzw. nach dem Index-Append; der heutige Tag wird nie vollständig markiert. Multi-Day-
+  Deferrals und später konsumierte Items können den Watermark nicht mehr über unvollständige Tage springen.
+- 200er-Batches: älteste 200 committen (Suffix inkl. späterer Items unindexiert), Rest nach Ledger-Konsum; 201/250
+  und Crash/Retry getestet; int-Datums-API meldet `handoff_deferred`, `..._report` zeigt `truncated`/Recovery.
+- `count`-Item-Budget blockiert schon den ersten nichtleeren Tag über Budget (kein Überschreiten); Recovery
+  tatsächlich erreichbar.
+- `since`/Initialmarker springen nie über offene Coverage; Erstlauf mit `since` persistiert den Marker.
+- Pagination beendet nur bei klassifiziertem `HimalayaInvocationError`/`himalaya_command_failed` mit exaktem
+  „envelope page out of bound“ ab Seite 2; Transport-„buffer index out of bounds“ bleibt fail-closed.
+- `write_state: state` (nur Coverage-State geschrieben, kein Handoff/Index) im Vertrag; Doku/L1/L2 bereinigt.
+
+
 
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).

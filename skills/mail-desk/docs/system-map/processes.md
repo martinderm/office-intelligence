@@ -666,7 +666,7 @@ sync-sent
   │      (ungültig ⇒ ledger_invalid/handoff_invalid; fremdes Konto ⇒ handoff_invalid; Stopp)
   │      konsumierte Items nur ableitend ignorieren, kein Write
   ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (Handoff byte-gleich, nichts indexiert)
-  ├─ 3b. Mehr als 200 neue Items?  ⇒ handoff_overflow, Stopp (nichts übergeben/indexiert)
+  ├─ 3b. Mehr als 200 neue Items?  ⇒ älteste 200 committen, Rest unindexiert; Schranke davor, nächster Batch nach Konsum
   ├─ 3c. Seite voll?  ⇒ paginieren bis kurze/leere Seite; nach max_pages voll ⇒ sent_window_truncated, Stopp (kein Watermark-Advance)
   ├─ 3d. Datumsfenster scheitert?  ⇒ sync_window_failed, Stopp (nichts geschrieben)
   ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200)
@@ -687,17 +687,23 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
   Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
 * **Fehlersemantik:** `write_state` in `ok:false`-Envelopes: `none` (Ablehnung/Fehler vor jedem Write, z. B.
   `sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`, `sent_window_truncated`, `sync_window_failed`) oder `unknown` (Schreibfehler — auch ein
+  `sent_window_truncated`, `sync_window_failed`), `state` (nur persistierte Coverage-Schranke/Marker, kein
+  Handoff/Index) oder `unknown` (Schreibfehler — auch ein
   Handoff-Write nach möglicher atomarer Publikation — beim Append; `new_count: null`,
   `new_items_unavailable: true`, Wiederholung idempotent). `partial` ist reserviert. Kein Fehler behauptet
-  pauschal null Writes. Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Write verweigert, damit das
-  Wasserzeichen keine ältere Lücke überspringt.
-* **Overflow-/Fenster-Recovery:** einen Tag eng nur über
-  `sync_sent_items_by_dates(..., include_next_day=False, max_pages=...)` (nicht `sync_sent_items(dates=[D])`, das
-  D+1 mitliest), älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery,
-  sondern ein Item-Budget; bei Erreichen stoppt der Lauf mit `truncated`/`coverage_*` und Recovery-Aufruf.
-  Same-day > 200 bleibt `handoff_overflow`. Seiten werden bis zur kurzen/leeren Seite paginiert; erst nach
-  `max_pages` volle Seiten ergeben `sent_window_truncated` (kein Watermark-Advance). Das Wasserzeichen-Alter
-  blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage zählen).
+  pauschal null Writes. Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Handoff-/Index-Write
+  verweigert, damit das Wasserzeichen keine ältere Lücke überspringt.
+* **Batch-/Fenster-Recovery:** einen Tag eng nur über
+  `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (nicht
+  `sync_sent_items(dates=[D])`, das D+1 mitliest; int-API meldet `handoff_deferred`), älteste Tage zuerst,
+  dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery,
+  sondern ein Item-Budget; schon der erste nichtleere Tag über dem Budget blockiert mit
+  `truncated`/`coverage_*` und Recovery-Aufruf. **> 200/Tag**: älteste 200 committen, Rest nach Konsum; die
+  atomare Coverage-Schranke steht nie hinter einem unvollständigen Tag.
+  Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
+  `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
+  Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
+  Watermark-Advance). Das Wasserzeichen-Alter blockiert nie (Coverage ab Watermark-Tag inklusive, leere Tage
+  zählen); `since`/Schranke springen nie über offene Coverage.
 * **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
   denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

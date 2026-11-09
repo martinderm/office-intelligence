@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .common import atomic_rewrite_jsonl, atomic_write_json, normalize_message_id, utc_now_iso, resolve_data_dir
-from .himalaya import run_himalaya, get_single_email_details
+from .himalaya import HimalayaInvocationError, run_himalaya, get_single_email_details
 from .sent_handoff import (
     HANDOFF_FILENAME,
     MAX_HANDOFF_ITEMS,
@@ -45,6 +45,23 @@ SENT_SYNC_PAGE_SIZE = 100
 #: Maximum pages fetched per date.  A still-full last page is fail-closed (no
 #: watermark advance); the error names a higher-limit Python-API recovery call.
 SENT_SYNC_MAX_PAGES = 50
+
+#: Strict adapter end signal for requesting a page beyond the last full page.
+#: Only the classified Himalaya command error with exactly this documented text is
+#: accepted; any other error (including transport "buffer index out of bounds") is
+#: fail-closed.  Pattern is anchored to the adapter's formatted stderr message.
+_SENT_PAGE_END_PATTERN = re.compile(
+    r"^Himalaya failed: Error: (?:envelope )?page out of bounds?\.?$", re.IGNORECASE
+)
+
+
+def _is_verified_page_end(error: BaseException) -> bool:
+    """Whether ``error`` is the documented, classified end-of-pages signal."""
+    return (
+        isinstance(error, HimalayaInvocationError)
+        and error.reason_code == "himalaya_command_failed"
+        and bool(_SENT_PAGE_END_PATTERN.match(str(error)))
+    )
 
 
 # Re-exported canonical MD-ID1 identity defaults.  These are the same objects the
@@ -186,10 +203,9 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
     disappear with the next replacement.  No new items means no handoff write.
 
     Fail-closed before any write (``SentHandoffError``): invalid handoff or ledger,
-    pending items of another mailbox, pending items plus further new items
-    (``handoff_pending``), and more new items than one handoff may hold
-    (``handoff_overflow``).  No reachability is assumed: an overflow is refused as a
-    whole before any write, so no surplus can silently fall out of a later window.
+    pending items of another mailbox and pending items plus further new items
+    (``handoff_pending``).  More new items than one handoff may hold are committed in
+    deterministic batches (oldest first); the suffix stays unindexed and re-readable.
     """
     ledger = load_ledger(dd)
     consumed = ledger["by_message_id"]
@@ -227,18 +243,25 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
             },
         )
 
-    # Handoff is bounded (200).  More new items: commit the oldest 200 now, hand
-    # them off, and leave the rest unindexed for the next run after consumption.
-    # The watermark advances only to a fully committed day; a partial day stays
-    # re-readable because the default window starts at the watermark day.
-    deferred = extra[MAX_HANDOFF_ITEMS:]
-    deferred_ids = {norm_id(c["entry"].get("message_id")) for c in deferred}
-    committed = [c for c in ordered if norm_id(c["entry"].get("message_id")) not in deferred_ids]
+    # Handoff is bounded (200).  More new items: commit only the prefix up to the
+    # first deferred item, so no newer consumed/candidate item can advance the
+    # watermark past an older deferral.  The rest stays unindexed for the next run.
+    if len(extra) > MAX_HANDOFF_ITEMS:
+        first_deferred_id = norm_id(extra[MAX_HANDOFF_ITEMS]["entry"].get("message_id"))
+        split_index = next(
+            index for index, candidate in enumerate(ordered)
+            if norm_id(candidate["entry"].get("message_id")) == first_deferred_id
+        )
+    else:
+        split_index = len(ordered)
+    committed = ordered[:split_index]
+    deferred = ordered[split_index:]
     deferred_days = sorted({
-        (parse_date_to_datetime(str(c["entry"].get("at", ""))) or datetime.min).strftime("%Y-%m-%d")
-        if parse_date_to_datetime(str(c["entry"].get("at", ""))) else "unparsed"
-        for c in deferred
-    })
+        parsed.strftime("%Y-%m-%d")
+        for candidate in deferred
+        for parsed in [parse_date_to_datetime(str(candidate["entry"].get("at", "")))]
+        if parsed is not None
+    }) or (["unparsed"] if deferred else [])
     new_items: list[dict[str, Any]] = []
     new_handoff_items: list[dict[str, Any]] = []
     for candidate in committed:
@@ -414,7 +437,7 @@ def _collect_date_candidates(
         # A verified adapter end marker: asking for a page beyond the last full page
         # can fail with "out of bound".  Only this exact marker on page >= 2 counts as
         # the end; every other error remains fail-closed.
-        if pages >= 2 and "out of bound" in str(error).lower():
+        if pages >= 2 and _is_verified_page_end(error):
             pass
         else:
             raise RuntimeError(
@@ -526,27 +549,55 @@ def _expand_sync_dates(dates: list[str], include_next_day: bool = True) -> list[
     return sorted(expanded)
 
 
-def sync_sent_items_by_dates(
+def _update_barrier_after_dates(dd: Path, requested: list[str], deferred_days: list[str]) -> None:
+    try:
+        state = _read_sync_state(dd)
+    except SentHandoffError as error:
+        raise SentIndexAppendError(
+            "Coverage state unreadable after the index append; the index is committed but the coverage "
+            f"barrier is unverified ({error}). A rerun re-reads conservatively."
+        ) from error
+    barrier = state["covered_through"]
+    candidates: list[str] = []
+    if requested:
+        earliest = min(requested)
+        candidates.append((datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d"))
+    if deferred_days and deferred_days[0] != "unparsed":
+        candidates.append(
+            (datetime.strptime(deferred_days[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+        )
+    if candidates:
+        barrier = min([d for d in (barrier, *candidates) if d])
+    try:
+        _write_sync_state(dd, initial_start=state["initial_start"], covered_through=barrier)
+    except Exception as error:  # noqa: BLE001 - index already committed, barrier unverified
+        raise SentIndexAppendError(
+            "Coverage state write failed after the index append; the index is committed but the "
+            f"coverage barrier is unverified ({type(error).__name__}: {error}). A rerun re-reads from "
+            "the previous barrier and merges idempotently by Message-ID."
+        ) from error
+
+
+def sync_sent_items_by_dates_report(
     dates: list[str],
     folder: str = "Sent Items",
     account: str | None = None,
     data_dir: Path | None = None,
     include_next_day: bool = True,
     max_pages: int = SENT_SYNC_MAX_PAGES,
-) -> int:
-    """Sync Sent Items for a list of ISO dates (e.g. ['2026-01-19', '2026-01-20']).
+) -> dict[str, Any]:
+    """Date-range sync that exposes batching/coverage instead of hiding it in an int.
 
-    All dates are read first and committed **once** (one handoff, then one index
-    append).  A commit per date would let the second date collide with the unconsumed
-    handoff written for the first one (``handoff_pending``).  Returns the number of
-    newly indexed entries; a failing date raises before any write.
+    Returns ``{"new_count", "new_items", "handoff", "truncated",
+    "deferred_count", "next_start", "recovery", "requested_dates"}``.  A deferred
+    batch leaves later items unindexed and rewinds the persistent barrier before the
+    first deferred day, so the next default run continues there after consumption.
     """
     dd = data_dir or resolve_data_dir()
+    expanded = _expand_sync_dates(dates, include_next_day=include_next_day)
     known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
     candidates: list[dict[str, Any]] = []
-    for d_str in _expand_sync_dates(dates, include_next_day=include_next_day):
-        # Same transactional rule as sync_sent_items: a failing date discards its
-        # own ID marks so no later window silently skips a mail.
+    for d_str in expanded:
         attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         date_candidates, _ = _collect_date_candidates(
             d_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids,
@@ -555,8 +606,68 @@ def sync_sent_items_by_dates(
         known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
     if not candidates:
-        return 0
-    return len(_commit_sent_candidates(dd, candidates, account=account)["new_items"])
+        _update_barrier_after_dates(dd, expanded, [])
+        return {
+            "new_count": 0, "new_items": [], "handoff": None, "truncated": False,
+            "deferred_count": 0, "next_start": None, "recovery": None,
+            "requested_dates": list(expanded),
+        }
+    committed = _commit_sent_candidates(dd, candidates, account=account)
+    deferred_days = committed.get("deferred_days") or []
+    truncated = bool(deferred_days)
+    next_start = deferred_days[0] if deferred_days else None
+    recovery = None
+    if truncated:
+        recovery = (
+            f"Consume the pending handoff, then run "
+            f"sync_sent_items_by_dates_report(dates=['{next_start}'], include_next_day=False, "
+            f"max_pages={max_pages}); all remaining ids are re-detected from the barrier."
+        )
+    _update_barrier_after_dates(dd, expanded, deferred_days)
+    return {
+        "new_count": len(committed["new_items"]),
+        "new_items": committed["new_items"],
+        "handoff": committed["handoff"],
+        "truncated": truncated,
+        "deferred_count": committed["handoff"]["deferred_count"] if deferred_days else 0,
+        "next_start": next_start,
+        "recovery": recovery,
+        "requested_dates": list(expanded),
+    }
+
+
+def sync_sent_items_by_dates(
+    dates: list[str],
+    folder: str = "Sent Items",
+    account: str | None = None,
+    data_dir: Path | None = None,
+    include_next_day: bool = True,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
+) -> int:
+    """Legacy int API: complete date syncs return their count; deferrals fail closed.
+
+    Callers that need the batching/coverage result must use
+    ``sync_sent_items_by_dates_report``; this wrapper never hides a deferred batch.
+    """
+    report = sync_sent_items_by_dates_report(
+        dates, folder=folder, account=account, data_dir=data_dir,
+        include_next_day=include_next_day, max_pages=max_pages,
+    )
+    if report["truncated"]:
+        raise SentHandoffError(
+            "handoff_deferred",
+            f"Date sync committed {report['new_count']} item(s) and deferred "
+            f"{report['deferred_count']}; use sync_sent_items_by_dates_report for visibility. "
+            f"{report['recovery']}",
+            {
+                "committed_count": report["new_count"],
+                "deferred_count": report["deferred_count"],
+                "next_start": report["next_start"],
+                "recovery": report["recovery"],
+                "state": report["handoff"]["state"] if report["handoff"] else "none",
+            },
+        )
+    return report["new_count"]
 
 
 def _sent_index_watermark(data_dir: Path) -> datetime | None:
@@ -572,47 +683,60 @@ def _sent_index_watermark(data_dir: Path) -> datetime | None:
     return latest
 
 
-INITIAL_START_FILENAME = "sent-sync-initial-start.json"
+SYNC_STATE_FILENAME = "sent-sync-state.json"
+INITIAL_START_FILENAME = SYNC_STATE_FILENAME  # legacy alias for callers/tests
 
 
-def _read_initial_start(data_dir: Path) -> str | None:
-    """Persisted initial coverage start for a still-empty index (or ``None``)."""
-    path = data_dir / INITIAL_START_FILENAME
-    if not path.exists():
+def _iso_day(value: Any, field: str) -> str | None:
+    if value is None:
         return None
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
-        raise SentHandoffError(
-            "sent_initial_state_invalid",
-            f"'{INITIAL_START_FILENAME}' is unreadable ({type(error).__name__}); nothing was read "
-            "or written. Recovery: inspect/remove the file or pass an explicit since=",
-            {"reason": "unreadable", "state": "invalid"},
-        ) from error
-    value = document.get("initial_start") if isinstance(document, dict) else None
-    if not isinstance(value, str):
-        raise SentHandoffError(
-            "sent_initial_state_invalid",
-            f"'{INITIAL_START_FILENAME}' has no valid initial_start; nothing was read or written. "
-            "Recovery: inspect/remove the file or pass an explicit since=",
-            {"reason": "malformed", "state": "invalid"},
-        )
+    if not isinstance(value, str) or len(value) != 10:
+        raise ValueError(f"{field} must be an ISO date (YYYY-MM-DD)")
+    datetime.strptime(value, "%Y-%m-%d")
     return value
 
 
-def _write_initial_start(data_dir: Path, start: str) -> None:
-    """Persist the initial coverage start before the first read (retry stability)."""
-    atomic_write_json(
-        data_dir / INITIAL_START_FILENAME,
-        {"schema_version": 1, "initial_start": start},
-    )
+def _read_sync_state(data_dir: Path) -> dict[str, str | None]:
+    """Read the persisted coverage state (initial start + covered-through barrier).
 
-
-def _clear_initial_start(data_dir: Path) -> None:
+    ``covered_through`` is the last day whose full day was committed.  The barrier
+    only ever moves after the index append, so a crash leaves it behind (safe
+    re-read) and it can never advance over an incomplete day.
+    """
+    path = data_dir / SYNC_STATE_FILENAME
+    if not path.exists():
+        return {"initial_start": None, "covered_through": None}
     try:
-        (data_dir / INITIAL_START_FILENAME).unlink()
-    except OSError:
-        pass
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or type(document.get("schema_version")) is not int \
+                or document.get("schema_version") != 1:
+            raise ValueError("unsupported schema_version")
+        return {
+            "initial_start": _iso_day(document.get("initial_start"), "initial_start"),
+            "covered_through": _iso_day(document.get("covered_through"), "covered_through"),
+        }
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, ValueError, TypeError) as error:
+        raise SentHandoffError(
+            "sent_initial_state_invalid",
+            f"'{SYNC_STATE_FILENAME}' is not a valid coverage state ({type(error).__name__}: {error}); "
+            "nothing was read or written and no index/handoff was changed. Recovery: repair or remove "
+            "the file, then rerun; or pass an explicit since= for a fresh initial start.",
+            {"reason": "unreadable_or_malformed", "state": "invalid"},
+        ) from error
+
+
+def _write_sync_state(
+    data_dir: Path, *, initial_start: str | None, covered_through: str | None,
+) -> None:
+    """Atomically persist the coverage state (both fields always explicit)."""
+    atomic_write_json(
+        data_dir / SYNC_STATE_FILENAME,
+        {
+            "schema_version": 1,
+            "initial_start": initial_start,
+            "covered_through": covered_through,
+        },
+    )
 
 
 def _derive_sent_sync_window(
@@ -663,7 +787,7 @@ def _derive_sent_sync_window(
     }
 
 
-def sync_sent_items(
+def _sync_sent_items_impl(
     count: int | None = 100,
     folder: str = "Sent Items",
     dates: list[str] | None = None,
@@ -672,6 +796,7 @@ def sync_sent_items(
     workspace_root: Path | None = None,
     since: str | None = None,
     max_pages: int = SENT_SYNC_MAX_PAGES,
+    state_tracker: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Sync Sent Items by explicit dates or by a coverage window.
 
@@ -701,6 +826,8 @@ def sync_sent_items(
     run_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     follow_up_hint: str | None = None
     truncated = False
+    barrier: str | None = None
+    initial_start: str | None = None
     if dates:
         window_dates = _dedupe_iso_dates(dates)
         coverage: dict[str, Any] = {
@@ -713,21 +840,39 @@ def sync_sent_items(
         }
     else:
         watermark = _sent_index_watermark(dd)
-        if watermark is None:
-            # Persist the initial coverage start before reading: a failed first run
-            # must not shift the 60-day window on the next day and lose its oldest day.
-            effective_since = since or _read_initial_start(dd)
-            if effective_since is None:
-                effective_since = (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
-                _write_initial_start(dd, effective_since)
-        else:
-            watermark_day = datetime(watermark.year, watermark.month, watermark.day)
-            # `since` may not skip forward over an existing watermark.
-            effective_since = min(
-                [watermark_day.strftime("%Y-%m-%d")] + ([str(since)[:10]] if since else []),
+        state = _read_sync_state(dd)
+        initial_start = state["initial_start"]
+        barrier = state["covered_through"]
+        if barrier is not None and datetime.strptime(barrier, "%Y-%m-%d") > run_date:
+            raise SentHandoffError(
+                "sent_initial_state_invalid",
+                f"Coverage barrier '{barrier}' lies in the future of the frozen run date "
+                f"{run_date:%Y-%m-%d}; nothing was read or written. Recovery: repair/remove "
+                f"'{SYNC_STATE_FILENAME}' or pass an explicit since=",
+                {"reason": "barrier_in_future", "state": "invalid"},
             )
+        if watermark is None and initial_start is None:
+            # Persist the initial coverage start before reading: a failed first run
+            # must not shift the window or lose its oldest day on a later day.
+            initial_start = (
+                str(since)[:10] if since
+                else (run_date - timedelta(days=MAX_SYNC_WINDOW_DAYS - 1)).strftime("%Y-%m-%d")
+            )
+            _write_sync_state(dd, initial_start=initial_start, covered_through=barrier)
+            if state_tracker is not None:
+                state_tracker["state_written"] = True
+        if barrier is not None:
+            base_start = (datetime.strptime(barrier, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        elif watermark is not None:
+            # Legacy/no-barrier: re-read the watermark day (new mails can arrive there).
+            base_start = datetime(watermark.year, watermark.month, watermark.day).strftime("%Y-%m-%d")
+        else:
+            base_start = initial_start
+        if since is not None:
+            # `since` may rewind, never move forward over open coverage.
+            base_start = min(base_start, str(since)[:10])
         window_dates, truncated, follow_up_hint, coverage = _derive_sent_sync_window(
-            count, dd, run_date=run_date, since=effective_since,
+            count, dd, run_date=run_date, since=base_start,
         )
 
     query_dates = _expand_sync_dates(window_dates, include_next_day=bool(dates))
@@ -752,7 +897,7 @@ def sync_sent_items(
         except Exception as error:
             failures.append((date_str, error))
             continue
-        if budget is not None and candidates and date_candidates and len(candidates) + len(date_candidates) > budget:
+        if budget is not None and date_candidates and len(candidates) + len(date_candidates) > budget:
             # Item budget reached at a day boundary: never read past it, never
             # advance coverage over it.  The blocked day keeps a concrete recovery.
             truncated = True
@@ -827,20 +972,66 @@ def sync_sent_items(
             covered_days = max(0, (last_full - start_dt).days + 1)
         except (TypeError, ValueError):
             coverage_end = coverage_end if first_deferred == "unparsed" else None
+        next_start_value = first_deferred
+        if first_deferred == "unparsed":
+            # No parseable day: re-read from the window start; the barrier stays put.
+            next_start_value = coverage.get("coverage_start")
         coverage.update(
             coverage_end=coverage_end,
             covered_days=covered_days,
             coverage_complete=False,
-            next_start=first_deferred,
+            next_start=next_start_value,
         )
         follow_up_hint = (
             f"Handoff batch limit {MAX_HANDOFF_ITEMS} reached; {handoff['deferred_count']} item(s) "
-            f"remain from {first_deferred}. Consume the pending handoff, then rerun (the default window "
-            f"starts at the watermark day) or use "
-            f"sync_sent_items_by_dates(dates=['{first_deferred}'], include_next_day=False)."
+            f"remain from {next_start_value}. Consume the pending handoff, then rerun (the default "
+            f"window re-reads the barrier) or use "
+            f"sync_sent_items_by_dates_report(dates=['{next_start_value}'], include_next_day=False)."
         )
-    if not dates and not truncated:
-        _clear_initial_start(dd)  # complete initial/default coverage reached
+    # Persist the coverage barrier only AFTER the index append: a crash before this
+    # point leaves the older barrier behind (safe re-read), never ahead of data.
+    try:
+        current_state = _read_sync_state(dd)
+    except SentHandoffError as error:
+        raise SentIndexAppendError(
+            "Coverage state unreadable after the index append; the index is committed but the coverage "
+            f"barrier is unverified ({error}). A rerun re-reads conservatively."
+        ) from error
+    current_initial = current_state["initial_start"] or initial_start
+    current_barrier = current_state["covered_through"] or barrier
+    if dates:
+        if window_dates:
+            earliest = min(window_dates)
+            rewound = (datetime.strptime(earliest, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            new_barrier = min([d for d in (current_barrier, rewound) if d]) if current_barrier else rewound
+        else:
+            new_barrier = current_barrier
+    elif deferred_days:
+        first_deferred = deferred_days[0]
+        if first_deferred != "unparsed":
+            last_full = (datetime.strptime(first_deferred, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+            new_barrier = min([d for d in (current_barrier, last_full) if d]) if current_barrier else last_full
+        else:
+            new_barrier = current_barrier
+    elif truncated:
+        new_barrier = coverage.get("coverage_end") or current_barrier
+    else:
+        new_barrier = coverage.get("coverage_end") or current_barrier
+    if not dates and new_barrier is not None:
+        # The current day is never final: more mail can arrive there later.  The
+        # barrier stops at yesterday so the next run always re-reads today.
+        yesterday = (run_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        new_barrier = min(new_barrier, yesterday)
+    try:
+        _write_sync_state(dd, initial_start=current_initial, covered_through=new_barrier)
+        if state_tracker is not None:
+            state_tracker["state_written"] = True
+    except Exception as error:  # noqa: BLE001 - index already committed, barrier unverified
+        raise SentIndexAppendError(
+            "Coverage state write failed after the index append; the index is committed but the "
+            f"coverage barrier is unverified ({type(error).__name__}: {error}). A rerun re-reads from "
+            "the previous barrier and merges idempotently by Message-ID."
+        ) from error
 
     result = {
         "date_windows_synced": len(accepted_dates),
@@ -856,6 +1047,41 @@ def sync_sent_items(
     }
 
     return result
+
+
+def sync_sent_items(
+    count: int | None = 100,
+    folder: str = "Sent Items",
+    dates: list[str] | None = None,
+    account: str | None = None,
+    data_dir: Path | None = None,
+    workspace_root: Path | None = None,
+    since: str | None = None,
+    max_pages: int = SENT_SYNC_MAX_PAGES,
+) -> dict[str, Any]:
+    """Public sync entry; exposes whether only coverage state was written on failure."""
+    tracker = {"state_written": False}
+    try:
+        return _sync_sent_items_impl(
+            count=count,
+            folder=folder,
+            dates=dates,
+            account=account,
+            data_dir=data_dir,
+            workspace_root=workspace_root,
+            since=since,
+            max_pages=max_pages,
+            state_tracker=tracker,
+        )
+    except Exception as error:
+        if tracker["state_written"] and getattr(error, "write_state", None) is None:
+            # Precise contract: only the coverage marker/barrier was written; no
+            # handoff and no index entry was published by this run.
+            try:
+                error.write_state = "state"
+            except (AttributeError, TypeError):
+                pass
+        raise
 
 
 def parse_date_to_datetime(s: str) -> datetime | None:

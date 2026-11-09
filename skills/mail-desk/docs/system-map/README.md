@@ -2331,7 +2331,7 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
 **Module und Verträge:**
 - [`scripts/core/sent_handoff.py`](../../scripts/core/sent_handoff.py) (neu): Handoff lesen/schreiben (atomar, ≤ 200),
   Ledger laden/anhängen, Thread-Schlüssel und Anker, `SentHandoffError` (`handoff_pending`/`handoff_invalid`/
-  `handoff_overflow`), `SentSyncPartialFailure`, `SentIndexAppendError` (unverifizierter Append-Fortschritt),
+  `handoff_deferred`), `SentSyncPartialFailure`, `SentIndexAppendError` (unverifizierter Append-Fortschritt),
   `durable_append_jsonl` (LF, `fsync`, Reparatur einer abgerissenen letzten Zeile).
 - [`scripts/core/sent_indexer.py`](../../scripts/core/sent_indexer.py): `_sync_sent_items_for_date` zerfällt in
   `_collect_date_candidates` (nur lesen) und `_commit_sent_candidates` (Handoff, dann Index). `sync_sent_items`
@@ -2341,7 +2341,7 @@ weil der Trigger ein Dateivertrag ist (`handoff.pending_count`/`new-sent-items.j
   Cc wurde bisher abgefragt, aber verworfen) und `headers_complete` (nur additiv, Inbound-Semantik unverändert).
 - [`scripts/core/modes/sync_sent.py`](../../scripts/core/modes/sync_sent.py): Envelope-Felder `new_count`,
   `new_items`, `handoff`, `write_state`; `ok: false` mit `reason_code` bei `sync_invalid_count`,
-  `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`, `handoff_overflow`,
+  `backend_binding`, `handoff_pending`, `handoff_invalid`, `handoff_deferred`, `ledger_invalid`,
   `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`, `sent_initial_state_invalid`,
   `sync_no_progress`, `sync_window_failed` und `sync_failed` (Exit ≠ 0). Der Legacy-Tupel-Vertrag der Dependency-Injection bleibt
   und trägt `handoff`/`new_items_unavailable`.
@@ -2376,12 +2376,15 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   Watermark-Tag erneut gescannt und der nächste Batch erzeugt (kein Skip, kein Verlust); offenes Pending bleibt
   `handoff_pending` fail-closed, Crash-Vertrag Handoff-vor-Index bleibt. Seiten werden paginiert; nach
   `max_pages` volle Seite ⇒ `sent_window_truncated` (kein Watermark-Advance).
+- *Coverage-Schranke:* `sent-sync-state.json` (`initial_start`, `covered_through`) wird vor dem ersten Read
+  bzw. atomar nach dem Index-Append geschrieben; ein Crash davor lässt die ältere Schranke stehen, der heutige
+  Tag wird nie vollständig markiert, `since`/Schranke springen nie über offene Coverage.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den
   Handoff byte-gleich, 0 neue Items schreiben nichts.
 - *`handoff.state`:* in allen Envelopes `none|written|pending|invalid`; die Ablehnungsursache steht in `reason_code`
   (`sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
-  `handoff_overflow`, `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`,
+  `handoff_deferred`, `sent_window_truncated`, `sync_invalid_since`, `sync_invalid_max_pages`,
   `sent_initial_state_invalid`, `sync_no_progress`, `sync_window_failed`, `sync_failed`).
 - *Validierung:* Handoff vollständig schema- und identitätskonsistent (`read_handoff`) **gegen die kanonischen
   Grenzen** (200 Items, 50 References, 100 To/Cc, 1000 Betreffzeichen) — ein dateieigenes höheres `max_items`
@@ -2392,10 +2395,11 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   unparsbarer Rest wandert vor dem nächsten Append ins Sidecar `<datei>.torn`, vollständige Einträge bleiben.
 - *Immer geformt:* `new_count`/`new_items`/`handoff` auch im Legacy-Tupel, in Bindungs-, Manifest-, Lese-, Ledger-
   und Append-Fehlern (`ok: false`, nie als Erfolg). `write_state` unterscheidet in Fehler-Envelopes `none`
-  (Ablehnung vor jedem Write) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer
+  (Ablehnung vor jedem Write), `state` (nur Coverage-Marker/-Schranke, kein Handoff/Index) und `unknown`
+  (Schreibfehler, auch ein Handoff-Write nach möglicher atomarer
   Publikation; Plattenstand unverifiziert; dann `new_count: null`, `new_items_unavailable: true`), statt
   pauschal null Writes zu behaupten; `partial` ist reserviert. Ein scheiterndes Datumsfenster und eine volle
-  Envelope-Seite brechen den Lauf vor jedem Write ab (`sync_window_failed`/`sent_window_truncated`).
+  Envelope-Seite brechen den Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`/`sent_window_truncated`).
 - *Manifest und Bindung:* ein ungültiger `count` (`sync_invalid_count`) und eine fehlende oder nicht passende
   Backend-/Account-Bindung (`backend_binding`) liefern das vollständige Fehler-Envelope ohne Mailbox-Zugriff;
   auch der Legacy-Tupel-Pfad trägt `handoff` und `new_items_unavailable`.
@@ -2409,7 +2413,9 @@ Wiederholung, Ledger-Dedupe, Thread-Anker (inkl. Vorgangs-Verfeinerung im selben
 Himalaya-Cc, Mehrtages-Commit, transaktionale Fenster-ID-Marken, Überhang-Verweigerung und Recovery per
 Python-Datumsfenster, Handoff-/Ledger-Validierung inkl. kanonischer Item-/Feldgrenzen und untrusted Typen,
 Fehler-Injection (Handoff-Publish nach Replace, Append) mit `write_state: unknown` und Wiederanlauf,
-abgerissenes UTF-8, Reply-Neuauflösung) plus die bestehenden
+abgerissenes UTF-8, Reply-Neuauflösung; zusätzlich Coverage-Schranke/Multi-Day-Deferral, alter Backfill mit
+jüngerem Watermark, 201/250-Batches, Batch-Crash/Retry, `since`/Initialmarker, Seiten-Pagination inkl.
+out-of-bound/Transportfehler und Item-Budget mit erreichbarer Recovery) plus die bestehenden
 `test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).

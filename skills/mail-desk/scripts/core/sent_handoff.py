@@ -39,9 +39,9 @@ HANDOFF_SCHEMA_VERSION = 1
 LEDGER_SCHEMA_VERSION = 1
 HANDOFF_KIND = "mail-desk.new-sent-items"
 
-#: Upper bound of items in the handoff file.  A run with more new items than
-#: this refuses fail-closed before any write (``handoff_overflow``); nothing is
-#: deferred, because a later run could not reliably reach a surplus.
+#: Upper bound of items in one handoff batch.  More new items are committed in
+#: deterministic batches (oldest first); the rest stays unindexed and is re-read
+#: after consumption.  The bounded file is written before the index append.
 MAX_HANDOFF_ITEMS = 200
 
 #: Per-item field bounds (the sent-index entry keeps the full values).  A bounded
@@ -73,9 +73,10 @@ class SentHandoffError(RuntimeError):
 
     ``reason_code``: ``handoff_pending`` (unconsumed items would be extended),
     ``handoff_invalid`` (handoff unreadable, inconsistent, oversized or foreign),
-    ``handoff_overflow`` (more new items than one handoff may hold; refused before
-    any write) or ``ledger_invalid`` (a ledger line violates the documented
-    schema).  ``details["state"]`` is the ``handoff.state``.
+    ``handoff_overflow`` (legacy producer refusals; current sync batches instead),
+    ``handoff_deferred`` (legacy int date API saw a deferred bounded batch) or
+    ``ledger_invalid`` (a ledger line violates the documented schema).
+    ``details["state"]`` is the ``handoff.state``.
     """
 
     def __init__(self, reason_code: str, message: str, details: dict[str, Any] | None = None) -> None:
