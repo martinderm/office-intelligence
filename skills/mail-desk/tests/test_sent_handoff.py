@@ -510,6 +510,60 @@ class IdempotenceAndCrashWindowTests(_Base):
         self.assertEqual(0, mailbox.calls)
         self.assertEqual(before, external.read_bytes())
 
+    def test_handoff_alias_preflight_blocks_every_entry_before_reads_or_writes(self) -> None:
+        entries = [
+            ("default", lambda dd: sent_indexer.sync_sent_items(account="ACC", data_dir=dd)),
+            ("dates", lambda dd: sent_indexer.sync_sent_items(
+                dates=["2026-09-21"], account="ACC", data_dir=dd)),
+            ("report", lambda dd: sent_indexer.sync_sent_items_by_dates_report(
+                ["2026-09-21", "2026-09-22", "2026-09-23"], account="ACC", data_dir=dd,
+                include_next_day=False)),
+            ("plural", lambda dd: sent_indexer.sync_sent_items_by_dates(
+                ["2026-09-21", "2026-09-22", "2026-09-23"], account="ACC", data_dir=dd,
+                include_next_day=False)),
+            ("singular", lambda dd: sent_indexer.sync_sent_items_by_date(
+                "2026-09-21", account="ACC", data_dir=dd)),
+            ("append", lambda dd: sent_indexer.append_sent_index_entries(
+                [{"message_id": "<new@example.test>", "at": "2026-09-21"}], dd)),
+        ]
+        for state_present in (True, False):
+            for label, content in (("empty", b""), ("pending", b'{"pending":true}')):
+                for name, call in entries:
+                    with self.subTest(state=state_present, handoff=label, entry=name), \
+                            tempfile.TemporaryDirectory() as temporary:
+                        dd = Path(temporary) / "data" / "mail-desk"
+                        dd.mkdir(parents=True)
+                        if state_present:
+                            (dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
+                                "schema_version": 1, "initial_start": "2026-09-01",
+                                "covered_through": "2026-09-20",
+                            }), encoding="utf-8")
+                        external = Path(temporary) / "external-handoff.json"
+                        external.write_bytes(content)
+                        try:
+                            os.link(external, dd / HANDOFF_FILENAME)
+                        except (OSError, NotImplementedError):
+                            self.skipTest("hardlinks are unavailable")
+                        before = {
+                            p.relative_to(dd): p.read_bytes()
+                            for p in dd.rglob("*") if p.is_file()
+                        }
+                        before_external = external.read_bytes()
+                        mailbox = _Mailbox(_details(1, _day="2026-09-21"))
+                        run, read = mailbox.patches()
+                        with run, read, patch.object(
+                            sent_indexer, "datetime", _frozen_datetime((2026, 9, 24)),
+                        ):
+                            with self.assertRaises(SentHandoffError) as caught:
+                                call(dd)
+                        self.assertEqual("handoff_alias_invalid", caught.exception.reason_code)
+                        self.assertEqual(0, mailbox.calls)
+                        self.assertEqual(before_external, external.read_bytes())
+                        self.assertEqual(before, {
+                            p.relative_to(dd): p.read_bytes()
+                            for p in dd.rglob("*") if p.is_file()
+                        })
+
     def test_index_alias_preflight_blocks_before_handoff_publication(self) -> None:
         (self.dd / sent_indexer.SYNC_STATE_FILENAME).write_text(json.dumps({
             "schema_version": 1, "initial_start": DAY, "covered_through": "2026-09-23",

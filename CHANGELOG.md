@@ -260,6 +260,18 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   behandelt; Log-Schema, Batch-Runner, Effects, L1/L2, SKILL und CLI dokumentieren `unknown`/`null`. Die
   Same-User-Race-Grenze (#91) bleibt unverändert außerhalb des kooperativen Scope.
 
+#### Fixed (sechzehnte Review-/Audit-Runde)
+
+- Der gemeinsame `assert_append_aliases`-Preflight prüft jetzt zusätzlich `new-sent-items.json` statisch
+  (`handoff_alias_invalid`) **vor** State-/Index-Nutzung, Mailbox-Read und jeder Coverage-/Handoff-/Index-Mutation.
+  Ein Handoff-Hardlink kann damit im Default-/Report-/Datums-/Singular-/Plural-Pfad und bei der direkten
+  Append-API keine Reads oder Writes mehr auslösen.
+- Tests mit echtem Handoff-Hardlink (leer und pending), vorhandenem und fehlendem State über alle Einstiege:
+  0 Mailbox-Aufrufe, State/Index/Handoff/externe Datei bytegleich, keine neuen Dateien, `handoff_alias_invalid`.
+- Doku korrigiert: Der Draft-Pfad schluckt weiterhin **nicht-Alias**-Fehler, propagiert aber statische
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`; Log-Schema, Effects, Processes,
+  L1/L2, SKILL und Batch-Runner sind synchron. Issue #91 bleibt außerhalb des kooperativen Scope.
+
 - Root-Katalog und Progress sind historische Linkstubs; unveränderte Snapshots
   samt Provenienz stehen unter [docs/archive/feature-ledgers](docs/archive/feature-ledgers/README.md).
   Einziger aktiver Backlog: [GitHub Issues](https://github.com/martinderm/office-intelligence/issues).

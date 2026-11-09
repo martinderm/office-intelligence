@@ -233,7 +233,8 @@ stdin-Manifest); nur ohne Wrapper direkt mit `--input`/`--stdin`, explizitem Acc
 unter derselben gehaltenen/verifizierten Lease. Ein jüngeres `since` wird nicht angewendet und meldet
 `since_ignored`, `since_ignored_reason` und `effective_coverage_start`. Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten
-akzeptiert (kein Fallback 2026-01-01); der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. In
+akzeptiert (kein Fallback 2026-01-01); der Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber
+statische `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial` reserviert); bei `unknown`
 (Schreibfehler) ist `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,

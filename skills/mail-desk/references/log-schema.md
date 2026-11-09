@@ -374,8 +374,9 @@ Tageswechsel. `covered_through` ist der letzte **vollständig** committete Tag. 
 Daten, älterer `since`, Legacy-Marker) wird **vor** Handoff/Index dauerhaft geschrieben; nach dem Append darf
 sie nur über einen zusammenhängend angeforderten Prefix vorrücken, nie über eine Punktabfrage und nie über den
 heutigen Tag. Das Source-Fenster (`window_date`) statt des Header-Datums bestimmt Grenzen/Recovery; fehlende
-oder unparsebare Header verschieben kein Item und brechen einen vollständigen Sync nicht ab (der Draft-Pfad
-schluckt Sync-Ausnahmen wie bisher, Inbound-Semantik unverändert). Ein Crash vor dem finalen State lässt die
+oder unparsebare Header verschieben kein Item und brechen einen vollständigen Sync nicht ab. Der Draft-Pfad
+schluckt weiterhin **nicht-Alias**-Sync-Ausnahmen wie bisher, propagiert aber statische
+`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`; Inbound-Semantik unverändert. Ein Crash vor dem finalen State lässt die
 konservative Schranke stehen (sicherer Re-Read). Ungültig/unlesbar ⇒ `sent_initial_state_invalid` (nichts
 gelesen oder geschrieben, Datei unangetastet). Das alte `sent-sync-initial-start.json` wird nur gelesen und
 non-destruktiv in den State migriert (älterer `initial_start` bleibt erhalten, Schranke wird davor

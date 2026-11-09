@@ -715,7 +715,8 @@ gehaltenen/verifizierten Lease. Ein jüngeres `since` wird nicht angewendet; der
 `since_ignored_reason` und `effective_coverage_start`, älter/gleich wird angewendet. Nur autorisierte
 Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
 Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen
-vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie bisher. Das Source-Fenster statt Header-Datum
+vollständigen Sync ab; der Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber statische
+`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`. Das Source-Fenster statt Header-Datum
 bestimmt Grenzen/Recovery. Nur der
 klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
 Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahme**, sonst fail-closed. Doppelte

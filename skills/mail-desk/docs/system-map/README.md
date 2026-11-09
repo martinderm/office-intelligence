@@ -2387,7 +2387,8 @@ des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfe
 Ledger schreibt. Mehr als 200 neue Items werden in 200er-Batches committet (älteste zuerst); der Rest bleibt
 unindexiert und wird nach Ledger-Konsum erneut gescannt (`truncated`, Recovery-Aufruf, kein ID-Skip/Verlust).
 Items mit `headers_complete: false` werden wie bisher indexiert, sind aber markiert; `cc`/`in_reply_to`/`references` sind
-dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit und schluckt Fehler wie bisher.
+dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Commit, schluckt nicht-Alias-Fehler
+wie bisher und propagiert statische `*_alias_invalid`.
 
 **Review-/Audit-Härtung (Folgecommit):**
 - *Ein Commit je Aufruf:* `sync_sent_items_by_dates` liest alle Tage zuerst und committet einmal (ein Commit je Tag
@@ -2421,8 +2422,8 @@ dort unbekannt. Der Draft-Pfad (`classifier.draft_manifest`) nutzt denselben Com
   State nur autorisierte Reparatur/Quarantäne (valides Schema-JSON, konservativer verifizierter älterer Start),
   kein `since`-Bypass eines malformed State; `since` mit Zeitanteil ist ein Formatfehler. Ungültige Mail-Header werden beim
   optionalen Draft-Sent-Sync nur akzeptiert, wenn sie als echtes ISO-/RFC-2822-Datum parsebar sind (kein
-  Fallback 2026-01-01), und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt Sync-Ausnahmen wie
-  bisher (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine offline nicht verifizierte
+  Fallback 2026-01-01), und brechen keinen vollständigen Sync ab; der Draft-Pfad schluckt nicht-Alias-Fehler wie
+  bisher, propagiert aber statische `*_alias_invalid` (Inbound-Semantik unverändert). Das out-of-bound-Seitenende ist eine offline nicht verifizierte
   Adapter-Annahme; Abweichungen bleiben fail-closed.
 - *Kein Prune-Write:* Konsumierte Items werden nur abgeleitet ignoriert (`consumed_ignored`); die Datei wird nur
   ersetzt, wenn neue Items übergeben werden und nichts Unkonsumiertes pending ist. `handoff_pending` lässt den

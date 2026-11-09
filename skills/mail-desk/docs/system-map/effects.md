@@ -309,7 +309,8 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   reichen `since` durch. Nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Source-Fenster
   statt Header-Datum bestimmt Grenzen/Recovery; ungültige Header werden beim optionalen Draft-Sent-Sync nur als
   echte ISO-Datetime/ISO-Datum/RFC-2822-Daten akzeptiert (kein Fallback-Datum) und brechen keinen vollständigen
-  Sync ab (Draft-Pfad schluckt Sync-Ausnahmen wie bisher); das alte
+  Sync ab. Der Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber statische
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`; das alte
   Marker-File wird non-destruktiv migriert. Seiten werden bis zur kurzen/leeren Seite paginiert; das
   dokumentierte „out of bound“-Ende ist eine offline nicht verifizierte **Annahme** und exakt klassifiziert,
   sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
