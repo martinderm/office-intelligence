@@ -15,6 +15,7 @@ from .sent_handoff import (
     HANDOFF_FILENAME,
     MAX_HANDOFF_ITEMS,
     SentHandoffError,
+    SentHandoffPublishError,
     SentIndexAppendError,
     SentSyncPartialFailure,
     build_handoff_item,
@@ -233,8 +234,9 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
         raise SentHandoffError(
             "handoff_overflow",
             f"{len(extra)} new Sent Items exceed one handoff ({MAX_HANDOFF_ITEMS}); nothing was handed "
-            "off or indexed. Sync a narrower explicit date range (oldest days first) and consume the "
-            "handoff in between.",
+            "off or indexed. Recover via the Python API sync_sent_items(dates=[...]) / "
+            "sync_sent_items_by_dates(..., include_next_day=False), oldest days first, and consume the "
+            "handoff in between; the --sync-sent count/CLI is not a date-range recovery.",
             {
                 "candidate_count": len(extra),
                 "max_items": MAX_HANDOFF_ITEMS,
@@ -261,7 +263,16 @@ def _commit_sent_candidates(dd: Path, candidates: list[dict[str, Any]], *, accou
 
     all_items = [*pending, *new_handoff_items]
     if new_handoff_items:
-        write_handoff(dd, all_items)  # only reached with no pending item; BEFORE the index grows
+        try:
+            write_handoff(dd, all_items)  # only reached with no pending item; BEFORE the index grows
+        except SentHandoffError:
+            raise  # explicit pre-write refusal (bound) keeps its reason code
+        except Exception as error:  # noqa: BLE001 - the atomic replace may already have published
+            raise SentHandoffPublishError(
+                f"Sent handoff write failed and may already have replaced '{HANDOFF_FILENAME}' "
+                f"({type(error).__name__}: {error}); the on-disk handoff state is unverified and a "
+                "rerun validates it and merges idempotently by Message-ID."
+            ) from error
     try:
         append_sent_index_entries([c["entry"] for c in committed], dd)
     except Exception as error:  # noqa: BLE001 - any append failure leaves unverified progress
@@ -481,9 +492,13 @@ def sync_sent_items_by_dates(
     known_mids, known_eids = _known_index_ids(dd) if account and str(account).strip() else (set(), set())
     candidates: list[dict[str, Any]] = []
     for d_str in _expand_sync_dates(dates, include_next_day=include_next_day):
+        # Same transactional rule as sync_sent_items: a failing date discards its
+        # own ID marks so no later window silently skips a mail.
+        attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         date_candidates, _ = _collect_date_candidates(
-            d_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+            d_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids
         )
+        known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
     if not candidates:
         return 0
@@ -600,13 +615,17 @@ def sync_sent_items(
     failures: list[tuple[str, Exception]] = []
     known_mids, known_eids = _known_index_ids(dd)
     for date_str in query_dates:
+        # Transactional per window: a failing date must not leak the IDs it already
+        # marked as known into later windows (that would silently skip those mails).
+        attempt_mids, attempt_eids = set(known_mids), set(known_eids)
         try:
             date_candidates, date_stats = _collect_date_candidates(
-                date_str, folder=folder, account=account, known_mids=known_mids, known_eids=known_eids
+                date_str, folder=folder, account=account, known_mids=attempt_mids, known_eids=attempt_eids
             )
         except Exception as error:
             failures.append((date_str, error))
             continue
+        known_mids, known_eids = attempt_mids, attempt_eids
         candidates.extend(date_candidates)
         envelopes_total += int(date_stats.get("envelopes_examined", 0))
         if date_stats.get("truncated"):

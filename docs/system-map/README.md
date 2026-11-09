@@ -662,9 +662,12 @@ indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff er
 kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
 schemaverletzendes Ledger `ledger_invalid`, ein Manifest mit ungültigem `count` `sync_invalid_count`, eine fehlende
 Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items `handoff_overflow` (vollständig vor jedem
-Write, kein Zurückstellen). `new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state`
-unterscheidet dort wahrheitsgemäß `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen
-Datumsfenster) und `unknown` (Schreibfehler, Plattenstand unverifiziert; dann `new_count: null`). Doppelte
+Write, kein Zurückstellen; Recovery nur über die Python-API `sync_sent_items(dates=[...])`, nicht über
+`--sync-sent N`/`count`, das bei heute endet und ältere Tage überspringt; Datums-CLI bewusst nicht vorhanden).
+`new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state` unterscheidet dort
+wahrheitsgemäß `none` (kein Write), `partial` (bestätigte Teilresultate der erfolgreichen Datumsfenster) und
+`unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer Publikation — Plattenstand
+unverifiziert; dann `new_count: null`). Doppelte
 Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
 meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
 Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die

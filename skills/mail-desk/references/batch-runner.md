@@ -1075,12 +1075,10 @@ Fortschritt nach einem fehlgeschlagenen Schreibversuch nicht kennen kann.
 offen ist (Consumer-Pipeline `pipelines/mail-desk-batch.md`, außerhalb des Bundles). Der Consumer liest über
 `load_pending_handoff` und schreibt über `record_synthesized`.
 
-**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `write_state` trennt drei Fälle
-wahrheitsgemäß: `none` = Ablehnung/Fehler vor jedem Handoff-/Index-Write, `partial` = der Commit-Pfad ist für
-die erfolgreichen Datumsfenster abgeschlossen und die gemeldeten Zähler sind bestätigt (bei
-`sync_partial_failure`), `unknown` = ein Schreibversuch schlug fehl und der Plattenstand ist unverifiziert
-(Handoff ggf. geschrieben, Index ggf. teilweise fortgeschrieben; ein Wiederholungslauf merged idempotent per
-Message-ID).
+**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
+jedem Handoff-/Index-Write; `partial` = Commit-Pfad für die erfolgreichen Datumsfenster abgeschlossen, Zähler
+bestätigt (bei `sync_partial_failure`); `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert
+(Handoff ggf. geschrieben, Index ggf. teilweise; Wiederholung idempotent).
 
 | `reason_code` | Ursache |
 |---|---|
@@ -1091,12 +1089,14 @@ Message-ID).
 | `ledger_invalid` | Ledger-Zeile verletzt das Schema |
 | `handoff_overflow` | mehr als 200 neue Items; der ganze Lauf wird vor jedem Write verweigert |
 | `sync_partial_failure` | Datumsfenster scheiterten; erfolgreiche sind übergeben und indexiert, `failed_dates` |
-| `sync_failed` | sonstiger Lese-/Transport-/Konfigurationsfehler vor dem Commit (`write_state: none`) oder Append-Fehler nach dem Handoff (`write_state: unknown`, `new_count: null`, `new_items_unavailable: true`); ein geschriebener Handoff bleibt, Wiederholung ist idempotent |
+| `sync_failed` | Lese-/Transport-/Konfigurationsfehler vor dem Commit (`write_state: none`) oder Schreibfehler nach möglicher Publikation (Handoff-Replace/Append; `unknown`, `new_count: null`, `new_items_unavailable: true`); Wiederholung idempotent |
 
-Es gibt kein Zurückstellen eines Überhangs: über 200 neue Items wird der Lauf vollständig verweigert
-(`handoff_overflow`), damit kein Überhang aus einem späteren Fenster fallen kann. Wiederanlauf mit engerem
-expliziten Datumsbereich (älteste Tage zuerst), dazwischen konsumieren; ein Überhang am selben Tag ist eine
-dokumentierte Betriebsgrenze (nicht per Datumsbereich teilbar). `sync_sent_items_by_dates` committet alle Tage einmal.
+Kein Zurückstellen: mehr als 200 neue Items ⇒ `handoff_overflow` vor jedem Write. **Recovery nur über die
+Python-API** `sync_sent_items(dates=[...])`/`sync_sent_items_by_dates(..., include_next_day=False)` (älteste
+Tage zuerst, dazwischen konsumieren). `--sync-sent N`/`count` ist **keine** Recovery: das Wasserzeichen-Fenster
+endet bei heute, überspringt ältere Tage, eine Datums-CLI gibt es bewusst nicht. Same-day > 200 ist nicht per
+Datumsbereich teilbar. Nach der Verweigerung wurde nichts geschrieben; ein reiner Default-/CLI-Lauf holt die
+alten Tage nicht nach, sie bleiben außerhalb von Index und Handoff. `sync_sent_items_by_dates` committet alle Tage einmal.
 
 ---
 

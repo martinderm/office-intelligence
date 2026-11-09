@@ -246,7 +246,8 @@ Pflicht sind `schema_version` (= 1), `message_id` (**bereits normalisiert**: ohn
 (String oder `null`); weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary`
 verbietet es. Doppelte `message_id` sind zulässig (die erste gültige Zeile gilt und ist für **alle** Indizes
 maßgeblich: eine spätere Dublette mit anderem `thread_key`/`vorgang_ref` führt weder einen Thread-Anker noch
-eine Vorgangs-Zuordnung ein).
+eine Vorgangs-Zuordnung ein). **Verschiedene** Message-IDs desselben Threads dürfen den Thread-Index auf eine
+Zeile mit vorhandenem `vorgang_ref` verfeinern (erste Zeile je Message-ID bleibt unangetastet).
 
 - **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
   im Ledger steht. Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht umgeschrieben
@@ -297,16 +298,21 @@ werden nur ignoriert (`consumed_ignored`). `handoff_pending` lässt die Datei by
 
 **Überhang über 200:** Der Lauf wird vollständig verweigert (`handoff_overflow`) **vor jedem Write**: nichts
 wird übergeben, zurückgestellt oder indexiert. Details: `candidate_count`, `max_items`,
-`candidates_per_day` (nicht parsebare Daten als `unparsed`). Wiederholung mit engerem expliziten Datumsbereich
-(älteste Tage zuerst), dazwischen konsumieren. Ein Überhang am selben Tag ist nicht per Datumsbereich teilbar
-und damit eine dokumentierte Betriebsgrenze; es wird keine Erreichbarkeit späterer Fenster gemutmaßt.
+`candidates_per_day` (nicht parsebare Daten als `unparsed`). **Recovery ausschließlich über die Python-API**
+`core.sent_indexer.sync_sent_items(dates=[...])` / `sync_sent_items_by_dates(..., include_next_day=False)`:
+älteste Tage zuerst, dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery (Wasserzeichen-Fenster
+endet bei heute, überspringt ältere Tage; keine Datums-CLI). Ein Überhang am selben Tag ist nicht per
+Datumsbereich teilbar (harte Betriebsgrenze). Nach der Verweigerung wurde nichts geschrieben; ein reiner
+Default-/CLI-Wiederanlauf holt die alten Tage nicht nach, die Items bleiben dann außerhalb von Index und Handoff
+(keine stille Lücke durch Writes, aber der Betreiber muss die Python-API nutzen).
 
 **Fehlerzustände:** `handoff.state` ist in Erfolgs- und Fehler-Envelopes `none` (nichts offen), `written`,
 `pending` oder `invalid` (Handoff oder Ledger nicht interpretierbar); die Ursache steht in `reason_code`.
 `write_state` trennt in Fehler-Envelopes `none` (Ablehnung/Fehler vor jedem Write), `partial` (bestätigte
-Teilresultate der erfolgreichen Datumsfenster, Zähler exakt) und `unknown` (ein Schreibversuch schlug fehl,
-Plattenstand unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, ein Wiederholungslauf
-merged idempotent per Message-ID). Fehler bedeuten also nie pauschal „null Writes“.
+Teilresultate der erfolgreichen Datumsfenster, Zähler exakt) und `unknown` (ein Schreibversuch schlug fehl —
+auch ein Handoff-Write nach möglicher atomarer Publikation, z. B. Verzeichnis-`fsync`/`close` — Plattenstand
+unverifiziert; dann `new_count: null` und `new_items_unavailable: true`, ein Wiederholungslauf merged idempotent
+per Message-ID). Fehler bedeuten also nie pauschal „null Writes“.
 
 ## Closing an item
 

@@ -12,6 +12,7 @@ from ..sent_handoff import (
     HANDOFF_STATES,
     MAX_HANDOFF_ITEMS,
     SentHandoffError,
+    SentHandoffPublishError,
     SentIndexAppendError,
     SentSyncPartialFailure,
     peek_handoff_state,
@@ -207,6 +208,21 @@ def run_sync_sent_mode(
             failed_dates=list(error.failed_dates),
         )
         return partial
+    except SentHandoffPublishError as error:
+        # The atomic replace may already have published the new handoff before a
+        # later step failed: *always* report unverified progress, never "no writes".
+        return failure_envelope(
+            dd,
+            folder,
+            str(error)[:1000],
+            "sync_failed",
+            write_state="unknown",
+            details={
+                "error_type": type(error.__cause__).__name__ if error.__cause__ else type(error).__name__,
+                "handoff_publish_failed": True,
+            },
+            new_count=None,
+        )
     except SentIndexAppendError as error:
         # The handoff is durable, but the index may be empty, partially written or
         # complete: report unverified progress instead of claiming zero entries.
@@ -223,8 +239,8 @@ def run_sync_sent_mode(
             new_count=None,
         )
     except Exception as error:  # noqa: BLE001 - every failed sync stays a failed, shaped envelope
-        # Everything else failed before the commit path wrote anything (the append is
-        # the only write after the handoff and is reported as ``unknown`` above).
+        # Everything else failed before the commit path wrote anything (handoff
+        # publication and index append are reported as ``unknown`` above).
         return failure_envelope(
             dd,
             folder,

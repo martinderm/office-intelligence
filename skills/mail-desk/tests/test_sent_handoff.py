@@ -25,6 +25,7 @@ from core.sent_handoff import (  # noqa: E402
     HANDOFF_FILENAME,
     LEDGER_FILENAME,
     SentHandoffError,
+    SentHandoffPublishError,
     SentSyncPartialFailure,
 )
 
@@ -69,7 +70,10 @@ class _Mailbox:
         ])
 
     def read(self, eid, *args, **kwargs):
-        return {k: v for k, v in self.details[str(eid)].items() if k != "_day"}
+        detail = self.details[str(eid)]
+        if detail.get("_raise"):
+            raise RuntimeError(str(detail["_raise"]))
+        return {k: v for k, v in detail.items() if not k.startswith("_")}
 
     def patches(self):
         return (
@@ -207,8 +211,9 @@ class IdempotenceAndCrashWindowTests(_Base):
     def test_handoff_write_failure_leaves_index_untouched(self) -> None:
         mailbox = _Mailbox(_details(1))
         with patch.object(sent_indexer, "write_handoff", side_effect=OSError("no space")):
-            with self.assertRaises(OSError):
+            with self.assertRaises(SentHandoffPublishError) as caught:
                 self.sync(mailbox)
+        self.assertIsInstance(caught.exception.__cause__, OSError)
         self.assertEqual([], self.index_ids())
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
         self.assertEqual(1, self.sync(mailbox)["new_count"])
@@ -412,6 +417,37 @@ class LedgerAndThreadTests(_Base):
         recorded = sent_handoff.load_ledger(self.dd)["by_message_id"]["c@example.test"]
         self.assertEqual(("primary", None), (recorded["role"], recorded["vorgang_ref"]))
 
+    def test_thread_index_keeps_a_later_vorgang_of_the_same_thread(self) -> None:
+        def line(message_id: str, thread: str, ref: str | None) -> str:
+            return json.dumps(_ledger_line(
+                message_id=message_id, thread_key=thread, vorgang_ref=ref,
+            ))
+
+        (self.dd / LEDGER_FILENAME).write_text(
+            line("a@example.test", "root@example.test", None)
+            + "\n"
+            + line("b@example.test", "root@example.test", "V-7")
+            + "\n",
+            encoding="utf-8",
+        )
+        ledger = sent_handoff.load_ledger(self.dd)
+        follow_up = {
+            "norm_message_id": "c@example.test",
+            "in_reply_to": "",
+            "references": [],
+            "thread_key": "root@example.test",
+            "anchor_candidates": [],
+        }
+        anchor = sent_handoff.resolve_thread_anchor(follow_up, ledger)
+        self.assertEqual(("V-7", "b@example.test", "thread_key"), (
+            anchor["vorgang_ref"], anchor["matched_message_id"], anchor["match_type"],
+        ))
+        sent_handoff.record_synthesized(self.dd, [follow_up])
+        record = sent_handoff.load_ledger(self.dd)["by_message_id"]["c@example.test"]
+        self.assertEqual(("follow_up", "V-7", "b@example.test"), (
+            record["role"], record["vorgang_ref"], record["anchored_to"],
+        ))
+
     def test_record_synthesized_is_idempotent_and_repairs_torn_ledger(self) -> None:
         item = {"message_id": "<x@example.test>"}
         self.assertEqual(1, sent_handoff.record_synthesized(self.dd, [item, item]))
@@ -447,6 +483,26 @@ class MultiDateAndOverflowTests(_Base):
         self.assertEqual((2, 0), (added, again))
         self.assertEqual(["m1@example.test", "m2@example.test"], self.handoff_ids())
         self.assertEqual(["m1@example.test", "m2@example.test"], self.index_ids())
+
+    def test_failing_date_does_not_leak_known_ids_into_later_windows(self) -> None:
+        # DAY: A reads fine, B's detail read fails. The next window serves A again
+        # (different envelope, same Message-ID): it must not be skipped because the
+        # failed window already marked A as known.
+        mailbox = _Mailbox(_details(1), _details(2))
+        mailbox.details["102"]["_raise"] = "detail read failed"
+        mailbox.details["201"] = _details(
+            9, _day="2026-09-25", message_id="m1@example.test", raw_message_id="<m1@example.test>",
+        )
+        run, read = mailbox.patches()
+        with run, read, self.assertRaises(SentSyncPartialFailure) as caught:
+            sent_indexer.sync_sent_items(dates=[DAY], account="ACC", data_dir=self.dd)
+
+        self.assertEqual([DAY], caught.exception.failed_dates)
+        result = caught.exception.result
+        self.assertEqual(1, result["new_count"])
+        self.assertEqual(["m1@example.test"], [i["norm_message_id"] for i in result["new_items"]])
+        self.assertEqual(["m1@example.test"], self.handoff_ids())
+        self.assertEqual(["m1@example.test"], self.index_ids())
 
     def test_sync_by_dates_failing_day_writes_nothing(self) -> None:
         mailbox = _Mailbox(_details(1))
@@ -563,6 +619,11 @@ class HandoffValidationTests(_Base):
         "mailbox_blank": lambda d: d["items"][0].__setitem__("mailbox", " "),
         "missing_field": lambda d: d["items"][0].pop("cc"),
         "headers_flag": lambda d: d["items"][0].__setitem__("headers_complete", "yes"),
+        "truncated_field_objects": lambda d: d["items"][0].__setitem__("truncated_fields", [{}]),
+        "truncated_field_types": lambda d: d["items"][0].__setitem__("truncated_fields", ["subject", 1]),
+        "anchored_to_match_type_type": lambda d: d["items"][0].__setitem__(
+            "anchored_to", {"vorgang_ref": "V-1", "matched_message_id": "m@example.test", "match_type": []}
+        ),
         "duplicate": lambda d: (d["items"].append(dict(d["items"][0])), d.__setitem__("count", 2)),
         "generated_at": lambda d: d.__setitem__("generated_at", "yesterday"),
     }
@@ -685,6 +746,8 @@ class LedgerValidationTests(_Base):
     BAD = {
         "unknown_field": _ledger_line(extra=1),
         "invalid_role": _ledger_line(role="other"),
+        "role_list": _ledger_line(role=[]),
+        "role_object": _ledger_line(role={"name": "primary"}),
         "not_normalized": _ledger_line(message_id="<X@example.test>"),
         "follow_up_without_anchor": _ledger_line(role="follow_up"),
         "primary_with_anchor": _ledger_line(anchored_to="a@example.test"),
@@ -968,6 +1031,26 @@ class ModeEnvelopeTests(_Base):
         ))
         self.assertFalse((self.dd / HANDOFF_FILENAME).exists())
         self.assertEqual([], self.index_ids())
+
+    def test_publish_failure_after_replace_reports_unknown_and_rerun_is_idempotent(self) -> None:
+        mailbox = _Mailbox(_details(1))
+        # The handoff file is already atomically replaced when the directory sync
+        # fails; the envelope must not claim that nothing was written.
+        with patch.object(sent_handoff, "_fsync_directory", side_effect=OSError("close failed")):
+            failed = self.run_mode(mailbox)
+
+        self.assert_failed_shape(failed, "sync_failed", "pending", write_state="unknown", new_count=None)
+        self.assertEqual("OSError", failed["handoff"]["error_type"])
+        self.assertIs(True, failed["handoff"]["handoff_publish_failed"])
+        self.assertEqual(1, failed["handoff"]["pending_count"])
+        self.assertEqual(["m1@example.test"], self.handoff_ids())
+        self.assertEqual([], self.index_ids())
+
+        rerun = self.run_mode(mailbox)
+        self.assertTrue(rerun["ok"])
+        self.assertEqual(1, rerun["new_count"])
+        self.assertEqual(0, rerun["handoff"]["written_count"])
+        self.assertEqual(["m1@example.test"], self.index_ids())
 
     def test_append_failure_reports_unknown_progress_and_rerun_is_idempotent(self) -> None:
         mailbox = _Mailbox(_details(1))

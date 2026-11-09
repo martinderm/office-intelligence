@@ -40,6 +40,8 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 - Überhang über 200 wird nicht mehr zurückgestellt: der Lauf wird vor jedem Write vollständig als
   `handoff_overflow` verweigert (keine Erreichbarkeits-Annahme; unparsebare Daten als `unparsed`).
+  Recovery nur über die Python-API `sync_sent_items(dates=[...])` (älteste Tage zuerst), nicht über
+  `--sync-sent N`/`count` (Wasserzeichen endet bei heute, überspringt ältere Tage; keine Datums-CLI).
 - Fehler-/Legacy-Envelope vollständig: `reason_code`, `handoff` (inkl. `written_count`/`pending_count`/
   `deferred_count`/`file`) und `write_state` auch bei Bindungs- und Legacy-Fällen; `sync_invalid_count` für
   ungültige Manifest-`count`-Werte.
@@ -47,8 +49,15 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   1000 Betreffzeichen); ein dateieigenes höheres `max_items` erweitert nichts.
 - Ledger-Dubletten: die erste gültige Zeile je `message_id` gilt für alle Indizes und führt keinen
   widersprüchlichen Thread-Anker ein.
-- Fehlervertrag trennt `write_state` `none`/`partial`/`unknown`; ein fehlgeschlagener Append meldet
-  `new_count: null` statt fälschlich null Writes, der Wiederanlauf bleibt idempotent.
+- Fehlervertrag trennt `write_state` `none`/`partial`/`unknown`; ein fehlgeschlagener Handoff-Write nach
+  möglicher Publikation oder Append meldet `new_count: null` statt fälschlich null Writes, der Wiederanlauf
+  bleibt idempotent.
+- Datumsfenster arbeiten transaktional auf ID-Kopien; ein Lesefehler verwirft Kandidaten und ID-Marken, sodass
+  eine später erneut gelistete Mail nicht still übersprungen wird.
+- Untrusted Ledger-/Handoff-Typen (`role`, `truncated_fields`, `match_type`) werden vor Mengenoperationen
+  validiert und fail-closed (`ledger_invalid`/`handoff_invalid`) statt `TypeError`.
+- Thread-Index verfeinert den Vorgang innerhalb eines Threads über verschiedene Message-IDs, ohne die
+  Dubletten-Regel (erste Zeile je Message-ID) zu verletzen.
 - L1/L2-Maps, Vertrag, Log-Schema, CLI-Referenz und SKILL synchron aktualisiert.
 
 ### 2026-10-18 — Historische FR-Ledger eingefroren

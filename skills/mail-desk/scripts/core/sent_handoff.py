@@ -105,6 +105,16 @@ class SentIndexAppendError(RuntimeError):
     """
 
 
+class SentHandoffPublishError(RuntimeError):
+    """The handoff write failed and may already have replaced the handoff file.
+
+    The atomic replace can publish the new document before a later step fails
+    (e.g. a directory fsync/close error).  The caller must report unverified
+    progress instead of claiming that nothing was written; a rerun validates the
+    published handoff and merges idempotently by Message-ID.
+    """
+
+
 def norm_id(value: Any) -> str:
     """Normalized Message-ID (no brackets, lower case); empty for blank input."""
     return normalize_message_id(str(value or ""))
@@ -305,7 +315,13 @@ def _fsync_directory(directory: Path) -> None:
     except OSError:
         pass
     finally:
-        os.close(descriptor)
+        # A close failure after a successful atomic replace must not surface as a
+        # failed handoff: publication already happened and the caller reports
+        # unverified progress. Best-effort closes keep this helper optional.
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
 
 
 # ------------------------------------------------------------------ ledger
@@ -333,7 +349,7 @@ def _ledger_problem(record: dict[str, Any]) -> str | None:
     message_id = record["message_id"]
     if not isinstance(message_id, str) or not message_id or message_id != norm_id(message_id):
         return "message_id_not_normalized"
-    if record["role"] not in _LEDGER_ROLES:
+    if not isinstance(record["role"], str) or record["role"] not in _LEDGER_ROLES:
         return "invalid_role"
     if not _iso_timestamp_ok(record["recorded_at"]):
         return "invalid_recorded_at"
@@ -411,7 +427,12 @@ def _index_ledger_record(
     by_message_id[message_id] = record
     key = norm_id(record.get("thread_key"))
     if key:
-        by_thread_key.setdefault(key, record)
+        existing = by_thread_key.get(key)
+        # Different messages of one thread may refine the anchor: prefer the first
+        # record that carries a Vorgang reference. A duplicate of the *same*
+        # Message-ID never reaches this point (first line wins above).
+        if existing is None or (not existing.get("vorgang_ref") and record.get("vorgang_ref")):
+            by_thread_key[key] = record
 
 
 def resolve_thread_anchor(item: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any] | None:
@@ -508,7 +529,7 @@ def _anchored_to_problem(value: Any) -> str | None:
         return "anchored_to_malformed"
     if not isinstance(value["matched_message_id"], str) or not value["matched_message_id"]:
         return "anchored_to_malformed"
-    if value["match_type"] not in _MATCH_TYPES:
+    if not isinstance(value["match_type"], str) or value["match_type"] not in _MATCH_TYPES:
         return "anchored_to_malformed"
     return None
 
@@ -538,7 +559,11 @@ def _item_problem(item: dict[str, Any]) -> str | None:
     if item["anchor_candidates"] != thread_anchor_ids(item["in_reply_to"], item["references"], item["message_id"]):
         return "anchor_candidates_mismatch"
     truncated = item.get("truncated_fields", [])
-    if not isinstance(truncated, list) or not set(truncated) <= _TRUNCATABLE:
+    if (
+        not isinstance(truncated, list)
+        or not all(isinstance(field, str) for field in truncated)
+        or not set(truncated) <= _TRUNCATABLE
+    ):
         return "truncated_fields_malformed"
     # Documented field bounds are enforced on read as well: a handoff written by
     # any other producer must never smuggle oversized fields into the consumer.

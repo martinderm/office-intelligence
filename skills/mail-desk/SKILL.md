@@ -185,7 +185,9 @@ Ein unkonsumiertes Handoff wird nie überschrieben: weitere neue Items scheitern
 übernommen hat; ein inkonsistenter oder übergroßer Handoff oder ein schemaverletzendes Ledger ergibt
 `handoff_invalid`/`ledger_invalid`, ein Manifest mit ungültigem `count` oder fehlender Bindung
 `sync_invalid_count`/`backend_binding`. Mehr als 200 neue Items werden vollständig vor jedem Write verweigert
-(`handoff_overflow`, kein Zurückstellen); Wiederanlauf mit engerem expliziten Datumsbereich. In
+(`handoff_overflow`, kein Zurückstellen); Recovery nur über die Python-API
+`sync_sent_items(dates=[...])` (älteste Tage zuerst), nicht über `--sync-sent N`/`count`, das bei heute endet
+und ältere Tage überspringt. In
 Fehler-Envelopes unterscheidet `write_state` `none`/`partial`/`unknown`; bei `unknown` (Schreibfehler) ist
 `new_count: null`, weil der Plattenstand unverifiziert ist. Der Consumer liest ausschließlich über
 `core.sent_handoff.load_pending_handoff` (validiert, frisch gegen das aktuelle Ledger verankert,
