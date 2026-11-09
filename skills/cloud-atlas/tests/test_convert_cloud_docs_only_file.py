@@ -12,10 +12,12 @@ import json
 import multiprocessing
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -39,13 +41,25 @@ def sha256_bytes(data):
 
 
 def snapshot(root):
-    """Map every workspace file to its content hash (symlinks are not followed)."""
+    """Map every workspace file (hash) and directory (marker) before/after a run.
+
+    Links are not followed; an empty leftover directory is a difference too.
+    """
     result = {}
-    for directory, _dirs, files in os.walk(root):
+    for directory, dirs, files in os.walk(root):
+        for name in dirs:
+            result["dir:" + (Path(directory) / name).relative_to(root).as_posix()] = "dir"
         for name in files:
             path = Path(directory) / name
             result[path.relative_to(root).as_posix()] = sha256_bytes(path.read_bytes())
     return result
+
+
+def write_minimal_docx(path, text):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        archive.writestr("_rels/.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        archive.writestr("word/document.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>')
 
 
 def foreign_entry_text(index, newline="\n"):
@@ -192,6 +206,18 @@ class OnlyFileTestCase(unittest.TestCase):
                 digest.update(b"\x00")
         return digest.hexdigest(), len(filemap.members)
 
+    def without_member(self, text, key):
+        """Remove one inserted member (and its separator): the rest must equal the original bytes."""
+        filemap = filemap_merge.parse_filemap(text)
+        members = filemap.members
+        index = next(i for i, member in enumerate(members) if member.key == key)
+        member = members[index]
+        if index + 1 < len(members):
+            return text[:member.key_start] + text[members[index + 1].key_start:]
+        if index > 0:
+            return text[:members[index - 1].value_end] + text[member.value_end:]
+        return text[:filemap.files_open + 1] + text[filemap.files_close:]
+
     def assert_failed_without_changes(self, before, exit_code, stdout):
         self.assertNotEqual(0, exit_code)
         self.assertEqual(before, snapshot(self.root))
@@ -229,6 +255,9 @@ class SingleEntryMergeTests(OnlyFileTestCase):
         after_hash, after_count = self.foreign_hash(after)
         self.assertEqual(before_hash, after_hash)
         self.assertEqual(before_count + 1, after_count)
+        # Separators and whitespace between members are untouched too: removing
+        # the one inserted member must give back the original document exactly.
+        self.assertEqual(before, self.without_member(after, SOURCE))
         after_map = filemap_merge.parse_filemap(after)
         # Container header and tail (including updated_at) are untouched bytes.
         self.assertEqual(before[:before_map.files_open + 1], after[:after_map.files_open + 1])
@@ -360,6 +389,8 @@ class ForeignFormattingTests(OnlyFileTestCase):
         after = self.read_text()
         self.assertEqual(before_hash[0], self.foreign_hash(after)[0])
         self.assertIn(SOURCE, json.loads(after)["files"])
+        if before_hash[1] > 0:
+            self.assertEqual(text, self.without_member(after, SOURCE))
         if expect_in_text:
             self.assertIn(expect_in_text, after)
         return after
@@ -565,6 +596,22 @@ class FailClosedFilemapTests(OnlyFileTestCase):
         self.reject(good.replace('"schema_version": 1', '"schema_version": NaN'))
         self.reject(good + "{}")
 
+    def test_container_contract_is_complete(self):
+        good = build_filemap_text(5)
+        self.reject(good.replace('"storage_id": "default"', '"storage_id": "bad id"'))
+        self.reject(good.replace('"exclude_dirs": [],', '"exclude_dirs": ["../escape"],'))
+        self.reject(good.replace('"exclude_dirs": [],', '"exclude_dirs": ["a:b"],'))
+        self.reject(good.replace('"exclude_dirs": [],', '"exclude_dirs": ["sub", "sub/deep"],'))
+        self.reject(good.replace('"exclude_dirs": [],', '"exclude_dirs": "sub",'))
+        # The container must belong to the resolved target.
+        self.reject(good.replace('"scope": "topic"', '"scope": "project"'))
+        self.reject(good.replace('"project": "demo"', '"project": "other"'))
+        self.reject(good.replace('"storage_id": "default"', '"storage_id": "second"'))
+        # Dropping $schema must not turn a modern container into a legacy one.
+        self.reject(good.replace(f'  "$schema": "{filemap_merge.FILEMAP_SCHEMA_URI}",\n', ""))
+        self.reject(json.dumps({"project": "demo", "files": {}, "kind": "cloud-filemap"}))
+        self.reject(json.dumps({"project": "demo", "files": {}, "surprise": 1}))
+
     def test_entry_schema_violations(self):
         good = build_filemap_text(5)
         self.reject(good.replace(f'"sha256": "{2:064x}"', '"sha256": "zz"'))
@@ -733,7 +780,7 @@ class RollbackTests(OnlyFileTestCase):
         with mock.patch.object(MODULE, "verify_splice", side_effect=filemap_merge.FilemapError("splice broke")):
             exit_code, stdout, _ = self.only_file()
         result = self.assert_failed_without_changes(self.before, exit_code, stdout)
-        self.assertEqual("filemap", result["error"]["phase"])
+        self.assertEqual("filemap", result["error"]["phase"], result["error"]["message"])
 
     def test_mirror_write_failure_rolls_back_derivative(self):
         with mock.patch.object(MODULE, "write_markdown_file", side_effect=OSError("disk full")):
@@ -826,8 +873,370 @@ class RollbackTests(OnlyFileTestCase):
         self.assertTrue(entry["ocr_applied"])
 
 
+def make_directory_link(link, target):
+    """Symlink, or a Windows junction when symlinks are not permitted."""
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        pass
+    if os.name == "nt":
+        completed = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True)
+        return completed.returncode == 0
+    return False
+
+
+def tree_worker(connection, stage_path, heartbeat_path, ready_path):
+    """A worker with a live converter child that both hold files open."""
+    Path(stage_path).parent.mkdir(parents=True, exist_ok=True)
+    stage = open(stage_path, "wb")
+    code = (
+        "import sys, time\ndeadline = time.time() + 90\nwhile time.time() < deadline:\n"
+        "    open(sys.argv[1], 'w').write(str(time.time()))\n    time.sleep(0.1)\n"
+    )
+    subprocess.Popen([sys.executable, "-c", code, heartbeat_path])
+    Path(ready_path).write_text("ready")
+    time.sleep(120)
+    stage.close()
+    connection.close()
+
+
+class HangingTreeProcess:
+    """Worker that has started an external converter child, then never finishes."""
+
+    stage_path = heartbeat_path = ready_path = None
+
+    def __init__(self, target=None, args=(), kwargs=None):
+        self._process = multiprocessing.get_context("spawn").Process(
+            target=tree_worker, args=(args[1], self.stage_path, self.heartbeat_path, self.ready_path),
+        )
+
+    def start(self):
+        self._process.start()
+        deadline = time.time() + 60
+        while not Path(self.ready_path).exists():
+            if time.time() > deadline:
+                raise TimeoutError("tree worker did not become ready")
+            time.sleep(0.1)
+
+    def __getattr__(self, name):
+        return getattr(self._process, name)
+
+
+class CommitPointTests(OnlyFileTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write_filemap()
+        self.before = snapshot(self.root)
+
+    def assert_committed(self):
+        entry = json.loads(self.read_text())["files"][SOURCE]
+        self.assertEqual(MIRROR, entry["markdown_mirror"])
+        self.assertTrue((self.root / MIRROR).is_file())
+        self.assertTrue((self.root / DERIVATIVE).is_file())
+
+    def test_output_failure_after_the_filemap_replace_keeps_the_committed_state(self):
+        real_print = print
+
+        def failing_print(*values, **keywords):
+            if values and str(values[0]).lstrip().startswith(("Saved filemap", "Zusammenfassung")):
+                raise OSError("stream closed")
+            return real_print(*values, **keywords)
+
+        with mock.patch("builtins.print", failing_print):
+            exit_code, stdout, stderr = self.only_file()
+
+        self.assertEqual(0, exit_code, stderr)
+        only = self.envelope(stdout)["data"]["only_file"]
+        self.assertEqual("created", only["action"])
+        self.assertFalse(only["rolled_back"])
+        self.assert_committed()
+
+    def test_late_failure_after_the_filemap_replace_never_rolls_artifacts_back(self):
+        with mock.patch.object(MODULE.ArtifactTransaction, "commit", side_effect=RuntimeError("late failure")):
+            exit_code, stdout, _stderr = self.only_file()
+
+        self.assertNotEqual(0, exit_code)
+        only = self.envelope(stdout)["data"]["only_file"]
+        self.assertFalse(only["rolled_back"])
+        self.assertTrue(only["entry_changed"])
+        self.assert_committed()
+
+
+class RollbackSafetyTests(OnlyFileTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write_filemap()
+        self.before = snapshot(self.root)
+
+    def test_rollback_keeps_files_other_processes_created_meanwhile(self):
+        def scheduler(tasks, **_kwargs):
+            derivative = Path(tasks[0]["derivative_abs"])
+            derivative.parent.mkdir(parents=True, exist_ok=True)
+            derivative.write_bytes(b"HALF")
+            (derivative.parent / "foreign_sync.docx").write_bytes(b"theirs")
+            (self.output / "foreign_concurrent.md").write_text("theirs", encoding="utf-8")
+            (self.output / "foreign_dir").mkdir()
+            (self.output / "foreign_dir" / "inner.md").write_text("inner", encoding="utf-8")
+            return {SOURCE: {"success": False, "conversion_required": True, "error": "boom"}}
+
+        exit_code, stdout, _ = self.only_file(patches=[mock.patch.object(MODULE, "run_conversion_tasks", scheduler)])
+
+        self.assertNotEqual(0, exit_code)
+        self.assertFalse((self.root / DERIVATIVE).exists())
+        self.assertEqual(b"theirs", (self.output / "_derivatives" / "foreign_sync.docx").read_bytes())
+        self.assertEqual("theirs", (self.output / "foreign_concurrent.md").read_text(encoding="utf-8"))
+        self.assertEqual("inner", (self.output / "foreign_dir" / "inner.md").read_text(encoding="utf-8"))
+        self.assertFalse(self.envelope(stdout)["data"]["only_file"].get("rollback_errors"))
+
+    def test_rollback_uses_unpredictable_temp_names_and_spares_a_fixed_name_sentinel(self):
+        self.assertEqual(0, self.only_file()[0])
+        sentinel = self.output / ".g_neu.md.rollback.tmp"
+        sentinel.write_text("not ours", encoding="utf-8")
+        self.source_path.write_bytes(b"\xd0\xcf\x11\xe0" + b"SECOND")
+        committed = snapshot(self.root)
+
+        exit_code, _stdout, _ = self.only_file(SOURCE, "--force", patches=[RollbackTests.failing_filemap_replace()])
+
+        self.assertNotEqual(0, exit_code)
+        self.assertEqual("not ours", sentinel.read_text(encoding="utf-8"))
+        self.assertEqual(committed, snapshot(self.root))
+
+    def test_failed_restore_keeps_the_backup_and_reports_the_recovery_directory(self):
+        self.assertEqual(0, self.only_file()[0])
+        old_mirror = (self.root / MIRROR).read_bytes()
+        self.source_path.write_bytes(b"\xd0\xcf\x11\xe0" + b"SECOND")
+        real_replace = os.replace
+
+        def replace(source, destination, *args, **keywords):
+            name = Path(str(destination)).name
+            if name == "filemap.json":
+                raise OSError("simulated replace failure")
+            if name == "g_neu.md" and Path(str(source)).name.startswith(".g_neu.md.rollback."):
+                raise OSError("simulated restore failure")
+            return real_replace(source, destination, *args, **keywords)
+
+        exit_code, stdout, _ = self.only_file(SOURCE, "--force", patches=[mock.patch("os.replace", replace)])
+
+        result = self.envelope(stdout)
+        self.assertNotEqual(0, exit_code)
+        self.assertEqual("rollback", result["error"]["phase"])
+        recovery = Path(result["data"]["only_file"]["recovery_dir"])
+        self.addCleanup(shutil.rmtree, recovery, True)
+        self.assertTrue(recovery.is_dir())
+        self.assertIn(old_mirror, [path.read_bytes() for path in recovery.iterdir()])
+        self.assertTrue(result["data"]["only_file"]["rollback_errors"])
+
+    def test_timeout_kills_the_converter_process_tree(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            HangingTreeProcess.stage_path = str(self.output / "_derivatives" / ".ocr-stage-tree.pdf")
+            HangingTreeProcess.heartbeat_path = str(Path(scratch) / "heartbeat")
+            HangingTreeProcess.ready_path = str(Path(scratch) / "ready")
+
+            exit_code, stdout, _ = self.only_file(
+                SOURCE, "--file-timeout", "1",
+                patches=[mock.patch.object(MODULE.multiprocessing, "Process", HangingTreeProcess)],
+            )
+
+            result = self.assert_failed_without_changes(self.before, exit_code, stdout)
+            self.assertEqual("ConversionRequired", result["state"])
+            self.assertFalse(result["data"]["only_file"].get("rollback_errors"))
+            heartbeat = Path(HangingTreeProcess.heartbeat_path)
+            time.sleep(1.0)
+            first = heartbeat.stat().st_mtime_ns
+            time.sleep(0.8)
+            self.assertEqual(first, heartbeat.stat().st_mtime_ns, "the converter child kept running after the timeout")
+
+    def test_early_ocr_exit_removes_its_staging_file(self):
+        with tempfile.TemporaryDirectory() as directory, \
+             mock.patch.dict(os.environ, {}, clear=False), \
+             mock.patch.object(MODULE.shutil, "which", return_value=None):
+            os.environ.pop("CLOUD_ATLAS_OCR_MOCK", None)
+            source = Path(directory) / "in.pdf"
+            shutil.copyfile(FIXTURE_PDF, source)
+            target_directory = Path(directory) / "out"
+            ok, _message = MODULE.run_ocr_on_pdf(str(source), dest_abs=str(target_directory / "o.pdf"))
+            self.assertFalse(ok)
+            self.assertEqual([], list(target_directory.iterdir()))
+
+
+class IdempotenceAndOwnershipTests(OnlyFileTestCase):
+    def setUp(self):
+        super().setUp()
+        self.write_filemap()
+
+    def test_custom_derivative_path_is_kept_and_the_second_run_is_a_no_op(self):
+        self.assertEqual(0, self.only_file()[0])
+        custom = "memory/cloud/topics/demo/_legacy/g_neu.docx"
+        (self.output / "_legacy").mkdir()
+        shutil.move(str(self.root / DERIVATIVE), str(self.root / custom))
+        (self.output / "_derivatives").rmdir()
+        self.write_filemap(self.read_text().replace(DERIVATIVE, custom))
+        before = snapshot(self.root)
+
+        exit_code, stdout, stderr = self.only_file()
+
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("unchanged", self.envelope(stdout)["data"]["only_file"]["action"])
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_up_to_date_doc_does_not_need_a_converter(self):
+        self.assertEqual(0, self.only_file()[0])
+        before = snapshot(self.root)
+        os.environ["CLOUD_ATLAS_DOC_CONVERTER_MOCK"] = "none"
+
+        exit_code, stdout, stderr = self.only_file()
+
+        self.assertEqual(0, exit_code, stderr)
+        result = self.envelope(stdout)
+        self.assertEqual("Completed", result["state"])
+        self.assertEqual("unchanged", result["data"]["only_file"]["action"])
+        self.assertEqual(before, snapshot(self.root))
+
+    def test_valid_short_office_document_is_idempotent(self):
+        write_minimal_docx(self.cloud / "kurz.docx", "Hi")
+        source = "data/cloud/DEMO/kurz.docx"
+        self.assertEqual(0, self.only_file(source)[0])
+        mirror = (self.output / "kurz.md").read_text(encoding="utf-8")
+        self.assertLess(len(mirror.split("---", 2)[2].strip()), 10)
+        before = snapshot(self.root)
+        mirror_mtime = (self.output / "kurz.md").stat().st_mtime_ns
+
+        exit_code, stdout, stderr = self.only_file(source)
+
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("unchanged", self.envelope(stdout)["data"]["only_file"]["action"])
+        self.assertEqual(before, snapshot(self.root))
+        self.assertEqual(mirror_mtime, (self.output / "kurz.md").stat().st_mtime_ns)
+
+    def test_short_body_heuristic_stays_on_for_the_full_scan_decision(self):
+        write_minimal_docx(self.cloud / "kurz.docx", "Hi")
+        self.assertEqual(0, self.only_file("data/cloud/DEMO/kurz.docx")[0])
+        arguments = dict(
+            src_abs=str(self.cloud / "kurz.docx"),
+            src_sha256=MODULE.calculate_sha256(str(self.cloud / "kurz.docx")),
+            dest_abs=str(self.output / "kurz.md"), derivative_abs=None, is_doc=False, is_pdf=False,
+            ocr_policy="disabled", redo_ocr=False, force=False, base_existing={},
+        )
+        self.assertTrue(MODULE.determine_needs_conversion(**arguments))
+        self.assertFalse(MODULE.determine_needs_conversion(**arguments, short_body_is_stale=False))
+
+    def test_index_and_readme_sources_are_legitimate(self):
+        for name in ("index", "readme"):
+            shutil.copyfile(FIXTURE_PDF, self.cloud / f"{name}.pdf")
+            exit_code, _stdout, stderr = self.only_file(f"data/cloud/DEMO/{name}.pdf", "--ocr-policy", "disabled")
+            self.assertEqual(0, exit_code, stderr)
+            self.assertTrue((self.output / f"{name}.md").is_file())
+
+
+class StorageContractTests(OnlyFileTestCase):
+    def reject_flag(self, flag, value, phase="only-file", source=SOURCE, *extra):
+        self.write_filemap(build_filemap_text(5))
+        before = snapshot(self.root)
+        exit_code, stdout, _ = self.run_main(
+            "--topic-id", "demo", "--workspace-root", str(self.root),
+            "--only-file", source, "--json", flag, value, *extra,
+        )
+        result = self.assert_failed_without_changes(before, exit_code, stdout)
+        self.assertEqual(phase, result["error"]["phase"])
+        return result
+
+    def test_drive_relative_segments_in_storage_paths_are_rejected(self):
+        self.reject_flag("--output-dir", "memory/cloud/e:y")
+        self.reject_flag("--cloud-dir", "data/cloud/DE:MO")
+        self.reject_flag("--filemap-json", "memory/cloud/topics/demo/x:y/filemap.json")
+        self.reject_flag("--filemap-json", "C:/outside/filemap.json")
+
+    def test_output_and_filemap_must_be_in_a_canonical_data_zone(self):
+        result = self.reject_flag("--output-dir", "scratch/out")
+        self.assertIn("Data Zones", result["error"]["message"])
+        self.reject_flag("--filemap-json", "scratch/filemap.json")
+
+    def test_in_place_ocr_requires_the_source_to_live_in_a_data_zone(self):
+        shutil.copyfile(FIXTURE_PDF, self.cloud / "x.pdf")
+        result = self.reject_flag("--cloud-dir", "elsewhere/DEMO", "only-file", "elsewhere/DEMO/x.pdf", "--ocr-policy", "enrich_source")
+        self.assertIn("enrich_source", result["error"]["message"])
+
+    def test_excluded_directory_is_rejected(self):
+        topics = self.root / "memory" / "references" / "topics" / "topics.json"
+        data = json.loads(topics.read_text(encoding="utf-8"))
+        data[0]["cloud_sync"]["default"]["exclude_dirs"] = ["sub"]
+        topics.write_text(json.dumps(data), encoding="utf-8")
+        (self.cloud / "sub").mkdir()
+        (self.cloud / "sub" / "x.doc").write_bytes(b"\xd0\xcf\x11\xe0x")
+        self.write_filemap(build_filemap_text(5))
+        before = snapshot(self.root)
+        exit_code, stdout, _ = self.only_file("data/cloud/DEMO/sub/x.doc")
+        self.assert_failed_without_changes(before, exit_code, stdout)
+
+    def test_alias_inside_the_output_zone_cannot_reach_a_foreign_mirror(self):
+        foreign_dir = self.output / "foreign"
+        foreign_dir.mkdir()
+        (foreign_dir / "g_neu.md").write_text("fremd", encoding="utf-8")
+        if not make_directory_link(self.output / "alias", foreign_dir):
+            self.skipTest("cannot create a directory link")
+        text = build_filemap_text(5)
+        entry = {
+            "version": "N/A", "mtime": "2026-01-01 00:00:00", "size": "1.0 KB", "sha256": SHA,
+            "description": "-", "markdown_mirror": "memory/cloud/topics/demo/alias/g_neu.md",
+            "conversion_status": "converted",
+        }
+        self.write_filemap(filemap_merge.splice_entry(filemap_merge.parse_filemap(text), SOURCE, entry))
+        before = snapshot(self.root)
+        exit_code, stdout, _ = self.only_file()
+        result = self.assert_failed_without_changes(before, exit_code, stdout)
+        self.assertEqual("mirror-plan", result["error"]["phase"])
+        self.assertEqual("fremd", (foreign_dir / "g_neu.md").read_text(encoding="utf-8"))
+
+    def test_project_target_uses_scope_project(self):
+        projects = self.root / "memory" / "references" / "projects"
+        projects.mkdir(parents=True)
+        (projects / "projects.json").write_text(json.dumps([{
+            "id": "proj", "title": "Proj",
+            "cloud_sync": {"default": {
+                "scan_dir": "data/cloud/DEMO", "output_json": FILEMAP,
+                "output_md": "memory/cloud/topics/demo/filemap.md", "output_dir": "memory/cloud/topics/demo",
+            }},
+        }]), encoding="utf-8")
+        good = build_filemap_text(5)
+        self.write_filemap(good.replace('"scope": "topic"', '"scope": "project"').replace('"project": "demo"', '"project": "proj"'))
+        exit_code, _stdout, stderr = self.run_main(
+            "--project-id", "proj", "--workspace-root", str(self.root), "--only-file", SOURCE, "--json",
+        )
+        self.assertEqual(0, exit_code, stderr)
+        # A topic-scoped container does not belong to a project target.
+        self.write_filemap(good)
+        shutil.rmtree(self.output / "_derivatives")
+        (self.output / "g_neu.md").unlink()
+        before = snapshot(self.root)
+        exit_code, stdout, _ = self.run_main(
+            "--project-id", "proj", "--workspace-root", str(self.root), "--only-file", SOURCE, "--json",
+        )
+        self.assert_failed_without_changes(before, exit_code, stdout)
+
+    def test_subtopic_target_reads_only_the_catalogued_storage(self):
+        topics = self.root / "memory" / "references" / "topics" / "topics.json"
+        topics.write_text(json.dumps([{
+            "id": "demo", "title": "Demo",
+            "subtopics": [{
+                "id": "sub1", "title": "Sub", "status": "active",
+                "cloud_sync": {"default": {
+                    "scan_dir": "data/cloud/DEMO", "output_json": FILEMAP,
+                    "output_md": "memory/cloud/topics/demo/filemap.md", "output_dir": "memory/cloud/topics/demo",
+                }},
+            }],
+        }]), encoding="utf-8")
+        self.write_filemap(build_filemap_text(5))
+        exit_code, stdout, stderr = self.run_main(
+            "--topic-id", "demo", "--subtopic-id", "sub1", "--workspace-root", str(self.root),
+            "--only-file", SOURCE, "--json",
+        )
+        self.assertEqual(0, exit_code, stderr)
+        self.assertEqual("created", self.envelope(stdout)["data"]["only_file"]["action"])
+
+
 class ModuleLevelTests(unittest.TestCase):
-    def test_transaction_restores_files_and_removes_created_directories(self):
+    def test_transaction_restores_files_and_spares_foreign_files_and_directories(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             existing = root / "keep" / "a.md"
@@ -840,15 +1249,44 @@ class ModuleLevelTests(unittest.TestCase):
             transaction.track_file(str(existing))
             transaction.track_file(str(new_directory / "b.md"))
             existing.write_bytes(b"new")
-            (existing.parent / "stray.tmp").write_bytes(b"x")
+            (existing.parent / "stray.tmp").write_bytes(b"foreign")
+            (existing.parent / "foreign_dir").mkdir()
+            (existing.parent / ".a.md.abc123.tmp").write_bytes(b"ours")
+            (existing.parent / ".ocr-stage-xyz.pdf").write_bytes(b"ours")
             new_directory.mkdir(parents=True)
             (new_directory / "b.md").write_bytes(b"b")
+            (root / "created" / "foreign.md").write_bytes(b"foreign")
 
             self.assertEqual([], transaction.rollback())
 
             self.assertEqual(b"old", existing.read_bytes())
-            self.assertEqual(["a.md"], sorted(p.name for p in existing.parent.iterdir()))
+            self.assertEqual(["a.md", "foreign_dir", "stray.tmp"], sorted(p.name for p in existing.parent.iterdir()))
+            self.assertFalse(new_directory.exists())
+            self.assertEqual(b"foreign", (root / "created" / "foreign.md").read_bytes())
+            self.assertEqual([str(root / "created")], transaction.left_behind)
+
+    def test_transaction_removes_created_directories_when_they_are_empty(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            new_directory = root / "created" / "deep"
+            transaction = MODULE.ArtifactTransaction()
+            transaction.track_directory(str(new_directory), str(root))
+            transaction.track_file(str(new_directory / "b.md"))
+            new_directory.mkdir(parents=True)
+            (new_directory / "b.md").write_bytes(b"b")
+            self.assertEqual([], transaction.rollback())
             self.assertFalse((root / "created").exists())
+
+    def test_transaction_refuses_to_track_a_link(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "target.md").write_bytes(b"t")
+            try:
+                os.symlink(root / "target.md", root / "link.md")
+            except (OSError, NotImplementedError):
+                self.skipTest("symlinks are not available")
+            with self.assertRaises(OSError):
+                MODULE.ArtifactTransaction().track_file(str(root / "link.md"))
 
     def test_schema_uri_matches_the_generator(self):
         import gen_filemap

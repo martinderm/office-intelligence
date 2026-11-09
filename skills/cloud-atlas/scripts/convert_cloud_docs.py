@@ -1,5 +1,6 @@
 import os
 import sys
+import signal
 import contextlib
 import datetime
 import re
@@ -807,10 +808,18 @@ def run_ocr_on_pdf(src_abs, dest_abs=None, redo_ocr=False, timeout=120, expected
                 os.unlink(target_output)
 
     ensure_tesseract_path()
+    unavailable = None
     if not shutil.which("ocrmypdf"):
-        return False, "OCRmyPDF CLI is unavailable (capability: ocrmypdf)."
-    if not shutil.which("tesseract"):
-        return False, "Tesseract CLI is unavailable (capability: tesseract)."
+        unavailable = "OCRmyPDF CLI is unavailable (capability: ocrmypdf)."
+    elif not shutil.which("tesseract"):
+        unavailable = "Tesseract CLI is unavailable (capability: tesseract)."
+    if unavailable:
+        # The staging file was created above; do not leave it behind on this early exit.
+        try:
+            os.unlink(target_output)
+        except OSError:
+            pass
+        return False, unavailable
 
     cmd = ["ocrmypdf", "-l", "deu", "--output-type", "pdf", "--optimize", "0"]
     if redo_ocr:
@@ -1266,6 +1275,12 @@ def format_size(bytes_size):
 
 def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=False):
     """Worker process target that converts documents safely and communicates via pipe."""
+    if hasattr(os, "setsid") and multiprocessing.current_process().name != "MainProcess":
+        # Own process group: a timeout can then stop the external converters too.
+        try:
+            os.setsid()
+        except OSError:
+            pass
     try:
         src_abs = task["src_abs"]
         is_doc = task.get("is_doc", False)
@@ -1484,6 +1499,33 @@ def _convert_worker_target(task, conn, ocr_policy="local_derivative", redo_ocr=F
         except Exception:
             pass
 
+def terminate_process_tree(proc):
+    """Stop a timed-out worker *and* the external converters it started.
+
+    Killing only the worker would leave e.g. LibreOffice or ocrmypdf running
+    and writing, so a rollback could race a still-active writer.  Windows uses
+    ``taskkill /T``; POSIX workers lead their own process group (see
+    ``_convert_worker_target``) which is killed as a whole.
+    """
+    pid = getattr(proc, "pid", None)
+    if pid:
+        try:
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    capture_output=True, timeout=15, check=False,
+                )
+            elif hasattr(os, "killpg") and os.getpgid(pid) == pid:
+                os.killpg(pid, signal.SIGKILL)
+        except Exception as exc:
+            print(f"Warning terminating process tree of pid {pid}: {exc}", file=sys.stderr, flush=True)
+    proc.terminate()
+    proc.join(timeout=2)
+    if proc.is_alive():
+        proc.kill()
+        proc.join()
+
+
 def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_derivative", redo_ocr=False, total_count=None):
     if total_count is None:
         total_count = len(tasks)
@@ -1627,11 +1669,7 @@ def run_conversion_tasks(tasks, file_timeout=60, max_jobs=1, ocr_policy="local_d
             elif elapsed > file_timeout:
                 print(f"[TIMEOUT] Konvertierung fuer {src_rel} nach {file_timeout}s abgebrochen! Skipping.", file=sys.stderr, flush=True)
                 try:
-                    proc.terminate()
-                    proc.join(timeout=2)
-                    if proc.is_alive():
-                        proc.kill()
-                        proc.join()
+                    terminate_process_tree(proc)
                 except Exception as e:
                     print(f"Warning terminating process for {src_rel}: {e}", file=sys.stderr, flush=True)
                 parent_conn.close()
@@ -2669,9 +2707,15 @@ def run_conversion(args, run_state):
 
 def determine_needs_conversion(
     *, src_abs, src_sha256, dest_abs, derivative_abs, is_doc, is_pdf,
-    ocr_policy, redo_ocr, force, base_existing,
+    ocr_policy, redo_ocr, force, base_existing, short_body_is_stale=True,
 ):
-    """Shared incremental decision for the full scan and the single-file mode."""
+    """Shared incremental decision for the full scan and the single-file mode.
+
+    ``short_body_is_stale`` keeps the full scan's legacy heuristic (an Office
+    mirror body under ten characters is re-converted).  The single-file mode
+    switches it off: a valid short document would otherwise be rewritten on
+    every run and break idempotence.
+    """
     needs_conversion = force or redo_ocr or not os.path.exists(get_safe_path(dest_abs))
     if is_doc and derivative_abs and not os.path.exists(get_safe_path(derivative_abs)):
         needs_conversion = True
@@ -2688,7 +2732,7 @@ def determine_needs_conversion(
                 needs_conversion = True
             elif is_pdf and ocr_policy != "disabled" and not mirror_ocr_applied(existing_meta, base_existing) and is_image_based_pdf(src_abs, body):
                 needs_conversion = True
-            elif len(body.strip()) < 10 and not mirror_ocr_applied(existing_meta, base_existing) and not is_doc and not is_pdf:
+            elif short_body_is_stale and len(body.strip()) < 10 and not mirror_ocr_applied(existing_meta, base_existing) and not is_doc and not is_pdf:
                 needs_conversion = True
         else:
             needs_conversion = True
@@ -2779,6 +2823,50 @@ def normalize_only_file_argument(value):
     return path.as_posix()
 
 
+def normalize_only_file_storage_path(label, value, storage_id=None):
+    """Strict form of a storage path flag (cloud/output/filemap) in single-file mode.
+
+    The generic normalizer tolerates drive-relative segments such as ``e:y``; on
+    Windows ``os.path.join`` would then leave the workspace.  The single-file
+    mode writes, so it rejects them like it does for ``--only-file``.
+    """
+    raw = value.strip().replace("\\", "/") if isinstance(value, str) else ""
+    if not raw or "\x00" in raw:
+        raise _only_file_error(f"{label} must be a non-empty workspace-relative path", storage_id)
+    windows = PureWindowsPath(raw)
+    path = PurePosixPath(raw)
+    if windows.drive or windows.root or not path.parts or ".." in path.parts or any(":" in part for part in path.parts):
+        raise _only_file_error(f"{label} must be a plain workspace-relative path without drive, root, '..' or ':': {raw}", storage_id)
+    return path.as_posix()
+
+
+# The canonical Data Zones of the consuming workspace (AGENTS.md "Dual Evidence").
+DATA_ZONES = ("memory/references", "memory/evidence", "memory/cloud", "data")
+
+
+def _in_data_zone(rel):
+    parts = tuple(part.casefold() for part in PurePosixPath(rel).parts)
+    return any(parts[:len(zone)] == zone and len(parts) > len(zone) for zone in (
+        tuple(PurePosixPath(z).parts) for z in DATA_ZONES
+    ))
+
+
+def _within_posix(path, parent):
+    try:
+        PurePosixPath(path).relative_to(PurePosixPath(parent))
+        return True
+    except ValueError:
+        return False
+
+
+def _quiet_print(*values):
+    """Progress output after the commit point must never turn success into failure."""
+    try:
+        print(*values)
+    except (OSError, ValueError):
+        pass
+
+
 def _is_inside(path, parent):
     path_norm = os.path.normcase(path)
     parent_norm = os.path.normcase(parent).rstrip("\\/")
@@ -2789,7 +2877,7 @@ def _same_path(left, right):
     return os.path.normcase(left) == os.path.normcase(right)
 
 
-def build_unchanged_file_entry(t, base_existing, dest_rel_workspace, doc_converter):
+def build_unchanged_file_entry(t, base_existing, dest_rel_workspace, doc_converter, workspace_root=None):
     """Entry for an up-to-date source: carry generated fields, never re-derive them."""
     same_source = (
         isinstance(base_existing, dict)
@@ -2829,6 +2917,12 @@ def build_unchanged_file_entry(t, base_existing, dest_rel_workspace, doc_convert
                 if t.get("is_doc") else "OCR-Textebene in durchsuchbarem PDF-Derivat erzeugt."
             ),
         }
+    elif same_source and workspace_root and isinstance(base_existing.get("derivative"), dict):
+        # The current policy plans no derivative, but the entry owns one that is
+        # still on disk (e.g. an earlier local_derivative run): keep the record.
+        previous_path = normalize_workspace_relative_path(base_existing["derivative"].get("path"))
+        if previous_path and os.path.isfile(get_safe_path(os.path.join(workspace_root, *PurePosixPath(previous_path).parts))):
+            entry["derivative"] = base_existing["derivative"]
     return entry
 
 
@@ -2859,12 +2953,21 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         cloud_dir = args.cloud_dir or resolved["scan_dir"]
         output_dir = args.output_dir or resolved["output_dir"]
         filemap_json = args.filemap_json or resolved["output_json"]
-    cloud_rel = normalize_workspace_relative_path(cloud_dir)
-    output_rel = normalize_workspace_relative_path(output_dir)
-    filemap_rel = normalize_workspace_relative_path(filemap_json)
-    if not (cloud_rel and output_rel and filemap_rel):
-        raise _only_file_error("cloud, output and filemap paths must be safe workspace-relative paths", sid)
+    cloud_rel = normalize_only_file_storage_path("cloud directory", cloud_dir, sid)
+    output_rel = normalize_only_file_storage_path("output directory", output_dir, sid)
+    filemap_rel = normalize_only_file_storage_path("filemap path", filemap_json, sid)
+    for label, rel in (("output directory", output_rel), ("filemap path", filemap_rel)):
+        if not _in_data_zone(rel):
+            raise _only_file_error(
+                f"{label} '{rel}' is outside the canonical Data Zones ({', '.join(DATA_ZONES)}); "
+                "--only-file writes only there", sid,
+            )
+    if ocr_policy == "enrich_source" and os.path.splitext(str(args.only_file).strip())[1].lower() == ".pdf" and not _in_data_zone(cloud_rel):
+        raise _only_file_error(
+            f"--ocr-policy enrich_source would modify the source in '{cloud_rel}', which is outside the canonical Data Zones", sid,
+        )
     source_rel = normalize_only_file_argument(args.only_file)
+    project_id = args.project_id or args.topic_id
     state["source"] = bounded_text(source_rel)
     exclude_dirs = resolved.get("exclude_dirs", [])
     storage_summary = {
@@ -2930,7 +3033,14 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         raise ConversionRunError("filemap", f"cannot read {filemap_rel}: {exc}", sid) from exc
     try:
         filemap = parse_filemap(filemap_text)
-        validate_filemap_document(filemap.data, scan_dir=cloud_rel, output_dir=output_rel)
+        validate_filemap_document(
+            filemap.data, scan_dir=cloud_rel, output_dir=output_rel,
+            expected={
+                "scope": "topic" if resolved.get("is_topic") else "project",
+                "storage_id": sid,
+                "project": project_id,
+            },
+        )
         member = locate_source(filemap, source_rel)
     except DuplicateSourceError as exc:
         state["duplicate_source"] = True
@@ -2983,6 +3093,20 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         derivative_rel = f"{output_rel}/_derivatives/{os.path.splitext(rel_to_cloud)[0]}.docx"
     elif is_pdf and ocr_policy == "local_derivative":
         derivative_rel = f"{output_rel}/_derivatives/{os.path.splitext(rel_to_cloud)[0]}.pdf"
+    # A derivative the entry already owns at a custom path (the generator keeps
+    # those) stays the target; a second copy at the canonical path would be a
+    # duplicate and needless reconversion.
+    previous_derivative = base_existing.get("derivative")
+    if derivative_rel and isinstance(previous_derivative, dict) and isinstance(previous_derivative.get("path"), str):
+        custom = normalize_workspace_relative_path(previous_derivative["path"])
+        if (
+            custom
+            and custom.casefold() != derivative_rel.casefold()
+            and PurePosixPath(custom).suffix.lower() == PurePosixPath(derivative_rel).suffix.lower()
+            and _within_posix(custom, output_rel)
+            and os.path.isfile(get_safe_path(absolute(custom)))
+        ):
+            derivative_rel = custom
     if derivative_rel:
         derivative_abs = absolute(derivative_rel)
 
@@ -2990,6 +3114,18 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         normalize_workspace_relative_path(path).casefold()
         for path in (base_existing.get("markdown_mirror"), (base_existing.get("derivative") or {}).get("path"))
         if isinstance(path, str) and normalize_workspace_relative_path(path)
+    }
+    # Exactly the files this storage itself maintains; broader name patterns
+    # (index.md, readme.md, ...) are legitimate mirrors of legitimate sources.
+    protected = {
+        normalized.casefold()
+        for normalized in (
+            filemap_rel,
+            normalize_workspace_relative_path(resolved.get("output_json")),
+            normalize_workspace_relative_path(resolved.get("output_md")),
+            normalize_workspace_relative_path(resolved.get("curation_json")),
+        )
+        if normalized
     }
     seen_targets = set()
     for label, rel in (("markdown mirror", dest_rel), ("derivative", derivative_rel)):
@@ -3001,13 +3137,16 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         seen_targets.add(folded)
         if folded in claimed:
             raise ConversionRunError("mirror-plan", f"{label} target {rel} is already claimed by filemap entry {claimed[folded]!r}", sid)
-        if is_protected_output_file(rel, resolved):
-            raise ConversionRunError("mirror-plan", f"{label} target {rel} is a protected filemap/index file", sid)
+        if folded in protected:
+            raise ConversionRunError("mirror-plan", f"{label} target {rel} is this storage's filemap/curation file", sid)
         target_abs = absolute(rel)
+        # No link component may sit between output_dir and the target: an alias
+        # inside the output zone could make two ownership keys name one file.
+        expected_target = os.path.join(real_output, *PurePosixPath(rel).parts[len(PurePosixPath(output_rel).parts):])
+        if not _same_path(os.path.realpath(target_abs), expected_target):
+            raise ConversionRunError("mirror-plan", f"{label} target {rel} resolves through a link or outside output_dir", sid)
         if os.path.lexists(get_safe_path(target_abs)) and folded not in owned:
             raise ConversionRunError("mirror-plan", f"{label} target {rel} already exists and is not owned by this entry; refusing to overwrite", sid)
-        if not _is_inside(os.path.realpath(target_abs), real_output):
-            raise ConversionRunError("mirror-plan", f"{label} target {rel} resolves outside output_dir (link)", sid)
 
     try:
         overlay = curation_overlays[sid]
@@ -3040,20 +3179,22 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
 
     counts = {"scanned": 1, "converted": 0, "skipped": 0, "conversion_required": 0, "failed": 0}
     storage_summary["counts"] = counts
+    needs_conversion = determine_needs_conversion(
+        src_abs=src_abs, src_sha256=task["src_sha256"], dest_abs=dest_abs,
+        derivative_abs=derivative_abs, is_doc=is_doc, is_pdf=is_pdf,
+        ocr_policy=ocr_policy, redo_ocr=redo_ocr, force=args.force,
+        base_existing=base_existing, short_body_is_stale=False,
+    )
     doc_converter = get_doc_converter()
-    if is_doc and not doc_converter:
+    # A converter is only a prerequisite when a conversion is actually due: an
+    # up-to-date .doc stays an idempotent success without LibreOffice/Word.
+    if needs_conversion and is_doc and not doc_converter:
         message = "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)"
         print(f"[SKIP] Kein .doc-Konverter verfuegbar fuer {source_rel}; Filemap bleibt unveraendert.")
         counts["conversion_required"] = 1
         requirement = {"source": bounded_text(source_rel), "capability": "doc_converter", "message": bounded_text(message)}
         return _finish_only_file(run_state, storage_summary, len(files), requirement)
 
-    needs_conversion = determine_needs_conversion(
-        src_abs=src_abs, src_sha256=task["src_sha256"], dest_abs=dest_abs,
-        derivative_abs=derivative_abs, is_doc=is_doc, is_pdf=is_pdf,
-        ocr_policy=ocr_policy, redo_ocr=redo_ocr, force=args.force,
-        base_existing=base_existing,
-    )
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     transaction = ArtifactTransaction(get_safe_path)
 
@@ -3064,10 +3205,13 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         errors = transaction.rollback()
         if errors:
             state["rollback_errors"] = [bounded_text(error) for error in errors[:10]]
+            if transaction.recovery_dir:
+                state["recovery_dir"] = transaction.recovery_dir
             raise ConversionRunError(
                 "rollback", f"rollback incomplete after {type(cause).__name__}: {'; '.join(errors[:3])}", sid,
             ) from cause
 
+    committed = False
     try:
         if needs_conversion:
             transaction.track_directory(os.path.dirname(dest_abs), workspace_root)
@@ -3116,7 +3260,7 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
             counts["converted"] = 1
             state["artifacts_changed"] = True
         else:
-            file_entry = build_unchanged_file_entry(task, base_existing, dest_rel, doc_converter)
+            file_entry = build_unchanged_file_entry(task, base_existing, dest_rel, doc_converter, workspace_root)
             counts["skipped"] = 1
 
         new_entry = merge_curated_metadata(
@@ -3128,6 +3272,7 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         except FilemapError as exc:
             raise ConversionRunError("filemap", str(exc), sid) from exc
         entry_changed = member is None or json.loads(json.dumps(new_entry)) != base_existing
+        new_text = None
         if entry_changed:
             try:
                 new_text = splice_entry(filemap, source_rel, new_entry)
@@ -3135,16 +3280,22 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
             except FilemapError as exc:
                 raise ConversionRunError("filemap", str(exc), sid) from exc
             write_text_atomic(filemap_json_abs, new_text, mode=filemap_mode, safe_path=get_safe_path)
-            print(f"Saved filemap JSON to {filemap_json_abs}")
+        # Commit point: the filemap replace is the last mutation.  From here on
+        # nothing may roll the artifacts back, or the map would point at files
+        # that no longer exist.  State is recorded before any further output.
+        committed = True
+        state["entry_changed"] = entry_changed
+        state["action"] = ("created" if member is None else "updated") if entry_changed else "unchanged"
+        state["mirror"] = bounded_text(dest_rel)
         transaction.commit()
     except BaseException as exc:
-        roll_back(exc)
+        if not committed:
+            roll_back(exc)
         raise
 
-    state["entry_changed"] = entry_changed
-    state["action"] = ("created" if member is None else "updated") if entry_changed else "unchanged"
-    state["mirror"] = bounded_text(dest_rel)
-    print(f"\nZusammenfassung fuer {sid}: {counts['converted']} konvertiert, {counts['skipped']} aktuell, Eintrag {state['action']}.")
+    if entry_changed:
+        _quiet_print(f"Saved filemap JSON to {filemap_json_abs}")
+    _quiet_print(f"\nZusammenfassung fuer {sid}: {counts['converted']} konvertiert, {counts['skipped']} aktuell, Eintrag {state['action']}.")
     return _finish_only_file(run_state, storage_summary, len(files) + (1 if member is None and entry_changed else 0))
 
 

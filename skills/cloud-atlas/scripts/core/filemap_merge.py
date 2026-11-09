@@ -20,6 +20,7 @@ from pathlib import PurePosixPath
 from typing import Any, Callable
 
 from .metadata import validate_cloud_artifact_metadata
+from .scan_scope import normalize_exclude_dirs
 
 
 FILEMAP_SCHEMA_URI = (
@@ -31,6 +32,8 @@ _CONTAINER_REQUIRED = frozenset({
     "$schema", "schema_version", "kind", "scope", "storage_id", "project",
     "project_title", "scan_dir", "output_dir", "updated_at", "files",
 })
+_LEGACY_KEYS = frozenset({"project", "project_title", "files", "exclude_dirs", "updated_at"})
+_STORAGE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 _SIZE = re.compile(r"\d+(?:\.\d+)? (?:B|KB|MB)")
 _SHA256 = re.compile(r"[a-fA-F0-9]{64}")
@@ -269,15 +272,26 @@ def validate_file_entry(source: str, entry: Any, *, scan_dir: str, output_dir: s
     return mirror.casefold() if mirror else None
 
 
-def validate_filemap_document(data: dict, *, scan_dir: str, output_dir: str) -> dict[str, str]:
+def validate_filemap_document(
+    data: dict, *, scan_dir: str, output_dir: str, expected: dict | None = None,
+) -> dict[str, str]:
     """Validate container + every entry before any mutation.
 
     Returns the folded-mirror index ``{folded mirror: source}``.  A container
-    with ``$schema`` must satisfy the full generator contract; a legacy
-    converter-written map only needs a ``files`` object.
+    with ``$schema`` must satisfy the full generator contract (and, through
+    ``expected``, belong to the resolved target: ``scope``, ``storage_id``,
+    ``project``).  Only the exact converter-written legacy shape (no modern
+    container key at all) is accepted without ``$schema``.
     """
     if not isinstance(data, dict):
         raise FilemapError("filemap must be an object")
+    if "$schema" not in data:
+        modern = sorted(set(data) & (_CONTAINER_REQUIRED - {"project", "project_title", "updated_at", "files"}))
+        if modern:
+            raise FilemapError(f"filemap has container keys {modern} but no $schema")
+        unknown = sorted(set(data) - _LEGACY_KEYS)
+        if unknown:
+            raise FilemapError(f"legacy filemap has unknown keys: {unknown}")
     if "$schema" in data:
         missing = sorted(_CONTAINER_REQUIRED - set(data))
         if missing:
@@ -296,6 +310,13 @@ def validate_filemap_document(data: dict, *, scan_dir: str, output_dir: str) -> 
         for field in ("project", "project_title", "storage_id"):
             if not isinstance(data[field], str) or not data[field].strip():
                 raise FilemapError(f"filemap.{field} must be a non-empty string")
+        if _STORAGE_ID.fullmatch(data["storage_id"]) is None:
+            raise FilemapError("filemap.storage_id is invalid")
+        for field, value in (expected or {}).items():
+            if data.get(field) != value:
+                raise FilemapError(
+                    f"filemap.{field} is {data.get(field)!r} but the resolved target expects {value!r}"
+                )
         for field, expected in (("scan_dir", scan_dir), ("output_dir", output_dir)):
             if normalize_relative(data[field]) != expected:
                 raise FilemapError(
@@ -305,10 +326,13 @@ def validate_filemap_document(data: dict, *, scan_dir: str, output_dir: str) -> 
         not isinstance(data["updated_at"], str) or _TIMESTAMP.fullmatch(data["updated_at"]) is None
     ):
         raise FilemapError("filemap.updated_at has an invalid timestamp")
-    if "exclude_dirs" in data and not (
-        isinstance(data["exclude_dirs"], list) and all(isinstance(v, str) for v in data["exclude_dirs"])
-    ):
-        raise FilemapError("filemap.exclude_dirs must be a list of strings")
+    if "exclude_dirs" in data:
+        try:
+            effective = normalize_exclude_dirs(data["exclude_dirs"])
+        except ValueError as exc:
+            raise FilemapError(f"filemap.exclude_dirs is invalid: {exc}") from exc
+        if effective != data["exclude_dirs"]:
+            raise FilemapError("filemap.exclude_dirs must contain normalized effective exclusions")
 
     mirrors: dict[str, str] = {}
     for source, entry in data["files"].items():

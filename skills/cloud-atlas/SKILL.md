@@ -402,27 +402,53 @@ ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
   Eintrag wird an der sortierten Position eingefügt (bei unsortierter Map am Ende) und im
   Stil der Datei formatiert; ein bestehender wird an Ort und Stelle ersetzt. Vor dem
   Schreiben beweist `verify_splice`, dass nur dieser Eintrag abweicht.
-* **Atomar und fail-closed:** Temporäre Geschwisterdatei + `os.replace`. Jeder Fehler —
-  Konvertierungsfehler, Timeout (`--file-timeout`), fehlender `.doc`-Konverter,
-  Schreib-/Replace-Fehler — rollt Mirror, Derivat und bei `enrich_source` auch die Quelle
-  auf den Zustand vor dem Lauf zurück und beendet mit Exit ≠ 0; die Filemap bleibt
-  unverändert. Es wird also auch kein `conversion_required`-Eintrag geschrieben.
+* **Fehlermodell (bewusst begrenzt):** Die Filemap selbst wird atomar ersetzt (Temp-Datei +
+  `fsync` + `os.replace`) und ist der **Commit-Punkt**. Davor schlägt ein Fehler im
+  laufenden Prozess — Konvertierungsfehler, Timeout (`--file-timeout`), Schreib-/Replace-
+  Fehler — in einen **Best-effort-Rollback** der Artefakte (Mirror, Derivat, bei
+  `enrich_source` die Quelle) um und endet mit Exit ≠ 0; die Filemap bleibt unverändert und
+  es wird kein `conversion_required`-Eintrag geschrieben. Nach dem Commit-Punkt wird nie
+  mehr zurückgerollt (Ausgabefehler ändern das Ergebnis nicht). **Das ist keine
+  Crash-/Mehrdatei-Atomarität:** Es gibt kein Journal. Hartes Beenden, Stromausfall, ein
+  fehlgeschlagener Restore oder eine bereits extern synchronisierte Quelle (`enrich_source`)
+  können einen Mischzustand hinterlassen; ein erneuter Lauf heilt ihn nur, soweit die
+  Zielpfade noch zum Eintrag passen. Schlägt ein Restore fehl, bleiben die Sicherungen in
+  `data.only_file.recovery_dir` erhalten und `error.phase` ist `rollback`.
+* **Rollback entfernt nur Eigenes:** ausschließlich die registrierten Zielpfade und die
+  eigenen Temp-Dateien (`.ocr-stage-*.pdf`, `.<ziel>.*.tmp`); fremde, parallel angelegte
+  Dateien und Verzeichnisse bleiben, selbst angelegte Verzeichnisse werden nur entfernt,
+  wenn sie wieder leer sind. Wiederherstellung über eine exklusiv erzeugte Zufalls-
+  Temp-Datei; Links als Ziele werden abgewiesen. Ein Timeout beendet den Worker samt
+  Prozessbaum (Windows `taskkill /T`, POSIX Prozessgruppe).
 * **Idempotent:** Ein zweiter Lauf ohne `--force` schreibt weder Eintrag noch Artefakte noch
-  Filemap (keine geänderte mtime). `--force` und `--redo-ocr` wirken nur auf diese Datei.
+  Filemap (keine geänderte mtime) — auch bei gültigen kurzen Office-Dokumenten (die
+  Voll-Scan-Heuristik „Body < 10 Zeichen“ gilt hier nicht), bei einem benutzerdefinierten
+  Derivatpfad des Eintrags und ohne installierten `.doc`-Konverter (er ist nur nötig, wenn
+  tatsächlich konvertiert wird). `--force` und `--redo-ocr` wirken nur auf diese Datei.
 * **Abweisungen vor jeder Mutation:** fehlende oder nicht lesbare Filemap (sie wird nie
   angelegt), ungültiges JSON, doppelte JSON-Schlüssel, `NaN`, BOM, Verstoß gegen den
   Container-/Eintrags-Vertrag (Runtime-Subset von `gen_filemap.validate_filemap`, ohne
-  Datenträgerzugriff), abweichende `scan_dir`/`output_dir`, mehrere oder per Schreibweise
-  (casefold/NFC/Separator) abweichende Einträge derselben Quelle (`duplicate_source`),
-  Symlink-/Junction-/`realpath`-Ausbruch der Quelle, der Output-Zone oder der Filemap,
-  abweichende Pfad-Groß-/Kleinschreibung, Mirror-/Derivat-Ziele, die ein fremder Eintrag
-  beansprucht, bereits vorhandene Ziele ohne Besitz durch diesen Eintrag, geschützte
-  Namen (`filemap.md` usw.) und nicht auflösbare Mirror-Kollisionen.
+  Datenträgerzugriff: `storage_id`-Muster, normalisierte `exclude_dirs`; `scope`,
+  `storage_id`, `project`, `scan_dir`, `output_dir` müssen zum aufgelösten Ziel passen;
+  ein Container ohne `$schema` ist nur die exakte Legacy-Form des Konverters mit
+  `project`, `project_title`, `files`, `exclude_dirs`, `updated_at`), mehrere oder per
+  Schreibweise (casefold/NFC/Separator) abweichende Einträge derselben Quelle
+  (`duplicate_source`), Symlink-/Junction-/`realpath`-Ausbruch der Quelle, der Output-Zone
+  oder der Filemap, Link-Komponenten zwischen `output_dir` und Mirror-/Derivat-Ziel (Alias
+  auf fremde Dateien), abweichende Pfad-Groß-/Kleinschreibung, `:`-, Laufwerks- oder
+  `..`-Segmente in `--cloud-dir`/`--output-dir`/`--filemap-json`, Output-Zone oder Filemap
+  außerhalb der kanonischen Data Zones (`memory/references/`, `memory/evidence/`,
+  `memory/cloud/`, `data/`; bei `enrich_source` auch die Quelle), Mirror-/Derivat-Ziele,
+  die ein fremder Eintrag beansprucht, bereits vorhandene Ziele ohne Besitz durch diesen
+  Eintrag, die eigene Filemap/`filemap.md`/Kuratierungsdatei als Ziel (andere Namen wie
+  `index.md` oder `readme.md` sind erlaubt) und nicht auflösbare Mirror-Kollisionen.
 * **Inkompatible Flags:** `--extensions` (Scan-Filter) wird mit Exit 2 und
   `phase: arguments` abgewiesen. `--jobs` hat bei einer Datei keine Wirkung.
 * **Envelope:** Der kanonische Envelope bleibt unverändert; `data.only_file` ergänzt
   `source`, `action` (`created`/`updated`/`unchanged`/`none`), `entry_changed`,
-  `duplicate_source`, `artifacts_changed`, `rolled_back` (und `mirror`).
+  `duplicate_source`, `artifacts_changed`, `rolled_back` (und `mirror`; bei
+  fehlgeschlagenem Rollback `rollback_errors`, `recovery_dir`). Bei Argumentfehlern
+  (Exit 2) gibt es noch keinen Lauf und damit kein `only_file`.
   `data.storages[0]` trägt `counts` (`scanned: 1`) und `file_count`.
 * **Eintragsfelder:** Wie beim Voll-Scan inkl. `form_fields`, `derivative`, OCR-Feldern und
   kuratierten Feldern/Overlay; zusätzlich `artifact_metadata` aus dem geschriebenen Mirror

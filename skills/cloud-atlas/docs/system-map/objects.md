@@ -191,7 +191,8 @@ unverändert):
 `action` ∈ `created` | `updated` | `unchanged` | `none` (Lauf vor einer Entscheidung
 gestoppt). `duplicate_source` ist bei mehrfachen/abweichend geschriebenen Einträgen der
 Quelle `true` (Lauf scheitert). `rolled_back` ist `true`, wenn nach begonnener
-Mutation zurückgerollt wurde; dann ggf. `rollback_errors`. Fehlerphasen: `only-file`,
+Mutation zurückgerollt wurde; schlägt der Rollback selbst fehl: `rollback_errors` und
+`recovery_dir` (erhaltene Sicherungen). Fehlerphasen: `only-file`,
 `filemap`, `mirror-plan`, `curation`, `conversion`, `rollback`, `runtime`. Der Eintrag selbst
 folgt dem Filemap-Objekt (1.); `artifact_metadata` entspricht dem geschriebenen
 Mirror-Frontmatter.

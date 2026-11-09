@@ -1,16 +1,28 @@
-"""Best-effort rollback of the artifacts one single-file run may touch (Issue #22).
+"""Best-effort, in-process rollback of the artifacts one single-file run may touch.
 
-Only paths registered before the first mutation are restored.  Backups live in a
-private temporary directory outside the workspace and are removed on commit and
-on rollback.
+This is deliberately *not* a crash-safe transaction: there is no journal, so a hard
+kill, power loss or a failed restore can leave a mixed state.  What it does give:
+
+* only paths registered before the first mutation are restored or removed;
+* the only other things removed are the run's own temporary files, recognised by
+  name pattern, never "everything new in the directory";
+* directories the run created are removed only when they are empty again;
+* backups live in a private temporary directory outside the workspace and are
+  kept (and reported) whenever a restore fails, so the previous state stays
+  recoverable by hand.
 """
 
 from __future__ import annotations
 
+import fnmatch
+import glob
 import os
 import shutil
 import tempfile
 from typing import Callable
+
+# Temporary names the conversion helpers create next to their targets.
+_STAGE_PATTERN = ".ocr-stage-*.pdf"
 
 
 class ArtifactTransaction:
@@ -19,8 +31,10 @@ class ArtifactTransaction:
         self._backup_root: str | None = None
         self._files: dict[str, str | None] = {}
         self._listings: dict[str, set[str]] = {}
-        self._created_roots: list[str] = []
+        self._created_dirs: list[str] = []
         self._counter = 0
+        self.recovery_dir: str | None = None
+        self.left_behind: list[str] = []
 
     def _backups(self) -> str:
         if self._backup_root is None:
@@ -28,11 +42,13 @@ class ArtifactTransaction:
         return self._backup_root
 
     def track_file(self, path: str) -> None:
-        """Remember the current content (or absence) of one file."""
+        """Remember the current content (or absence) of one regular file."""
         absolute = os.path.abspath(path)
         if absolute in self._files:
             return
         safe = self._safe(absolute)
+        if os.path.islink(safe):
+            raise OSError(f"artifact path is a link; refusing to track it: {absolute}")
         if os.path.isdir(safe):
             raise IsADirectoryError(f"artifact path is a directory: {absolute}")
         if os.path.exists(safe):
@@ -44,10 +60,10 @@ class ArtifactTransaction:
             self._files[absolute] = None
 
     def track_directory(self, directory: str, boundary: str) -> None:
-        """Remember a directory listing, or the topmost directory we would create."""
+        """Remember an existing directory's listing, or the directories we would create."""
         absolute = os.path.abspath(directory)
         boundary = os.path.abspath(boundary)
-        if absolute in self._listings or absolute in self._created_roots:
+        if absolute in self._listings or absolute in self._created_dirs:
             return
         missing = []
         current = absolute
@@ -58,47 +74,82 @@ class ArtifactTransaction:
             missing.append(current)
             current = parent
         if missing:
-            self._created_roots.append(missing[-1])
+            for created in missing:
+                if created not in self._created_dirs:
+                    self._created_dirs.append(created)
         else:
             self._listings[absolute] = set(os.listdir(self._safe(absolute)))
+
+    def _own_temporary(self, directory: str, name: str) -> bool:
+        if fnmatch.fnmatchcase(name, _STAGE_PATTERN):
+            return True
+        for tracked in self._files:
+            if os.path.dirname(tracked) != directory:
+                continue
+            base = os.path.basename(tracked)
+            if fnmatch.fnmatchcase(name, f".{glob.escape(base)}.*.tmp"):
+                return True
+        return False
+
+    def _restore(self, path: str, backup: str) -> None:
+        directory, name = os.path.split(path)
+        fd, temporary = tempfile.mkstemp(
+            prefix=f".{name}.rollback.", suffix=".tmp", dir=self._safe(directory),
+        )
+        os.close(fd)
+        try:
+            shutil.copyfile(backup, temporary)
+            shutil.copystat(backup, temporary)
+            os.replace(temporary, self._safe(path))
+        finally:
+            if os.path.lexists(temporary):
+                os.unlink(temporary)
 
     def rollback(self) -> list[str]:
         """Restore tracked state; return human-readable errors (empty on success)."""
         errors: list[str] = []
+        failed_backups: set[str] = set()
         for path, backup in self._files.items():
             try:
                 if backup is None:
                     if os.path.lexists(self._safe(path)):
                         os.unlink(self._safe(path))
                 else:
-                    directory, name = os.path.split(path)
-                    sibling = os.path.join(directory, f".{name}.rollback.tmp")
-                    try:
-                        shutil.copy2(backup, self._safe(sibling))
-                        os.replace(self._safe(sibling), self._safe(path))
-                    finally:
-                        if os.path.lexists(self._safe(sibling)):
-                            os.unlink(self._safe(sibling))
+                    self._restore(path, backup)
             except OSError as exc:
                 errors.append(f"{path}: {exc}")
+                if backup is not None:
+                    failed_backups.add(backup)
         for directory, before in self._listings.items():
             try:
                 for name in os.listdir(self._safe(directory)):
-                    if name in before:
+                    if name in before or not self._own_temporary(directory, name):
                         continue
-                    child = os.path.join(directory, name)
-                    if os.path.isdir(self._safe(child)) and not os.path.islink(self._safe(child)):
-                        shutil.rmtree(self._safe(child))
-                    else:
-                        os.unlink(self._safe(child))
+                    child = self._safe(os.path.join(directory, name))
+                    if os.path.isfile(child) or os.path.islink(child):
+                        os.unlink(child)
             except OSError as exc:
                 errors.append(f"{directory}: {exc}")
-        for root in self._created_roots:
+        # Created directories: temporary files of ours first, then only empty ones.
+        for directory in sorted(self._created_dirs, key=len, reverse=True):
             try:
-                if os.path.lexists(self._safe(root)):
-                    shutil.rmtree(self._safe(root))
+                if not os.path.isdir(self._safe(directory)):
+                    continue
+                for name in os.listdir(self._safe(directory)):
+                    if self._own_temporary(directory, name):
+                        child = self._safe(os.path.join(directory, name))
+                        if os.path.isfile(child) or os.path.islink(child):
+                            os.unlink(child)
+                if os.listdir(self._safe(directory)):
+                    self.left_behind.append(directory)
+                else:
+                    os.rmdir(self._safe(directory))
             except OSError as exc:
-                errors.append(f"{root}: {exc}")
+                errors.append(f"{directory}: {exc}")
+        if failed_backups:
+            self.recovery_dir = self._backup_root
+            errors.append(f"previous content kept for manual recovery in {self._backup_root}")
+            self._backup_root = None  # never delete a backup that is still needed
         self._discard()
         return errors
 
@@ -111,4 +162,4 @@ class ArtifactTransaction:
             self._backup_root = None
         self._files = {}
         self._listings = {}
-        self._created_roots = []
+        self._created_dirs = []

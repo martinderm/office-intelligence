@@ -16,9 +16,9 @@ erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 **Issue #22 (Einzeldatei-Modus `--only-file`):** ergänzt `core/filemap_merge.py`,
-`core/artifact_txn.py` und `tests/test_convert_cloud_docs_only_file.py` (53 Tests, 2 davon
-nur ohne Symlink-Recht übersprungen); Gesamtsuite `skills/cloud-atlas/tests`: 310 bestanden,
-2 übersprungen, 136 Subtests (zuvor 259 bestanden).
+`core/artifact_txn.py` und `tests/test_convert_cloud_docs_only_file.py` (75 Tests, 3 davon
+nur ohne Symlink-Recht übersprungen); Gesamtsuite `skills/cloud-atlas/tests`: 331 bestanden,
+3 übersprungen, 136 Subtests (vor #22: 259 bestanden).
 Die Metrik der Kopfzeile ist davon unberührt (Stand PR #51).
 
 Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
@@ -92,5 +92,5 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 2. **OCR-Policy Disziplin:** Standard ist `local_derivative` (lokales Textderivat). `enrich_source` (In-Place OCR im Cloud-PDF) ist nur für un-signierte, beschreibbare PDFs mit voller Provenienz zulässig.
 3. **Zirkelfreies Payload-Hashing:** `artifact_sha256` im Frontmatter repräsentiert exakt die Bytes des reinen Markdown-Bodys, niemals der Datei inklusive Frontmatter (Ausschluss selbstreferenzieller Hash-Drifts).
 4. **Strikte Frontmatter-Konformität:** Erzeugte Markdown-Dateien erzwingen exakt die 12 kanonischen Pflichtfelder (`REQUIRED_CLOUD_FRONTMATTER_KEYS`).
-5. **Einzeldatei-Isolation (Issue #22):** `--only-file` verändert genau einen Filemap-Eintrag per Roh-Splice, scannt und löscht nichts und hinterlässt bei jedem Fehler (inkl. Timeout) weder Artefakt- noch Filemap-Änderungen.
+5. **Einzeldatei-Isolation (Issue #22):** `--only-file` verändert genau einen Filemap-Eintrag per Roh-Splice und scannt und löscht nichts. Der atomare Filemap-Replace ist der Commit-Punkt; davor rollt ein Fehler im laufenden Prozess (inkl. Timeout mit Prozessbaum-Kill) die Artefakte best-effort zurück und entfernt dabei nur Eigenes. Keine Crash-/Mehrdatei-Atomarität (kein Journal): harte Abbrüche oder fehlgeschlagene Restores können einen Mischzustand hinterlassen, Sicherungen bleiben dann unter `recovery_dir` erhalten.
 6. **Kuratierungs-Stabilität:** Manuelle Overrides in `filemap-curation.json` übersteuern automatisierte Heuristiken deterministisch.

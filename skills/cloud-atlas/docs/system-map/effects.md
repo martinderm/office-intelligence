@@ -91,10 +91,26 @@ Alles andere bleibt unangetastet: kein Walk, kein Löschen verwaister Mirrors/De
 oder leerer Verzeichnisse, keine anderen Einträge, kein `filemap.md`, keine
 Katalogzeitstempel. Vor der ersten Mutation registriert `ArtifactTransaction`
 (`core/artifact_txn.py`) die Zielpfade: Dateien werden in ein privates Temp-Verzeichnis
-**außerhalb des Workspaces** gesichert, Zielverzeichnisse per Listing bzw. als „von uns
-angelegt" vermerkt. Bei jedem Fehler (Konvertierung, Timeout, Schreib-/Replace-Fehler,
-Abbruch) werden Dateien wiederhergestellt oder entfernt, neue Dateien in überwachten
-Verzeichnissen (z. B. `.ocr-stage-*`) gelöscht und angelegte Verzeichnisse entfernt.
-Misslingt der Rollback selbst, endet der Lauf mit `phase: rollback` und
-`only_file.rollback_errors`. Der Windows-Pfad bleibt über `get_safe_path` abgedeckt.
-Die Prozessgrenze bleibt die des Workers (`--file-timeout`, `terminate()`/`kill()`).
+**außerhalb des Workspaces** gesichert (Links als Ziele werden abgewiesen), Zielverzeichnisse
+per Listing bzw. als „von uns angelegt" vermerkt.
+
+**Fehlermodell:** Der Filemap-Replace ist der **Commit-Punkt**. Ein Fehler im laufenden
+Prozess davor (Konvertierung, Timeout, Schreib-/Replace-Fehler, Abbruch) löst einen
+**Best-effort-Rollback** aus; danach wird nie mehr zurückgerollt (Ausgabefehler ändern das
+Ergebnis nicht). Der Rollback entfernt ausschließlich registrierte Zielpfade und eigene
+Temp-Dateien (`.ocr-stage-*.pdf`, `.<ziel>.*.tmp`) — nie „alles Neue" in einem Verzeichnis —;
+selbst angelegte Verzeichnisse verschwinden nur, wenn sie leer sind (`left_behind`
+sonst). Restore läuft über eine exklusiv erzeugte, zufällig benannte Temp-Datei. Schlägt
+ein Restore fehl, bleiben die Sicherungen erhalten (`only_file.recovery_dir`), der Lauf
+endet mit `phase: rollback` und `only_file.rollback_errors`.
+
+**Grenzen (kein Versprechen darüber hinaus):** keine Crash-/Mehrdatei-Atomarität — ohne
+Journal können hartes Beenden, Stromausfall oder ein Restore-Fehler Mirror/Derivat/Quelle
+und Filemap in einem Mischzustand hinterlassen; eine bei `enrich_source` bereits extern
+synchronisierte Quelle lässt sich lokal nicht rückgängig machen. Ob dafür ein Journal-/
+Recovery-Protokoll gewünscht ist, ist eine offene Scope-Entscheidung.
+
+**Prozessgrenze:** `--file-timeout` beendet den Worker samt Kindprozessen
+(`terminate_process_tree`: Windows `taskkill /T /F`, POSIX eigene Prozessgruppe via
+`setsid` und `killpg`), damit kein externer Konverter während des Rollbacks weiterschreibt.
+Der Windows-Pfad bleibt über `get_safe_path` abgedeckt.

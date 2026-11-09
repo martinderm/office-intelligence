@@ -126,9 +126,14 @@ Filemap-Neuaufbau) wird nicht betreten. Ablauf:
 6. **Merge:** Eintrag bauen (`build_converted_file_entry` bzw. `build_unchanged_file_entry`,
    dann `merge_curated_metadata`), validieren, `splice_entry` + `verify_splice`, schreiben
    per Temp-Datei + `os.replace`. Identischer Eintrag → kein Schreiben der Filemap.
-7. **Fehler:** `ArtifactTransaction.rollback()` stellt alle Artefakte wieder her; Exit ≠ 0.
-   Nur Erfolg schreibt Artefakte und Eintrag; `conversion_required` wird gemeldet, nicht
-   persistiert.
+7. **Commit-Punkt und Fehler:** Der Filemap-Replace ist die letzte Mutation; danach kein
+   Rollback mehr. Davor stellt `ArtifactTransaction.rollback()` die registrierten Artefakte
+   best-effort wieder her (nur Eigenes, Sicherungen bleiben bei Restore-Fehlern in
+   `recovery_dir`); Exit ≠ 0. Nur Erfolg schreibt Artefakte und Eintrag;
+   `conversion_required` wird gemeldet, nicht persistiert. Der `.doc`-Konverter wird erst
+   nach `determine_needs_conversion` verlangt; die Kurz-Body-Heuristik des Voll-Scans ist
+   im Einzelmodus aus; ein benutzerdefinierter Derivatpfad des Eintrags bleibt Ziel.
+   Keine Crash-Atomarität (siehe `effects.md` §6).
 
 ---
 
