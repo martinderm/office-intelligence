@@ -383,12 +383,17 @@ werden bereinigt.
 ```bash
 python .agents/skills/cloud-atlas/scripts/convert_cloud_docs.py --topic-id <topic_id> --only-file data/cloud/<ORDNER>/<Pfad>/datei.pdf --json
 ```
-Für große Maps (z. B. 2.000+ Einträge), in denen ein Voll-Scan unverhältnismäßig oder
-riskant ist: Der Modus konvertiert **genau eine** Quelle und erzeugt oder aktualisiert
-**genau einen** Eintrag einer **bestehenden** `filemap.json`. Er läuft in einem eigenen
-Pfad ohne Verzeichnis-Scan, ohne `retained_artifact_paths`-Walk, ohne Orphan-Cleanup und
-ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
 
+**Bewusste Scope-Reduktion.** Dieser Modus ist absichtlich klein: genau eine Quelle,
+genau ein Filemap-Eintrag, ein Commit-Punkt. Er hat **keine** Vollscan-Integration, **keine**
+Fremdreferenz-Ermittlung, **keine** Quarantäne, **keine** Journal-Archivierung und **kein**
+Verschieben oder Löschen im Produktpfad. Die daraus folgenden Grenzen stehen unten
+ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
+
+* **Umfang:** Der Modus konvertiert **genau eine** Quelle und erzeugt oder aktualisiert
+  **genau einen** Eintrag einer **bestehenden** `filemap.json`. Er läuft in einem eigenen
+  Pfad ohne Verzeichnis-Scan, ohne `retained_artifact_paths`-Walk, ohne Orphan-Cleanup und
+  ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
 * **Pfadsemantik:** `--only-file` ist wie `--cloud-dir`, `--output-dir` und
   `--filemap-json` **relativ zum Workspace-Root** und identisch mit dem Schlüssel in
   `files`. Er muss unter dem Cloud-Verzeichnis liegen (`--cloud-dir` oder `scan_dir` des
@@ -402,24 +407,67 @@ ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
   Eintrag wird an der sortierten Position eingefügt (bei unsortierter Map am Ende) und im
   Stil der Datei formatiert; ein bestehender wird an Ort und Stelle ersetzt. Vor dem
   Schreiben beweist `verify_splice`, dass nur dieser Eintrag abweicht.
-* **Fehlermodell (bewusst begrenzt):** Die Filemap selbst wird atomar ersetzt (Temp-Datei +
-  `fsync` + `os.replace`) und ist der **Commit-Punkt**. Davor schlägt ein Fehler im
-  laufenden Prozess — Konvertierungsfehler, Timeout (`--file-timeout`), Schreib-/Replace-
-  Fehler — in einen **Best-effort-Rollback** der Artefakte (Mirror, Derivat, bei
-  `enrich_source` die Quelle) um und endet mit Exit ≠ 0; die Filemap bleibt unverändert und
-  es wird kein `conversion_required`-Eintrag geschrieben. Nach dem Commit-Punkt wird nie
-  mehr zurückgerollt (Ausgabefehler ändern das Ergebnis nicht). **Das ist keine
-  Crash-/Mehrdatei-Atomarität:** Es gibt kein Journal. Hartes Beenden, Stromausfall, ein
-  fehlgeschlagener Restore oder eine bereits extern synchronisierte Quelle (`enrich_source`)
-  können einen Mischzustand hinterlassen; ein erneuter Lauf heilt ihn nur, soweit die
-  Zielpfade noch zum Eintrag passen. Schlägt ein Restore fehl, bleiben die Sicherungen in
-  `data.only_file.recovery_dir` erhalten und `error.phase` ist `rollback`.
-* **Rollback entfernt nur Eigenes:** ausschließlich die registrierten Zielpfade und die
-  eigenen Temp-Dateien (`.ocr-stage-*.pdf`, `.<ziel>.*.tmp`); fremde, parallel angelegte
-  Dateien und Verzeichnisse bleiben, selbst angelegte Verzeichnisse werden nur entfernt,
-  wenn sie wieder leer sind. Wiederherstellung über eine exklusiv erzeugte Zufalls-
-  Temp-Datei; Links als Ziele werden abgewiesen. Ein Timeout beendet den Worker samt
-  Prozessbaum (Windows `taskkill /T`, POSIX Prozessgruppe).
+* **Versionierte Ziele (direkt geschrieben):** Eine Konvertierung legt ein **neues,
+  eindeutiges Versionsverzeichnis** unter dem reservierten Root
+  `<output_dir>/_versions/<quell-key>/<zeit-pid-id>/` an und schreibt Mirror und Derivat
+  **direkt hinein** — kein Staging-Verzeichnis, kein Verzeichnis-Rename; Dateien und
+  Verzeichnis werden gefsynct (Verzeichnis-fsync nur POSIX). Auch der Mirror wird direkt
+  geschrieben (kein Temp, kein Replace). Der Filemap-Eintrag (`markdown_mirror`,
+  `derivative.path`) zeigt danach auf diese Version. **Der Mirror-Pfad ist nicht stabil**;
+  die Filemap ist die Quelle der Wahrheit. Ein vorhandenes Artefakt wird nie in-place
+  überschrieben, umbenannt oder zurückgerollt. Der reservierte Root hat **keine
+  Aufräumlogik**: alte Versionen, Reste und Journale bleiben liegen (Retention ist bewusst
+  nicht Teil dieses Modus).
+* **Commit-Punkt:** Der atomare Filemap-Replace ist der **einzige** Commit-Punkt. Jeder
+  Fehler davor — Konvertierungsfehler, Timeout (`--file-timeout`), Validierungs-, Schreib-
+  oder Konfliktfehler, Exception — lässt die alte Version aktiv; die neue Version bleibt
+  unreferenziert liegen und wird als `retained_version` gemeldet. **Einzige zulässige
+  Mutationen neben den direkten Schreibvorgängen sind** der atomare `os.replace` der
+  Ziel-Filemap und des Journals (Temp-Datei im selben Verzeichnis, notwendige Ausnahme für
+  den Commit bzw. den Journal-Record). Es gibt **kein** `os.rename` von Verzeichnissen und
+  **kein** `unlink`/`rmtree` im Produktpfad — auch nicht im Worker: OCR schreibt direkt in
+  das endgültige Derivat, ein Short-Path-Staging bleibt liegen, Derivate werden per Kopie
+  (nicht per Replace) übernommen.
+* **Minimales Journal:** Ein atomar geschriebenes Journal
+  `<output_dir>/.only-file-journal/<key>.json` hält `planned → staged → published →
+  committed`, Quellpfad, Versionsverzeichnis, Zielpfade mit SHA-256 und die
+  Eintrags-Digests. `planned` wird vor dem Anlegen des Versionsverzeichnisses geschrieben,
+  `staged` **unmittelbar vor** dem Filemap-Replace, danach `published`/`committed`. Das
+  Journal wird **nie** umbenannt, archiviert oder gelöscht; es bleibt nach jedem Lauf
+  liegen. **Vor jeder Journalmutation** prüft der Lauf **alle** Einträge derselben
+  Ziel-Filemap — auch den Eintrag der gewählten Quelle: beansprucht einer davon den
+  Journalpfad (`markdown_mirror` oder `derivative.path`), endet der Lauf fail-closed
+  (`phase: journal`), ohne das Journal zu schreiben oder die Filemap zu ändern (kein
+  Scan, keine andere Filemap). Der Vergleich nutzt dieselbe Windows-Aliasing-Regel wie
+  das Dateisystem: case-insensitiv und abschließende Punkte/Leerzeichen je
+  Pfadkomponente ignoriert (`…/.only-file-journal./…` ist derselbe Pfad).
+* **Recovery meldet nur:** Der nächste Lauf derselben Quelle liest **genau diesen Pfad**
+  (kein Scan, keine Suche nach anderen Journalen, keine Fremd-Filemap). Er trifft **keine**
+  Roll-forward-/Roll-back-Entscheidung und schreibt, verschiebt oder löscht nichts:
+  - `published`/`committed` oder ein Live-Eintrag, der dem aufgezeichneten neuen Digest
+    entspricht ⇒ der frühere Lauf hat committet; der neue Lauf fährt fort (und ersetzt dabei
+    nur seinen eigenen Journalinhalt).
+  - Jeder andere Zustand (`planned`, `staged` ohne passenden Live-Eintrag, unlesbares
+    Journal, beschädigte aktive Version) ist **unklar** ⇒ der Lauf endet **fail-closed**
+    (`phase: journal`) vor jeder Mutation; Journal, Versionen und Stages bleiben exakt
+    liegen. Die manuelle Abhilfe ist die Inspektion und das Entfernen des Journals durch den
+    Operator.
+* **Fremdreferenzschutz (nur Ziel-Filemap):** Geschützt wird ausschließlich, was **dieselbe**
+  `filemap.json` schon beansprucht: Ziele anderer Einträge (`claimed`), eigene Artefakte
+  (`owned`) und die Storage-eigenen Dateien (Filemap, `filemap.md`, Kuratierung). Andere
+  Topics/Projekte werden **nicht** gelesen und nicht berücksichtigt.
+* **Keine Cloud-Hydratation (nur Quelle und Ziel-Filemap):** Beide werden vor jedem
+  relevanten Öffnen lokal geprüft (`FILE_ATTRIBUTE_OFFLINE`, `RECALL_ON_OPEN`,
+  `RECALL_ON_DATA_ACCESS`; ein `stat`-Fehler auf einem existierenden Pfad gilt fail-closed als
+  Platzhalter). Eine nicht-lokale Quelle bzw. Platzhalter-Ziel-Filemap endet fail-closed,
+  ohne zu hydratisieren.
+* **Locking:** Der Lauf hält **OS-Locks pro Storage**: Output-Verzeichnis **exklusiv**,
+  Elternordner **shared**, Filemap-Pfad **exklusiv**, sortiert akquiriert. Die Filemap wird
+  darunter gelesen, gespleißt und per Base-Hash vor dem Temp-Write und unmittelbar vor dem
+  Replace geprüft. Die Locks werden vom OS beim Prozesstod freigegeben und liegen persistent
+  unter `<workspace>/data/.locks/cloud-atlas/` (nicht gelöscht; `.gitignore` empfohlen).
+  **Kooperierende Läufe sind geschützt; Writer ohne Harness-Lease sind ausdrücklich außerhalb
+  des Vertrags.** Das ist kein vollständiges CAS gegen beliebige Fremdschreiber.
 * **Idempotent:** Ein zweiter Lauf ohne `--force` schreibt weder Eintrag noch Artefakte noch
   Filemap (keine geänderte mtime) — auch bei gültigen kurzen Office-Dokumenten (die
   Voll-Scan-Heuristik „Body < 10 Zeichen“ gilt hier nicht), bei einem benutzerdefinierten
@@ -438,25 +486,59 @@ ohne `gen_filemap.py`. `sync_project_cloud.py` kennt den Modus nicht.
   auf fremde Dateien), abweichende Pfad-Groß-/Kleinschreibung, `:`-, Laufwerks- oder
   `..`-Segmente in `--cloud-dir`/`--output-dir`/`--filemap-json`, Output-Zone oder Filemap
   außerhalb der kanonischen Data Zones (`memory/references/`, `memory/evidence/`,
-  `memory/cloud/`, `data/`; bei `enrich_source` auch die Quelle), Mirror-/Derivat-Ziele,
-  die ein fremder Eintrag beansprucht, bereits vorhandene Ziele ohne Besitz durch diesen
-  Eintrag, die eigene Filemap/`filemap.md`/Kuratierungsdatei als Ziel (andere Namen wie
-  `index.md` oder `readme.md` sind erlaubt) und nicht auflösbare Mirror-Kollisionen.
-* **Inkompatible Flags:** `--extensions` (Scan-Filter) wird mit Exit 2 und
-  `phase: arguments` abgewiesen. `--jobs` hat bei einer Datei keine Wirkung.
+  `memory/cloud/`, `data/`), Mirror-/Derivat-Ziele,
+  die ein fremder Eintrag **derselben** Filemap beansprucht, bereits vorhandene Ziele ohne
+  Besitz durch diesen Eintrag, die eigene Filemap/`filemap.md`/Kuratierungsdatei als Ziel
+  (andere Namen wie `index.md` oder `readme.md` sind erlaubt) und nicht auflösbare
+  Mirror-Kollisionen.
+* **Inkompatible Flags:** `--extensions` (Scan-Filter) und `--ocr-policy enrich_source`
+  (Quellmutation) werden mit Exit 2 und `phase: arguments` abgewiesen. `--jobs` hat bei
+  einer Datei keine Wirkung.
 * **Envelope:** Der kanonische Envelope bleibt unverändert; `data.only_file` ergänzt
   `source`, `action` (`created`/`updated`/`unchanged`/`none`), `entry_changed`,
-  `duplicate_source`, `artifacts_changed`, `rolled_back` (und `mirror`; bei
-  fehlgeschlagenem Rollback `rollback_errors`, `recovery_dir`). Bei Argumentfehlern
-  (Exit 2) gibt es noch keinen Lauf und damit kein `only_file`.
+  `duplicate_source`, `artifacts_changed`, `recovered` (`committed`, wenn ein früherer Lauf
+  nachweislich committet hat, sonst `null`), `retained_version` (reell existierender
+  Versionsverzeichnis, der liegen blieb, sonst `null`), `version` (neues
+  Versionsverzeichnis), `journal` (offener bzw. liegengebliebener Journalpfad) und `mirror`.
+  Bei Argumentfehlern (Exit 2) gibt es noch keinen Lauf und damit kein `only_file`.
   `data.storages[0]` trägt `counts` (`scanned: 1`) und `file_count`.
 * **Eintragsfelder:** Wie beim Voll-Scan inkl. `form_fields`, `derivative`, OCR-Feldern und
   kuratierten Feldern/Overlay; zusätzlich `artifact_metadata` aus dem geschriebenen Mirror
   (so wie der Generator es nachträglich ergänzt). Unveränderte Quellen übernehmen ihre
   generierten Felder aus dem bestehenden Eintrag.
-* **Nicht Teil des Modus:** SHA-Rename-Adoption, Löschen verwaister Dateien oder
-  Einträge, Neuaufbau von `filemap.md`, Anlegen einer Filemap. Danach ist ein regulärer
-  Sync nötig, wenn diese Wirkungen gewünscht sind. Es gilt die Lock-Vorbedingung oben.
+* **Nicht Teil des Modus (Sicherheitsgrenzen, bewusst):**
+  - **Kein Vollscan:** `--only-file` scannt und bereinigt nichts. Ein späterer regulärer
+    Vollscan kennt den Version-Root **nicht**: er kann versionierte Quellen erneut
+    konvertieren und versionierte Mirror-Dateien als Waisen entfernen. Wer das vermeiden
+    will, betreibt den Modus in einem Storage, der nicht zusätzlich vollgescannt wird.
+  - **Keine Fremdreferenz-Discovery:** Verweise anderer Storages/Filemaps auf Pfade dieses
+    Outputs werden nicht ermittelt und nicht geschützt.
+  - **Keine Quarantäne, keine Journal-Archivierung, kein Aufräumen:** Journale, Versionen,
+    Reste und Commit-Temps bleiben liegen und sammeln sich an (Follow-up). Nichts wird
+    verschoben oder gelöscht.
+  - **Kein Sibling-Schutz:** Ein paralleler Schreiber eines anderen Storages wird nicht
+    koordiniert; nur derselbe Storage (Output/Filemap) ist gesperrt.
+  - **Kein Roll-forward/Roll-back:** Recovery meldet und blockiert, sie repariert nicht.
+  - **Grenze der Platzhalter-Prüfung:** Nur Quelle und Ziel-Filemap werden geprüft; bereits
+    erzeugte Mirror-/Derivat-/Versionsdateien im Output werden nicht geprüft. Liegt der
+    Output in einem cloud-synchronisierten Ordner, ist das eine dokumentierte Grenze.
+  - **Kein Move/Delete im Worker:** Auch der Konvertierungs-Worker löscht keine Artefakte:
+    das DOC-Short-Path-Staging **und** das LibreOffice-Profil — im Short-Path- und im
+    direkten Pfad — liegen im kurzen, eindeutigen Laufverzeichnis
+    `<workspace>/data/ca-doc/<run-id>` (kanonische Data Zone) und bleiben
+    liegen; ein fehlgeschlagenes OCR-/Derivat-Artefakt bleibt an seinem Pfad. Unser Code
+    legt im `--only-file`-Pfad kein temporäres Verzeichnis außerhalb der Data Zones an; die
+    OCR-Fähigkeitsprobe läuft **nur im Vollscan**. Externe Programme (LibreOffice, OCRmyPDF,
+    Tesseract) verwalten ihre eigenen internen Temp-Dateien selbst. Die Profil-URI wird als
+    reiner `file://`-URI gebildet (ohne Windows-Extended-Prefix, Leerzeichen percent-kodiert,
+    UNC als `file://server/share/…`), damit der Konverter nicht auf ein unauflösbares Profil
+    wartet. Das kurze Laufverzeichnis hält die URI unter der sicheren Grenze von 120 Zeichen;
+    ist der Workspace-Pfad zu tief, endet die Konvertierung fail-closed als
+    `conversion_required` (statt eines Konverter-Absturzes), und es wird nichts gelöscht. OCR schreibt das Derivat
+    direkt (kein `os.replace(x, x)`); die Pfadgleichheit wird nach Entfernen des
+    Windows-Extended-Prefix geprüft.
+  - **Trust-Boundary:** Same-User-Manipulation (z. B. Hardlink-Restore) liegt außerhalb des
+    kooperativen Vertrags; es gibt keine Identitätsgarantie.
 
 ---
 

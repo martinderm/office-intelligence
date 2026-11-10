@@ -9,6 +9,7 @@ raw character spans of the members and splices only the one member.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -453,6 +454,84 @@ def verify_splice(before: Filemap, after_text: str, source: str, entry: dict) ->
     if after.data["files"].get(source) != json.loads(json.dumps(entry)):
         raise FilemapError("splice verification failed: target entry differs from the merge result")
     return after
+
+
+def _sha256_file(path: str) -> str | None:
+    # The filemap can turn into a cloud placeholder between two checks; the digest
+    # check opens it, so it must re-check locally right before every open.
+    from .artifact_refs import is_cloud_placeholder
+
+    if is_cloud_placeholder(path):
+        raise FilemapError(f"{path} is a cloud placeholder; refusing to hydrate it")
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def write_text_atomic_cas(
+    path: str, text: str, *, expected_sha256: str, mode: int | None = None,
+    safe_path: Callable[[str], str] = lambda value: value,
+    tmp_path: str | None = None,
+    before_replace: Callable[[], None] | None = None,
+) -> None:
+    """Atomic replace that aborts when the target no longer holds ``expected_sha256``.
+
+    The check runs once before writing the temporary file and once immediately before
+    the replace.  With ``tmp_path`` the temporary lives at a deterministic location
+    (for ``--only-file`` inside the journal directory) so a hard kill leaves no
+    unjournaled sibling next to the filemap.  ``before_replace`` runs after the final
+    CAS check and directly before ``os.replace``; ``--only-file`` uses it to persist
+    its armed journal record, so the only remaining window is the replace itself.
+    """
+    absolute = os.path.abspath(path)
+    target = safe_path(absolute)
+    if _sha256_file(target) != expected_sha256:
+        raise FilemapError("filemap changed while this run was staging; refusing to overwrite it")
+    directory, name = os.path.split(absolute)
+    if tmp_path is not None:
+        temporary = tmp_path
+        os.makedirs(safe_path(os.path.dirname(os.path.abspath(temporary))), exist_ok=True)
+        fd = os.open(safe_path(temporary), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    else:
+        fd, temporary = tempfile.mkstemp(prefix=f".{name}.", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(text.encode("utf-8"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        if mode is not None:
+            os.chmod(temporary, stat.S_IMODE(mode))
+        if os.environ.get("CLOUD_ATLAS_ONLY_FILE_CRASH_AFTER") == "filemap_tmp":
+            os._exit(137)
+        if _sha256_file(target) != expected_sha256:
+            raise FilemapError("filemap changed while this run was staging; refusing to overwrite it")
+        if before_replace is not None:
+            before_replace()
+        if _sha256_file(target) != expected_sha256:
+            raise FilemapError("filemap changed while this run was staging; refusing to overwrite it")
+        os.replace(safe_path(temporary), target)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        # No unlink: a pre-commit failure leaves the (unique) temp file in place.
+        # Deleting/moving it could break a foreign reference; cleanup is follow-up.
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY)
+    except OSError:
+        directory_fd = None
+    if directory_fd is not None:
+        try:
+            os.fsync(directory_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(directory_fd)
 
 
 def write_text_atomic(

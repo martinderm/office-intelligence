@@ -58,7 +58,7 @@ Die Modifikation von Originaldateien im Modus `enrich_source` unterliegt strengs
 
 ## 4. Nebenläufigkeit & Locking
 
-* **Workspace-Lock Guard:** Jeder Lauf von `sync_project_cloud.py` oder `convert_cloud_docs.py` validiert vor dem ersten Schreibvorgang in `memory/cloud/` die aktive Lease des aufrufenden Harnesses via `workspace-lock`.
+* **Workspace-Lock Guard:** Der aufrufende Harness validiert vor dem ersten Schreibvorgang in `memory/cloud/` die aktive Lease via `workspace-lock`; `convert_cloud_docs.py` erzwingt die Lease nicht selbst (auch nicht mit `--only-file`). Ohne Harness-Guard gilt die Lock-Vorbedingung aus `SKILL.md`.
 * **Idempotente Atomarität:** Das Schreiben von `filemap.json` und aller `.md`-Mirrors erfolgt über `tempfile.NamedTemporaryFile` gefolgt von `os.replace`. Ein vorzeitiger Abbruch hinterlässt weder leere noch halb konvertierte Dateien.
 
 ## 5. Ausschluss- und Cleanup-Grenze (Issue #2)
@@ -76,41 +76,72 @@ Ohne Ausschlüsse gilt das bisherige Cleanup. Überlappende Quellwurzeln erforde
 getrennte Output-Wurzeln und Filemaps je Storage. Keine automatische Übernahme
 von Ownership oder Entfernung zurückbehaltener Artefakte.
 
-## 6. Einzeldatei-Modus: Schreibgrenze und Rollback (Issue #22)
+**Der Vollscan kennt den Version-Root nicht (bewusste Grenze der Scope-Reduktion):**
+`_versions/` und `.only-file-journal/` werden vom Vollscan weder reserviert noch
+ausgenommen. Ein regulärer Vollscan kann versionierte Quellen erneut konvertieren
+und die versionierten Mirror-Dateien als Waisen entfernen; Journale werden von ihm
+nicht gelesen. Der Version-Root bleibt ausschließlich Sache von `--only-file` und
+hat dort keine Aufräumlogik.
+
+## 6. Einzeldatei-Modus: versionierte Ziele und Commit (Issue #22)
 
 `convert_cloud_docs.py --only-file` schreibt ausschließlich:
 
 | Ziel | Wann | Mechanismus |
 | :--- | :--- | :--- |
-| Markdown-Mirror der einen Quelle | nur bei Konvertierung | `atomic_write_text` (Temp + `os.replace`) |
-| Derivat der einen Quelle (`_derivatives/`) | `.doc`, PDF mit `local_derivative` | Worker-Staging/Promotion |
-| Cloud-Quelle selbst | nur `--ocr-policy enrich_source` | In-place-OCR, hier zusätzlich per Backup rückholbar |
-| `filemap.json` | nur wenn sich der eine Eintrag ändert | Roh-Splice + `write_text_atomic` (Temp + `fsync` + `os.replace`, Dateimodus erhalten) |
+| `<output_dir>/.only-file-journal/<key>.json` | jeder Launch mit Konvertierung oder Eintragsänderung | atomar (Datei-`fsync` + `os.replace`), `planned → staged → published → committed`; `staged` unmittelbar vor dem Replace; wird **nie** umbenannt, archiviert oder gelöscht |
+| `<output_dir>/_versions/<quell-key>/<zeit-pid-id>/` | jede Konvertierung | neues, eindeutiges Versionsverzeichnis (nie überschrieben); Mirror und Derivat werden **direkt hineingeschrieben** (kein Staging-Verzeichnis, kein Verzeichnis-Rename, auch der Mirror ohne Temp/Replace), Dateien und Verzeichnis gefsynct; keine Aufräumlogik |
+| `filemap.json` | nur wenn sich der eine Eintrag ändert | Roh-Splice in die **aktuelle** Datei unter OS-Lock + Base-Hash-Prüfung vor dem Temp-Write und unmittelbar vor dem atomaren `os.replace` — **einziger Commit-Punkt** |
 
-Alles andere bleibt unangetastet: kein Walk, kein Löschen verwaister Mirrors/Derivate
-oder leerer Verzeichnisse, keine anderen Einträge, kein `filemap.md`, keine
-Katalogzeitstempel. Vor der ersten Mutation registriert `ArtifactTransaction`
-(`core/artifact_txn.py`) die Zielpfade: Dateien werden in ein privates Temp-Verzeichnis
-**außerhalb des Workspaces** gesichert (Links als Ziele werden abgewiesen), Zielverzeichnisse
-per Listing bzw. als „von uns angelegt" vermerkt.
+Alles andere bleibt unangetastet: kein Walk, kein Löschen verwaister Mirrors/Derivate,
+keine Quarantäne, keine Archivierung. **Bewusste Scope-Reduktion:** es gibt keine
+Fremdreferenz-Ermittlung (Schutz nur gegen die **eigene** Ziel-Filemap), keine
+Sibling-Koordination und keinen Vollscan-Anteil.
 
-**Fehlermodell:** Der Filemap-Replace ist der **Commit-Punkt**. Ein Fehler im laufenden
-Prozess davor (Konvertierung, Timeout, Schreib-/Replace-Fehler, Abbruch) löst einen
-**Best-effort-Rollback** aus; danach wird nie mehr zurückgerollt (Ausgabefehler ändern das
-Ergebnis nicht). Der Rollback entfernt ausschließlich registrierte Zielpfade und eigene
-Temp-Dateien (`.ocr-stage-*.pdf`, `.<ziel>.*.tmp`) — nie „alles Neue" in einem Verzeichnis —;
-selbst angelegte Verzeichnisse verschwinden nur, wenn sie leer sind (`left_behind`
-sonst). Restore läuft über eine exklusiv erzeugte, zufällig benannte Temp-Datei. Schlägt
-ein Restore fehl, bleiben die Sicherungen erhalten (`only_file.recovery_dir`), der Lauf
-endet mit `phase: rollback` und `only_file.rollback_errors`.
+**Fehlermodell:** Der Filemap-Replace ist der **einzige** Commit-Punkt. Jeder Fehler davor
+lässt die alte Version aktiv; die neue Version bleibt unreferenziert liegen und wird als
+`retained_version` gemeldet. **Es wird nichts gelöscht, verschoben, umbenannt oder
+archiviert** — auch nicht im Worker: OCR schreibt direkt in das endgültige Derivat, ein
+Short-Path-Staging und LibreOffice-Profil bleiben — im Short-Path- wie im direkten Pfad —
+im kurzen, eindeutigen Laufverzeichnis `<workspace>/data/ca-doc/<run-id>` (kanonische Data
+Zone) liegen, Derivate werden per Kopie übernommen. Das
+Profil wird dem Konverter als reiner `file://`-URI übergeben (ohne Extended-Prefix,
+Leerzeichen percent-kodiert, UNC als `file://server/share/…`); ein `file://///?/…`-URI
+würde LibreOffice bis zum Timeout hängen lassen. Die URI bleibt unter 120 Zeichen; tiefere
+Workspace-Pfade enden fail-closed als `conversion_required` (kein Konverter-Absturz). **Einzige zulässige
+Ausnahmen sind** der atomare `os.replace` der Ziel-Filemap und des Journals
+(Temp-Datei im selben Verzeichnis; notwendig für Commit bzw. Journal-Record). Das OCR-
+Derivat wird direkt geschrieben; die Pfadgleichheit wird nach Entfernen des Windows-
+Extended-Prefix geprüft, sodass kein `os.replace(x, x)` entsteht. Eine bereits committete, später überholte Version ist historisch und wird
+nicht gemeldet. Kaputtes JSON der Ziel-Filemap verhindert den Lauf (`filemap`); ein
+unlesbares Journal, ein unklarer Journalzustand oder eine beschädigte aktive Version
+beenden ihn fail-closed (`journal`) ohne jede Mutation.
 
-**Grenzen (kein Versprechen darüber hinaus):** keine Crash-/Mehrdatei-Atomarität — ohne
-Journal können hartes Beenden, Stromausfall oder ein Restore-Fehler Mirror/Derivat/Quelle
-und Filemap in einem Mischzustand hinterlassen; eine bei `enrich_source` bereits extern
-synchronisierte Quelle lässt sich lokal nicht rückgängig machen. Ob dafür ein Journal-/
-Recovery-Protokoll gewünscht ist, ist eine offene Scope-Entscheidung.
+**Journal-Pfad ist geschützt:** Vor jeder Journalmutation prüft der Lauf **alle** Einträge
+derselben Ziel-Filemap (auch den Eintrag der gewählten Quelle); beansprucht einer davon
+den Journalpfad (`markdown_mirror` oder `derivative.path`), endet er fail-closed
+(`phase: journal`) ohne Journal-Write und ohne Filemap-Änderung (kein Scan, keine andere
+Filemap). Der Vergleich folgt dem Windows-Aliasing (case-insensitiv, abschließende
+Punkte/Leerzeichen je Komponente ignoriert).
+
+**Recovery meldet nur:** Der nächste Lauf derselben Quelle liest genau den kanonischen
+Journalpfad (kein Scan, keine Suche nach weiteren Journalen, keine Fremd-Filemap) und
+entscheidet **nichts**: Ist der Lauf nachweislich committet (`published`/`committed` oder
+Live-Eintrag == aufgezeichneter neuer Digest), fährt er fort; jeder andere Zustand ist
+unklar und blockiert. Journal, Versionen und Stages bleiben exakt liegen; die manuelle
+Abhilfe ist die Inspektion und das Entfernen des Journals durch den Operator.
+
+**Zusage:** F1 gilt ohne Restore: Vor dem Commit ist die alte Version vollständig aktiv,
+nach dem Commit die neue; es gibt keinen mehrstufigen In-Place-Rollback und keinen
+gemischten Zustand. Getestet sind Crashs nach jedem Schritt (`planned`, `writing`, `temp`,
+`filemap_tmp`, `staged`, `filemap`, `published`, `committed`), fail-closed ohne Writes vor
+dem Commit, Fortsetzen nach dem Commit, kein `unlink`/`remove`/`rename`/`replace`/`rmtree`
+im Recoverypfad, Platzhalter-Quelle/-Ziel-Filemap (fail-closed), doppelte JSON-Schlüssel,
+fremde Einträge der Ziel-Filemap und Checksummen-Abweichungen. **Nicht** getestet und
+ausdrücklich außerhalb des Vertrags: Vollscan-Verträglichkeit des Version-Roots,
+Fremdreferenzen anderer Storages, Quarantäne, Journal-Archivierung und Aufräumlogik.
 
 **Prozessgrenze:** `--file-timeout` beendet den Worker samt Kindprozessen
 (`terminate_process_tree`: Windows `taskkill /T /F`, POSIX eigene Prozessgruppe via
-`setsid` und `killpg`), damit kein externer Konverter während des Rollbacks weiterschreibt.
-Der Windows-Pfad bleibt über `get_safe_path` abgedeckt.
+`setsid` und `killpg`), damit kein externer Konverter weiterarbeitet. Der Windows-Pfad
+bleibt über `get_safe_path` abgedeckt.

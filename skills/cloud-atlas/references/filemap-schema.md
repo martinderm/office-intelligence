@@ -25,9 +25,37 @@ Dateieintragsfelder bleiben für manuell kuratierte Metadaten zulässig.
 `convert_cloud_docs.py --only-file` erzeugt oder ersetzt genau ein `files`-Mitglied
 einer bestehenden Filemap per Roh-Splice; alle übrigen Mitglieder und Container-Felder
 (auch `updated_at`) bleiben Zeichen für Zeichen unverändert. Vor dem Schreiben gilt ein
-Runtime-Subset des Vertrags oben (Container, alle Einträge, keine doppelten JSON-Schlüssel,
-eindeutige Mirror-Ziele ohne Datenträgerzugriff). Der Eintrag trägt wie beim Generator
-`artifact_metadata` des geschriebenen Mirrors. Details: [SKILL.md](../SKILL.md).
+Runtime-Subset des Vertrags oben (Container, alle Einträge, keine doppelten JSON-Schlüssel).
+Der Eintrag trägt wie beim Generator `artifact_metadata` des geschriebenen Mirrors.
+Konvertierte Artefakte liegen in einem neuen Versionsverzeichnis unter
+`<output_dir>/_versions/`; `markdown_mirror` und `derivative.path` zeigen dorthin und sind
+**nicht stabil** über Läufe. Die Filemap ist die Quelle der Wahrheit; alte und
+liegengelassene Versionen bleiben erhalten und werden **nicht** aufgeräumt (der Version-Root
+hat keine Aufräumlogik). **Die Recovery entfernt nie eine Datei und verschiebt nie ein
+Artefakt**, sie archiviert auch kein Journal: `planned`/`staged`-Reste bleiben an ihrem Platz
+und werden als `retained_version` gemeldet — stets das real existierende
+Versionsverzeichnis. Eine bereits committete, später überholte Version ist historisch und wird nicht
+gemeldet. Der Filemap-Replace
+ist der einzige Commit-Punkt. Das minimale Intent-Journal unter
+`<output_dir>/.only-file-journal/` ist kein Filemap-Bestandteil; es koordiniert die Version
+und die Recovery (SKILL.md §8) und wird **nie** umbenannt, archiviert oder gelöscht — es
+bleibt nach jedem Lauf liegen. Ein früherer Lauf gilt nur dann als abgeschlossen, wenn
+`published`/`committed` gespeichert ist oder der Live-Eintrag dem aufgezeichneten neuen
+Digest entspricht; jeder andere Zustand ist unklar und blockiert den nächsten Lauf
+fail-closed ohne jede Mutation. Vor jeder Journalmutation prüft der Lauf alle Einträge der
+Ziel-Filemap (auch den der Quelle, inkl. Windows-Aliasen); beansprucht einer davon den
+Journalpfad, endet er fail-closed (`journal`). Versionen werden **direkt**
+in ihr endgültiges Verzeichnis geschrieben (kein Verzeichnis-Rename), der Worker löscht
+keine Artefakte (DOC-Staging und LibreOffice-Profil bleiben im Versionsverzeichnis);
+einzige zulässige `os.replace`-Aufrufe sind Filemap und Journal. Sein
+Filemap-Temp liegt im Journal-Verzeichnis, daher müssen Journal und Filemap auf demselben
+Dateisystem liegen. Details: [SKILL.md](../SKILL.md).
+
+**Bewusste Scope-Reduktion:** keine Fremdreferenz-Ermittlung (Schutz nur gegen die eigene
+Ziel-Filemap), keine Quarantäne, keine Archivierung, kein Aufräumen, keine
+Sibling-Koordination und kein Vollscan-Anteil. Ein regulärer Vollscan kennt den Version-Root
+nicht; er kann versionierte Quellen erneut konvertieren und versionierte Mirror als Waisen
+entfernen.
 
 ## Scan-Provenienz: `exclude_dirs` (Issue #2)
 
