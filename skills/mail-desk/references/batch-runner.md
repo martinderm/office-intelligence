@@ -1053,6 +1053,59 @@ Schließt und archiviert offene Einträge aus `replies-needed.jsonl`/`pending-re
 
 ---
 
+## Modus: `sync_sent` (Sent-Index und Synthese-Handoff, Issue #88)
+
+`--sync-sent [N]` indexiert neue Sent Items in `sent-index.jsonl` und übergibt, was gegenüber dem vorherigen
+Indexstand neu ist, als begrenzten Handoff `data/mail-desk/new-sent-items.json` an eine externe Synthese
+(kein weiterer Schalter, keine zweite CLI; Synthese/LLM sind nicht Teil des Bundles). Reihenfolge: Fenster
+lesen → alle Ablehnungsprüfungen → Handoff atomar schreiben → erst dann Index. Schema, Validierung,
+Konsumvertrag und Absturzfenster: [`log-schema.md`](log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
+
+**Envelope-Felder (`data`), in jedem Sync-Ergebnis, auch Fehler/Legacy:** `new_count` (= `new_entries_indexed`),
+`new_items[]` (Message-ID, Datum, Betreff, From, To, Cc, In-Reply-To, References, Envelope-ID, Thread-Schlüssel,
+Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|written|pending|invalid|unknown`,
+`written_count`, `pending_count`, `consumed_ignored`, `deferred_count` — Items der nächsten 200er-Batches,
+`headers_incomplete_count`, `file`) sowie `truncated`, `coverage_*`, `next_start`, `follow_up_hint`, `since_*`.
+`headers_complete: false` heißt: `cc`, `in_reply_to`, `references` unbekannt (Item wird wie bisher indexiert).
+`new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei `write_state: unknown` ist `new_count: null`
+(und `new_items_unavailable: true`).
+
+**Trigger für den Consumer:** `pending_count > 0`, nicht `new_count` (Absturz: `new_count` 0 bei offenen Items).
+`state` `unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und** No-op bis zur manuellen
+Behebung; nur `0` bei `none`/`written` ist leer (`handoff_allows_noop`). Consumer:
+`pipelines/mail-desk-batch.md` (extern), liest `load_pending_handoff`, schreibt `record_synthesized`.
+
+**Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
+jedem Write; `state` = nur Coverage-Marker/-Schranke (`sent-sync-state.json`) wurde persistiert, kein
+Handoff/Index-Eintrag; `unknown` = Schreibversuch fehlgeschlagen, Plattenstand unverifiziert (Handoff ggf.
+geschrieben, Index ggf. teilweise; `new_count: null`). `partial` ist reserviert; ein scheiterndes Fenster bricht
+vor jedem Handoff-/Index-Write ab.
+
+| `reason_code` | Ursache |
+|---|---|
+| `sync_invalid_count` | Manifest-`count` ist kein positiver Integer; nichts gelesen/geschrieben |
+| `backend_binding` | Backend-/Account-Bindung fehlt oder passt nicht; nichts gelesen/geschrieben |
+| `handoff_pending` | unkonsumierte Items im Handoff und weitere neue Items; Handoff bleibt byte-gleich |
+| `handoff_invalid` | Handoff unlesbar/inkonsistent/über der kanonischen Grenze oder fremdes Konto |
+| `handoff_deferred` | int-Datums-API traf einen Batch; nutze `..._report` |
+| `ledger_invalid` | Ledger-Zeile verletzt das Schema |
+| `sent_window_truncated` | volle Seite nach `max_pages` |
+| `sync_invalid_since` / `sync_invalid_max_pages` / `sync_invalid_date` / `sent_initial_state_required` / `sent_initial_state_invalid` / `sent_index_alias_invalid` / `ledger_alias_invalid` / `handoff_alias_invalid` / `sync_no_progress` | Manifest/State/Datum/Alias ungültig (inkl. `unverifiable`) |
+| `sync_window_failed` | Datumsfenster scheiterten; Lauf vor jedem Write verweigert |
+| `sync_failed` | Vorab-Fehler (`none`) oder Schreibfehler nach Publikation (`unknown`, `new_count: null`) |
+
+`count` ist **Item-Budget**: der erste Tag über Budget; Stopp mit `truncated`/`coverage_*`, Recovery
+(`sync_sent_items_by_dates_report(dates=['D'], include_next_day=False)`). >200: älteste 200 committen, Rest
+unindexiert; atomare Coverage-Schranke nie hinter unvollständigen Tagen; nach Konsum erneut scannen.
+State fehlt + Index: fail-closed; `since` exakt; Erstlauf: Initialstart/`since`. Explizite Daten
+spulen konservativ **vor** dem Read zurück, rücken nur zusammenhängenden Prefix und nie heute vor;
+Punktabfragen erzeugen keine jüngere Schranke. Source-Fenster statt Header-Datum bestimmt Grenzen/Recovery;
+Legacy-Marker non-destruktiv migriert. Seiten bis kurze/leere Seite; das Endsignal ist eine **Annahme** (nur
+implizit), strikt klassifiziert, sonst fail-closed. Recovery:
+`..._report(..., include_next_day=False, max_pages=...)`; int-/Singular-API melden `handoff_deferred`.
+
+---
+
 ## Modus: `reconcile` (Recovery-Bericht & lokale Reparatur)
 
 `reconcile` liest das `batch-recovery-journal.json` des neuesten unterbrochenen
@@ -1146,7 +1199,7 @@ Reparaturmanifest `data/mail-desk/batch-reconcile.json`:
 - Mutierende Läufe (`--draft`/`execute`/`--inspect`) führen `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) atomar mit Zählern, Prozentwert, Schritten und deterministischer ETA; `pipeline` schreibt keine Statusdatei.
 - Ungepuffertes Live-Streaming in stdout/`task.log`: jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
 - **Bekannte Mails sind aggregiert:** genau eine Zeile `skipped N known envelopes` pro Scan-Phase statt einer Zeile je Envelope (OUT-P1, Issue #5); `known_count` und Progressdatei bleiben unverändert.
-- **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent` mit eigenem shared Lock ohne Legacy-Bypass vor Persistenz/Pruning; Lease-/Conversation-Flags nur bei `draft` delegiert. Sent-Sync liest die Mailbox und schreibt nur lokal. Runner-stdout/-stderr liegen unter `<workspace>/tmp/mail-batch/`; nur der kompakte Summary erreicht den Caller-Kontext, Fehler/unlesbare Envelopes enden mit Nichtnull-Exit. Genau ein Envelope pro Runner; Doppelungen stammen aus Harness/Shell. Details: CLI-Vertrag.
+- **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent` mit shared Lock ohne Legacy-Bypass; Lease-/Conversation-Flags nur bei `draft` delegiert. `--data-dir`/`tmp/mail-batch`: kanonisch, jede Reparse-Komponente; Abweichungen stoppen vor mkdir/Prune/Child. Statische Prüfung: TOCTOU/Hardlink erfordert OS-Isolation (#91). Runner-stdout/-stderr unter `<workspace>/tmp/mail-batch/`; nur der Summary erreicht den Caller, Fehler enden mit Nichtnull-Exit. Ein Envelope pro Runner; Doppelungen aus Harness/Shell.
 - **Kompakter Fehler-Envelope:** Bei `PartialFailure` listet `data.results` nur fehlgeschlagene Items; erfolgreiche zählen als `succeeded_count`/`succeeded_envelope_ids` (das Journal führt die Liste). `execute_summary` und Success-Envelope bleiben unverändert (OUT-P1, Issue #6).
 - **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
   1. Batch im Hintergrund mit initialem Timer von **60 Sekunden** starten (Warmup für $\bar{T}_{\text{item}}$ über mehrere IMAP-Operationen).

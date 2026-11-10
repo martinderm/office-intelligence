@@ -531,3 +531,59 @@ Kanonische Referenzstruktur für aus E-Mail-Anhängen extrahierte iCalendar-Obje
   - `recurrence_id`: Optionaler Wiederholungsbezeichner (`RECURRENCE-ID` in UTC/Normalform oder `None`).
   - `content_sha256`: Deterministischer 64-Hex SHA-256 Hash des normalisierten Roh-iCalendar-Texts.
 * **Quarantäne-Erweiterung:** `attachment_policy.py` stuft `text/calendar` und `application/ics` als zulässige MIME-Typen ein; `attachment_extract.py` extrahiert den Textinhalt bounded ohne Ausführung.
+
+---
+
+## 10. Sent-Synthese-Handoff und Konsum-Ledger (Issue #88)
+
+Beide Dateien liegen im Datenbereich des Consumers (`data/mail-desk/`), werden nur zur Laufzeit geschrieben und
+nie im Bundle. Implementierung: [`scripts/core/sent_handoff.py`](../../scripts/core/sent_handoff.py).
+Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
+
+### 10.1 Handoff (`new-sent-items.json`)
+* **Rolle:** operative Evidence (Transit), kein Referenzwissen (Dual Evidence).
+* **Schema:** `schema_version: 1`, `kind: "mail-desk.new-sent-items"`, `generated_at`, `max_items` (200), `count`,
+  `items[]` (Felder wie `new_items[]` des `sync_sent`-Envelopes ohne `already_synthesized`).
+* **Schreiben:** atomar (`atomic_write_json`: Temp-Datei, `fsync`, `os.replace`, danach best-effort `fsync` des
+  Verzeichnisses), vor dem Fortschreiben von `sent-index.jsonl`; nie bei 0 neuen Items; nie mehr als 200 Items;
+  nur wenn nichts Unkonsumiertes pending ist (kein Überschreiben, Erweitern oder Ausräumen von Pending-Items).
+* **Lesen:** vollständig validiert (Kopf, `count`/Schranke, Feldtypen, Identität, Thread-Schlüssel, Anker-Kandidaten,
+  `anchored_to`, Dubletten, unbekannte Felder); jede Abweichung ⇒ `handoff_invalid`, Datei unangetastet.
+  `handoff.state ∈ none|written|pending|invalid|unknown`.
+
+### 10.3 Coverage-State (`sent-sync-state.json`)
+* **Rolle:** persistente, atomare Coverage-Schranke für den Default-Lauf; kein Referenzwissen.
+* **Schema:** exakt `schema_version: 1`, `initial_start` (ISO, Pflicht), `covered_through` (ISO|null).
+  Altbestand `initial_start:null` mit `covered_through` ist nicht sicher migrierbar (Wasserzeichen beweist keine
+  lückenlose Untergrenze) und fail-closed `unsafe_null_initial_migration`; Datei unangetastet. Fehlt bei
+  bestehendem Sent-Index jede State-Datei, fail-closed `sent_initial_state_required` in **allen** Einstiegen
+  (Default, `dates`, Report, Singular/Plural) und unabhängig von einem parsebaren `at`; eine bloße Quarantäne
+  reicht nicht. Nur ein verifiziertes `since` (exakter Start, nie `min(Watermark, since)`) oder ein
+  wiederhergestellter valider State erlaubt den Resync; datierte APIs reichen `since` durch, Tage davor sind
+  fail-closed. Jeder originale State/Marker wird vor Merge auf Future
+  geprüft; `covered_through` gleich heute wird auf gestern zurückgesetzt. Nur autorisierte Reparatur/Quarantäne, keine
+  autonome Löschung; valider State siehe Log-Schema. `initial_start` wird
+  vor dem ersten Read persistiert (auch bei `since`); jede Rückspulung vor Handoff/Index. `covered_through` ist
+  fortlaufend bewiesene Abdeckung, rückt nur über einen zusammenhängend angeforderten Prefix und nie über heute
+  oder eine Punktabfrage vor. Source-Fenster (`window_date`) statt Header-Datum bestimmt Grenzen; das alte
+  `sent-sync-initial-start.json` wird non-destruktiv migriert (älterer Start bleibt).
+* **Validierung:** unlesbar/ungültig ⇒ `sent_initial_state_invalid`, nichts gelesen/geschrieben.
+* **Batching:** > 200 neue Items: älteste 200 committen, Suffix ab erstem Deferred unindexiert, Schranke davor;
+  nach Ledger-Konsum wird derselbe Tag erneut gescannt (kein ID-Skip).
+
+### 10.2 Ledger (`sent-synthesis-ledger.jsonl`)
+* **Rolle:** Konsum-Status, Dedupe-Quelle und Thread-Anker-Quelle. Append-only, Schreiber ist der Consumer.
+* **Zeile (Schema 1, strikt geprüft, sonst `ledger_invalid`):** Pflicht `schema_version`, `message_id`
+  (bereits normalisiert), `role` (`primary`/`follow_up`), `recorded_at` (ISO); optional `thread_key`, `vorgang_ref`
+  (opak), `anchored_to`; `follow_up` ⇔ `anchored_to` gesetzt; keine weiteren Felder.
+* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger. Es gibt
+  keinen Prune-Write: konsumierte Reste in der Handoff-Datei werden ignoriert (`consumed_ignored`).
+* **Abgerissene Zeilen:** zeilenweise Byte-Dekodierung; ein unparsbarer unterminierter Rest (auch ein halbes
+  UTF-8-Zeichen) wird ignoriert und vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben (auch für
+  `sent-index.jsonl`).
+
+### 10.3 Helfer (rein, deterministisch, ohne LLM)
+`thread_key`, `thread_anchor_ids`, `resolve_thread_anchor` (Reihenfolge `in_reply_to` → `references` nächster Vorfahr
+zuerst → `thread_key`), `is_synthesized`, `record_synthesized` (idempotent; löst den Anker beim Schreiben frisch
+gegen das aktuelle Ledger auf), `load_pending_handoff` (Konsumsicht: validiert, nur unkonsumiert, frisch verankert,
+Vorfahren zuerst, `waits_for`), `peek_handoff_state` (read-only, wirft nie), `parse_address_list`.

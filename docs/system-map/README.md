@@ -125,7 +125,13 @@ Execute, Verify oder Handoff. FR-04/`dossier_apply` prüft inneren H2-Vertrag pl
 bestehende äußere Dossier-Receipt; keine Ausnahme und keine automatische Freigabe.
 Receipt-Formate und Hash-Kanonisierung bleiben unverändert.
 Der CLI-Wrapper prüft denselben Vertrag vor eigenen Logs/Pruning und übergibt den
-geprüften Snapshot per stdin (Runner revalidiert).
+geprüften Snapshot per stdin (Runner revalidiert). Er bindet `--data-dir` kanonisch an den
+lease-geprüften `--workspace` (`<workspace>/data/mail-desk`) und ebenso sein Ausgabeverzeichnis
+`<workspace>/tmp/mail-batch` vor mkdir/Prune/Child; jede Symlink-/Junction-/Reparse-Komponente
+(auch intern/gebrochen) sowie externe Consumer oder ein fehlender Workspace stoppen mit
+`WorkspacePathError` vor Child/Read/Write. Die Prüfung ist statisch: ein konkurrierender
+Same-User-Mutator (TOCTOU/Hardlink) bleibt außerhalb der kooperativen Lease-Grenze und erfordert
+OS-Isolation (Issue #91).
 Details: Mail-Desk-L2 und [`Batch-Vertrag`](../../skills/mail-desk/references/batch-runner.md#review-gebundene-kandidatenzahl).
 
 **Issue #8:** read-only Event-Dossier-Fassade mit fünf Stages; `apply` komponiert
@@ -333,6 +339,12 @@ Testmodule, Testanzahl) wird **nicht mehr an mehreren Stellen als Literal gepfle
    - **Leseort, keine Datenzone (Issue #52 P7):** `memory/operations/` ist **ausschließlich** Leseort für Beleg-Referenzen in Korrekturdateien; Schreiboperationen bleiben auf die vier Data-Zones beschränkt.
 4. **Dual Evidence Prinzip:** Trennung von operativer Evidenz (Mails, Transkripte, Downloads) und konsolidierter Referenz (Kataloge, Notizen, Action Items).
 5. **Structured CLI Envelopes:** Skriptausgaben erfolgen ausnahmslos als parsebares JSON über standardisierte Hüllkurven mit deterministischen Stopcodes.
+
+**Trust-Grenze (Issue #91):** Die Workspace-Lease koordiniert kooperierende Harnesses/Prozesse; sie ist
+**keine OS-Sicherheitsgrenze** gegen einen Same-User-Adversar. Ein solcher kann Pfade zwischen Prüfung und
+Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase anlegen. Statische Symlink-/Junction-/Hardlink-
+Härtung bleibt bestehen; vollständige Isolation erfordert OS-Mittel (separater Benutzer, Namespace/Container
+oder ACLs) und ist Issue #91, nicht Teil dieses Bundles.
 
 ---
 
@@ -649,3 +661,75 @@ Offline-Tests).
 
 L2: [Mail-Desk §42](../../skills/mail-desk/docs/system-map/README.md#42-issue-18--raw-eml-import-zweite-lieferung).
 Tests: `skills/mail-desk/tests/test_draft_raw_eml_*.py`.
+
+## 14. Issue #88: Sent-Items-Handoff für die Synthese
+
+`sync-sent` meldet im Envelope `new_count`/`new_items[]` (inklusive Cc, `In-Reply-To`, `References`,
+Envelope-ID) und übergibt neue Sent Items als begrenzten (200), atomar geschriebenen, idempotenten Handoff
+`data/mail-desk/new-sent-items.json` **vor** dem Fortschreiben von `sent-index.jsonl`. Ein
+Konsum-/Dedupe-Ledger (`sent-synthesis-ledger.jsonl`, Schreiber ist der Consumer) markiert konsumierte Items und
+verankert Folge-Mails im selben Thread über `In-Reply-To`/`References` am selben Vorgang. Ein unkonsumierter
+Handoff wird nie überschrieben: weitere neue Items scheitern mit `handoff_pending` (Exit ≠ 0, nichts
+indexiert, Handoff byte-gleich); ein inkonsistenter oder übergroßer Handoff ergibt `handoff_invalid` (die
+kanonischen Item-/Feldgrenzen gelten auch beim Lesen, ein dateieigenes höheres `max_items` erweitert nichts), ein
+schemaverletzendes Ledger `ledger_invalid`, statische Symlink-/Hardlink-Aliase von Index/Ledger/Handoff
+(jeweils inkl. `<datei>.torn`-Sidecar) `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid` (Preflight in
+allen Einstiegen **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Write, `write_state none|state`,
+keine automatische Löschung, Rerun ohne Reparatur scheitert gleich; `alias_kind: unverifiable` bei
+Permission/IO ebenfalls fail-closed; Consumer-Reads `load_ledger`/`load_pending_handoff`/`load_sent_index`/
+`read_handoff` fail-closed; Classifier propagiert Index-Alias statt `needs_reply: true`), ein Manifest mit
+ungültigem `count` `sync_invalid_count`, eine fehlende
+Backend-/Account-Bindung `backend_binding`, mehr als 200 neue Items in 200er-Batches (älteste zuerst,
+Rest nach Konsum) und nach `max_pages`
+weiterhin volle Seiten `sent_window_truncated` (kein Watermark-Advance, höheres-`max_pages`-Recovery; sonst
+wird paginiert, kein sicherer Skip). Ein fehlender State bei bestehendem Index ist in allen Einstiegen
+fail-closed `sent_initial_state_required`; ein verifiziertes `since` ist der exakte Start (nie der Watermark).
+Leere Tage zählen; Erstlauf mit eingefrorenem Laufdatum und 60-Tage-Backfill bzw. `since`. `count`
+ist ein Item-Budget; schon der erste nichtleere Tag über dem Budget stoppt mit `truncated`/`coverage_*` und
+Recovery-Aufruf. Recovery eines Tages nur über
+`sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-/Singular-API melden
+`handoff_deferred`), nicht über `--sync-sent N`/`count` oder `sync_sent_items(dates=[D])`, das D+1 mitliest;
+Datums-CLI bewusst nicht vorhanden. Scheitert ein
+Datumsfenster, wird der ganze Lauf vor jedem Handoff-/Index-Write verweigert (`sync_window_failed`,
+`failed_dates`), damit das Wasserzeichen keine ältere Lücke überspringt.
+`new_count`/`new_items`/`handoff` stehen auch in allen Fehler-Envelopes; `write_state` unterscheidet dort
+wahrheitsgemäß `none`, `state` (nur `sent-sync-state.json`/Coverage-Schranke geschrieben, kein Handoff/Index)
+und `unknown` (Schreibfehler — auch ein Handoff-Write nach möglicher atomarer Publikation — Plattenstand
+unverifiziert; dann `new_count: null`); `partial` ist reserviert. Die persistente Schranke
+(`initial_start`, `covered_through`) wird vor dem ersten Read bzw. jeder Rückspulung **vor** Handoff/Index
+geschrieben, steht nie hinter einem unvollständigen Tag, rückt nur über einen zusammenhängenden angeforderten
+Prefix und nie über heute/Punktabfragen vor; `since` springt nie über offene Coverage, das Legacy-Marker-File
+wird non-destruktiv migriert. Future `initial_start`/`covered_through`, malformed/null-both State, future `since`
+und `since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
+geprüft, `covered_through` gleich heute wird vor dem Read auf gestern zurückgesetzt. Altbestand
+`initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
+(`unsafe_null_initial_migration`, Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
+reicht nicht. Fehlt bei bestehendem Sent-Index jede State-Datei, fail-closed `sent_initial_state_required` in
+**allen** Einstiegen (Default, `dates`, Report, Singular/Plural) und unabhängig von einem parsebaren `at`;
+nur ein vom Operator verifiziertes `since` (exakter Start, nie `min(Watermark, since)`, keine Punktdaten oder
+CLI-Defaults) bzw. ein wiederhergestellter valider State erlaubt den Resync, datierte APIs reichen `since`
+durch und angeforderte Tage davor sind fail-closed. Recovery bevorzugt über den Wrapper
+`sync-sent --since ... --account ...` (maschinelle `verify_workspace_lock`-Prüfung vor Read/Write, stdin-Manifest);
+nur ohne Wrapper direkt mit `--input`/`--stdin`, explizitem Account, ohne `--sync-sent` und unter derselben
+gehaltenen/verifizierten Lease. Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`,
+`since_ignored_reason` und `effective_coverage_start`, älter/gleich wird angewendet. Nur autorisierte
+Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
+Draft-Sent-Sync nur als echte ISO-/RFC-2822-Daten akzeptiert (kein Fallback 2026-01-01) und brechen keinen
+vollständigen Sync ab; der Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber statische
+`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`. Das Source-Fenster statt Header-Datum
+bestimmt Grenzen/Recovery. Nur der
+klassifizierte `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab
+Seite 2 beendet die Pagination; das ist eine offline nicht verifizierte **Annahme**, sonst fail-closed. Doppelte
+Ledger-`message_id`s: die erste gültige Zeile gilt für alle Indizes und führt den Thread-Anker. Der Crash-Vertrag
+meint Prozess-Absturz (Stromausfall nur best-effort). Dual Evidence: Handoff = operative Evidence, Ledger =
+Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synthese, LLM-Logik und die
+Consumer-Pipeline (`pipelines/mail-desk-batch.md`); deren `inbox_zero`-No-op darf weder bei offenem Handoff
+noch bei `handoff.state unknown|invalid` oder `pending_count: null` greifen – dann ist die Synthese blockiert,
+bis ein Mensch die Ursache behebt; nur `pending_count == 0` bei `none|written` gilt als leer.
+Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das
+Stehenbleiben der Sent-Indexierung bis zum Konsum.
+
+L2: [Mail-Desk §43](../../skills/mail-desk/docs/system-map/README.md#43-issue-88--sent-items-handoff-für-die-synthese-deterministischer-bundle-teil).
+Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88),
+[Log-Schema](../../skills/mail-desk/references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
+Tests: `skills/mail-desk/tests/test_sent_handoff.py`.

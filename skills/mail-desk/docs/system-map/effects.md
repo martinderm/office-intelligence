@@ -264,3 +264,68 @@ Details: L2-§39, [`objects.md`](objects.md) §7, [`processes.md`](processes.md)
 - `classifier.py`/Matching bleiben unangetastet, `classifier_revision` rotiert nicht.
 
 Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md) §8.
+
+## 9. Sent-Items-Handoff (Issue #88)
+
+* **Schreibreihenfolge:** Handoff (atomar, danach best-effort Verzeichnis-`fsync`) vor Sent-Index (Append mit
+  `fsync`). Der Vertrag gilt für Prozess-Absturz, nicht für Stromausfall auf Plattformen ohne Verzeichnis-`fsync`
+  (Windows). Eine abgerissene letzte Zeile in `sent-index.jsonl`/Ledger (auch mitten im UTF-8-Zeichen) blockiert kein
+  Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
+* **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
+  neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
+  Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische
+  Symlink-/Hardlink-Aliase von Index, Ledger, Handoff (jeweils inklusive `<datei>.torn`-Sidecar) sind
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`, werden in allen Einstiegen
+  **vor** Index-/State-Nutzung, Mailbox-Read und Handoff-/Index-Mutationen geprüft und sind keine transienten
+  Fehler: `write_state` bleibt `none`/`state`, Handoff/Index unangetastet (`handoff.file` bleibt der
+  Handoff-Pfad, `alias_file` separat), nur manuelle Reparatur/Quarantäne hilft, ein Rerun ohne Korrektur
+  scheitert gleich. `alias_kind: "unverifiable"` (Permission/IO bei `lstat`) ist ebenfalls fail-closed und
+  liefert `unknown`/`null`, nie „kein Alias“. Mehr als 200 neue Items
+  werden in 200er-Batches committet (älteste zuerst, Rest nach Konsum, `truncated`). Jede andere Störung wird
+  `sync_failed`. `write_state` unterscheidet: `none` (kein Write), `state` (nur `sent-sync-state.json`/
+  Coverage-Schranke, kein Handoff/Index) und `unknown` (Schreibfehler, auch ein Handoff-Write nach möglicher
+  atomarer Publikation; `new_count: null`); `partial` ist reserviert. Alle Fehler-Envelopes tragen
+  `new_items`, `handoff` mit `state ∈ none|written|pending|invalid|unknown` und die dokumentierten Zähler;
+  statische Aliasfehler melden `unknown`/`pending_count: null`, weil der abgewiesene Pfad nicht gelesen wird.
+  Consumer-Reads (`load_ledger`, `load_pending_handoff`, `load_sent_index`, `read_handoff`) prüfen ihre
+  Zieldateien statisch vor dem Lesen und fail-closed; der Classifier propagiert einen Index-Alias, statt
+  `needs_reply` fälschlich auf `true` zu setzen. Ein
+  scheiterndes Datumsfenster bricht den ganzen Lauf vor jedem Handoff-/Index-Write ab (`sync_window_failed`,
+  `failed_dates`). `count` ist ein Item-Budget (kein Tageslimit): schon der erste nichtleere Tag über Budget
+  stoppt mit `truncated`/`coverage_*` und Recovery, ohne ungedeckte Tage zu überspringen. Ein fehlender State
+  bei bestehendem Index ist in allen Einstiegen fail-closed; ein verifiziertes `since` ist der exakte Start (nie
+  der Watermark; leere Tage zählen; Erstlauf: persistierter Initialstart/`since`, nie über offener Coverage).
+  Ein jüngeres `since` wird nicht angewendet; der Envelope meldet `since_ignored`, `since_ignored_reason` und
+  `effective_coverage_start`. Rückspulungen (explizite Daten/älterer `since`/Legacy) werden
+  **vor** Handoff/Index dauerhaft geschrieben; die Schranke rückt nur über zusammenhängende angeforderte Tage
+  und nie über heute/Punktabfragen vor. Future `initial_start`/`covered_through`, malformed/null-both State,
+  future `since`/`since` mit Zeitanteil werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird
+  vor Merge geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
+  `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
+  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
+  reicht nicht. Fehlt bei bestehendem Index jede State-Datei, fail-closed `sent_initial_state_required` in
+  **allen** Einstiegen und unabhängig von einem parsebaren `at`; nur ein verifiziertes `since` (exakter Start,
+  nie `min(Watermark, since)`) oder ein wiederhergestellter valider State erlaubt den Resync, datierte APIs
+  reichen `since` durch. Nur autorisierte Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Source-Fenster
+  statt Header-Datum bestimmt Grenzen/Recovery; ungültige Header werden beim optionalen Draft-Sent-Sync nur als
+  echte ISO-Datetime/ISO-Datum/RFC-2822-Daten akzeptiert (kein Fallback-Datum) und brechen keinen vollständigen
+  Sync ab. Der Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber statische
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`; das alte
+  Marker-File wird non-destruktiv migriert. Seiten werden bis zur kurzen/leeren Seite paginiert; das
+  dokumentierte „out of bound“-Ende ist eine offline nicht verifizierte **Annahme** und exakt klassifiziert,
+  sonst/ nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
+  Watermark-Advance, höheres-`max_pages`-Recovery).
+  Nichts wird still verworfen:
+  ein Überhang > 200 wird in 200er-Batches committet (kein ID-Skip, Rest nach Konsum); die atomare
+  Coverage-Schranke steht nie hinter unvollständigen Tagen; Recovery eines Tages nur über
+  `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (int-/Singular-API melden
+  `handoff_deferred`; nicht `sync_sent_items(dates=[D])`, das D+1 liest), nicht über `--sync-sent N`/`count`.
+  Gekürzte Felder
+  stehen in `truncated_fields` und werden beim Lesen gegen dieselben Grenzen validiert.
+* **Sicherheitsgrenze:** Handoff-Items sind untrusted Mail-Metadaten (Betreff, Adressen); das Bundle interpretiert
+  sie nicht. Single Writer über die Workspace-Lease; keine Dateisperre zusätzlich.
+* **Consumer-Trigger:** `pending_count > 0` startet die Synthese; `handoff.state` `unknown`/`invalid` oder
+  `pending_count: null` **blockiert** Synthese **und** `inbox_zero`-No-op bis zur manuellen Behebung. Nur
+  `pending_count == 0` bei `state` `none`/`written` gilt als bekannt leer (`handoff_allows_noop`).
+* **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion
+  möglich (Consumer-Idempotenz nötig).

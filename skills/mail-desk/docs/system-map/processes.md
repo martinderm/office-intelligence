@@ -652,3 +652,74 @@ execute ─► verify / reconcile ─► completion_report + synthesis_handoff (
 Stopbedingungen: fehlende Kataloge, mehrdeutiges Ziel, nichtkanonischer Pfad,
 fehlendes Dossier, doppelte Event-IDs, nicht deklarierte Cloud-Ressource.
 Details: L2-§40, [`objects.md`](objects.md) §8, [`effects.md`](effects.md) §8.
+
+## 9. Sent-Items-Handoff für die Synthese (Issue #88)
+
+`sync-sent` bleibt ein lesender Mailbox-Zugriff mit lokalen Schreibzugriffen; neu ist, dass es die **neuen**
+Sent Items (gegenüber dem vorherigen Indexstand) als Handoff für eine nachgelagerte Synthese bereitstellt.
+Es gibt keine Synthese-, LLM- oder Katalog-Logik im Bundle; der Consumer entscheidet über Promotion.
+
+```text
+sync-sent
+  ├─ 1. Datumsfenster lesen (Watermark-Fenster, keine Schreibzugriffe)  ─► Kandidaten (Index-neu, Cc, Thread-Header)
+  ├─ 2. Ledger + vorhandenes Handoff laden und voll validieren
+  │      (ungültig ⇒ ledger_invalid/handoff_invalid; fremdes Konto ⇒ handoff_invalid; Stopp)
+  │      konsumierte Items nur ableitend ignorieren, kein Write
+  ├─ 3. Offene Items vorhanden UND weitere neue Items?  ⇒ handoff_pending, Stopp (Handoff byte-gleich, nichts indexiert)
+  ├─ 3b. Mehr als 200 neue Items?  ⇒ älteste 200 committen, Rest unindexiert; Schranke davor, nächster Batch nach Konsum
+  ├─ 3c. Seite voll?  ⇒ paginieren bis kurze/leere Seite; nach max_pages voll ⇒ sent_window_truncated, Stopp (kein Watermark-Advance)
+  ├─ 3d. Datumsfenster scheitert?  ⇒ sync_window_failed, Stopp (nichts geschrieben)
+  ├─ 4. Handoff atomar schreiben (nur bei neuen Items und ohne Pending; ≤ 200)
+  ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
+  └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}, write_state bei ok:false
+
+Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) → Promotion des ersten Items →
+  record_synthesized (Ledger, Anker erneut aufgelöst) → load_pending_handoff erneut … bis pending_count == 0
+```
+
+* **Trigger-Regel:** `handoff.pending_count > 0`, nicht `new_count`. Die Synthese-Phase ist bei `inbox_zero`
+  nur dann No-op, wenn auch kein Handoff offen ist (Consumer-Pipeline, außerhalb des Bundles).
+* **Idempotenz:** Erkennung relativ zum Index; Merge per normalisierter Message-ID; Ledger-Treffer werden
+  indexiert, aber nie erneut übergeben (`already_synthesized`); Folge-Mails im Thread tragen `anchored_to`.
+* **Absturzfenster:** Handoff geschrieben/Index nicht ⇒ Wiederholung erkennt dieselben Items, kein Duplikat;
+  Index geschrieben/nicht konsumiert ⇒ Items bleiben `pending`; Tabelle in
+  [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Nicht lösbar im Bundle:
+  Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
+* **Fehlersemantik:** `write_state` in `ok:false`-Envelopes: `none` (Ablehnung/Fehler vor jedem Write, z. B.
+  `sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
+  `sent_window_truncated`, `sync_window_failed`), `state` (nur persistierte Coverage-Schranke/Marker, kein
+  Handoff/Index) oder `unknown` (Schreibfehler — auch ein
+  Handoff-Write nach möglicher atomarer Publikation — beim Append; `new_count: null`,
+  `new_items_unavailable: true`, Wiederholung idempotent). `partial` ist reserviert. Kein Fehler behauptet
+  pauschal null Writes. Scheitert ein Datumsfenster, wird der ganze Lauf vor jedem Handoff-/Index-Write
+  verweigert, damit das Wasserzeichen keine ältere Lücke überspringt.
+* **Batch-/Fenster-Recovery:** einen Tag eng nur über
+  `sync_sent_items_by_dates_report(..., include_next_day=False, max_pages=...)` (nicht
+  `sync_sent_items(dates=[D])`, das D+1 mitliest; int-API meldet `handoff_deferred`), älteste Tage zuerst,
+  dazwischen konsumieren. `--sync-sent N`/`count` ist **keine** Recovery,
+  sondern ein Item-Budget; schon der erste nichtleere Tag über dem Budget blockiert mit
+  `truncated`/`coverage_*` und Recovery-Aufruf. **> 200/Tag**: älteste 200 committen, Rest nach Konsum; die
+  atomare Coverage-Schranke steht nie hinter einem unvollständigen Tag; Rückspulung (explizite Daten/`since`/
+  Legacy) wird **vor** Handoff/Index dauerhaft geschrieben, rückt nur zusammenhängend und nie über heute/Punkt-
+  abfragen vor; Source-Fenster statt Header-Datum bestimmt Grenzen; Legacy-Marker wird non-destruktiv migriert.
+  Future `initial_start`/`covered_through`, malformed/null-both State, future `since`/`since` mit Zeitanteil und
+  ungültige Kalenderdaten werden vor jedem Read/Write abgewiesen; jeder originale State/Marker wird vor Merge
+  geprüft, `covered_through` gleich heute vor dem Read auf gestern zurückgesetzt. Altbestand
+  `initial_start:null` mit `covered_through` ist nicht sicher migrierbar und fail-closed
+  (`unsafe_null_initial_migration`; Wasserzeichen beweist keine lückenlose Untergrenze); eine bloße Quarantäne
+  reicht nicht. Fehlt bei bestehendem Index jede State-Datei, fail-closed `sent_initial_state_required` in
+  **allen** Einstiegen und unabhängig von einem parsebaren `at`; nur ein verifiziertes `since` (exakter Start,
+  nie `min(Watermark, since)`) oder ein wiederhergestellter valider State erlaubt den Resync, datierte APIs
+  reichen `since` durch. Nur autorisierte
+  Reparatur/Quarantäne mit validem Schema-JSON, keine autonome Löschung. Ungültige Header werden beim optionalen
+  Draft-Sent-Sync nur als echte ISO-Datum/ISO-Datetime/RFC-2822-Daten akzeptiert (kein Fallback-Datum); der
+  Draft-Pfad schluckt nicht-Alias-Fehler wie bisher, propagiert aber statische
+  `sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`.
+  Seiten werden bis zur kurzen/leeren Seite paginiert; nur der klassifizierte
+  `HimalayaInvocationError`/`himalaya_command_failed` mit exakt „envelope page out of bound“ ab Seite 2 ist
+  (offline nicht verifizierte **Annahme**) Ende, sonst fail-closed; nach `max_pages` volle Seiten ergeben `sent_window_truncated` (kein
+  Watermark-Advance). Ein fehlender State bei bestehendem Index ist in allen Einstiegen fail-closed; ein
+  verifiziertes `since` ist der exakte Start (nie der Watermark); leere Tage zählen; `since`/Schranke springen
+  nie über offene Coverage.
+* **Weitere Produzenten:** `draft` ruft `sync_sent_items` über `classifier.draft_manifest` auf; dieser Pfad nutzt
+  denselben Handoff-Commit (kein Bypass), schluckt aber wie bisher Ausnahmen, auch `handoff_pending`.

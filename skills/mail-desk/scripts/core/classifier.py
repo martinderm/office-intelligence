@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 
@@ -54,6 +55,7 @@ from .matching.topic_matching import (
     materialize_topic_details,
     select_topic_match,
 )
+from .sent_handoff import STATIC_ALIAS_REASON_CODES
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
 
 
@@ -351,7 +353,11 @@ def classify_email(
     if sent_lookup is None:
         try:
             sent_lookup = load_sent_index(ws / "data" / "mail-desk")
-        except Exception:
+        except Exception as error:
+            if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                # An aliased sent index is a deterministic filesystem fault, not
+                # "no lookup": never reinterpret it as "not replied".
+                raise
             sent_lookup = None
 
     if final_index is None:
@@ -894,6 +900,48 @@ def classify_email(
     return item_result
 
 
+def _sent_sync_batch_dates(emails: list[dict[str, Any]]) -> list[str]:
+    """Valid calendar dates for the optional sent sync; invalid headers are skipped.
+
+    Inbound classification is unchanged: only the transient Sent-sync date list is
+    filtered, so one malformed header cannot abort the whole draft sync (whose
+    exception is intentionally swallowed by the caller).
+    """
+    dates: list[str] = []
+    for email in emails:
+        raw = email.get("date")
+        if not raw:
+            continue
+        text = str(raw).strip()
+        parsed: datetime | None = None
+        if len(text) == 10:
+            try:
+                parsed = datetime.strptime(text, "%Y-%m-%d")
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            try:
+                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            for fmt in ("%a, %d %b %Y", "%d %b %Y"):
+                try:
+                    parsed = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+        if parsed is None:
+            try:
+                parsed = parsedate_to_datetime(text)
+            except (TypeError, ValueError, OverflowError):
+                parsed = None
+        if parsed is None:
+            continue
+        dates.append(parsed.date().isoformat())
+    return dates
+
+
 def draft_manifest(
     emails: list[dict[str, Any]],
     workspace_root: Path | None = None,
@@ -925,14 +973,17 @@ def draft_manifest(
     if sent_lookup is None:
         if sync_sent and emails:
             try:
-                batch_dates = [parse_date_to_year_month(str(e.get("date", "")))[1] for e in emails if e.get("date")]
+                batch_dates = _sent_sync_batch_dates(emails)
                 if batch_dates:
                     sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws, account=account)
-            except Exception:
-                pass
+            except Exception as error:
+                if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                    raise
         try:
             sent_lookup = load_sent_index(dd)
-        except Exception:
+        except Exception as error:
+            if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
+                raise
             sent_lookup = None
 
     items: list[dict[str, Any]] = []

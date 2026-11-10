@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -263,6 +265,8 @@ class SyncSentModeTests(unittest.TestCase):
             account="primary",
             data_dir=data_dir,
             workspace_root=data_dir.parent.parent,
+            since=None,
+            max_pages=50,
         )
         self.assertEqual(
             {
@@ -271,10 +275,111 @@ class SyncSentModeTests(unittest.TestCase):
                 "folder": "Gesendet",
                 "total_envelopes_examined": 12,
                 "new_entries_indexed": 4,
+                # #88 (D): the legacy tuple contract also reports new_count/new_items (items unknown).
+                "new_count": 4,
+                "new_items": [],
+                "new_items_unavailable": True,
+                "handoff": {
+                    "state": "none",
+                    "written_count": 0,
+                    "pending_count": 0,
+                    "consumed_ignored": 0,
+                    "deferred_count": 0,
+                    "headers_incomplete_count": 0,
+                    "already_synthesized_skipped": 0,
+                    "max_items": 200,
+                    "file": str(data_dir / "new-sent-items.json"),
+                },
                 "sent_index_file": str(data_dir / "sent-index.jsonl"),
             },
             result,
         )
+
+
+class SyncSentInvocationTests(unittest.TestCase):
+    """The documented recovery path: a manifest by --input/--stdin, not --sync-sent."""
+
+    def test_direct_sync_sent_ignores_input_and_cannot_carry_since(self) -> None:
+        args = runner._build_parser().parse_args(
+            ["--sync-sent", "10", "--input", "does-not-exist.json"]
+        )
+        config, input_path = runner._load_configuration(args, Path("data"))
+        self.assertEqual({"mode": "sync_sent", "count": 10, "folder": "Sent Items"}, config)
+        self.assertIsNone(input_path)  # direct mode wins; --input is never read
+        self.assertNotIn("since", config)
+
+    def test_stdin_sync_sent_manifest_carries_since_and_dispatches(self) -> None:
+        payload = {"mode": "sync_sent", "since": "2026-09-01", "count": 7}
+        args = runner._build_parser().parse_args(["--stdin"])
+        with patch("sys.stdin", io.StringIO(json.dumps(payload))):
+            config, input_path = runner._load_configuration(args, Path("data"))
+        self.assertEqual(payload, config)
+        self.assertIsNone(input_path)
+        with patch.object(runner, "run_sync_sent_mode", return_value={"ok": True}) as dispatch:
+            result, operation = runner._dispatch(
+                config, account="ACC", data_dir=Path("data/mail-desk"),
+                index_path=Path("data/mail-desk/final-location-index.json"),
+            )
+        self.assertEqual("sync_sent", operation)
+        self.assertEqual({"ok": True}, result)
+        dispatch.assert_called_once_with(
+            config, account="ACC", data_dir=Path("data/mail-desk"),
+        )
+
+    def test_input_sync_sent_manifest_carries_since(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "batch-sync-sent.json"
+            payload = {"mode": "sync_sent", "since": "2026-09-01", "count": 7}
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            args = runner._build_parser().parse_args(["--input", str(path)])
+            config, input_path = runner._load_configuration(args, Path(temporary) / "data")
+        self.assertEqual(payload, config)
+        self.assertEqual(path.resolve(), input_path)
+
+    def test_sync_sent_recovery_binds_account_from_workspace_fixture(self) -> None:
+        # Only the mailbox sync is mocked: the real account-binding seam runs
+        # against an offline workspace backend fixture.
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            data_dir = workspace / "data" / "mail-desk"
+            data_dir.mkdir(parents=True)
+            (workspace / ".agents").mkdir()
+            (workspace / ".agents" / "mail-desk-backend.json").write_text(
+                json.dumps({"schema_version": 1, "backend": "himalaya", "account": "BOUND"}),
+                encoding="utf-8",
+            )
+            sync_items = Mock(return_value={"ok": True, "new_count": 0})
+            with patch.object(runner, "sync_sent_items", sync_items):
+                result = runner.run_sync_sent_mode(
+                    {"mode": "sync_sent", "count": 3, "since": "2026-09-01"},
+                    account=None, data_dir=data_dir,
+                )
+        self.assertTrue(result["ok"])
+        sync_items.assert_called_once_with(
+            count=3, folder="Sent Items", account="BOUND", data_dir=data_dir,
+            workspace_root=workspace, since="2026-09-01", max_pages=50,
+        )
+
+
+class SentAliasRunnerTests(unittest.TestCase):
+    def test_alias_error_is_exposed_without_traceback(self) -> None:
+        stream = io.StringIO()
+        payload = json.dumps({"mode": "sync_sent", "count": 1})
+        error = runner.SentHandoffError(
+            "sent_index_alias_invalid", "Static alias detected.",
+            {"alias_file": "sent-index.jsonl", "alias_kind": "hardlink"},
+        )
+        with patch.object(sys, "argv", ["runner", "--stdin"]), \
+                patch("sys.stdin", io.StringIO(payload)), \
+                patch.object(runner, "_dispatch", side_effect=error), \
+                contextlib.redirect_stdout(stream):
+            code = runner.main()
+        envelope = json.loads(stream.getvalue())
+        self.assertEqual(1, code)
+        self.assertFalse(envelope["success"])
+        self.assertEqual("sent_index_alias_invalid",
+                         envelope["error"]["details"]["reason_code"])
+        self.assertNotIn("Traceback", envelope["message"])
 
 
 class ExecuteModeTests(unittest.TestCase):

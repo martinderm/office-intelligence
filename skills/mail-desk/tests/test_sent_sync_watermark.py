@@ -63,6 +63,9 @@ class WatermarkWindowTests(unittest.TestCase):
             dd.mkdir(parents=True)
             entry = _index_entry("2026-09-11T10:00:00Z", "old@x", "9001")
             (dd / "sent-index.jsonl").write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+            (dd / "sent-sync-state.json").write_text(json.dumps({
+                "schema_version": 1, "initial_start": "2026-09-12", "covered_through": "2026-09-11",
+            }), encoding="utf-8")
 
             queried_dates: list[str] = []
 
@@ -96,6 +99,9 @@ class WatermarkWindowTests(unittest.TestCase):
             dd.mkdir(parents=True)
             entry = _index_entry("2026-09-26T10:00:00Z", "old@x", "9001")
             (dd / "sent-index.jsonl").write_text(json.dumps(entry, ensure_ascii=False) + "\n", encoding="utf-8")
+            (dd / "sent-sync-state.json").write_text(json.dumps({
+                "schema_version": 1, "initial_start": "2026-09-26", "covered_through": "2026-09-25",
+            }), encoding="utf-8")
 
             queried_dates: list[str] = []
 
@@ -131,11 +137,9 @@ class WatermarkWindowTests(unittest.TestCase):
                 watermark_day + timedelta(days=i)
                 for i in range((frozen_today - watermark_day).days + 1)
             ]
-            expected = {
-                (day + timedelta(days=offset)).strftime("%Y-%m-%d")
-                for day in base_days
-                for offset in (0, 1)
-            }
+            # No-dates coverage freezes the run date and does NOT expand into the
+            # next day; the window is exactly watermark..frozen today (inclusive).
+            expected = {day.strftime("%Y-%m-%d") for day in base_days}
             self.assertEqual(
                 expected,
                 set(queried_dates),

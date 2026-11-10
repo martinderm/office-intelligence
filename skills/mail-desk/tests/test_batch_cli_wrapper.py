@@ -12,6 +12,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,24 @@ MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 
 import mail_desk_batch_cli as batch_cli  # noqa: E402
+
+
+def _make_dir_link(link: Path, target: Path) -> bool:
+    """Create a real directory link (symlink, or Windows junction) if allowed."""
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                    check=True, capture_output=True,
+                )
+                return True
+            except (OSError, subprocess.CalledProcessError):
+                return False
+        return False
 
 
 def _base_args(**overrides):
@@ -37,6 +56,7 @@ def _base_args(**overrides):
         "keep": 10,
         "workspace_lease_id": None,
         "workspace_conversation_id": None,
+        "since": None,
     }
     defaults.update(overrides)
     ns = type("Args", (), {})()
@@ -75,6 +95,18 @@ class BuildArgsTests(unittest.TestCase):
         for flag in ("--reconcile", "--input", "--folder", "--skip-known", "--draft"):
             self.assertNotIn(flag, argv)
 
+    def test_sync_sent_since_becomes_a_stdin_manifest_without_direct_mode(self):
+        args = _base_args(
+            mode="sync-sent", count=42, since="2026-09-01", account="ACC",
+        )
+        argv = batch_cli._build_args(args, Path("/ws"))
+        self.assertNotIn("--sync-sent", argv)
+        self.assertEqual("ACC", argv[argv.index("--account") + 1])
+        self.assertEqual({
+            "mode": "sync_sent", "folder": "Sent Items", "count": 42,
+            "since": "2026-09-01", "account": "ACC",
+        }, batch_cli._sync_sent_manifest(args))
+
     def test_exact_delegation_only_for_draft(self):
         for mode in ("draft", "execute", "reconcile", "sync-sent"):
             argv = batch_cli._build_args(_base_args(mode=mode, workspace_lease_id="lease exact",
@@ -104,6 +136,38 @@ class BuildArgsTests(unittest.TestCase):
         joined = " ".join(argv)
         self.assertIn("--account", joined)
         self.assertIn("OTHER-ACC", joined)
+
+
+class SummaryAliasDetailsTests(unittest.TestCase):
+    def test_summary_keeps_handoff_file_when_alias_details_are_present(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            envelope_path = root / "sync-sent-envelope.json"
+            progress_path = root / "sync-sent-progress.log"
+            envelope_path.write_text(json.dumps({
+                "success": False,
+                "state": "Failed",
+                "message": "static alias",
+                "data": {
+                    "reason_code": "sent_index_alias_invalid",
+                    "handoff": {
+                        "state": "pending",
+                        "file": str(root / "data" / "mail-desk" / "new-sent-items.json"),
+                        "alias_file": "sent-index.jsonl",
+                        "alias_kind": "hardlink",
+                    },
+                },
+            }), encoding="utf-8")
+            progress_path.write_text("", encoding="utf-8")
+            summary = batch_cli._summary(
+                _base_args(mode="sync-sent"), envelope_path, progress_path,
+                subprocess.CompletedProcess(["runner"], 1),
+            )
+        self.assertEqual(
+            str(root / "data" / "mail-desk" / "new-sent-items.json"),
+            summary["handoff"]["file"],
+        )
+        self.assertNotIn("alias_file", summary["handoff"])
 
 
 class ReconcileApplyWrapperTests(unittest.TestCase):
@@ -225,8 +289,147 @@ class MainTests(unittest.TestCase):
         self.assertNotIn("--workspace-lease-id", self.command)
         self.assertNotIn("--keep 10", self.command)
         self.assertEqual(self.child_options["cwd"], str(self.workspace))
+        self.assertEqual(
+            self.command[self.command.index("--data-dir") + 1],
+            str((self.workspace / "data" / "mail-desk").resolve()),
+        )
+        self.assertEqual(
+            Path(result["data"]["envelope_file"]).resolve().parent,
+            (self.workspace / "tmp" / "mail-batch").resolve(),
+        )
         self.assertTrue(Path(result["data"]["envelope_file"]).is_file())
         self.assertEqual(Path(result["data"]["progress_file"]).read_text(), "synthetic progress\n")
+
+    def test_data_dir_outside_the_verified_workspace_is_rejected(self):
+        outside = self.workspace.parent / (self.workspace.name + "-outside")
+        outside.mkdir()
+        self.addCleanup(lambda: shutil.rmtree(outside, ignore_errors=True))
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code, result = self.call(extra=("--data-dir", str(outside / "data" / "mail-desk")))
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        run.assert_not_called()
+        self.assertEqual(list(self.workspace.iterdir()), [])
+
+    def test_absolute_data_dir_inside_the_workspace_is_accepted(self):
+        canonical = str((self.workspace / "data" / "mail-desk").resolve())
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+            code, result = self.call(extra=("--data-dir", canonical))
+        self.assertEqual(0, code)
+        self.assertTrue(result["success"])
+        guard.assert_called_once_with(self.workspace, lease_id=None, conversation_id=None)
+        self.assertEqual(canonical, self.command[self.command.index("--data-dir") + 1])
+
+    def test_missing_workspace_is_rejected_before_child(self):
+        missing = self.workspace / "missing-workspace"
+        stream = io.StringIO()
+        argv = ["batch-cli", "sync-sent", "--workspace", str(missing)]
+        with patch.object(sys, "argv", argv), contextlib.redirect_stdout(stream), \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code = batch_cli.main()
+        result = json.loads(stream.getvalue())
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        run.assert_not_called()
+
+    def _assert_external_output_untouched(self, old: Path, external: Path, extra=()) -> None:
+        before = {p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()}
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as child, \
+                patch.object(batch_cli, "_prune_output_dir") as prune:
+            code, result = self.call("reconcile", extra=("--keep", "1", *extra))
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        child.assert_not_called()
+        prune.assert_not_called()
+        self.assertEqual(before, {
+            p.relative_to(external): p.read_bytes() for p in external.rglob("*") if p.is_file()
+        })
+        self.assertEqual(b"{}", old.read_bytes())
+
+    def test_tmp_junction_escape_is_rejected_before_output_mutation(self):
+        external = self.workspace.parent / (self.workspace.name + "-tmp-external")
+        (external / "mail-batch").mkdir(parents=True)
+        old = external / "mail-batch" / "reconcile-20260101-000000-envelope.json"
+        old.write_bytes(b"{}")
+        self.addCleanup(lambda: shutil.rmtree(external, ignore_errors=True))
+        if not _make_dir_link(self.workspace / "tmp", external):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_external_output_untouched(old, external)
+
+    def test_mail_batch_symlink_escape_is_rejected_before_output_mutation(self):
+        external = self.workspace.parent / (self.workspace.name + "-batch-external")
+        target = external / "mail-batch"
+        target.mkdir(parents=True)
+        old = target / "reconcile-20260101-000000-envelope.json"
+        old.write_bytes(b"{}")
+        self.addCleanup(lambda: shutil.rmtree(external, ignore_errors=True))
+        (self.workspace / "tmp").mkdir()
+        if not _make_dir_link(self.workspace / "tmp" / "mail-batch", target):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_external_output_untouched(old, external)
+
+    def _assert_workspace_path_error(self) -> None:
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as child:
+            code, result = self.call()
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        child.assert_not_called()
+
+    def test_internal_tmp_junction_is_rejected(self):
+        (self.workspace / "real-tmp").mkdir()
+        if not _make_dir_link(self.workspace / "tmp", self.workspace / "real-tmp"):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_internal_data_junction_is_rejected(self):
+        (self.workspace / "real-data" / "mail-desk").mkdir(parents=True)
+        if not _make_dir_link(self.workspace / "data", self.workspace / "real-data"):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_broken_mail_batch_symlink_is_rejected(self):
+        (self.workspace / "tmp").mkdir()
+        link = self.workspace / "tmp" / "mail-batch"
+        try:
+            link.symlink_to(self.workspace / "missing-target", target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("file symlinks are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_self_referential_mail_batch_symlink_is_rejected(self):
+        tmp = self.workspace / "tmp"
+        tmp.mkdir()
+        link = tmp / "mail-batch"
+        try:
+            link.symlink_to(link, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("self-referential symlinks are unavailable")
+        self._assert_workspace_path_error()
+
+    def test_symlink_or_junction_data_dir_escape_is_rejected(self):
+        data = self.workspace / "data"
+        data.mkdir()
+        outside = self.workspace.parent / (self.workspace.name + "-link-target")
+        target = outside / "data" / "mail-desk"
+        target.mkdir(parents=True)
+        self.addCleanup(lambda: shutil.rmtree(outside, ignore_errors=True))
+        if not _make_dir_link(data / "mail-desk", target):
+            self.skipTest("directory symlinks/junctions are unavailable")
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code, result = self.call()
+        self.assertEqual(2, code)
+        self.assertEqual("WorkspacePathError", result["error"]["type"])
+        guard.assert_not_called()
+        run.assert_not_called()
+        self.assertFalse((self.workspace / "tmp").exists())
 
     def test_draft_default_count_and_delegation_reaches_child(self):
         with patch.object(batch_cli, "verify_workspace_lock"), \
@@ -244,6 +447,52 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertFalse(result["success"])
         self.assertEqual(result["error"]["type"], "WorkspaceLockError")
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        run.assert_not_called()
+
+    def test_failed_guard_blocks_since_recovery_before_read_or_write(self):
+        with patch.object(batch_cli, "verify_workspace_lock", side_effect=RuntimeError("foreign")), \
+                patch.object(batch_cli.subprocess, "run") as run:
+            code, result = self.call(
+                extra=("--since", "2026-09-01", "--account", "ACC", "--workspace-lease-id", "foreign"),
+            )
+        self.assertEqual(code, 2)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"]["type"], "WorkspaceLockError")
+        self.assertEqual(list(self.workspace.iterdir()), [])
+        run.assert_not_called()
+
+    def test_sync_sent_since_dispatches_verified_manifest_through_stdin(self):
+        with patch.object(batch_cli, "verify_workspace_lock") as guard, \
+                patch.object(batch_cli.subprocess, "run", side_effect=self.runner()):
+            code, result = self.call(
+                extra=("--since", "2026-09-01", "--account", "ACC", "--workspace-lease-id", "mine"),
+            )
+        self.assertEqual(0, code)
+        self.assertTrue(result["success"])
+        guard.assert_called_once_with(self.workspace, lease_id="mine", conversation_id=None)
+        self.assertIn("--stdin", self.command)
+        self.assertNotIn("--sync-sent", self.command)
+        self.assertEqual(
+            {
+                "mode": "sync_sent", "folder": "Sent Items", "count": 150,
+                "since": "2026-09-01", "account": "ACC",
+            },
+            json.loads(self.child_options["input"]),
+        )
+
+    def test_sync_sent_since_requires_the_verified_account(self):
+        stream = io.StringIO()
+        argv = [
+            "batch-cli", "sync-sent", "--since", "2026-09-01",
+            "--workspace", str(self.workspace),
+        ]
+        with patch.object(sys, "argv", argv), patch.object(batch_cli.subprocess, "run") as run, \
+                contextlib.redirect_stderr(io.StringIO()) as stderr, \
+                self.assertRaises(SystemExit) as raised:
+            batch_cli.main()
+        self.assertEqual(2, raised.exception.code)
+        self.assertIn("--since requires --account", stderr.getvalue())
         self.assertEqual(list(self.workspace.iterdir()), [])
         run.assert_not_called()
 

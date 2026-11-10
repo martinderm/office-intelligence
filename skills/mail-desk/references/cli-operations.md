@@ -118,10 +118,29 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Caller ausschließlich den Summary-Envelope übergibt.
 
    Modi: `draft`/`execute`/`reconcile`/`sync-sent`; kein beliebiger Runner-Passthrough.
-   `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150).
-   `sync-sent` delegiert ausschließlich an den bestehenden `--sync-sent`-Modus:
-   Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Runner-Ergebnis
-   `batch-sync-sent.json` und Wrapper-Logs). Es führt keine Send-/APPEND-Aktion aus.
+   `--count` muss positiv sein (Default: `draft` 10, `sync-sent` 150). Bei `sync-sent` ist `count` ein
+   **Item-Budget** (kein Tageslimit). `--since YYYY-MM-DD` ist der verifizierte Recovery-Start und
+   erfordert `--account`; ohne `since` läuft `sync-sent` im bestehenden direkten `--sync-sent`-Modus.
+   Mailbox lesend, lokal jedoch schreibend (`sent-index.jsonl`, Wrapper-Envelope/Progress unter
+   `tmp/mail-batch/`; `batch-sync-sent.json` ist nur ein optionales **Eingabe**-Manifest für die
+   Auto-Discovery, kein Ergebnis) sowie den Synthese-Handoff
+   `data/mail-desk/new-sent-items.json` (Issue #88, nur bei neuen Items; Vertrag und
+   Fail-closed-Codes `sync_invalid_count`/`backend_binding`/`handoff_pending`/`handoff_invalid`/
+   `ledger_invalid`/`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`/
+   `handoff_deferred`/`sent_window_truncated`/`sync_window_failed`/`sync_failed`, `write_state`
+   `none`/`state`/`unknown` (`partial` reserviert). Statische Index-/Ledger-/Handoff-/Sidecar-Aliase werden in
+   allen Einstiegen vor Index-/State-Nutzung, Mailbox-Read und Handoff/Index geprüft; `alias_kind:
+   unverifiable` ist ebenfalls fail-closed; `handoff.file` bleibt der Handoff-Pfad (`alias_file` separat),
+   keine automatische Löschung, ein Rerun ohne manuelle Reparatur scheitert identisch:
+   [`batch-runner.md`](batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88)).
+   Ein Batch > 200 wird committet, der Rest bleibt für den nächsten Lauf; Recovery über
+   `sync_sent_items_by_dates_report(dates=['D'], include_next_day=False, max_pages=...)`, nicht über
+   `--count`/`--sync-sent N` (keine Datums-CLI).
+   Der Summary-Envelope nennt `new_count`, `reason_code`, `write_state`, `truncated`, `coverage_*`,
+   `next_start`, `follow_up_hint` und `handoff` (nur Zähler);
+   die Items stehen im persistierten Runner-Envelope und im Handoff. Bei `write_state: unknown`
+   fehlt `new_count` (nicht verifiziert).
+   Es führt keine Send-/APPEND-Aktion aus.
    Vor jeglicher Wrapper-Persistenz oder Pruning wird der eigene Workspace-Lock
    mit dem bestehenden shared Guard geprüft, ohne Legacy-Bypass. Dafür dienen
    `--workspace-lease-id`/`--workspace-conversation-id` oder die bestehenden
@@ -133,6 +152,28 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    Aufträge stoppen ohne lokale Writes; der geprüfte Snapshot wird per stdin an
    den Runner übergeben, der dieselben Gates erneut prüft. Das Eingabemanifest
    bleibt erhalten; keine automatische Freigabe.
+   `--data-dir` (relativ zu `--workspace` oder absolut) muss kanonisch exakt
+   `<workspace>/data/mail-desk` des per Lease geprüften Consumer-Workspaces sein.
+   Der Wrapper löst Symlinks/Junctions auf, gleicht mit der Runner-Root-Inferenz
+   (`workspace_root_from_data_dir`) ab und stoppt mit `WorkspacePathError` vor
+   Kindprozess/Read/Write bei externen Consumern, Escapes oder fehlendem Workspace.
+   Ein fehlendes `data/mail-desk` im geprüften Workspace bleibt zulässig (der Sync
+   legt es an). Der Wrapper bindet auch sein Ausgabeverzeichnis `<workspace>/tmp/mail-batch`
+   vor jedem `mkdir`/Prune/Child kanonisch an denselben Workspace. Jede vorhandene
+   Symlink-/Junction-/Reparse-Point-Komponente in `data`, `data/mail-desk`, `tmp` oder
+   `tmp/mail-batch` wird abgewiesen (auch intern, gebrochen oder selbstreferenziell); der Lauf
+   stoppt mit `WorkspacePathError`, bevor fremde Dateien angelegt, überschrieben oder gelöscht
+   werden. Nicht vom Wrapper verwendete Pfade bleiben unberührt.
+
+   **Trust-Grenze (bewusst; Same-User-Adversar außerhalb des kooperativen Lease-Scope, Issue #91):**
+   Diese Prüfungen sind statisch.
+   Ein konkurrierender Prozess mit Schreibrechten im selben Workspace kann Pfade zwischen
+   Prüfung und Zugriff austauschen (TOCTOU) oder Hardlink-/Symlink-Aliase für Zieldateien
+   anlegen; mit Python-Mitteln ist das plattformübergreifend nicht vollständig verhinderbar.
+   Die Workspace-Lease ist eine kooperative Ownership-Grenze, kein Schutz gegen denselben
+   Benutzer. Vollständige Isolation erfordert separaten OS-Benutzer, Namespace/Container oder
+   ACLs (Issue #91); bis dahin gibt es keine Zusage „vor jeder Mutation sicher“ gegen einen
+   feindlichen Mutator.
    Ein fehlgeschlagener oder unlesbarer Runner-Envelope ergibt einen fehlgeschlagenen
    Summary-Envelope und einen Nichtnull-Exit, auch bei Child-Exit 0.
    `reconcile` liest ausschließlich das Recovery-Journal des unterbrochenen
@@ -151,15 +192,72 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    `--apply` sind Argumentfehler.
 
    ```bash
-   python3 scripts/mail_desk_batch_cli.py draft --count 10
-   python3 scripts/mail_desk_batch_cli.py execute
-   python3 scripts/mail_desk_batch_cli.py reconcile
-   python3 scripts/mail_desk_batch_cli.py reconcile --apply --approved-by operator
-   python3 scripts/mail_desk_batch_cli.py sync-sent --count 150
+   MAIL_DESK_SKILL=/path/to/installed/mail-desk   # installiertes Skill-Verzeichnis
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" draft --count 10
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" execute
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" reconcile
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" reconcile --apply --approved-by operator
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" sync-sent --count 150
    ```
 
    Die Beispiele setzen eine eigene Lease über die genannten Umgebungsvariablen
    voraus; alternativ die entsprechende ID explizit übergeben.
+
+   **Sent-Sync-Recovery bei fehlendem Coverage-State (`sent_initial_state_required`,
+   Issue #88):** Bevorzugt über den Wrapper, weil dieser die maschinelle
+   `verify_workspace_lock`-Prüfung **vor** jedem Read/Write ausführt:
+
+   ```bash
+   MAIL_DESK_SKILL=/path/to/installed/mail-desk   # installiertes Skill-Verzeichnis, nicht der Workspace
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_cli.py" sync-sent \
+       --count 150 --since 2026-09-01 --account ACC \
+       --workspace "$PWD" --workspace-lease-id "$WORKSPACE_LOCK_LEASE_ID"
+   ```
+
+   `--since` erfordert `--account` und übergibt dem Runner ein stdin-Manifest
+   `{"mode":"sync_sent","folder":"Sent Items","count":150,"since":"...","account":"..."}`;
+   dabei wird bewusst **nicht** der direkte `--sync-sent`-Modus gesetzt. Fehlt
+   oder fremd ist die Lease, stoppt der Wrapper mit `WorkspaceLockError` vor
+   jedem Read/Write. Normale Läufe bleiben `... sync-sent --count 150` ohne `since`.
+
+   Nur falls der Wrapper nicht verfügbar ist, den Runner direkt starten; dann
+   muss der Aufrufer dieselbe Lease bereits halten und verifiziert haben (der
+   Runner prüft sie für `sync_sent` nicht selbst). Manifest mit **explizitem**
+   Account:
+
+   ```json
+   {"mode":"sync_sent","folder":"Sent Items","since":"YYYY-MM-DD","count":150,"account":"VERIFIED-ACCOUNT"}
+   ```
+
+   ```bash
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_runner.py" \
+       --input data/mail-desk/batch-sync-sent.json --keep-input
+   # oder
+   python3 "$MAIL_DESK_SKILL/scripts/mail_desk_batch_runner.py" --stdin < data/mail-desk/batch-sync-sent.json
+   ```
+
+   `--sync-sent` darf dabei **nicht** gesetzt sein: Es gewinnt als direkter Modus und
+   ignoriert das Manifest stillschweigend. `$MAIL_DESK_SKILL` ist das installierte
+   Skill-Verzeichnis (im Bundle `skills/mail-desk`), nicht der Workspace-Root.
+
+   `since` ist der **verifizierte konservative Start** (ISO-Datum, nicht future,
+   kein Zeitanteil); er wird exakt übernommen, nicht mit dem Watermark gemischt.
+   `count` ist ein positives Item-Budget; Pfade bleiben unter dem Workspace
+   (`--data-dir`, Default `data/mail-desk/`): `sent-index.jsonl`,
+   `sent-sync-state.json`, `new-sent-items.json`. Der Lauf ist eine bewusste
+   Operator-Recovery, keine Live-Automatik; vorher State/Index prüfen und den
+   Start verifizieren. Ist `since` jünger als die bestehende Coverage, wird es
+   **nicht** angewendet (kein Coverage-Skip); der Envelope meldet
+   `since_ignored: true`, `since_ignored_reason:
+   "coverage_starts_before_requested_since"` und `effective_coverage_start`.
+
+   Der Wrapper prüft vor dem Kindprozess die Workspace-Lease
+   (`verify_workspace_lock`; `--workspace-lease-id`/`--workspace-conversation-id`
+   bzw. `WORKSPACE_LOCK_*`). Ein direkter Runner-Aufruf umgeht diese
+   Wrapper-Prüfung und akzeptiert für `sync_sent` keine Lease-Flags: Er ist nur
+   zulässig, solange der Aufrufer dieselbe Lease hält und verifiziert hat.
+   Zulässige Aufrufe sind der Wrapper für normale Läufe und der obige
+   `--input`/`--stdin`-Manifest-Lauf ohne `--sync-sent` für die Recovery.
 
 8. **Katalog-Inspector (`catalog_inspect.py`):**
    Read-seitiges Gegenstück zum `catalog_validator.py`: liest

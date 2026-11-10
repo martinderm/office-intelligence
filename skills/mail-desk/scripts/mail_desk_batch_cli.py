@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ from pathlib import Path
 
 from core.envelope import build_error, build_success, emit_json
 from core.batch_contract import validate_execute_contract
-from core.readiness import bind_workspace_account
+from core.readiness import bind_workspace_account, workspace_root_from_data_dir
 from core.quarantine.attachment_fetch import verify_workspace_lock
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -27,6 +28,82 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 def _absolute(data_dir: str, workspace: Path) -> str:
     path = Path(data_dir)
     return str(path if path.is_absolute() else workspace / path)
+
+
+def _is_link_or_reparse(path: Path) -> bool:
+    """Static detection of symlinks, junctions and other reparse points."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = getattr(info, "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _reject_linked_components(workspace: Path, relative: Path, label: str) -> None:
+    """Reject any existing symlink/junction/reparse component (internal or broken)."""
+    current = workspace
+    for part in relative.parts:
+        current = current / part
+        if _is_link_or_reparse(current):
+            raise ValueError(
+                f"{label} contains a symlink/junction/reparse point at '{current.name}'; "
+                "refusing before child/read/write"
+            )
+
+
+def _resolve_bound_paths(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Canonicalize the verified workspace and its bound ``data/mail-desk``.
+
+    The wrapper lease belongs to ``--workspace``; a ``--data-dir`` outside it
+    would let the runner bind and write another consumer without its lease.
+    Symlinks/junctions are resolved (escape detection) and the result must match
+    the runner's own workspace-root inference exactly. A non-existent workspace
+    fails closed; a missing ``data/mail-desk`` is allowed because sync creates it.
+    """
+    workspace = Path(args.workspace).expanduser()
+    try:
+        workspace = workspace.resolve(strict=True)
+    except OSError as exc:
+        raise ValueError(f"workspace does not exist or cannot be resolved: {exc}") from exc
+    if not workspace.is_dir():
+        raise ValueError("workspace must be an existing directory")
+
+    _reject_linked_components(workspace, Path("data") / "mail-desk", "--data-dir")
+    raw_data_dir = Path(args.data_dir).expanduser()
+    data_dir = (raw_data_dir if raw_data_dir.is_absolute() else workspace / raw_data_dir).resolve()
+    try:
+        inferred = workspace_root_from_data_dir(data_dir)
+    except ValueError as exc:
+        raise ValueError(
+            "--data-dir must be the verified workspace's canonical data/mail-desk directory"
+        ) from exc
+    expected = (workspace / "data" / "mail-desk").resolve()
+    if data_dir != expected or inferred != workspace:
+        raise ValueError(
+            "--data-dir resolves outside the verified workspace; refusing before child/read/write"
+        )
+    return workspace, data_dir
+
+
+def _resolve_run_dir(workspace: Path) -> Path:
+    """Bind the wrapper's output directory to its canonical workspace path.
+
+    ``tmp`` or ``tmp/mail-batch`` may be symlinks/junctions; the canonical path
+    must be exactly ``<workspace>/tmp/mail-batch`` so pruning/writes cannot touch
+    another consumer's files without its lease. Missing internal paths are fine.
+    """
+    _reject_linked_components(workspace, Path("tmp") / "mail-batch", "tmp/mail-batch")
+    expected = workspace / "tmp" / "mail-batch"
+    resolved = expected.resolve()
+    if resolved != expected:
+        raise ValueError(
+            "workspace tmp/mail-batch resolves outside or away from the canonical output "
+            "directory; refusing before mkdir/prune/child"
+        )
+    return resolved
 
 
 def _positive_int(value: str) -> int:
@@ -38,6 +115,17 @@ def _positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError(f"expected a value >= 1, got {number}")
     return number
+
+
+def _iso_date(value: str) -> str:
+    """Argparse type enforcing a bare ``YYYY-MM-DD`` verified recovery start."""
+    if len(value) != 10:
+        raise argparse.ArgumentTypeError(f"expected YYYY-MM-DD, got {value!r}")
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"expected a valid YYYY-MM-DD date, got {value!r}") from exc
+    return value
 
 
 def _resolve_account(args: argparse.Namespace) -> str | None:
@@ -81,7 +169,12 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
             if approved_by:
                 argv += ["--approved-by", approved_by]
     elif args.mode == "sync-sent":
-        argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
+        if getattr(args, "since", None) is not None:
+            # Recovery carries since in a stdin manifest; the direct --sync-sent
+            # mode would win and silently ignore it.
+            argv = [runner, "--data-dir", data_dir]
+        else:
+            argv = [runner, "--data-dir", data_dir, "--sync-sent", str(args.count)]
     else:
         raise ValueError(f"Unsupported wrapper mode: {args.mode}")
     account = _resolve_account(args)
@@ -96,6 +189,24 @@ def _build_args(args: argparse.Namespace, workspace: Path) -> list[str]:
                 argv += ["--" + name.replace("_", "-"), value]
     argv.append(f"--keep {args.keep}")
     return argv
+
+
+def _sync_sent_manifest(args: argparse.Namespace) -> dict[str, object] | None:
+    """Build the verified sent-recovery manifest sent to the runner via stdin.
+
+    Only ``sync-sent`` with ``--since`` uses a manifest; normal runs keep the
+    direct ``--sync-sent`` mode. The verified account is mandatory for recovery.
+    """
+    since = getattr(args, "since", None)
+    if args.mode != "sync-sent" or since is None:
+        return None
+    return {
+        "mode": "sync_sent",
+        "folder": "Sent Items",
+        "count": args.count,
+        "since": since,
+        "account": _resolve_account(args),
+    }
 
 
 def _prune_output_dir(run_dir: Path, keep: int) -> None:
@@ -143,9 +254,19 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
         if runner_data.get("executed_count") is not None:
             data["executed_count"] = runner_data.get("executed_count")
         for key in ("recovery_required", "date_windows_synced", "envelopes_examined",
-                    "total_envelopes_examined", "new_entries_indexed"):
+                    "total_envelopes_examined", "new_entries_indexed", "new_count", "reason_code",
+                    "write_state", "truncated", "coverage_start", "coverage_end", "covered_days",
+                    "total_days", "coverage_complete", "next_start", "follow_up_hint",
+                    "since_requested", "since_ignored", "since_ignored_reason",
+                    "effective_coverage_start"):
             if runner_data.get(key) is not None:
                 data[key] = runner_data[key]
+        handoff = runner_data.get("handoff")
+        if isinstance(handoff, dict):
+            # Counts only: the items stay in the persisted runner envelope and the handoff file.
+            data["handoff"] = {key: handoff[key] for key in (
+                "state", "pending_count", "written_count", "deferred_count", "file",
+            ) if key in handoff}
     return data
 
 
@@ -153,6 +274,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("mode", choices=("draft", "execute", "reconcile", "sync-sent"))
     parser.add_argument("--count", "-c", type=_positive_int, default=None, help="draft candidates (default 10) or recent Sent Items (default 150)")
+    parser.add_argument(
+        "--since", type=_iso_date, default=None,
+        help="verified conservative start (YYYY-MM-DD) for sync-sent recovery; requires --account",
+    )
     parser.add_argument("--account", default=None, help="optional account override; default: workspace backend binding")
     parser.add_argument("--data-dir", default="data/mail-desk", help="mail-desk data dir relative to --workspace")
     parser.add_argument("--workspace", default=".", help="workspace root (default: current directory)")
@@ -167,10 +292,34 @@ def main() -> int:
         parser.error("--apply requires the reconcile mode")
     if args.approved_by is not None and not args.apply:
         parser.error("--approved-by requires --apply")
+    if args.since is not None and args.mode != "sync-sent":
+        parser.error("--since requires the sync-sent mode")
+    if args.since is not None and not (args.account and args.account.strip()):
+        parser.error("--since requires --account with the verified account")
     if args.count is None:
         args.count = 150 if args.mode == "sync-sent" else 10
 
-    workspace = Path(args.workspace).resolve()
+    try:
+        workspace, data_dir = _resolve_bound_paths(args)
+    except (OSError, ValueError) as exc:
+        emit_json(build_error(
+            "batch_cli", "Workspace/data-dir binding could not be verified.",
+            {"mode": args.mode}, error_type="WorkspacePathError",
+            error_details={"reason": str(exc)[:1000]},
+        ))
+        return 2
+    # All downstream paths use the canonical bound directory, exactly as the
+    # runner infers its workspace root from ``data_dir``.
+    args.data_dir = str(data_dir)
+    try:
+        run_dir = _resolve_run_dir(workspace)
+    except (OSError, ValueError) as exc:
+        emit_json(build_error(
+            "batch_cli", "Workspace output directory could not be verified.",
+            {"mode": args.mode}, error_type="WorkspacePathError",
+            error_details={"reason": str(exc)[:1000]},
+        ))
+        return 2
     try:
         verify_workspace_lock(
             workspace, lease_id=args.workspace_lease_id,
@@ -189,7 +338,7 @@ def main() -> int:
         from mail_desk_batch_runner import _build_parser, _load_configuration, MODE_ALIASES
 
         try:
-            dd = Path(_absolute(args.data_dir, workspace))
+            dd = data_dir
             runner_args = _build_parser().parse_args(_build_args(args, workspace)[1:-1])
             config, _ = _load_configuration(runner_args, dd)
             if not isinstance(config, dict) or MODE_ALIASES.get(str(config.get("mode", "execute")).lower()) != "execute":
@@ -214,7 +363,6 @@ def main() -> int:
             emit_json(build_error("batch_cli", "Execute preflight failed.",
                                   {"mode": "execute"}, error_type=type(exc).__name__))
             return 1
-    run_dir = workspace / "tmp" / "mail-batch"
     try:
         run_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -233,8 +381,12 @@ def main() -> int:
     command = [sys.executable, str(SCRIPTS_DIR / runner_argv[0]), *runner_argv[1:]]
     child_input = {}
     if execute_input is not None:
-        command.append("--stdin")
         child_input["input"] = execute_input
+    sync_sent_manifest = _sync_sent_manifest(args)
+    if sync_sent_manifest is not None:
+        child_input["input"] = json.dumps(sync_sent_manifest, ensure_ascii=False).encode("utf-8")
+    if child_input:
+        command.append("--stdin")
 
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"

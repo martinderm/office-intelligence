@@ -63,6 +63,7 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.sent_handoff import SentHandoffError
 from core.batch_contract import validate_execute_contract
 from core.telemetry import empty_telemetry
 from core.synthesis_handoff import empty_synthesis_handoff
@@ -86,6 +87,7 @@ from core.modes import (
     run_sync_sent_mode as _run_sync_sent_mode,
     run_verify_mode as _run_verify_mode,
 )
+from core.modes.sync_sent import failure_envelope as _sync_sent_failure_envelope
 
 
 # ==============================================================================
@@ -613,7 +615,23 @@ def run_sync_sent_mode(
     """Compatibility facade for the extracted sent-items synchronization handler."""
     dd, binding, failure = _bind_mailbox_mode("sync_sent", account, data_dir)
     if failure is not None:
-        return failure
+        # Binding/readiness refusals keep the complete sync result shape: nothing
+        # was read or synced, and the refusal carries reason_code + handoff state.
+        raw_folder = config.get("folder", "Sent Items")
+        binding_failure = failure["backend_binding"]
+        result = _sync_sent_failure_envelope(
+            dd,
+            raw_folder if isinstance(raw_folder, str) else "Sent Items",
+            str(
+                binding_failure.get("message")
+                or failure.get("message")
+                or "Workspace backend binding failed before mailbox access."
+            ),
+            "backend_binding",
+            details={"error_type": "WorkspaceConfiguration", "invalid_field": "account"},
+        )
+        result["backend_binding"] = binding_failure
+        return result
     return _run_sync_sent_mode(
         config,
         account=binding["account"],
@@ -1431,6 +1449,12 @@ def main() -> int:
         return 2
     except FileNotFoundError as exc:
         _emit(_failure_envelope(str(exc), error_type="InputNotFound", operation="input_load", state="NotFound"))
+        return 1
+    except SentHandoffError as exc:
+        _emit(_failure_envelope(
+            str(exc), error_type="SentHandoffError", operation="runtime", state="Failed",
+            details={"reason_code": exc.reason_code, **exc.details},
+        ))
         return 1
     except Exception as exc:  # noqa: BLE001 - every CLI failure must retain the envelope contract
         _emit(
