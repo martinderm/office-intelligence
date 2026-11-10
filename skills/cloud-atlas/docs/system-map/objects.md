@@ -170,3 +170,66 @@ Alle Skripte (`gen_filemap.py`, `convert_cloud_docs.py`, `sync_project_cloud.py`
   "error": null
 }
 ```
+
+### 4.1 Einzeldatei-Ergänzung `data.only_file` (Issue #22)
+
+Nur bei `convert_cloud_docs.py --only-file` trägt `data` zusätzlich (Envelope-Schlüssel
+unverändert):
+
+```json
+"only_file": {
+  "source": "data/cloud/DEMO/g_neu.doc",
+  "action": "created",
+  "entry_changed": true,
+  "duplicate_source": false,
+  "artifacts_changed": true,
+  "recovered": null,
+  "retained_version": null,
+  "version": "memory/cloud/topics/demo/_versions/6bf52975593f2a7b/20261109T173512811272Z-40368-4e66145b",
+  "journal": null,
+  "mirror": "memory/cloud/topics/demo/_versions/6bf52975593f2a7b/20261109T173512811272Z-40368-4e66145b/g_neu.md"
+}
+```
+
+`action` ∈ `created` | `updated` | `unchanged` | `none` (Lauf vor einer Entscheidung
+gestoppt). `duplicate_source` ist bei mehrfachen/abweichend geschriebenen Einträgen der
+Quelle `true` (Lauf scheitert). `entry_changed` zeigt eine Filemap-Änderung an.
+`artifacts_changed` ist `true`, wenn eine neue Version geschrieben wurde.
+`recovered` ist `committed`, wenn ein früherer Lauf nachweislich committet hat, sonst
+`null`. `version` ist das neue Versionsverzeichnis (bei Konvertierung); `retained_version`
+nennt das reell existierende Versionsverzeichnis, das liegen blieb, sonst `null`.
+**Die Recovery entfernt nie eine Datei und verschiebt nie ein Artefakt**, und sie archiviert
+das Journal nicht: Journale, Versionen, Reste und Commit-Temps bleiben liegen
+(Retention ist bewusst nicht Teil dieses Modus; eine bereits committete, später überholte
+Version ist historisch und wird nicht gemeldet). `journal` nennt ein offenes bzw.
+liegengebliebenes Journal — der Lauf, der es gemeldet hat, hat dann fail-closed nichts
+geschrieben. `mirror` ist der neue oder aktuelle Mirror-Pfad. Fehlerphasen:
+`only-file`, `filemap`, `mirror-plan`, `curation`, `conversion`, `conflict`, `journal`,
+`runtime`. Der Eintrag selbst folgt dem Filemap-Objekt (1.); `markdown_mirror` und
+`derivative.path` zeigen in den reservierten Version-Root und sind **nicht stabil** — die
+Filemap ist die Quelle der Wahrheit. `artifact_metadata` entspricht dem geschriebenen
+Mirror-Frontmatter. Das Journal selbst (`<output_dir>/.only-file-journal/<key>.json`) ist
+kein Filemap- oder Artefakt-Objekt; es wird geschrieben und **nie** umbenannt, archiviert
+oder gelöscht. Vor jeder Journalmutation prüft der Lauf alle Einträge der Ziel-Filemap
+(auch den der Quelle, inkl. Windows-Aliasen wie einem abschließenden Punkt): beansprucht
+einer den Journalpfad, endet der Lauf fail-closed (`journal`).
+
+### 4.2 Scope-Grenzen des Einzeldatei-Modus (bewusst)
+
+- **Kein Vollscan-Anteil:** Ein regulärer Vollscan kennt `_versions/` und
+  `.only-file-journal/` nicht und kann versionierte Quellen erneut konvertieren bzw.
+  versionierte Mirror als Waisen entfernen.
+- **Nur Ziel-Filemap als Referenzquelle:** Andere Topics/Projekte werden nicht gelesen; deren
+  Verweise auf Pfade dieses Outputs sind ungeschützt.
+- **Keine Quarantäne, keine Archivierung, kein Aufräumen:** alle Reste bleiben liegen.
+- **Kein Move/Delete:** Versionen werden direkt geschrieben (kein Verzeichnis-Rename); der
+  Worker löscht keine Artefakte (OCR schreibt direkt, Short-Path-Staging und
+  LibreOffice-Profil bleiben im kurzen Laufverzeichnis `data/ca-doc/<run-id>` — auch im
+  direkten Pfad). Einzige
+  Ausnahme sind die atomaren `os.replace` von Filemap und Journal. Die OCR-Fähigkeitsprobe
+  läuft nur im Vollscan; unser Code legt im `--only-file`-Pfad kein Temp-Verzeichnis
+  außerhalb der Data Zones an, externe Programme verwalten ihre Temp-Dateien selbst.
+- **Kein Sibling-Schutz:** nur derselbe Storage ist gesperrt.
+- **Kein Roll-forward/Roll-back:** Recovery meldet und blockiert.
+- **Platzhalter-Prüfung nur für Quelle und Ziel-Filemap:** Output-Artefakte werden nicht
+  geprüft.

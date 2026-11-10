@@ -15,6 +15,14 @@ erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
 > **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand PR #51, 2026-10-23: 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
+**Issue #22 (Einzeldatei-Modus `--only-file`, bewusste Scope-Reduktion):** ergänzt
+`core/filemap_merge.py`, `core/publish_journal.py`, `core/artifact_refs.py` und
+`tests/test_convert_cloud_docs_only_file.py` (113 Tests, 1 davon nur ohne
+Symlink-/Junction-Recht übersprungen; Laufzeit 363,7 s). Gesamtsuite
+`skills/cloud-atlas/tests`: **372 Tests, 1 übersprungen, 575,7 s** (vor #22: 259 bestanden).
+Die frühere, größere Ausbaustufe (415 Tests) ist mit der Scope-Reduktion entfallen.
+Die Metrik der Kopfzeile ist davon unberührt (Stand PR #51).
+
 Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
 PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
 Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz.
@@ -41,6 +49,8 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 │      ├─ metadata.py (Frontmatter- & Metadaten-Schemas)                 │
 │      ├─ curation.py (Curation-Overlays & manuelle Overrides)           │
 │      ├─ mirror_paths.py (Pfadberechnung & Kollisionsvermeidung)        │
+│      ├─ publish_journal.py (Intent-Journal & Recovery, --only-file)    │
+│      ├─ artifact_refs.py (Konfigurierte Referenzermittlung)            │
 │      └─ scan_scope.py (Storage-lokale Verzeichnisausschlüsse)          │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │ Atomare Disk-Writes (Lock-geschützt)
@@ -66,6 +76,8 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 | **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
 | **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen; kollidierende Quellen erhalten `original.ext.md`, nicht auflösbare case-only Kollisionen stoppen fail-closed. |
 | **Scan-Scope (Issue #2)** | `scripts/core/scan_scope.py` | Gemeinsame Normalisierung, case-insensitiver Komponentenvergleich und Pre-Traversal-Pruning von `exclude_dirs`; Inventar und Rename-Matching bleiben im selben Scope. |
+| **Lokale Zugriffsprüfung (Issue #22)** | `scripts/core/artifact_refs.py` | `is_cloud_placeholder` prüft `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` und behandelt einen `stat`-Fehler auf existierendem Pfad fail-closed; nur für die Quelle und die Ziel-Filemap des `--only-file`-Laufs. Keine Referenz-Ermittlung, kein Walk, keine Symlink-Verfolgung. |
+| **Einzeldatei-Merge (Issue #22)** | `scripts/core/filemap_merge.py`, `scripts/core/publish_journal.py`, `convert_cloud_docs.py --only-file` | Roh-Splice genau eines Filemap-Eintrags (alle anderen Bytes identisch), strikte Parse-/Schema-Prüfung vor Mutation, unveränderliche versionierte Ziele unter `<output_dir>/_versions/` (direkt geschrieben, kein Verzeichnis-Rename, ohne Aufräumlogik), atomarer Filemap-Replace als einziger Commit-Punkt, minimales Journal `planned → staged → published → committed` (`staged` unmittelbar vor dem Replace), das nie archiviert oder gelöscht wird und dessen Pfad vor jeder Mutation gegen **alle** Einträge der Ziel-Filemap (auch den der Quelle, inkl. Windows-Aliase) geprüft wird (Claim → fail-closed); Recovery meldet nur, setzt nach einem nachweislichen Commit fort und endet sonst fail-closed ohne Writes; kein Scan, kein Cleanup, keine Fremdreferenz-Ermittlung ([`processes.md`](processes.md) Phase 5, [`effects.md`](effects.md) §6). |
 
 ---
 
@@ -79,10 +91,11 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 
 ---
 
-## 4. Die 5 fundamentalen Cloud-Atlas-Invarianten
+## 4. Die 6 fundamentalen Cloud-Atlas-Invarianten
 
 1. **Unveränderlichkeit externer Originale:** Cloud-Speicher bleiben standardmäßig read-only. Modifikationen finden als lokale Markdown-Spiegel in der Workspace-Zone `memory/cloud/` statt.
 2. **OCR-Policy Disziplin:** Standard ist `local_derivative` (lokales Textderivat). `enrich_source` (In-Place OCR im Cloud-PDF) ist nur für un-signierte, beschreibbare PDFs mit voller Provenienz zulässig.
 3. **Zirkelfreies Payload-Hashing:** `artifact_sha256` im Frontmatter repräsentiert exakt die Bytes des reinen Markdown-Bodys, niemals der Datei inklusive Frontmatter (Ausschluss selbstreferenzieller Hash-Drifts).
 4. **Strikte Frontmatter-Konformität:** Erzeugte Markdown-Dateien erzwingen exakt die 12 kanonischen Pflichtfelder (`REQUIRED_CLOUD_FRONTMATTER_KEYS`).
-5. **Kuratierungs-Stabilität:** Manuelle Overrides in `filemap-curation.json` übersteuern automatisierte Heuristiken deterministisch.
+5. **Einzeldatei-Isolation (Issue #22):** `--only-file` verändert genau einen Filemap-Eintrag per Roh-Splice und scannt und löscht nichts. Jede Konvertierung legt ein neues, eindeutiges Versionsverzeichnis unter `<output_dir>/_versions/` an und schreibt Mirror und Derivat **direkt** hinein (kein Staging-Verzeichnis, kein Verzeichnis-Rename, Datei-/Verzeichnis-fsync, nie in-place überschrieben); der atomare Filemap-Replace ist der **einzige Commit-Punkt**. **Es wird nichts gelöscht, verschoben, umbenannt, archiviert oder aufgeräumt**: Journale, Versionen, Reste und Commit-Temps bleiben liegen; der Version-Root hat keine Aufräumlogik; auch der Worker löscht keine Artefakte (OCR schreibt direkt — kein `os.replace(x, x)`, Pfadgleichheit nach Entfernen des Windows-Extended-Prefix; DOC-Short-Path-Staging und LibreOffice-Profil liegen im kurzen Data-Zone-Laufverzeichnis `data/ca-doc/<run-id>`). Einzige zulässige `os.replace`-Aufrufe sind Filemap und Journal. **Die Recovery meldet nur**: ein nachweislich committeter Lauf (`published`/`committed` oder Live-Eintrag == aufgezeichneter neuer Digest) wird fortgesetzt, jeder andere Zustand endet fail-closed (`phase: journal`) ohne jede Mutation, Journal und Reste bleiben liegen. **Vor jeder Journalmutation** prüft der Lauf **alle** Einträge derselben Ziel-Filemap — auch den der Quelle, inklusive Windows-Aliasen (case-insensitiv, abschließende Punkte/Leerzeichen je Komponente) — auf den Journalpfad (Claim → fail-closed, kein Scan). Quelle und Ziel-Filemap werden vor jedem Öffnen lokal geprüft (nie hydratisiert). Der Lauf hält OS-Locks pro Storage (Output exklusiv, Eltern shared, Filemap exklusiv; im Projekt-Datenbereich `data/.locks/cloud-atlas/`, sortiert akquiriert) und prüft den Base-Hash unmittelbar vor dem Replace; kooperierende Läufe sind geschützt, Writer ohne Harness-Lease sind außerhalb des Vertrags. **Bewusste Scope-Reduktion:** kein Vollscan-Anteil (ein regulärer Vollscan kennt den Version-Root nicht und kann versionierte Mirror als Waisen entfernen), keine Fremdreferenz-Ermittlung (Schutz nur gegen die eigene Ziel-Filemap), keine Quarantäne, keine Journal-Archivierung, keine Sibling-Koordination. `published`/`committed` erreichte Versionen werden nie automatisch gelöscht; nie ist ein gemischter Versionszustand sichtbar.
+6. **Kuratierungs-Stabilität:** Manuelle Overrides in `filemap-curation.json` übersteuern automatisierte Heuristiken deterministisch.
