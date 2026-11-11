@@ -1,8 +1,8 @@
 # Cloud-Atlas — Subsystem System Map: Nomen (Objects)
 
-> **Typ**: ICM Form 6 (`system-map`), Dimension: Nomen  
-> **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Vollständige Dokumentation aller Datenstrukturen, Schemas, Indizes und Frontmatter-Definitionen von Cloud-Atlas mit Quellcode-Zitaten.  
+> **Typ**: ICM Form 6 (`system-map`), Dimension: Nomen<br>
+> **Subsystem**: [`skills/cloud-atlas`](../../SKILL.md)<br>
+> **Ziel**: Vollständige Dokumentation aller Datenstrukturen, Schemas, Indizes und Frontmatter-Definitionen von Cloud-Atlas mit Quellcode-Zitaten.<br>
 > **Gültig für**: `skills/cloud-atlas/` und `memory/cloud/` im Ziel-Workspace
 
 ---
@@ -13,8 +13,8 @@ Die Filemap ist das maschinenlesbare Inventar des konfigurierten Scan-Scopes ein
 angebundenen Cloud-Speichers. `exclude_dirs` dokumentiert absichtliche Auslassungen.
 
 * **Dateipfad:** `memory/cloud/projects/<project-id>/filemap.json`
-* **Implementierungsdatei:** [`scripts/gen_filemap.py`](../scripts/gen_filemap.py)
-* **Schema-Referenz:** [`references/filemap.schema.json`](../references/filemap.schema.json)
+* **Implementierungsdatei:** [`scripts/gen_filemap.py`](../../scripts/gen_filemap.py)
+* **Schema-Referenz:** [`references/filemap.schema.json`](../../references/filemap.schema.json)
 * **Aktuelle Schema-Version:** `1` (`FILEMAP_SCHEMA_VERSION`)
 
 ### 1.1 Root-Struktur
@@ -96,8 +96,8 @@ Feld additiv.
 Ermöglicht menschlichen Nutzern und Agenten, Konvertierungs- und Synchronisationsentscheidungen granular zu steuern, ohne den Generator-Code zu verändern.
 
 * **Dateipfad:** `memory/cloud/projects/<project-id>/filemap-curation.json`
-* **Implementierungsdatei:** [`scripts/core/curation.py`](../scripts/core/curation.py)
-* **Schema-Referenz:** [`references/filemap-curation.schema.json`](../references/filemap-curation.schema.json)
+* **Implementierungsdatei:** [`scripts/core/curation.py`](../../scripts/core/curation.py)
+* **Schema-Referenz:** [`references/filemap-curation.schema.json`](../../references/filemap-curation.schema.json)
 * **Felder:**
   * `curation_version`: Integer (Standard: `1`)
   * `ignore_patterns`: Liste von Glob-Patterns (z. B. `["*.tmp", "~$*"]`)
@@ -113,7 +113,7 @@ Ermöglicht menschlichen Nutzern und Agenten, Konvertierungs- und Synchronisatio
 
 Konvertierte Dokumente werden als Markdown mit strikt typisiertem YAML-Frontmatter abgelegt.
 
-* **Implementierungsdatei:** [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py#L48-L71) und [`scripts/core/metadata.py`](../scripts/core/metadata.py)
+* **Implementierungsdatei:** [`scripts/convert_cloud_docs.py`](../../scripts/convert_cloud_docs.py#L112-L127) und [`scripts/core/metadata.py`](../../scripts/core/metadata.py)
 * **Speicherort:** `memory/cloud/projects/<project-id>/mirrors/...`
 
 ### 3.1 Die 12 Pflichtschlüssel (`REQUIRED_CLOUD_FRONTMATTER_KEYS`)
@@ -141,7 +141,7 @@ Jedes generierte Mirror-Dokument muss diese 12 Schlüssel zwingend enthalten:
 * `promotion_policy`: Enum (`"allowed"`, `"approval_required"`, `"prohibited"`).
 
 ### 3.3 Zirkelfreies Payload-Hashing
-Definiert in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py#L62-L71):
+Definiert in [`scripts/convert_cloud_docs.py`](../../scripts/convert_cloud_docs.py#L119-L127):
 ```python
 def calculate_markdown_payload_sha256(markdown_body):
     """Hash the converted Markdown payload, never the full self-referential file."""

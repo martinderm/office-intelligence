@@ -1,8 +1,8 @@
 # Cloud-Atlas — Subsystem System Map: Seiteneffekte (Effects)
 
-> **Typ**: ICM Form 6 (`system-map`), Dimension: Seiteneffekte  
-> **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Vollständige Dokumentation aller Subprozess-Grenzen, Tool-Abhängigkeiten, Sicherheitsbarrieren und Plattformspezifika.  
+> **Typ**: ICM Form 6 (`system-map`), Dimension: Seiteneffekte<br>
+> **Subsystem**: [`skills/cloud-atlas`](../../SKILL.md)<br>
+> **Ziel**: Vollständige Dokumentation aller Subprozess-Grenzen, Tool-Abhängigkeiten, Sicherheitsbarrieren und Plattformspezifika.<br>
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 ---
@@ -42,7 +42,7 @@ Testabdeckung unter `tests/test_pdf_form_field_extraction.py` (inkl. Non-`Import
 
 Externe Windows-Binaries (insbesondere LibreOffice und ältere Pandoc-Builds) scheitern trotz aktivierter Windows-10-Long-Paths-Option häufig an Pfaden über ~260 Zeichen.
 
-* **Konstante:** `EXTERNAL_CONVERTER_PATH_LIMIT = 240` in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py#L57).
+* **Konstante:** `EXTERNAL_CONVERTER_PATH_LIMIT = 240` in [`scripts/convert_cloud_docs.py`](../../scripts/convert_cloud_docs.py#L57).
 * **Schwelle:** geprüft wird `len(os.path.abspath(pfad)) >= 240` für den geplanten Quell- **und** den geplanten Derivatpfad; auf POSIX ist die Prüfung immer `False`.
 * **Wirkung (nur DOC-Konvertierung):** Erreicht einer der geplanten Pfade die Schwelle, kopiert `convert_doc_with_short_staging` die Quelle als `source.doc` in ein kurzes Staging-Verzeichnis, konvertiert dort und kopiert das DOCX-Derivat an seinen endgültigen Derivatpfad. Im `--only-file`-Modus ist dieses Staging das Data-Zone-Laufverzeichnis `data/ca-doc/<run-id>` und bleibt liegen; der Vollscan nutzt ein temporäres Verzeichnis und räumt es auf. Der direkte Pfad übergibt die Cloud-Quelle ohne Kopie. Das LibreOffice-Profil liegt im `--only-file`-Modus in beiden DOC-Zweigen im selben kurzen Laufverzeichnis; der Vollscan nutzt auch dafür ein temporäres Profil und räumt es auf. Der Word-COM-Pfad hat kein LibreOffice-Profil.
 * **Retry unterhalb der Schwelle und auf POSIX:** Meldet LibreOffice im direkten Aufruf einen eindeutigen Pfadlängenfehler (`is_path_length_converter_error`, z. B. `path too long`, `filename too long`, `enametoolong`), wird derselbe Short-Staging-Zweig **einmalig** nachgeholt. Diese Erkennung ist nicht OS-gebunden und greift daher auch bei geplanten Pfaden `< 240` sowie auf POSIX, wo die Vorabprüfung immer `False` ist. Andere Konverterfehler lösen keinen Retry aus.
