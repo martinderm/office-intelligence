@@ -35,6 +35,10 @@ class AttachmentInventoryValidationError(ValueError):
     """Raised when an attachment candidate fails strict RFC-822 inventory validation."""
 
 
+class MimeStructureError(ValueError):
+    """Raised when a MIME tree is defective or structurally incomplete."""
+
+
 def validate_attachment_candidate_metadata(item: dict[str, Any]) -> tuple[bool, str | None]:
     """Strictly validate that an attachment candidate comes from authentic RFC-822 MIME inspection.
 
@@ -168,6 +172,66 @@ def _traverse_part_locators(current_part: Any, current_locator: str) -> list[tup
     return locators
 
 
+def _part_defect_names(part: Any) -> set[str]:
+    """Return parser defect class names without exposing message contents."""
+    names = {type(defect).__name__ for defect in (getattr(part, "defects", ()) or ())}
+    try:
+        items = part.items()
+    except Exception:
+        names.add("HeaderIterationError")
+        return names
+    for _name, value in items:
+        names.update(type(defect).__name__ for defect in (getattr(value, "defects", ()) or ()))
+    return names
+
+
+_SINGLETON_MIME_HEADERS = (
+    "Content-Type",
+    "Content-Transfer-Encoding",
+    "Content-Disposition",
+)
+
+
+def _validate_mime_structure(message: Any) -> None:
+    """Reject ambiguous, defective or undecodable MIME trees before inventory."""
+    try:
+        parts = list(message.walk())
+    except Exception as exc:
+        raise MimeStructureError("The MIME tree could not be walked.") from exc
+    for index, part in enumerate(parts):
+        for header in _SINGLETON_MIME_HEADERS:
+            try:
+                values = part.get_all(header)
+                count = len(values) if values is not None else 0
+            except Exception as exc:
+                raise MimeStructureError(f"MIME part {index} has unreadable {header} headers.") from exc
+            if count > 1:
+                raise MimeStructureError(f"MIME part {index} has multiple {header} headers.")
+        if _part_defect_names(part):
+            raise MimeStructureError(f"MIME part {index} has parser defects.")
+        encoding_header = part.get("Content-Transfer-Encoding")
+        encoding = str(getattr(encoding_header, "cte", "") or "").strip().lower()
+        if encoding_header is not None and not encoding:
+            raise MimeStructureError(f"MIME part {index} has an unreadable transfer encoding.")
+        if encoding not in {"", "7bit", "8bit", "binary", "base64", "quoted-printable"}:
+            raise MimeStructureError(f"MIME part {index} has an unknown transfer encoding.")
+        if part.get_content_type().lower() == "message/rfc822":
+            raise MimeStructureError(f"MIME part {index} is an embedded message/rfc822.")
+        if part.is_multipart():
+            payload = part.get_payload()
+            if not isinstance(payload, list) or not payload:
+                raise MimeStructureError(f"MIME part {index} has no usable part list.")
+        else:
+            try:
+                payload = part.get_payload(decode=True)
+            except Exception as exc:
+                raise MimeStructureError(f"MIME part {index} payload could not be decoded.") from exc
+            if not isinstance(payload, bytes):
+                raise MimeStructureError(f"MIME part {index} has no decodable payload.")
+        if _part_defect_names(part):
+            raise MimeStructureError(f"MIME part {index} has parser defects after decoding.")
+
+
 def inspect_mime_tree(
     raw_eml: bytes | str,
     policy: dict[str, Any] | None = None,
@@ -175,7 +239,8 @@ def inspect_mime_tree(
     """Parse raw RFC 822 MIME bytes and return structured attachment inventory.
 
     Strictly inspects MIME headers and structure; untrusted body text is never
-    scanned for fabricated attachment markers.
+    scanned for fabricated attachment markers. A defective, ambiguous or
+    undecodable tree raises ``MimeStructureError`` before an inventory is returned.
     """
     if isinstance(raw_eml, str):
         eml_bytes = raw_eml.encode("utf-8", errors="replace")
@@ -186,6 +251,7 @@ def inspect_mime_tree(
         return []
 
     msg = email.message_from_bytes(eml_bytes, policy=email.policy.default)
+    _validate_mime_structure(msg)
     pol = policy or DEFAULT_ATTACHMENT_POLICY
 
     referenced_cids = extract_referenced_cids(msg)
@@ -231,12 +297,10 @@ def inspect_mime_tree(
 
         # Extract decoded payload, size and hash
         payload = part.get_payload(decode=True)
-        if isinstance(payload, bytes):
-            size_bytes = len(payload)
-            sha256 = hashlib.sha256(payload).hexdigest()
-        else:
-            size_bytes = None
-            sha256 = None
+        if not isinstance(payload, bytes) or _part_defect_names(part):
+            raise MimeStructureError(f"MIME part {locator} cannot be decoded safely.")
+        size_bytes = len(payload)
+        sha256 = hashlib.sha256(payload).hexdigest()
 
         clean_filename = sanitize_attachment_filename(raw_filename or f"part_{locator.replace('.', '_')}")
 

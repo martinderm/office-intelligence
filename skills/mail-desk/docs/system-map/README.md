@@ -1,5 +1,16 @@
 # Mail-Desk — Subsystem System Map
 
+**MIME-Inventar, fail-closed:** `core.attachments.inspect_mime_tree` prüft
+nichtleere RFC-822-Quellen vor der Inventarisierung vollständig per
+`_validate_mime_structure`: Parser- und Headerdefekte vor und nach dem
+Dekodieren, mehrfaches `Content-Type`, `Content-Transfer-Encoding` oder
+`Content-Disposition`, nicht dekodierbare Blätter, defekte Container und
+unbekannte Transferkodierungen und `message/rfc822` führen zu
+`MimeStructureError`. Die Draft-Reklassifikation fängt diesen konkreten Fehler
+elementlokal als `handoff_invalid` ab und erzwingt Review/INBOX. Ein defekter
+Baum liefert keine partielle Inventur. Leerinput behält das bestehende leere Ergebnis;
+dieser Vertrag prüft nicht die Vollständigkeit des RFC-822-Headerabschlusses.
+
 **Standalone-Guard (#38):** Quarantäne und Diagnose akzeptieren den
 Operator-Pfad `WORKSPACE_LOCK_ROOT`. Diagnose behält den expliziten API-Pfad als
 höchste Priorität und den bisherigen Desk-Env-Alias nachrangig. Letzter Fallback

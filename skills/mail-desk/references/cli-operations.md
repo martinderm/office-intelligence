@@ -380,6 +380,16 @@ den Top-Level-Account wiederholen; Abweichung, fehlende Message-ID oder ungülti
 MIME-Metadaten sind fail-closed Fehler. Der Inventarschritt lädt noch keinen
 Anhang in eine Arbeits- oder Cloud-Ablage herunter.
 
+Bei nichtleeren RFC-822-Quellen validiert `inspect_mime_tree` vor der Inventur
+den gesamten MIME-Baum. Defekte vor oder nach der Dekodierung, mehrfache
+`Content-Type`-, `Content-Transfer-Encoding`- oder `Content-Disposition`-Header,
+nicht dekodierbare Nutzlasten, unbekannte Transferkodierungen und
+`message/rfc822` lösen `MimeStructureError`
+aus; ein partielles Inventar wird nicht zurückgegeben. Der bisherige Umgang mit
+Leerinput und die Prüfung des RFC-822-Headerabschlusses ändern sich nicht.
+Die Draft-Reklassifikation behandelt den konkreten Strukturfehler elementlokal
+als `handoff_invalid` mit Review/INBOX, ohne den übrigen Lauf abzubrechen.
+
 `attachment_fetch` ruft einen verifizierten Anhangskandidaten sicher und isoliert
 in den temporären Quarantäneordner `data/mail-desk/attachments/<run-id>/` ab.
 Erfordert zwingend eine gültige `approval_receipt` mit passendem `request_hash` gegen

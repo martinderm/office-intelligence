@@ -16,6 +16,15 @@ before decoding or parsing; oversized inputs cannot trigger an unbounded read.
 
 ## 1. Systemübersicht
 
+**Mail-Desk-MIME-Inventar:** `inspect_mime_tree` validiert nichtleere
+RFC-822-Quellen vor der Inventur über den gesamten MIME-Baum. Parser- und
+Headerdefekte, mehrfache MIME-Singleton-Header, nicht dekodierbare Nutzlasten
+unbekannte Transferkodierungen und `message/rfc822` führen zu
+`MimeStructureError` statt einer Teilinventur. Die Draft-Reklassifikation
+behandelt diesen Fehler elementlokal als `handoff_invalid` mit Review/INBOX.
+Der bisherige Leerinput-Vertrag und die Transportpfade bleiben unverändert.
+Details: [Mail-Desk L2](../../skills/mail-desk/docs/system-map/README.md).
+
 **Standalone-Installation (#38):** Die sechs Guard-Einstiege in Event-, Meeting-,
 Cloud-, Mail-/Diagnose- und Projekt-Migrationscode akzeptieren das gemeinsame
 Operator-Environment `WORKSPACE_LOCK_ROOT`. Explizite Aufrufparameter gehen vor,

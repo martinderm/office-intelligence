@@ -527,7 +527,11 @@ nur Verifikationshilfen, nie Primär-, Close-, Idempotenz- oder Referenzschlüss
    sichtbare Link-/Anhang-/Thread-Hinweise) und **vor** Body-Auswertung den Lesegrad
    festlegen: `structural`, `selective` oder `full`. Reale Anhänge ausschließlich
    über das manifestgebundene MIME-Inventar erfassen; Betreff, Preview oder
-   Body-Markup sind kein Anhangsnachweis.
+   Body-Markup sind kein Anhangsnachweis. Nichtleere MIME-Quellen mit Defekten,
+   mehrfachen MIME-Singleton-Headern, nicht dekodierbaren Nutzlasten oder
+   unbekannten Transferkodierungen oder `message/rfc822` liefern keine
+   Teilinventur; Details im
+   [CLI-Vertrag](references/cli-operations.md).
 3. Nur nötigen Inhalt laden. Bei Unklarheit oder höherem Wissens-/Fehlerrisiko stets
    `structural → selective → full` eskalieren, nie aus Bequemlichkeit zurück. Nach
    jeder Inhaltslektüre sofort Kernaussage, Aktion, Reply, Todo, Referenzwert und

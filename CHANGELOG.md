@@ -8,6 +8,15 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### MIME-Anhangsinventur: Fail-closed-Strukturprüfung
+
+- Nichtleere RFC-822-Quellen werden vor der Inventur auf Defekte im gesamten
+  MIME-Baum, mehrfache Singleton-Header und dekodierbare Nutzlasten geprüft.
+  `message/rfc822`, unbekannte Transferkodierungen und defekte oder mehrdeutige
+  Strukturen ergeben `MimeStructureError` statt einer Teilinventur. Die
+  Draft-Reklassifikation setzt den konkreten Fehler elementlokal auf Review/INBOX.
+  Leerinput bleibt unverändert.
+
 ### 2026-11-09 — Issue #88: Sent-Items-Handoff für die Synthese (Teillieferung)
 
 #### Added

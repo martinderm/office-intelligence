@@ -61,6 +61,7 @@ from .attachment_evaluation import (
     STATUS_SKIPPED,
 )
 from .attachment_fetch import is_valid_run_id
+from .attachments import MimeStructureError
 from .attachment_handoff import (
     HANDOFF_STATUS_READY,
     AttachmentHandoffError,
@@ -590,20 +591,24 @@ def _evaluate_item(
         namespace=run_id,
     )
 
-    result = evaluate(
-        raw_eml=raw_eml,
-        account=normalized_account,
-        folder=folder,
-        envelope_id=envelope_id,
-        message_id=message_id,
-        decision=decision,
-        policy=policy,
-        run_id=effective_run_id,
-        data_dir=data_dir,
-        workspace_root=workspace_root,
-        lease_id=lease_id,
-        conversation_id=conversation_id,
-    )
+    try:
+        result = evaluate(
+            raw_eml=raw_eml,
+            account=normalized_account,
+            folder=folder,
+            envelope_id=envelope_id,
+            message_id=message_id,
+            decision=decision,
+            policy=policy,
+            run_id=effective_run_id,
+            data_dir=data_dir,
+            workspace_root=workspace_root,
+            lease_id=lease_id,
+            conversation_id=conversation_id,
+        )
+    except MimeStructureError:
+        _force_review_inbox(item, REASON_HANDOFF_INVALID)
+        return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
     if not isinstance(result, Mapping):
         raise AttachmentReclassificationContractError(
             "attachment_evaluate returned a non-mapping result."
