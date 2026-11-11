@@ -166,6 +166,54 @@ Filemap-Neuaufbau) wird nicht betreten. Ablauf:
    `data/.locks/cloud-atlas/` (nicht gelöscht, `.gitignore` empfohlen). Keine
    Mehrdatei-Atomarität gegen Stromausfall, aber nie ein gemischter Versionszustand.
 
+### Phase 6: Retention-Audit (Issue #97, rein lesend)
+
+`retention_audit.py` ist **kein** Teil von `run_conversion()` und wird von
+`sync_project_cloud.py` nicht aufgerufen. Es liest genau eine Ziel-Filemap und
+deren `<output_dir>/_versions/` und schreibt nichts:
+
+1. **Eingabe:** `--output-dir` und `--filemap` sind workspace-relativ und müssen in
+   den kanonischen Data Zones liegen. Output, Filemap, Version-Root und jeder
+   Katalogpfad werden **komponentenweise vor `realpath`/`scandir`/`open`** geprüft.
+   Links, Junctions und Cloud-Platzhalter in Output-/Filemap-Vorfahren brechen den
+   Audit fail-closed ab; in Katalog-Vorfahren verhindern sie nur das Lesen und die
+   Verifikation (Audit läuft nicht-autoritativ weiter), auch bei externen
+   Katalogzielen. Ein in der Filemap deklariertes `output_dir` muss per
+   Alias-Vergleich zur auditierten Output-Zone passen. Eine Legacy-Filemap **ohne**
+   `output_dir` wird fail-closed abgewiesen. Die Identität wird über die nur
+   gelesenen `projects.json`/`topics.json` an `output_json` + `output_dir` gebunden
+   (inkl. `filemap_json`/`cloud_mirror_dir` und synthetisierter Defaults). Jeder
+   Katalog-Lese-/Parsefehler verhindert `verified`; ohne genau einen fehlerfreien
+   Treffer ist die Klassifikation nicht autoritativ.
+2. **Aktive Referenz:** Nur `markdown_mirror` und `derivative.path` derselben
+   Filemap markieren ein Versionsverzeichnis als `active`. Windows-Pfadalias
+   (case-insensitiv, abschließende Punkte/Leerzeichen je Komponente ignoriert) gilt
+   **nur auf Windows**; auf case-sensitiven Plattformen muss der Pfad exakt passen,
+   sonst bleibt die Referenz `unresolved`. Andere Filemaps, Konsumenten und manuelle
+   Verweise werden nicht gelesen.
+3. **Klassifikation:** Nicht aktive Versionen sind `retained`, wenn sie zu den
+   neuesten 2 inaktiven Versionen ihres Quell-Keys gehören oder höchstens 90 Tage
+   alt sind; sonst `quarantine_candidate`. **Älter als 365 Tage hat Vorrang** und ist
+   auch dann Kandidat, wenn die Version unter den neuesten zwei liegt oder ≤ 90 Tage
+   alt wäre. Das Alter wird ungerundet aus der mtime berechnet. Unerwartete Layouts
+   und Links sind Kandidaten; ein referenziertes Link-/Junction-Run bleibt `active`
+   und wird nie traversiert. Cloud-Platzhalter in Quell-Key-, Run- oder
+   Inhaltsverzeichnissen werden nicht traversiert (Guard vor `realpath`/`scandir`).
+   Ein unlesbarer Quell-Key mit aktiver Referenz wird `unresolved`/
+   `potentially_active: true`, nicht Kandidat; `references.unresolved` und die
+   menschliche Zusammenfassung nennen die Referenz. Ein Link/Platzhalter auf dem
+   Version-Root bricht fail-closed ab.
+4. **Bericht:** `data.retention` enthält Policy, Zähler, bekannte Bytes, Journal-
+   Zusammenfassung und Einträge. Jeder Eintrag hat `action: "none"`,
+   `foreign_reference_risk: "unknown"`, `safe_to_delete: false` und
+   `safe_to_move: false`. `quarantine_candidate` ist nur eine logische
+   Prüfempfehlung; der reservierte Bereich `<output_dir>/_quarantine/` wird weder
+   angelegt noch beschrieben.
+5. **Grenzen:** Kein Lock (nur lesend, Snapshot), keine automatische Bereinigung,
+   keine physische Quarantäne, keine Kenntnis fremder Referenzen. Die Schwellen
+   sind Empfehlungen, keine Speicherobergrenze. Ein späterer Vollscan kann den
+   Version-Root weiterhin nicht schützen (Phase 5, Schritt 8).
+
 ## 3. Der Filemap-Generierungs-Lifecycle
 
 Implementiert in [`scripts/gen_filemap.py`](../scripts/gen_filemap.py):

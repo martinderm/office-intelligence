@@ -200,8 +200,9 @@ Quelle `true` (Lauf scheitert). `entry_changed` zeigt eine Filemap-Änderung an.
 nennt das reell existierende Versionsverzeichnis, das liegen blieb, sonst `null`.
 **Die Recovery entfernt nie eine Datei und verschiebt nie ein Artefakt**, und sie archiviert
 das Journal nicht: Journale, Versionen, Reste und Commit-Temps bleiben liegen
-(Retention ist bewusst nicht Teil dieses Modus; eine bereits committete, später überholte
-Version ist historisch und wird nicht gemeldet). `journal` nennt ein offenes bzw.
+(Retention ist bewusst nicht Teil dieses Modus; §5 beschreibt nur die rein lesende
+logische Klassifikation. Eine bereits committete, später überholte Version ist
+historisch und wird im Lauf nicht gemeldet). `journal` nennt ein offenes bzw.
 liegengebliebenes Journal — der Lauf, der es gemeldet hat, hat dann fail-closed nichts
 geschrieben. `mirror` ist der neue oder aktuelle Mirror-Pfad. Fehlerphasen:
 `only-file`, `filemap`, `mirror-plan`, `curation`, `conversion`, `conflict`, `journal`,
@@ -221,7 +222,8 @@ einer den Journalpfad, endet der Lauf fail-closed (`journal`).
   versionierte Mirror als Waisen entfernen.
 - **Nur Ziel-Filemap als Referenzquelle:** Andere Topics/Projekte werden nicht gelesen; deren
   Verweise auf Pfade dieses Outputs sind ungeschützt.
-- **Keine Quarantäne, keine Archivierung, kein Aufräumen:** alle Reste bleiben liegen.
+- **Keine physische Quarantäne, keine Archivierung, kein Aufräumen:** alle Reste bleiben
+  liegen. Die rein lesende logische Klassifikation aus §5 ist kein Bestandteil des Laufs.
 - **Kein Move/Delete:** Versionen werden direkt geschrieben (kein Verzeichnis-Rename); der
   Worker löscht keine Artefakte (OCR schreibt direkt; im `--only-file`-Modus bleiben
   Short-Path-Staging und LibreOffice-Profil im kurzen Laufverzeichnis
@@ -238,3 +240,115 @@ einer den Journalpfad, endet der Lauf fail-closed (`journal`).
 - **Kein Roll-forward/Roll-back:** Recovery meldet und blockiert.
 - **Platzhalter-Prüfung nur für Quelle und Ziel-Filemap:** Output-Artefakte werden nicht
   geprüft.
+
+---
+
+## 5. Retention-Audit-Objekt (Issue #97)
+
+`retention_audit.py` liefert einen kanonischen Envelope mit `data.retention`. Das
+Objekt ist ein **reiner Bericht** und keine Handlungsanweisung:
+
+```json
+"retention": {
+  "policy": {
+    "id": "cloud-atlas-retention-v1",
+    "retained_inactive_versions": 2,
+    "retained_inactive_age_days": 90.0,
+    "quarantine_age_days": 365.0,
+    "automatic_actions": "none",
+    "storage_bound": "none; these thresholds are advisory labels, not a quota"
+  },
+  "output_dir": "memory/cloud/topics/demo",
+  "filemap": "memory/cloud/topics/demo/filemap.json",
+  "version_root": "memory/cloud/topics/demo/_versions",
+  "identity": {
+    "status": "verified",
+    "classification_authoritative": true,
+    "source": "catalog",
+    "match_count": 1,
+    "target": {
+      "scope": "topic", "owner_id": "demo", "subtopic_id": null,
+      "storage_id": "default",
+      "output_json": "memory/cloud/topics/demo/filemap.json",
+      "output_dir": "memory/cloud/topics/demo"
+    }
+  },
+  "classification_authoritative": true,
+  "quarantine_area": "memory/cloud/topics/demo/_quarantine",
+  "reserved_area_present": false,
+  "journals": {
+    "path": "memory/cloud/topics/demo/.only-file-journal",
+    "present": true,
+    "entries": 1,
+    "bytes": 142,
+    "classification": "journal_not_managed",
+    "unsafe": false
+  },
+  "counts": {"active": 1, "retained": 2, "quarantine_candidate": 1, "unresolved": 0},
+  "entries": [
+    {
+      "path": "memory/cloud/topics/demo/_versions/6bf52975593f2a7b/20261109T173512811272Z-40368-4e66145b",
+      "source_key": "6bf52975593f2a7b",
+      "classification": "active",
+      "reasons": ["filemap_reference"],
+      "active": true,
+      "age_days": 2.1,
+      "unsafe": false,
+      "placeholders": false,
+      "potentially_active": false,
+      "authoritative": true,
+      "action": "none",
+      "foreign_reference_risk": "unknown",
+      "safe_to_delete": false,
+      "safe_to_move": false,
+      "quarantine": {"logical": false, "physical": false}
+    }
+  ]
+}
+```
+
+* `active` ist ausschließlich die von **dieser** Ziel-Filemap referenzierte
+  Version (`markdown_mirror` oder `derivative.path`). Nur auf Windows werden
+  Windows-Pfadalias verwendet (case-insensitiv, abschließende Punkte/Leerzeichen
+  je Komponente ignoriert); auf case-sensitiven Plattformen muss der Pfad exakt
+  passen, sonst bleibt die Referenz `unresolved`. Ein referenziertes
+  Link-/Junction-Run bleibt `active` und wird nie traversiert.
+* `retained` = neueste **2** inaktive Versionen je Quell-Key **oder** höchstens
+  **90 Tage** alt. `quarantine_candidate` = älter als **365 Tage** oder außerhalb
+  des Counts und älter als 90 Tage. **Die 365-Tage-Regel hat Vorrang:** eine
+  >365-Tage-Version ist auch dann Kandidat, wenn sie unter den neuesten zwei liegt
+  oder ≤ 90 Tage alt wäre. `age_days` wird ungerundet aus der mtime des
+  Versionsverzeichnisses (UTC) berechnet und nur für die Anzeige gerundet; die
+  Klassifikation ist ein Snapshot, keine Manipulationsgarantie. `reasons` macht die
+  Entscheidung nachvollziehbar.
+* Cloud-Platzhalter in Quell-Key-, Run- oder Inhaltsverzeichnissen werden nie
+  traversiert. Nicht aktive betroffene Versionen sind `cloud_placeholder_*`.
+  Kandidaten, referenzierte aktive bleiben `active` mit `unsafe: true` und
+  `placeholders: true`. Ist das Quell-Key-Verzeichnis selbst unlesbar (Link,
+  Platzhalter, Datei/unerwartet) und zeigt eine aktive Referenz hinein, wird es
+  `unresolved` mit `potentially_active: true`; die Referenz steht unter
+  `references.unresolved` und wird in der menschlichen Zusammenfassung genannt.
+* `identity` bindet die Filemap über die nur gelesenen `projects.json`/
+  `topics.json` an `output_json` + `output_dir`, inklusive der Aliasfelder
+  `filemap_json`/`cloud_mirror_dir` und synthetisierter Defaults. Nur genau ein
+  Treffer **ohne jeden Katalog-Lese-/Parsefehler** setzt
+  `classification_authoritative: true`; sonst ist die Klassifikation
+  unverifiziert/mehrdeutig, jeder Eintrag trägt `authoritative: false`, und
+  Kandidaten sind nicht-autoritative Prüfhinweise. Eine Filemap ohne deklariertes
+  `output_dir` wird fail-closed abgewiesen, weil ihre Zugehörigkeit nicht bewiesen
+  werden kann. Output, Filemap und Katalogpfade werden komponentenweise vor
+  `realpath`/`scandir`/`open` geprüft. Links/Junctions/Platzhalter in
+  Output-/Filemap-Vorfahren brechen den Audit ab; in Katalog-Vorfahren verhindern
+  sie nur das Lesen und die Verifikation, nicht den Audit.
+* `quarantine.logical` markiert nur die Prüfempfehlung. `physical` ist immer
+  `false`; `<output_dir>/_quarantine/` ist ein reservierter Namensraum, den der
+  Audit weder anlegt noch beschreibt.
+* `journals` ist **kein** Retentionsobjekt: `classification:
+  "journal_not_managed"`, keine Kandidaten, keine Archivierung.
+* `action`, `safe_to_delete` und `safe_to_move` sind konstant. Fremde Filemaps,
+  Konsumenten und manuelle Verweise sind nicht ermittelbar
+  (`foreign_reference_risk: "unknown"`); ein manuelles Verschieben/Löschen liegt
+  außerhalb des Produktvertrags. Die Bytes sind ein Snapshot, keine Obergrenze.
+* Der Audit liest nur; er braucht keinen Workspace-Lock und verändert weder
+  Filemap noch Version-Root. Er kennt die Vollscan-Grenze aus §4.2 und schützt
+  keine Version vor einem späteren Vollscan.
