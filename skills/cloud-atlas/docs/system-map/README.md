@@ -10,9 +10,9 @@ mit optionalem `installation_guidance`, das in `result_hash` eingeht; fremde Lea
 erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
 [Bundle-README](../../../../README.md#workspace-lock-voraussetzung).
 
-> **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)  
-> **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Letzte vollständige Metrik (PR #51, 2026-10-23): 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung. Issue #97 ergänzt `scripts/core/retention.py`, `retention_audit.py` und `tests/test_retention_policy.py`; die PR-#51-Zahl bleibt als historischer Messpunkt stehen.
+> **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)<br>
+> **Subsystem**: [`skills/cloud-atlas`](../../SKILL.md)<br>
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. **HEAD-Frame, 2026-11-11 (`9a04cd0`, aktuell):** 42 Dateien unter `skills/cloud-atlas/`, davon 14 Python-Dateien rekursiv unter `scripts/` (inkl. `core/`) und 17 Testmodule `tests/test_*.py` (`git ls-files --cached --others --exclude-standard`, Basis-Arbeitsbaum `9a04cd0`; dieser Doku-PR ändert die Cloud-Dateizahl nicht). **Historischer Messpunkt (PR #51, 2026-10-23, Commit `709bd45`):** 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); historischer vollständiger pytest-Suite-Lauf: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe des damaligen Laufs; für diesen Doku-Commit nicht neu erhoben). **Historischer Issue-#2-Messpunkt (2026-10-16, Merge `a4b8e80`):** 32 Dateien / 182/182 (15 Ausschluss-Regressionstests). Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung. Issue #97 ergänzt `scripts/core/retention.py`, `retention_audit.py` und `tests/test_retention_policy.py`; die PR-#51-Zahl bleibt als historischer Messpunkt stehen.<br>
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 **Issue #22 (Einzeldatei-Modus `--only-file`, bewusste Scope-Reduktion):** ergänzt
@@ -24,10 +24,17 @@ Short-Path-E2E ist Windows-only gegated). Gesamtsuite `skills/cloud-atlas/tests`
 Windows mit echtem LibreOffice ohne Skip: der Short-Path-E2E prüft die geplante Pfadlänge
 `>= 240` und `source.doc` im Staging, der direkte Pfad denselben Inhaltstransfer ohne
 Quellkopie; beide prüfen Envelope, Konverteridentität, DOCX-Lesbarkeit und Mirror-Inhalt.
-Auf POSIX läuft nur der direkte Pfad (dort ist die Vorabprüfung immer `False`); der Retry
-nach erkanntem Pfadlängenfehler ist plattformneutral getestet.
-Die frühere, größere Ausbaustufe (415 Tests) ist mit der Scope-Reduktion entfallen.
-Die Metrik der Kopfzeile ist davon unberührt (Stand PR #51).
+Auf POSIX startet der direkte Pfad (die Vorabprüfung ist dort immer `False`); bei
+einem eindeutig erkannten LibreOffice-Pfadlängenfehler folgt einmalig das
+Short-Staging, auch unterhalb von 240 Zeichen. Der Retry nach erkanntem
+Pfadlängenfehler ist plattformneutral getestet; ein POSIX-End-to-End-Lauf ist damit
+nicht nachgewiesen.
+Die frühere, größere Ausbaustufe (415 Tests) ist historisch und mit der
+Scope-Reduktion entfallen. Die Testzahlen dieses Abschnitts sind historische
+Messpunkte: Der Einzeldatei-Modus wurde mit #99 (`389b49e`, 2026-11-10)
+eingeführt; die Testzahlen wurden mit PR #102 (`7443ba7`, 2026-11-11) in dieser
+Karte dokumentiert und für diesen Doku-Commit nicht neu erhoben. Der HEAD-Frame
+der Kopfzeile ist davon unberührt.
 
 **Issue #97 (Retention-/Quarantäne-Policy, rein lesend):** ergänzt
 `scripts/core/retention.py`, `scripts/retention_audit.py` und
@@ -56,7 +63,8 @@ und archiviert nichts; Journale bleiben `journal_not_managed`. `--only-file` und
 Speicherobergrenze; Fremdreferenzen anderer Filemaps/Konsumenten sind unbekannt,
 daher ist kein Eintrag `safe_to_delete`/`safe_to_move`.
 
-Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
+Die PR-#51-Metrik der Kopfzeile ist ein historischer PDF-Fix-Frame vor Integration
+von #14/#11 (2026-10-23).
 PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
 Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz.
 
@@ -76,23 +84,33 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 ┌────────────────────────────────────────────────────────────────────────┐
 │                          cloud-atlas Engine                            │
 │  ├─ sync_project_cloud.py (Orchestrierter Sync-Runner)                 │
-│  ├─ gen_filemap.py (Filemap-Generator, Schema 1, 53 KB)                │
-│  ├─ convert_cloud_docs.py (Pandoc-, LibreOffice- & OCR-Pipeline, 103 KB)│
+│  ├─ gen_filemap.py (Filemap-Generator, Schema 1)                       │
+│  ├─ convert_cloud_docs.py (Pandoc-, LibreOffice- & OCR-Pipeline)       │
 │  └─ core/ (Hilfsmodule)                                                │
 │      ├─ metadata.py (Frontmatter- & Metadaten-Schemas)                 │
 │      ├─ curation.py (Curation-Overlays & manuelle Overrides)           │
 │      ├─ mirror_paths.py (Pfadberechnung & Kollisionsvermeidung)        │
 │      ├─ publish_journal.py (Intent-Journal & Recovery, --only-file)    │
-│      ├─ artifact_refs.py (Konfigurierte Referenzermittlung)            │
+│      ├─ artifact_refs.py (Platzhalter-/Lokalzugriffsprüfung, #22)      │
 │      └─ scan_scope.py (Storage-lokale Verzeichnisausschlüsse)          │
 └───────────────────────────────────┬────────────────────────────────────┘
-                                    │ Atomare Disk-Writes (Lock-geschützt)
+                                    │ Vollscan: atomare Mirror-Writes
+                                    │ --only-file: Versions-Writes direkt;
+                                    │ atomarer Filemap-/Journal-Replace
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │             Ziel-Workspace Cloud-Zone (memory/cloud/)                  │
 │  ├─ projects/<id>/filemap.json (Maschinenlesbare Bestandsaufnahme)     │
 │  ├─ projects/<id>/filemap-curation.json (Manuelle Kuratierungsregeln)  │
 │  └─ projects/<id>/mirrors/ (Generierte Markdown-Derivate mit Metadaten)│
+└────────────────────────────────────────────────────────────────────────┘
+                                    │ nur lesend: Filemap, Version-Root,
+                                    │ Journal-Zusammenfassung, Kataloge
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│  Retention-Audit (Issue #97, separater read-only Einstieg)             │
+│  retention_audit.py klassifiziert active / retained /                  │
+│  quarantine_candidate; keine Writes, kein Move, kein Delete            │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -102,12 +120,12 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 
 | Komponente | Dateipfade | Primäre Verantwortlichkeit |
 | :--- | :--- | :--- |
-| **Sync-Orchestrierung** | [`scripts/sync_project_cloud.py`](../scripts/sync_project_cloud.py) | Geordneter 2-Phasen-Lauf: Konvertierung gefolgt von Filemap-Aktualisierung für Projekte oder Topics. |
-| **Filemap-Engine** | [`scripts/gen_filemap.py`](../scripts/gen_filemap.py) | Rekursiver Dateisystemscan, SHA-256 Hashing, Schema-1-Generierung, Validierung gegen `filemap.schema.json`. |
-| **Konvertierungs-Engine** | [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py) | Pandoc-/LibreOffice-Bridge, PDF-OCR-Pipeline (`local_derivative` vs. `enrich_source`), optionale AcroForm-Formularfelder-Extraktion (PyMuPDF, Status/Warnungen → Filemap), Frontmatter-Injektion. |
-| **Metadaten & Frontmatter** | [`scripts/core/metadata.py`](../scripts/core/metadata.py) | Validierung der 12 Pflichtschlüssel und kanonischen Frontmatter-Eigenschaften. |
-| **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
-| **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen; kollidierende Quellen erhalten `original.ext.md`, nicht auflösbare case-only Kollisionen stoppen fail-closed. |
+| **Sync-Orchestrierung** | [`scripts/sync_project_cloud.py`](../../scripts/sync_project_cloud.py) | Geordneter 2-Phasen-Lauf: Konvertierung gefolgt von Filemap-Aktualisierung für Projekte oder Topics. |
+| **Filemap-Engine** | [`scripts/gen_filemap.py`](../../scripts/gen_filemap.py) | Rekursiver Dateisystemscan, SHA-256 Hashing, Schema-1-Generierung, Validierung gegen `filemap.schema.json`. |
+| **Konvertierungs-Engine** | [`scripts/convert_cloud_docs.py`](../../scripts/convert_cloud_docs.py) | Pandoc-/LibreOffice-Bridge, PDF-OCR-Pipeline (`local_derivative` vs. `enrich_source`), optionale AcroForm-Formularfelder-Extraktion (PyMuPDF, Status/Warnungen → Filemap), Frontmatter-Injektion. |
+| **Metadaten & Frontmatter** | [`scripts/core/metadata.py`](../../scripts/core/metadata.py) | Validierung der 12 Pflichtschlüssel und kanonischen Frontmatter-Eigenschaften. |
+| **Kuratierungs-Overlay** | [`scripts/core/curation.py`](../../scripts/core/curation.py) | Laden und Mergen manueller Kuratierungsentscheidungen aus `filemap-curation.json`. |
+| **Spiegelpfad-Berechnung** | [`scripts/core/mirror_paths.py`](../../scripts/core/mirror_paths.py) | Deterministische Transformation von Cloud-Pfaden in lokale Mirror-Pfade, Vermeidung von Namenskollisionen; kollidierende Quellen erhalten `original.ext.md`, nicht auflösbare case-only Kollisionen stoppen fail-closed. |
 | **Scan-Scope (Issue #2)** | `scripts/core/scan_scope.py` | Gemeinsame Normalisierung, case-insensitiver Komponentenvergleich und Pre-Traversal-Pruning von `exclude_dirs`; Inventar und Rename-Matching bleiben im selben Scope. |
 | **Lokale Zugriffsprüfung (Issue #22)** | `scripts/core/artifact_refs.py` | `is_cloud_placeholder` prüft `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` und behandelt einen `stat`-Fehler auf existierendem Pfad fail-closed; nur für die Quelle und die Ziel-Filemap des `--only-file`-Laufs. Keine Referenz-Ermittlung, kein Walk, keine Symlink-Verfolgung. |
 | **Einzeldatei-Merge (Issue #22)** | `scripts/core/filemap_merge.py`, `scripts/core/publish_journal.py`, `convert_cloud_docs.py --only-file` | Roh-Splice genau eines Filemap-Eintrags (alle anderen Bytes identisch), strikte Parse-/Schema-Prüfung vor Mutation, unveränderliche versionierte Ziele unter `<output_dir>/_versions/` (direkt geschrieben, kein Verzeichnis-Rename, ohne Aufräumlogik), atomarer Filemap-Replace als einziger Commit-Punkt, minimales Journal `planned → staged → published → committed` (`staged` unmittelbar vor dem Replace), das nie archiviert oder gelöscht wird und dessen Pfad vor jeder Mutation gegen **alle** Einträge der Ziel-Filemap (auch den der Quelle, inkl. Windows-Aliase) geprüft wird (Claim → fail-closed); Recovery meldet nur, setzt nach einem nachweislichen Commit fort und endet sonst fail-closed ohne Writes; kein Scan, kein Cleanup, keine Fremdreferenz-Ermittlung ([`processes.md`](processes.md) Phase 5, [`effects.md`](effects.md) §6). |

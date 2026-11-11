@@ -72,7 +72,7 @@ Vollständige DTOs und Bounds: `references/event-dossier.md`.
 
 Definiert in [`references/batch-runner.md`](../../references/batch-runner.md) und implementiert in [`scripts/core/modes/`](../../scripts/core/modes/):
 
-### Phase 1: `draft` ([`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py))
+### Phase 1: `draft` ([`scripts/core/modes/draft.py`](../../scripts/core/modes/draft.py))
 1. Lädt verarbeitete Mails aus `final-location-index.json` und `sent-index.json`.
 2. Ruft unprozessierte E-Mails aus dem Zielordner ab (`get_unprocessed_emails()`).
 3. Führt konservative Klassifikation durch:
@@ -99,14 +99,14 @@ Definiert in [`references/batch-runner.md`](../../references/batch-runner.md) un
 * FR-04/`dossier_apply`: innere H2-Receipt zuerst, bestehende äußere Dossier-Receipt
   danach über den vollständigen inneren Request; beide vor Delegation prüfen.
 
-### Phase 3: `execute` ([`scripts/core/modes/execute.py`](../scripts/core/modes/execute.py))
+### Phase 3: `execute` ([`scripts/core/modes/execute.py`](../../scripts/core/modes/execute.py))
 1. Validiert den Workspace-Lock (`require_workspace_lock()`).
 2. Prüft die Gültigkeit des übergebenen Receipts gegen das Manifest.
 3. Führt IMAP-Operationen (Verschieben, Flaggen) atomar aus.
 4. Schreibt neue Einträge in `data/mail-desk/final-location-index.json` via atomarem Tempfile-Replace.
 5. Nach dem Copy verifiziert die Zielordner-Listung **bounded-eskalierend**: bis zu 4 Versuche mit Backoff 0.3/0.5/1.0/2.0s und einer frischen Himalaya-Listung je Versuch. Erschöpft sich das Budget, bleibt der kanonische Fehler „Target verification failed after copy." byte-identisch und trägt einen Diagnose-Suffix (Versuche, gesehene Envelopes, Kandidaten, `elapsed_ms`); dieselben Fakten gehen als freie Details in `journal.transition(...)`. Kein neuer Kanon-Zustand und kein neuer Result-Schema-Key.
 
-### Phase 4: `verify` ([`scripts/core/modes/verify.py`](../scripts/core/modes/verify.py))
+### Phase 4: `verify` ([`scripts/core/modes/verify.py`](../../scripts/core/modes/verify.py))
 1. Fragt die Zielordner via Himalaya ab.
 2. Bestätigt das physische Vorhandensein der verschobenen Mails am Zielort.
 3. Bleibt der unabhängige Gesamt-Batch-Nachlauf; die execute-seitige Copy-Verifikation (Phase 3, Punkt 5) reduziert den zuvor flakigen Recovery-Fall, ersetzt Phase 4 aber nicht.
@@ -129,7 +129,7 @@ Task-Desk-/Todoist-Zustände. Reply-Kandidaten entstehen über
 
 ## 3. Die Attachment-Quarantäne-Pipeline (MD-Q1 / MD-Q2)
 
-Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py) und [`scripts/core/quarantine/attachment_fetch.py`](../scripts/core/quarantine/attachment_fetch.py):
+Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../../scripts/core/quarantine/quarantine_index.py) und [`scripts/core/quarantine/attachment_fetch.py`](../../scripts/core/quarantine/attachment_fetch.py):
 
 ```
 [MIME-Part Erkennung] ──► [Symlink / Reparse Check] ──► [Download in attachments/<run_id>/]
@@ -138,7 +138,7 @@ Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core
 [Atomarer Index-Write] ◄── [SHA-256 Re-Verifikation] ◄── [Inventar .quarantine-inventory.json]
 ```
 
-**Tracked-Quarantäne-Preflight (FR-15/MD-E1-T02):** Nach der Lock-Ownership-Prüfung und vor dem ersten Write prüft [`scripts/core/quarantine_preflight.py`](../scripts/core/quarantine_preflight.py) den Git-Index am vertrauenswürdigen `workspace_root` (`git ls-files`, read-only, ohne Shell, mit Timeout). Jede getrackte Datei unter `data/mail-desk/attachments/` (inklusive `**/.quarantine-inventory.json`/`.lock`) stoppt fail-closed (`TrackedQuarantineError`); Non-Zero-Exit, Timeout oder unlesbarer Index stoppen fail-closed (`QuarantinePreflightError`). Der Preflight verändert `.gitignore` nie autonom. Derselbe Preflight läuft vor dem ersten mutierenden OCR-Derivat-Write der Extraktionsstufe.
+**Tracked-Quarantäne-Preflight (FR-15/MD-E1-T02):** Nach der Lock-Ownership-Prüfung und vor dem ersten Write prüft [`scripts/core/quarantine_preflight.py`](../../scripts/core/quarantine_preflight.py) den Git-Index am vertrauenswürdigen `workspace_root` (`git ls-files`, read-only, ohne Shell, mit Timeout). Jede getrackte Datei unter `data/mail-desk/attachments/` (inklusive `**/.quarantine-inventory.json`/`.lock`) stoppt fail-closed (`TrackedQuarantineError`); Non-Zero-Exit, Timeout oder unlesbarer Index stoppen fail-closed (`QuarantinePreflightError`). Der Preflight verändert `.gitignore` nie autonom. Derselbe Preflight läuft vor dem ersten mutierenden OCR-Derivat-Write der Extraktionsstufe.
 
 1. **MIME-Inspektion (`inspect_mime_tree`):**
    - Traversiert die MIME-Struktur der Mail und identifiziert Binäranhänge.
@@ -157,7 +157,7 @@ Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core
 
 ### 3.1 Policygebundene Anhang-Evaluierung (`attachment_evaluate`, FR-15/MD-E1-T04/T05/T06/T07)
 
-Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path und mit **FR-15/MD-E2-T03** als opt-in `inspect`-Vorschlag implementiert und mit **FR-15/MD-E2-T04** über den hermetischen Real-Pfad-Akzeptanztest paketabgenommen (FR-15 geschlossen; §3.2/§3.3).
+Implementiert in [`scripts/core/attachment_evaluation.py`](../../scripts/core/attachment_evaluation.py). Der Orchestrator revalidiert die echten MIME-Parts, autorisiert intern, komponiert seit **FR-15/MD-E1-T05** die bestehenden kanonischen Seams linear und schließt mit **FR-15/MD-E1-T06** die negative Fehler-/Reason-Matrix fail-closed; **MD-E1 selbst endet vor der Reklassifikation und der `DraftManifest`-Installation** (beide gehören zu MD-E2). **FR-15/MD-E1-T07** nimmt das Paket ab: ein hermetischer End-to-End-Test beweist Inspect → policygebundenen Fetch → begrenzte Extraktion → validierten Handoff für einen klarstellenden erlaubten Anhang bei null Mailbox-/Promotion-/Export-/Dispositions-/Cleanup-/Classifier-Writes; die Reklassifikation und die `DraftManifest`-Installation sind **nicht Teil der MD-E1-Laufzeit**, sondern werden mit **FR-15/MD-E2-T01/T02** für den `draft`-Happy-Path und mit **FR-15/MD-E2-T03** als opt-in `inspect`-Vorschlag implementiert und mit **FR-15/MD-E2-T04** über den hermetischen Real-Pfad-Akzeptanztest paketabgenommen (FR-15 geschlossen; §3.2/§3.3).
 
 ```
 [Body-/Full-Read-Decision] ──► Trigger? ──nein──► not_needed/classification_clear
@@ -197,8 +197,8 @@ Implementiert in [`scripts/core/attachment_evaluation.py`](../scripts/core/attac
 
 ### 3.2 Draft-Integration und einmalige Neuklassifikation (`attachment_reclassification`, FR-15/MD-E2-T01/T02/T03/T04)
 
-Implementiert in [`scripts/core/attachment_reclassification.py`](../scripts/core/attachment_reclassification.py)
-und aufgerufen aus [`scripts/core/modes/draft.py`](../scripts/core/modes/draft.py) **nach** der
+Implementiert in [`scripts/core/attachment_reclassification.py`](../../scripts/core/attachment_reclassification.py)
+und aufgerufen aus [`scripts/core/modes/draft.py`](../../scripts/core/modes/draft.py) **nach** der
 bestehenden Preview-/Body-/Full-Read-Klassifikation und **vor** `add_draft_contract` (der
 Review-Hash bindet die installierte Auswertung):
 
@@ -238,7 +238,7 @@ Review-Hash bindet die installierte Auswertung):
    direktes `draft`/`inspect` gültig (`draft` default an, `inspect` default aus); `--pipeline` bleibt
    unverändert. MD-E2-T03 verdrahtet den opt-in `inspect`-Vorschlag (§3.3); mit **MD-E2-T04**
    ist die Paketabnahme über den hermetischen Akzeptanztest
-   [`tests/test_batch_runner_mde2_acceptance.py`](../tests/test_batch_runner_mde2_acceptance.py)
+   [`tests/test_batch_runner_mde2_acceptance.py`](../../tests/test_batch_runner_mde2_acceptance.py)
    abgeschlossen (**FR-15 geschlossen**): ein einziger realer Pfad Body/Full-Read → mehrdeutig →
    realer `text/plain`-Anhang → genau eine `untrusted_external`-Neuklassifikation →
    persistiertes Projekt-`DraftManifest` mit bounded `attachment_evaluation`
@@ -258,7 +258,7 @@ Review-Hash bindet die installierte Auswertung):
 
 ### 3.3 Opt-in `inspect`-Vorschlag (`inspect.py`, FR-15/MD-E2-T03)
 
-[`scripts/core/modes/inspect.py`](../scripts/core/modes/inspect.py) bleibt ohne
+[`scripts/core/modes/inspect.py`](../../scripts/core/modes/inspect.py) bleibt ohne
 `evaluate_attachments`/`propose_manifest` rein lesend. `evaluate_attachments: true` impliziert
 den top-level `manifest_proposal`: der Inspektor baut das Manifest über
 `draft_manifest(ordered_emails, …, source_sink=…)` (die initiale Preview-/Body-/Full-Read-
@@ -276,7 +276,7 @@ unverändert geerbt. Mit **MD-E2-T04** ist die Paketabnahme abgeschlossen
 
 ## 4. Die Attachment-Disposition & Sichere Bereinigung (MD-Q3)
 
-Implementiert in [`scripts/core/attachment_disposition_log.py`](../scripts/core/attachment_disposition_log.py) und der CLI [`scripts/mail_desk_attachment_disposition.py`](../scripts/mail_desk_attachment_disposition.py):
+Implementiert in [`scripts/core/attachment_disposition_log.py`](../../scripts/core/attachment_disposition_log.py) und der CLI [`scripts/mail_desk_attachment_disposition.py`](../../scripts/mail_desk_attachment_disposition.py):
 
 ```
 ┌────────────────────────────────┐
@@ -339,7 +339,7 @@ Implementiert in [`scripts/core/attachment_disposition_log.py`](../scripts/core/
 
 ## 5. Der Read-Only Reconcile Flow
 
-Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../scripts/core/quarantine/quarantine_index.py):
+Implementiert in [`scripts/core/quarantine/quarantine_index.py`](../../scripts/core/quarantine/quarantine_index.py):
 
 * **Ziel:** Vollständige Konsistenzprüfung zwischen Dateisystem, Inventaren und Index ohne jede Schreiboperation.
 * **Ergebnisse:**
@@ -356,7 +356,7 @@ separat — siehe die Modul-Zelle „Integrität & Reconcile" in der L2-Karte.
 
 ## 6. Himalaya Invocation Lifecycle
 
-Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
+Implementiert in [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
 
 1. **Fail-Fast Bootstrap (`resolve_himalaya_invocation`):**
    - Wählt den Konfigurationspfad: expliziter `HIMALAYA_CONFIG`-Override (mit `expanduser`) oder, wenn nicht gesetzt, der plattformspezifische Default (`%APPDATA%\himalaya\config.toml` unter Windows, sonst `~/.config/himalaya/config.toml`).
@@ -372,8 +372,8 @@ Implementiert in [`scripts/core/himalaya.py`](../scripts/core/himalaya.py):
 
 ### 6.1 Ungesendete Draft-Operationen (Client, ohne Approval-Gate)
 
-Implementiert in [`scripts/core/drafts.py`](../scripts/core/drafts.py) und verdrahtet im
-JSON-Manifest-Client ([`scripts/mail_desk_himalaya_client.py`](../scripts/mail_desk_himalaya_client.py),
+Implementiert in [`scripts/core/drafts.py`](../../scripts/core/drafts.py) und verdrahtet im
+JSON-Manifest-Client ([`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py),
 Aktionen `save_draft`/`delete_draft`/`replace_draft`). Der Ablauf ist standalone: kein
 Batch-Modus, kein Approval-Gate, kein SMTP-/`send`-Schritt; das Batch-Recovery-Journal
 bleibt unberührt.

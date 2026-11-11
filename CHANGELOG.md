@@ -66,6 +66,42 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Draft-Reklassifikation setzt den konkreten Fehler elementlokal auf Review/INBOX.
   Leerinput bleibt unverändert.
 
+### 2026-11-11 — Cloud-Atlas: DOC-/POSIX-Härtung (#102)
+
+- **DOC-Konvertierung:** Short-Staging startet initial nur unter Windows ab
+  `>= 240` Zeichen geplantem Quell- oder Derivatpfad. Meldet LibreOffice einen
+  eindeutigen Pfadlängenfehler, folgt einmalig derselbe Short-Staging-Zweig —
+  auch unterhalb von 240 Zeichen und auf POSIX; andere Konverterfehler lösen
+  keinen Retry aus. POSIX startet direkt (Vorabprüfung immer `False`) und
+  normalisiert Separatoren nicht. Kein neuer POSIX-E2E-Nachweis.
+  Vertrag: [effects.md §2](skills/cloud-atlas/docs/system-map/effects.md),
+  [Cloud-L2](skills/cloud-atlas/docs/system-map/README.md).
+
+### 2026-11-11 — Cloud-Atlas: Rein lesender Retention-Audit (#104)
+
+- **Retention-/Quarantäne-Policy:** `retention_audit.py` klassifiziert den
+  Version-Root als `active`, `retained` oder `quarantine_candidate`
+  (>365 Tage hat Vorrang) und meldet unerwartete Layouts/Links. Der Audit ist
+  ein separater, rein lesender Einstieg: keine Writes, kein Move/Delete, keine
+  Archivierung, keine physische Quarantäne; alle Einträge bleiben
+  `action: "none"`, `safe_to_delete: false`, `safe_to_move: false`.
+  Vertrag: [effects.md §6.1](skills/cloud-atlas/docs/system-map/effects.md),
+  [Cloud-L2](skills/cloud-atlas/docs/system-map/README.md).
+
+### 2026-11-10 — Cloud-Atlas: Einzeldatei-Modus `--only-file` (#99)
+
+- **Einzeldatei-Konvertierung (Vertrag Issue #22):** `convert_cloud_docs.py
+  --only-file` konvertiert genau eine Quelle und merged genau einen
+  Filemap-Eintrag per Roh-Splice. Mirror und Derivat werden direkt in ein neues,
+  unveränderliches Versionsverzeichnis unter `<output_dir>/_versions/`
+  geschrieben; der atomare Filemap-Replace ist der einzige Commit-Punkt, das
+  Journal folgt `planned → staged → published → committed`. Kein Scan, keine
+  Cleanup-/Move-/Delete-Logik, keine Fremdreferenz-Ermittlung; Recovery meldet
+  nur und endet sonst fail-closed ohne Writes.
+  Vertrag: [Cloud-SKILL](skills/cloud-atlas/SKILL.md),
+  [effects.md §6](skills/cloud-atlas/docs/system-map/effects.md),
+  [Cloud-L2](skills/cloud-atlas/docs/system-map/README.md).
+
 ### 2026-11-09 — Issue #88: Sent-Items-Handoff für die Synthese (Teillieferung)
 
 #### Added

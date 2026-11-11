@@ -134,7 +134,7 @@ standalone client operations with **no approval gate** and no SMTP path: sending
 out of scope, the batch runner has no draft mode, and the operations touch no batch
 journal.
 
-- **Target folder (dynamic, fail-loud):** [`scripts/core/drafts.py`](../scripts/core/drafts.py)
+- **Target folder (dynamic, fail-loud):** [`scripts/core/drafts.py`](../../scripts/core/drafts.py)
   (`resolve_drafts_folder`) resolves the folder from the live catalog — first the
   RFC-6154 `\Drafts` special-use attribute (forward-compatible: Himalaya 1.2.0's
   `folder list` exposes no attribute columns, only `-a`/`-w`/`-o`), then the

@@ -1,8 +1,8 @@
 # Cloud-Atlas — Subsystem System Map: Verben (Processes)
 
-> **Typ**: ICM Form 6 (`system-map`), Dimension: Verben  
-> **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Detaillierte Beschreibung aller Filemap-, Konvertierungs-, OCR- und Synchronisations-Pipelines.  
+> **Typ**: ICM Form 6 (`system-map`), Dimension: Verben<br>
+> **Subsystem**: [`skills/cloud-atlas`](../../SKILL.md)<br>
+> **Ziel**: Detaillierte Beschreibung aller Filemap-, Konvertierungs-, OCR- und Synchronisations-Pipelines.<br>
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 ---
@@ -32,7 +32,7 @@
 
 ## 2. Der Dokument-Konvertierungs-Lifecycle
 
-Implementiert in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py):
+Implementiert in [`scripts/convert_cloud_docs.py`](../../scripts/convert_cloud_docs.py):
 
 ### Phase 1: Identifikation & Inkrementalitätsprüfung
 1. Validiert `exclude_dirs` pro Storage; `core/scan_scope.walk_scoped()` beschneidet ausgeschlossene Teilbäume vor der Traversierung und scannt danach nach unterstützten Formaten (`.pdf`, `.docx`, `.xlsx`, `.pptx`, `.doc`).
@@ -216,7 +216,7 @@ deren `<output_dir>/_versions/` und schreibt nichts:
 
 ## 3. Der Filemap-Generierungs-Lifecycle
 
-Implementiert in [`scripts/gen_filemap.py`](../scripts/gen_filemap.py):
+Implementiert in [`scripts/gen_filemap.py`](../../scripts/gen_filemap.py):
 
 1. **Overlay-Laden:** Liest `filemap-curation.json` (falls vorhanden).
 2. **Dateisystem-Traversierung:**
@@ -236,7 +236,7 @@ Implementiert in [`scripts/gen_filemap.py`](../scripts/gen_filemap.py):
 
 ## 4. Der Orchestrierte Sync-Runner
 
-Implementiert in [`scripts/sync_project_cloud.py`](../scripts/sync_project_cloud.py):
+Implementiert in [`scripts/sync_project_cloud.py`](../../scripts/sync_project_cloud.py):
 
 1. Kapselt beide Einzelschritte in einen sequentiellen, deterministischen Lauf.
 2. Führt zuerst die Konvertierung aus (damit generierte Mirrors existieren).
