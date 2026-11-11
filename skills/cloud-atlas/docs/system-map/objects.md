@@ -225,9 +225,14 @@ einer den Journalpfad, endet der Lauf fail-closed (`journal`).
 - **Keine physische Quarantäne, keine Archivierung, kein Aufräumen:** alle Reste bleiben
   liegen. Die rein lesende logische Klassifikation aus §5 ist kein Bestandteil des Laufs.
 - **Kein Move/Delete:** Versionen werden direkt geschrieben (kein Verzeichnis-Rename); der
-  Worker löscht keine Artefakte (OCR schreibt direkt, Short-Path-Staging und
-  LibreOffice-Profil bleiben im kurzen Laufverzeichnis `data/ca-doc/<run-id>` — auch im
-  direkten Pfad). Einzige
+  Worker löscht keine Artefakte (OCR schreibt direkt; im `--only-file`-Modus bleiben
+  Short-Path-Staging und LibreOffice-Profil im kurzen Laufverzeichnis
+  `data/ca-doc/<run-id>`). Im `--only-file`-Modus liegt das Profil dort in beiden
+  DOC-Zweigen; `source.doc` und das gestagte DOCX-Derivat nur im Short-Path-Zweig. Dieser
+  wird initial ab `>= 240` Zeichen geplantem Quell- oder Derivatpfad (Windows) oder
+  einmalig nach einem erkannten LibreOffice-Pfadlängenfehler betreten (auch unterhalb von
+  240 und auf POSIX). Der direkte Pfad übergibt die Cloud-Quelle ohne Kopie; der Vollscan nutzt temporäre Verzeichnisse,
+  Word-COM hat kein LibreOffice-Profil. Einzige
   Ausnahme sind die atomaren `os.replace` von Filemap und Journal. Die OCR-Fähigkeitsprobe
   läuft nur im Vollscan; unser Code legt im `--only-file`-Pfad kein Temp-Verzeichnis
   außerhalb der Data Zones an, externe Programme verwalten ihre Temp-Dateien selbst.

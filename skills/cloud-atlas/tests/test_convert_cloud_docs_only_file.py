@@ -12,6 +12,7 @@ import io
 import json
 import multiprocessing
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -35,6 +36,8 @@ SOURCE = "data/cloud/DEMO/g_neu.doc"
 FILEMAP = "memory/cloud/topics/demo/filemap.json"
 VERSION_ROOT = "memory/cloud/topics/demo/_versions"
 SHA = "a" * 64
+DOC_MIRROR_PLACEHOLDER = "[Inhalt aus .docx-Derivat extrahiert]"
+DOC_FIXTURE_LINES = ("Synthetischer Test", "Zweite Zeile")
 
 
 def sha256_bytes(data):
@@ -322,6 +325,116 @@ class OnlyFileTestCase(unittest.TestCase):
         if derivative:
             self.assertTrue(derivative.startswith(VERSION_ROOT + "/"), derivative)
             self.assertTrue((self.root / derivative).is_file(), derivative)
+
+    def prepare_synthetic_doc_topic(self, topic, source_stem="g_neu"):
+        """Create a synthetic ``.doc`` cloud source plus its catalogue and filemap.
+
+        Requires a local LibreOffice to produce the legacy ``.doc`` from RTF.
+        Returns ``(source_rel, filemap_path, output_rel)``.
+        """
+        soffice = MODULE.find_soffice_binary()
+        if soffice is None:
+            self.skipTest("no local LibreOffice available")
+        fixture = Path(tempfile.mkdtemp(prefix="doc-src-"))
+        self.addCleanup(shutil.rmtree, fixture, True)
+        rtf = fixture / "probe.rtf"
+        rtf.write_bytes(
+            b"{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}Synthetischer Test \\par Zweite Zeile.}"
+        )
+        # Never touch the host's default LibreOffice profile: a unique, isolated
+        # profile inside the fixture keeps this helper independent of a running
+        # desktop instance and of user configuration.
+        profile = fixture / "lo-profile"
+        profile.mkdir()
+        created = subprocess.run(
+            [
+                soffice,
+                f"-env:UserInstallation={MODULE.path_to_file_uri(str(profile))}",
+                "--headless",
+                "--convert-to", "doc",
+                "--outdir", str(fixture),
+                str(rtf),
+            ],
+            capture_output=True, timeout=120,
+        )
+        self.assertEqual(0, created.returncode, created.stderr[-1000:])
+        synthetic_doc = fixture / "probe.doc"
+        self.assertTrue(synthetic_doc.is_file(), "LibreOffice must produce a synthetic .doc")
+
+        cloud_rel = f"data/cloud/{topic.upper()}"
+        output_rel = f"memory/cloud/topics/{topic}"
+        source_rel = f"{cloud_rel}/{source_stem}.doc"
+        cloud_dir = self.root / cloud_rel
+        cloud_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(synthetic_doc, cloud_dir / f"{source_stem}.doc")
+        filemap = self.root / output_rel / "filemap.json"
+        filemap.parent.mkdir(parents=True, exist_ok=True)
+        filemap.write_text(json.dumps({
+            "$schema": filemap_merge.FILEMAP_SCHEMA_URI,
+            "schema_version": 1,
+            "kind": "cloud-filemap",
+            "scope": "topic",
+            "storage_id": "default",
+            "project": topic,
+            "project_title": "Synthetic",
+            "scan_dir": cloud_rel,
+            "output_dir": output_rel,
+            "exclude_dirs": [],
+            "updated_at": "2026-01-01 00:00:00",
+            "files": {},
+        }), encoding="utf-8")
+        topics = self.root / "memory" / "references" / "topics" / "topics.json"
+        data = json.loads(topics.read_text(encoding="utf-8"))
+        data.append({
+            "id": topic, "title": "Synthetic",
+            "cloud_sync": {"default": {
+                "scan_dir": cloud_rel,
+                "output_json": f"{output_rel}/filemap.json",
+                "output_md": f"{output_rel}/filemap.md",
+                "output_dir": output_rel,
+            }},
+        })
+        topics.write_text(json.dumps(data), encoding="utf-8")
+        os.environ.pop("CLOUD_ATLAS_DOC_CONVERTER_MOCK", None)
+        return source_rel, filemap, output_rel
+
+    def assert_doc_mirror_content(self, mirror_path, *markers):
+        """Assert the mirror carries the converted body, never the exception placeholder.
+
+        The worker writes ``DOC_MIRROR_PLACEHOLDER`` when the DOCX extraction raises,
+        so a success test that checks this helper cannot stay green on a lost transfer.
+        """
+        text = Path(mirror_path).read_text(encoding="utf-8")
+        self.assertNotIn(
+            DOC_MIRROR_PLACEHOLDER, text,
+            "the worker fell back to the extraction placeholder instead of the document text",
+        )
+        for marker in markers:
+            self.assertIn(marker, text)
+        return text
+
+    def assert_readable_docx(self, path):
+        """Validate the derivative as a non-empty, readable OOXML Word package."""
+        path = Path(path)
+        self.assertGreater(path.stat().st_size, 0, "the derivative must not be empty")
+        self.assertTrue(zipfile.is_zipfile(path), "the derivative must be a readable OOXML package")
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+            self.assertIn("[Content_Types].xml", names)
+            self.assertIn("word/document.xml", names)
+            document = archive.read("word/document.xml").decode("utf-8")
+        self.assertIn("wordprocessingml", document)
+        visible = "".join(re.findall(r"<w:t[^>]*>([^<]*)</w:t>", document))
+        self.assertTrue(visible.strip(), "the DOCX must contain readable text")
+
+    def doc_staging_dirs(self):
+        root = self.root / "data" / "ca-doc"
+        return [path for path in root.iterdir() if path.is_dir()] if root.is_dir() else []
+
+    def single_doc_staging_dir(self):
+        staging = self.doc_staging_dirs()
+        self.assertEqual(1, len(staging), staging)
+        return staging[0]
 
     def foreign_hash(self, text, source=SOURCE):
         filemap = filemap_merge.parse_filemap(text)
@@ -1985,58 +2098,23 @@ class CrossModeAndContractTests(OnlyFileTestCase):
         self.assertTrue(staging_root.is_dir(), "the profile root is the short Data-Zone run directory")
 
     def test_a_full_only_file_doc_run_with_a_long_output_path(self):
-        soffice = MODULE.find_soffice_binary()
-        if soffice is None:
-            self.skipTest("no local LibreOffice available")
-        fixture = Path(tempfile.mkdtemp(prefix="doc-src-"))
-        self.addCleanup(shutil.rmtree, fixture, True)
-        rtf = fixture / "probe.rtf"
-        rtf.write_bytes(
-            b"{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Arial;}}Synthetischer Test \\par Zweite Zeile.}"
-        )
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "doc", "--outdir", str(fixture), str(rtf)],
-            capture_output=True, timeout=120,
-        )
-        synthetic_doc = fixture / "probe.doc"
-        self.assertTrue(synthetic_doc.is_file(), "LibreOffice must produce a synthetic .doc")
-
-        topic = "long-" + "a" * 40
-        cloud_rel = f"data/cloud/{topic.upper()}"
+        if os.name != "nt":
+            self.skipTest("the planned-path threshold only takes effect on Windows")
+        topic = "long-" + "a" * 24
         output_rel = f"memory/cloud/topics/{topic}"
-        source_rel = f"{cloud_rel}/g_neu.doc"
-        cloud_dir = self.root / cloud_rel
-        cloud_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(synthetic_doc, cloud_dir / "g_neu.doc")
-        filemap = self.root / output_rel / "filemap.json"
-        filemap.parent.mkdir(parents=True, exist_ok=True)
-        filemap.write_text(json.dumps({
-            "$schema": filemap_merge.FILEMAP_SCHEMA_URI,
-            "schema_version": 1,
-            "kind": "cloud-filemap",
-            "scope": "topic",
-            "storage_id": "default",
-            "project": topic,
-            "project_title": "Long",
-            "scan_dir": cloud_rel,
-            "output_dir": output_rel,
-            "exclude_dirs": [],
-            "updated_at": "2026-01-01 00:00:00",
-            "files": {},
-        }), encoding="utf-8")
-        topics = self.root / "memory" / "references" / "topics" / "topics.json"
-        data = json.loads(topics.read_text(encoding="utf-8"))
-        data.append({
-            "id": topic, "title": "Long",
-            "cloud_sync": {"default": {
-                "scan_dir": cloud_rel,
-                "output_json": f"{output_rel}/filemap.json",
-                "output_md": f"{output_rel}/filemap.md",
-                "output_dir": output_rel,
-            }},
-        })
-        topics.write_text(json.dumps(data), encoding="utf-8")
-        os.environ.pop("CLOUD_ATLAS_DOC_CONVERTER_MOCK", None)
+        # Choose a source basename long enough that the *planned* DOCX derivative
+        # path actually crosses EXTERNAL_CONVERTER_PATH_LIMIT on this host.
+        padding = 0
+        while True:
+            stem = "g_neu_" + "x" * padding
+            planned = (
+                self.root / output_rel / "_versions" / ("0" * 16)
+                / f"{'0' * 22}-999999-ffffffff" / f"{stem}.docx"
+            )
+            if len(str(planned)) >= MODULE.EXTERNAL_CONVERTER_PATH_LIMIT:
+                break
+            padding += MODULE.EXTERNAL_CONVERTER_PATH_LIMIT - len(str(planned)) + 10
+        source_rel, filemap, _ = self.prepare_synthetic_doc_topic(topic, stem)
 
         exit_code, stdout, stderr = self.run_main(
             "--topic-id", topic, "--workspace-root", str(self.root),
@@ -2044,21 +2122,171 @@ class CrossModeAndContractTests(OnlyFileTestCase):
         )
 
         self.assertEqual(0, exit_code, stderr[-2500:])
+        envelope = self.envelope(stdout)
+        self.assertTrue(envelope["success"], envelope)
+        self.assertEqual("Completed", envelope["state"])
+        only = envelope["data"]["only_file"]
+        self.assertEqual(source_rel, only["source"])
+        self.assertEqual("created", only["action"])
+        storage = envelope["data"]["storages"][0]
+        self.assertTrue(storage["success"], storage)
+        self.assertEqual(1, storage["counts"]["converted"])
+
         entry = json.loads(filemap.read_text(encoding="utf-8"))["files"][source_rel]
-        self.assertTrue((self.root / entry["markdown_mirror"]).is_file())
-        self.assertTrue((self.root / entry["derivative"]["path"]).is_file())
+        derivative_abs = self.root / entry["derivative"]["path"]
+        self.assertGreaterEqual(
+            len(str(derivative_abs)), MODULE.EXTERNAL_CONVERTER_PATH_LIMIT,
+            "the test data must cross the Windows short-path threshold",
+        )
+        self.assertTrue(MODULE.requires_short_external_converter_paths(str(derivative_abs)))
+
+        self.assertEqual("converted", entry["conversion_status"])
+        self.assertEqual("docx", entry["derivative"]["format"])
+        self.assertEqual("libreoffice-headless", entry["derivative"]["conversion_method"])
+        self.assertEqual("libreoffice-headless", entry["artifact_metadata"]["converter"])
+        self.assertEqual(
+            MODULE.calculate_sha256(MODULE.get_safe_path(str(derivative_abs))),
+            entry["derivative"]["sha256"],
+        )
+        self.assertEqual(entry["markdown_mirror"], only["mirror"])
         self.assertTrue(
-            entry["markdown_mirror"].startswith(f"{output_rel}/_versions/"),
+            entry["markdown_mirror"].startswith(only["version"] + "/"),
             entry["markdown_mirror"],
         )
-        staging_roots = list((self.root / "data" / "ca-doc").glob("*"))
-        self.assertTrue(staging_roots, "the converter staging stays in the Data Zone")
-        for created in staging_roots:
-            self.assertTrue(
-                MODULE.normalized_local_path(str(created)).startswith(
-                    MODULE.normalized_local_path(str(self.root / "data")) + os.sep
-                )
+
+        # The short-path branch executed: only it copies the source into the short
+        # Data-Zone run directory as source.doc (and converts that copy to
+        # source.docx).  The direct path never creates either file.
+        staging = self.single_doc_staging_dir()
+        self.assertTrue(
+            (staging / "source.doc").is_file(),
+            "the short-path branch must copy the cloud source into the staging directory",
+        )
+        self.assertTrue((staging / "source.docx").is_file(), "the staged derivative stays in the Data Zone")
+        self.assertTrue((staging / "user").is_dir(), "the kept LibreOffice profile stays in the Data Zone")
+
+        self.assert_readable_docx(derivative_abs)
+        mirror_text = self.assert_doc_mirror_content(
+            self.root / entry["markdown_mirror"], *DOC_FIXTURE_LINES,
+        )
+        self.assertIn('converter: "libreoffice-headless"', mirror_text)
+
+    def test_a_full_only_file_doc_run_uses_the_direct_path_for_a_short_output_path(self):
+        source_rel, filemap, _ = self.prepare_synthetic_doc_topic("direct", "g_neu")
+
+        exit_code, stdout, stderr = self.run_main(
+            "--topic-id", "direct", "--workspace-root", str(self.root),
+            "--only-file", source_rel, "--json",
+        )
+
+        self.assertEqual(0, exit_code, stderr[-2500:])
+        envelope = self.envelope(stdout)
+        self.assertTrue(envelope["success"], envelope)
+        entry = json.loads(filemap.read_text(encoding="utf-8"))["files"][source_rel]
+        derivative_abs = self.root / entry["derivative"]["path"]
+        self.assertFalse(MODULE.requires_short_external_converter_paths(str(derivative_abs)))
+        if os.name == "nt":
+            self.assertLess(
+                len(str(derivative_abs)), MODULE.EXTERNAL_CONVERTER_PATH_LIMIT,
+                "the direct path precondition is below the Windows threshold",
             )
+        self.assertEqual("converted", entry["conversion_status"])
+        self.assertEqual("libreoffice-headless", entry["derivative"]["conversion_method"])
+
+        # The direct path passes the cloud source to LibreOffice: the short run
+        # directory holds only the profile, never a source.doc copy.
+        staging = self.single_doc_staging_dir()
+        self.assertFalse(
+            (staging / "source.doc").exists(),
+            "the direct path must not copy the cloud source into the staging directory",
+        )
+        self.assertFalse((staging / "source.docx").exists())
+        self.assertTrue((staging / "user").is_dir(), "the kept profile still lives in the Data Zone")
+
+        self.assert_readable_docx(derivative_abs)
+        self.assert_doc_mirror_content(self.root / entry["markdown_mirror"], *DOC_FIXTURE_LINES)
+
+    def test_requires_short_external_converter_paths_is_windows_only_and_threshold_based(self):
+        long_path = str(Path(tempfile.gettempdir()) / ("x" * (MODULE.EXTERNAL_CONVERTER_PATH_LIMIT + 10)))
+        short_path = str(Path(tempfile.gettempdir()) / "a.docx")
+
+        with mock.patch.object(MODULE.os, "name", "posix"):
+            self.assertFalse(MODULE.requires_short_external_converter_paths(long_path))
+        with mock.patch.object(MODULE.os, "name", "nt"):
+            self.assertTrue(MODULE.requires_short_external_converter_paths(long_path))
+            self.assertFalse(MODULE.requires_short_external_converter_paths(short_path))
+
+    def test_a_path_length_error_retries_through_short_staging_below_the_threshold(self):
+        """The retry is OS-independent and not limited to planned paths above 240.
+
+        On POSIX the planned-path precheck is always False, so the detected
+        LibreOffice path-length error is the only way to enter the short staging.
+        """
+        out_dir = self.output / "_versions" / "retry"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        final = out_dir / "g_neu.docx"
+        final.write_bytes(b"DOCX")
+        calls = []
+
+        def direct(*args, **kwargs):
+            calls.append("direct")
+            return False, "LibreOffice failed (code 1): file name too long"
+
+        def short(*args, **kwargs):
+            calls.append("short")
+            return True, str(final)
+
+        with mock.patch.object(MODULE, "get_doc_converter", return_value="libreoffice-headless"), \
+             mock.patch.object(MODULE, "requires_short_external_converter_paths", return_value=False), \
+             mock.patch.object(MODULE, "convert_doc_to_docx_libreoffice", side_effect=direct), \
+             mock.patch.object(MODULE, "convert_doc_with_short_staging", side_effect=short):
+            ok, result, converter = MODULE.convert_doc_file(
+                str(self.source_path), str(out_dir), timeout=5,
+            )
+
+        self.assertTrue(ok, result)
+        self.assertEqual(str(final), result)
+        self.assertEqual("libreoffice-headless", converter)
+        self.assertEqual(["direct", "short"], calls)
+
+    def test_the_placeholder_makes_the_content_assertion_fail(self):
+        """An extraction exception must not look like a successful content transfer.
+
+        The worker writes DOC_MIRROR_PLACEHOLDER when the DOCX extraction raises.
+        This injects exactly that exception and proves the strengthened success
+        assertion rejects the resulting mirror.
+        """
+        derivative = self.root / "data" / "ca-doc" / "probe.docx"
+        derivative.parent.mkdir(parents=True, exist_ok=True)
+        write_minimal_docx(derivative, "Synthetischer Test")
+        task = {
+            "src_abs": str(self.source_path),
+            "src_sha256": SHA,
+            "derivative_abs": str(self.root / "memory" / "cloud" / "topics" / "demo"
+                                  / "_versions" / "v" / "g_neu.docx"),
+            "derivative_rel": "memory/cloud/topics/demo/_versions/v/g_neu.docx",
+            "is_doc": True,
+            "file_timeout": 5,
+        }
+        connection = mock.Mock()
+
+        with mock.patch.object(
+            MODULE, "convert_doc_file",
+            return_value=(True, str(derivative), "libreoffice-headless"),
+        ), mock.patch.object(
+            MODULE, "convert_to_markdown_raw",
+            side_effect=RuntimeError("extraction exploded"),
+        ):
+            MODULE._convert_worker_target(task, connection)
+
+        kind, payload = connection.send.call_args[0][0]
+        self.assertEqual("ok", kind)
+        self.assertEqual("libreoffice-headless", payload["conversion_method"])
+        self.assertIn(DOC_MIRROR_PLACEHOLDER, payload["text"])
+        mirror = self.root / "placeholder-mirror.md"
+        mirror.write_text(f"---\n---\n\n{payload['text']}", encoding="utf-8")
+        with self.assertRaises(AssertionError):
+            self.assert_doc_mirror_content(mirror, *DOC_FIXTURE_LINES)
 
     def test_the_libreoffice_profile_uri_is_a_plain_file_uri(self):
         directory = Path(tempfile.mkdtemp(prefix="uri probe "))
@@ -2071,7 +2299,37 @@ class CrossModeAndContractTests(OnlyFileTestCase):
         self.assertNotIn("\\", uri, "no backslashes in the URI")
         self.assertIn("%20", uri, "spaces are percent-encoded")
         self.assertTrue(uri.endswith(directory.name.replace(" ", "%20")), uri)
+
+    def test_the_extended_length_prefix_is_stripped_on_windows_only(self):
+        if os.name != "nt":
+            self.skipTest("the extended-length prefix is Windows-specific")
+        directory = Path(tempfile.mkdtemp(prefix="uri probe "))
+        self.addCleanup(shutil.rmtree, directory, True)
+
+        uri = MODULE.path_to_file_uri(str(directory))
+
         self.assertEqual(uri, MODULE.path_to_file_uri("\\\\?\\" + str(directory)))
+        self.assertNotIn("?", uri, "no extended-length prefix in the URI")
+
+    def test_posix_backslashes_in_a_filename_are_not_separators(self):
+        if os.name == "nt":
+            self.skipTest("a backslash cannot be part of a Windows file name")
+        directory = Path(tempfile.mkdtemp(prefix="uri backslash "))
+        self.addCleanup(shutil.rmtree, directory, True)
+        literal = directory / "a\\b"
+        literal.write_text("x", encoding="utf-8")
+
+        uri = MODULE.path_to_file_uri(str(literal))
+
+        self.assertTrue(uri.endswith("a%5Cb"), uri)
+        self.assertNotIn("/a/b", uri)
+
+    def test_separator_normalization_in_the_uri_depends_on_the_os(self):
+        with mock.patch.object(MODULE.os.path, "abspath", return_value="/tmp/a\\b"):
+            with mock.patch.object(MODULE.os, "name", "posix"):
+                self.assertEqual("file:///tmp/a%5Cb", MODULE.path_to_file_uri("ignored"))
+            with mock.patch.object(MODULE.os, "name", "nt"):
+                self.assertEqual("file:///tmp/a/b", MODULE.path_to_file_uri("ignored"))
 
     def test_the_unc_profile_uri_uses_the_server_form(self):
         if os.name != "nt":

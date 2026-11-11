@@ -46,8 +46,17 @@ fail-closed ohne jede Mutation. Vor jeder Journalmutation prüft der Lauf alle E
 Ziel-Filemap (auch den der Quelle, inkl. Windows-Aliasen); beansprucht einer davon den
 Journalpfad, endet er fail-closed (`journal`). Versionen werden **direkt**
 in ihr endgültiges Verzeichnis geschrieben (kein Verzeichnis-Rename), der Worker löscht
-keine Artefakte (DOC-Staging und LibreOffice-Profil bleiben im Versionsverzeichnis);
-einzige zulässige `os.replace`-Aufrufe sind Filemap und Journal. Sein
+keine Artefakte. Im `--only-file`-Modus bleibt das LibreOffice-Profil im kurzen
+Data-Zone-Laufverzeichnis `data/ca-doc/<run-id>` (nicht im Versionsverzeichnis); nur der
+Short-Path-Zweig hält dort zusätzlich die Quellkopie `source.doc` und das gestagte
+DOCX-Derivat. Er wird initial ab `>= 240` Zeichen geplantem Quell- oder Derivatpfad (nur
+Windows) oder einmalig nach einem eindeutigen LibreOffice-Pfadlängenfehler betreten (auch
+unterhalb von 240 und auf POSIX), während der direkte Pfad die Cloud-Quelle ohne Kopie
+übergibt. Der Vollscan nutzt für Short-Staging und LibreOffice-Profil temporäre
+Verzeichnisse; der Word-COM-Pfad hat kein LibreOffice-Profil. Die Profil-URI bleibt bei
+höchstens 120 Zeichen (`<= 120`); auf POSIX werden Separatoren nicht normalisiert (ein
+Backslash im Dateinamen bleibt Namenszeichen).
+Einzige zulässige `os.replace`-Aufrufe sind Filemap und Journal. Sein
 Filemap-Temp liegt im Journal-Verzeichnis, daher müssen Journal und Filemap auf demselben
 Dateisystem liegen. Details: [SKILL.md](../SKILL.md).
 

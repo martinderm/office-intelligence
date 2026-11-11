@@ -42,8 +42,10 @@ Testabdeckung unter `tests/test_pdf_form_field_extraction.py` (inkl. Non-`Import
 
 Externe Windows-Binaries (insbesondere LibreOffice und ältere Pandoc-Builds) scheitern trotz aktivierter Windows-10-Long-Paths-Option häufig an Pfaden über ~260 Zeichen.
 
-* **Konstante:** `EXTERNAL_CONVERTER_PATH_LIMIT = 240` in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py#L36).
-* **Effekt:** Liegt ein Zieldateipfad inklusive temporärer Arbeitsnamen über 240 Zeichen, nutzt der Konverter deterministisch verkürzte temporäre Hash-Pfade für den externen Tool-Aufruf und verschiebt das fertige Markdown-Derivat erst nach Abschluss an den Zielort.
+* **Konstante:** `EXTERNAL_CONVERTER_PATH_LIMIT = 240` in [`scripts/convert_cloud_docs.py`](../scripts/convert_cloud_docs.py#L57).
+* **Schwelle:** geprüft wird `len(os.path.abspath(pfad)) >= 240` für den geplanten Quell- **und** den geplanten Derivatpfad; auf POSIX ist die Prüfung immer `False`.
+* **Wirkung (nur DOC-Konvertierung):** Erreicht einer der geplanten Pfade die Schwelle, kopiert `convert_doc_with_short_staging` die Quelle als `source.doc` in ein kurzes Staging-Verzeichnis, konvertiert dort und kopiert das DOCX-Derivat an seinen endgültigen Derivatpfad. Im `--only-file`-Modus ist dieses Staging das Data-Zone-Laufverzeichnis `data/ca-doc/<run-id>` und bleibt liegen; der Vollscan nutzt ein temporäres Verzeichnis und räumt es auf. Der direkte Pfad übergibt die Cloud-Quelle ohne Kopie. Das LibreOffice-Profil liegt im `--only-file`-Modus in beiden DOC-Zweigen im selben kurzen Laufverzeichnis; der Vollscan nutzt auch dafür ein temporäres Profil und räumt es auf. Der Word-COM-Pfad hat kein LibreOffice-Profil.
+* **Retry unterhalb der Schwelle und auf POSIX:** Meldet LibreOffice im direkten Aufruf einen eindeutigen Pfadlängenfehler (`is_path_length_converter_error`, z. B. `path too long`, `filename too long`, `enametoolong`), wird derselbe Short-Staging-Zweig **einmalig** nachgeholt. Diese Erkennung ist nicht OS-gebunden und greift daher auch bei geplanten Pfaden `< 240` sowie auf POSIX, wo die Vorabprüfung immer `False` ist. Andere Konverterfehler lösen keinen Retry aus.
 
 ---
 
@@ -59,7 +61,7 @@ Die Modifikation von Originaldateien im Modus `enrich_source` unterliegt strengs
 ## 4. Nebenläufigkeit & Locking
 
 * **Workspace-Lock Guard:** Der aufrufende Harness validiert vor dem ersten Schreibvorgang in `memory/cloud/` die aktive Lease via `workspace-lock`; `convert_cloud_docs.py` erzwingt die Lease nicht selbst (auch nicht mit `--only-file`). Ohne Harness-Guard gilt die Lock-Vorbedingung aus `SKILL.md`.
-* **Idempotente Atomarität:** Das Schreiben von `filemap.json` und aller `.md`-Mirrors erfolgt über `tempfile.NamedTemporaryFile` gefolgt von `os.replace`. Ein vorzeitiger Abbruch hinterlässt weder leere noch halb konvertierte Dateien.
+* **Idempotente Atomarität (Vollscan):** Im Vollscan erfolgt das Schreiben von `filemap.json` und aller `.md`-Mirrors über eine Temp-Datei im Zielverzeichnis gefolgt von `os.replace`. Ein vorzeitiger Abbruch hinterlässt weder leere noch halb konvertierte Dateien. `--only-file` weicht bewusst davon ab und schreibt Mirror/Derivat direkt in das neue, unreferenzierte Versionsverzeichnis (§6).
 
 ## 5. Ausschluss- und Cleanup-Grenze (Issue #2)
 
@@ -102,14 +104,24 @@ Sibling-Koordination und keinen Vollscan-Anteil. Der rein lesende Retention-Audi
 **Fehlermodell:** Der Filemap-Replace ist der **einzige** Commit-Punkt. Jeder Fehler davor
 lässt die alte Version aktiv; die neue Version bleibt unreferenziert liegen und wird als
 `retained_version` gemeldet. **Es wird nichts gelöscht, verschoben, umbenannt oder
-archiviert** — auch nicht im Worker: OCR schreibt direkt in das endgültige Derivat, ein
-Short-Path-Staging und LibreOffice-Profil bleiben — im Short-Path- wie im direkten Pfad —
-im kurzen, eindeutigen Laufverzeichnis `<workspace>/data/ca-doc/<run-id>` (kanonische Data
-Zone) liegen, Derivate werden per Kopie übernommen. Das
+archiviert** — auch nicht im Worker: OCR schreibt direkt in das endgültige Derivat. Im
+`--only-file`-Modus liegt das LibreOffice-Profil in beiden DOC-Zweigen im kurzen,
+eindeutigen Laufverzeichnis `<workspace>/data/ca-doc/<run-id>` (kanonische Data Zone);
+nur der Short-Path-Zweig hält dort zusätzlich die Quellkopie `source.doc` und das
+gestagte DOCX-Derivat. Er wird
+initial ab `>= 240` Zeichen geplantem Quell- **oder** Derivatpfad (nur Windows) oder
+einmalig nach einem eindeutigen LibreOffice-Pfadlängenfehler betreten (auch unterhalb von
+240 und auf POSIX). Der direkte Pfad übergibt die Cloud-Quelle ohne Kopie; im
+Short-Path-Zweig wird das Derivat per Kopie an seinen Versionspfad übernommen, im direkten
+Pfad schreibt es der Konverter direkt dorthin. Der Vollscan nutzt für Short-Staging und
+LibreOffice-Profil temporäre Verzeichnisse und räumt sie auf; der Word-COM-Pfad hat kein
+LibreOffice-Profil. Das
 Profil wird dem Konverter als reiner `file://`-URI übergeben (ohne Extended-Prefix,
 Leerzeichen percent-kodiert, UNC als `file://server/share/…`); ein `file://///?/…`-URI
-würde LibreOffice bis zum Timeout hängen lassen. Die URI bleibt unter 120 Zeichen; tiefere
-Workspace-Pfade enden fail-closed als `conversion_required` (kein Konverter-Absturz). **Einzige zulässige
+würde LibreOffice bis zum Timeout hängen lassen. Die URI bleibt bei höchstens 120 Zeichen
+(`<= 120`); tiefere Workspace-Pfade enden fail-closed als `conversion_required` (kein
+Konverter-Absturz). Auf POSIX normalisiert die URI-Bildung keine Separatoren: ein Backslash
+im Dateinamen bleibt Namenszeichen (`%5C`, kein Trenner). **Einzige zulässige
 Ausnahmen sind** der atomare `os.replace` der Ziel-Filemap und des Journals
 (Temp-Datei im selben Verzeichnis; notwendig für Commit bzw. Journal-Record). Das OCR-
 Derivat wird direkt geschrieben; die Pfadgleichheit wird nach Entfernen des Windows-
