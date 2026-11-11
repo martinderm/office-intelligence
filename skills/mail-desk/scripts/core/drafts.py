@@ -234,6 +234,7 @@ def resolve_drafts_folder(
         try:
             folders = list_folders(account=account)
         except Exception as exc:  # noqa: BLE001 - classified fail-loud boundary
+            himalaya.raise_if_transport_blocked(exc)
             raise DraftsFolderUnresolvedError(
                 DRAFTS_FOLDER_UNRESOLVED_REASON,
                 "Could not list mailbox folders to resolve the Drafts folder: "
@@ -487,7 +488,8 @@ def _append_and_verify(
         existing, complete = himalaya.find_envelopes_by_message_id(
             folder, normalized_id, subject=subject, account=account, reserve=1
         )
-    except Exception:  # noqa: BLE001 - classified below without backend text
+    except Exception as exc:  # noqa: BLE001 - classified below without backend text
+        himalaya.raise_if_transport_blocked(exc)
         existing, complete = [], False
     if existing or not complete:
         raise DraftError(
@@ -524,6 +526,7 @@ def _append_and_verify(
             max_retries=1,
         )
     except himalaya.HimalayaInvocationError as exc:
+        himalaya.raise_if_transport_blocked(exc)
         reason = str(getattr(exc, "reason_code", "unknown"))[:64]
         outcome = ("unknown" if reason in _UNKNOWN_APPEND_REASONS else "failed", reason)
     except ValueError:
@@ -578,6 +581,19 @@ def _append_and_verify(
                 )
             envelope_id = found[0]
     except Exception as exc:  # noqa: BLE001 - only the exception TYPE is reported, never its text
+        if (
+            isinstance(exc, himalaya.HimalayaInvocationError)
+            and exc.reason_code == himalaya.TRANSPORT_BLOCKED_REASON
+        ):
+            # The APPEND already happened; keep the journal honest before the
+            # structured F6 abort leaves this function.
+            _try_attempt(
+                journal,
+                normalized_id,
+                status="appended_unverified",
+                problems=["readback:mailbox_transport_blocked"],
+            )
+            raise
         problems = [f"readback:{type(exc).__name__}"]
     if problems or envelope_id is None:
         journaled = _try_attempt(journal, normalized_id, status="appended_unverified", problems=problems[:8])
@@ -902,7 +918,8 @@ def _inspect_old_draft(
         message_id, subject, parts, defective = da.describe_stored_message(raw)
         if defective and require_clean:
             raise ValueError("defective MIME structure")
-    except Exception:  # noqa: BLE001 - no backend text may reach the error
+    except Exception as exc:  # noqa: BLE001 - no backend text may reach the error
+        himalaya.raise_if_transport_blocked(exc)
         raise DraftError(
             DRAFT_OLD_UNREADABLE_REASON,
             "The old draft could not be read unambiguously (bounded, defect-free); nothing was appended or deleted.",
@@ -1068,7 +1085,8 @@ def _finish_replace(
         old_ids, complete = himalaya.find_envelopes_by_message_id(
             target_folder, expected_old, subject=old_subject, account=bound_account
         )
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        himalaya.raise_if_transport_blocked(exc)
         old_ids, complete = [], False
     if not complete or len(old_ids) > 1:
         raise partial("the old draft could not be resolved unambiguously", "old_delete_failed")
@@ -1086,7 +1104,8 @@ def _finish_replace(
         return result
     try:
         delete_draft(old_ids[0], folder=target_folder, account=bound_account, folders=folders)
-    except Exception:  # noqa: BLE001 - no backend text in the error
+    except Exception as exc:  # noqa: BLE001 - no backend text in the error
+        himalaya.raise_if_transport_blocked(exc)
         raise partial("the delete step failed", "old_delete_failed") from None
     result.update({"old_deleted": True, "old_status": "deleted", "resolved_old_envelope_id": old_ids[0]})
     if not _try_attempt(journal, normalized_id, status="replaced", old_status="deleted"):

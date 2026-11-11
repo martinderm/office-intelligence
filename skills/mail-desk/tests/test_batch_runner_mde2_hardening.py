@@ -32,6 +32,7 @@ from core import attachments  # noqa: E402
 from core import attachment_evaluation as aevaluate  # noqa: E402
 from core import attachment_fetch as afetch  # noqa: E402
 from core import attachment_reclassification as reclass  # noqa: E402
+from core.himalaya import HimalayaInvocationError  # noqa: E402
 from core.modes import draft as draft_mode  # noqa: E402
 import mde2_fixtures as fixtures  # noqa: E402
 
@@ -188,6 +189,27 @@ class Mde2BoundedOutcomeTests(unittest.TestCase):
         ("extraction_failed", "not_applicable"),
         ("handoff_invalid", "not_applicable"),
     )
+
+    def test_raw_mime_transport_blocked_propagates_and_writes_no_manifest(self) -> None:
+        blocked = HimalayaInvocationError("mailbox_transport_blocked", "blocked")
+        item = _item()
+        with tempfile.TemporaryDirectory() as temporary:
+            output_path = Path(temporary) / "data" / "mail-desk" / "batch-manifest.json"
+            with self.assertRaises(HimalayaInvocationError) as raised:
+                _run_draft(
+                    temporary,
+                    [item],
+                    [_email()],
+                    evaluate=Mock(),
+                    reclassify=Mock(),
+                    raw_reader=Mock(side_effect=blocked),
+                )
+            self.assertEqual("mailbox_transport_blocked", raised.exception.reason_code)
+            self.assertFalse(output_path.exists())
+        # A transport block is not an item-local fetch failure: the item was not
+        # silently rewritten to review/INBOX.
+        self.assertNotIn("attachment_evaluation", item)
+        self.assertEqual({"type": "keep_in_folder", "target_folder": "INBOX"}, item["action"])
 
     def test_bounded_failures_are_item_local_and_forced_to_review_inbox(self) -> None:
         for reason, authorization in self._FAILURES:

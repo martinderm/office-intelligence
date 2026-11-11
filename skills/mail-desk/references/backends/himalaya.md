@@ -55,6 +55,54 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
 
+### Batch known-envelope skip over `envelope thread`
+
+The batch scan uses one additional CLI operation to reduce per-envelope logins.
+With `skip_known` enabled, exactly one
+`himalaya envelope thread -f <folder> -o json` runs per scan (60 s, no retry).
+Its output is a JSON array of
+`[source, target, weight]` triples (Himalaya's serialized `ThreadedEnvelopes`
+graph edges); both envelope positions carry `id`, `message-id`, `from`,
+`subject` and `date`, and the weight is an integer `0..255`. The runner only
+builds a process-local `envelope id -> Message-ID` map from it. There is no
+second IMAP transport, no credentials, no UIDVALIDITY access and no persistence
+beyond the scan.
+
+- The map is used only when the process exits 0, stays within the timeout and
+  returns that valid structure. A malformed root (not a list of three-element
+  lists, a non-object envelope position, or a non-integer/out-of-range weight)
+  discards the whole map and the scan reads every envelope individually.
+- Message-ID values from this command are angle-bracketed; `message read`
+  returns them without brackets. Both are compared through
+  `normalize_message_id`, and "well formed" is checked on the normalized form:
+  exactly one `@`, no whitespace/control characters, no angle brackets,
+  non-empty local/domain parts and no `@generated` domain.
+- A repeated envelope id is kept only when every occurrence is valid and
+  identical; a conflicting or invalid duplicate drops the id entirely.
+- A skip requires the identical `id` **and** the identical `subject` in the
+  scanned envelope listing, plus that normalized Message-ID in
+  `final-location-index.json`. A map hit supplies no mail data and is never
+  collected, indexed, journaled or attached.
+- Envelope IDs are CLI locators. The CLI-Envelope-ID = IMAP UID equivalence is
+  an implementation fact of the bundled `email-lib`/Himalaya generation, not a
+  documented backend guarantee.
+- The second consecutive transport failure ends the run immediately with the
+  structured `mailbox_transport_blocked` reason; no third process starts and
+  fallback paths re-raise it instead of degrading it to empty or partial data.
+  Budget check, block publication and `Popen` share one spawn lock, so parallel
+  workers cannot double-book the last budget slot or start after a block is
+  published. Classifier full reads, Sent-Sync calls inside the batch modes and
+  attachment raw-MIME reads propagate the block; an F6 abort writes no manifest
+  or inspect output.
+  The process-start budget defaults to 10,000 and is configurable per manifest
+  (`transport_start_budget`) or CLI (`--transport-start-budget`). The default
+  covers the documented 2,500-envelope fallback window with up to two processes
+  per envelope (raw-MIME export plus read) plus list tiers and thread map. The
+  session is scoped to `inspect`/`draft`/`pipeline`; `execute`, `verify`,
+  `search` and `sync_sent` keep their previous behaviour. The result envelope
+  reports `transport_stats` (starts, retries, errors total and per command
+  class), counters only, never mail content.
+
 ### Message reads and body preview
 
 The client's `read` operation (subcommand `read`, manifest action `read`) fetches

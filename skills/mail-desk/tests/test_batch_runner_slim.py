@@ -21,6 +21,19 @@ Orchestrator test-correction (documented, 2026-10-16, run
 (measured 7843 words + 100 headroom, rounded to the next hundred). FR-28
 review-correction/verify/recovery docs. All floors (sections, vocabulary,
 schema) unchanged.
+
+Orchestrator test-correction (documented, 2026-11-11, issue #103, lane
+2026-11-11-lane-103-cli-batch-skip): MAX_WORDS 8000 → 8250 (measured 8191 words
++ headroom, rounded to the next fifty). The new normative section
+``#### CLI-Batch-Skip über `envelope thread` und Transportzähler`` documents the
+fail-closed scan accelerator and its transport counter/abort contract. All
+floors (sections, vocabulary, schema) unchanged.
+
+Orchestrator test-correction (documented, 2026-11-11, issue #103 review follow-up,
+lane 2026-11-11-lane-103-cli-batch-skip): MAX_WORDS 8250 → 8300 (measured 8299
+words, rounded to the next fifty). The documented contract now also covers the
+atomic spawn gate, the 10,000 default budget and F6 no-write behaviour. All
+floors unchanged.
 """
 
 from __future__ import annotations
@@ -33,11 +46,12 @@ import unittest
 BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 
-#: Size gate: 20-40% reduction from the 8754-word baseline; raised twice for
-#: the MD-P1 promotion-preflight module contract and the FR-28
-#: review-correction/verify/recovery docs (see docstring history).
+#: Size gate: 20-40% reduction from the 8754-word baseline; raised four times
+#: for the MD-P1 promotion-preflight module contract, the FR-28
+#: review-correction/verify/recovery docs, the issue-#103 scan accelerator
+#: contract, and its atomic-spawn/default-budget follow-up (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8000
+MAX_WORDS = 8300
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (

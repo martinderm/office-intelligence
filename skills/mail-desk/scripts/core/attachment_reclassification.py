@@ -69,7 +69,7 @@ from .attachment_handoff import (
     validate_attachment_handoff,
 )
 from .common import normalize_message_id
-from .himalaya import HimalayaInvocationError
+from .himalaya import HimalayaInvocationError, raise_if_transport_blocked
 
 _SHA256_LOWER = re.compile(r"^[0-9a-f]{64}$")
 
@@ -574,7 +574,8 @@ def _evaluate_item(
         raw_eml = read_raw_mime(envelope_id, folder=folder, account=account)
     # Only the canonical raw-MIME acquisition failures map to the bounded item-local
     # `fetch_failed` outcome; unexpected programmer errors stay fail-loud.
-    except (HimalayaInvocationError, OSError, RuntimeError):
+    except (HimalayaInvocationError, OSError, RuntimeError) as exc:
+        raise_if_transport_blocked(exc)
         _force_review_inbox(item, REASON_FETCH_FAILED)
         return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
 

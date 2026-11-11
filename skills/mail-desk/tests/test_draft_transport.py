@@ -50,7 +50,7 @@ import sys
 import tempfile
 import unittest
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
@@ -525,6 +525,150 @@ class SaveFailureTaxonomyTests(_TransportHarness):
                 drafts.save_draft(**self.SAVE_KWARGS)
         self.assertEqual(drafts.DRAFT_SAVE_FAILED_REASON, raised.exception.reason_code)
         self.assertIs(invocation_error, raised.exception.__cause__)
+
+
+class DraftTransportBlockTests(unittest.TestCase):
+    """Issue #103/F6: draft readback keeps the journal honest and re-raises.
+
+    The drafts API normally runs outside the batch transport session, so the
+    guard is inert there.  If a caller *does* hold an active session, the
+    structured block must not be reclassified as ``draft_save_failed`` or as an
+    unverified-but-finished draft.
+    """
+
+    def setUp(self) -> None:
+        self.blocked = himalaya.HimalayaInvocationError(
+            himalaya.TRANSPORT_BLOCKED_REASON, "blocked"
+        )
+
+    def test_append_readback_journals_unverified_then_reraises(self) -> None:
+        journal = Mock()
+        journal.record_attempt.return_value = True
+        with patch.object(
+            drafts.himalaya,
+            "find_envelopes_by_message_id",
+            side_effect=[([], True), self.blocked],
+        ), patch.object(drafts.himalaya, "run_himalaya", return_value=""):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts._append_and_verify(
+                    raw_message="Message-ID: <one@example.test>\r\n\r\nbody",
+                    normalized_id="one@example.test",
+                    date_header="2026-11-11",
+                    subject="Subject",
+                    to="a@example.test",
+                    body="body",
+                    cc=None,
+                    from_addr=None,
+                    prepared=(),
+                    folder="Drafts",
+                    account="demo",
+                    journal=journal,
+                    action="save_draft",
+                    record_item=False,
+                )
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+        calls = journal.record_attempt.call_args_list
+        self.assertEqual("append_started", calls[0].kwargs["status"])
+        self.assertEqual("appended_unverified", calls[-1].kwargs["status"])
+        self.assertEqual(
+            ["readback:mailbox_transport_blocked"], calls[-1].kwargs["problems"]
+        )
+
+    def test_inspect_old_draft_reraises_the_block(self) -> None:
+        with patch.object(
+            drafts.himalaya, "fetch_raw_message_eml", side_effect=self.blocked
+        ):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts._inspect_old_draft(
+                    "1",
+                    "Drafts",
+                    "demo",
+                    expected_message_id=None,
+                    require_clean=True,
+                )
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+
+    def test_folder_list_reraises_the_block(self) -> None:
+        with patch.object(drafts, "list_folders", side_effect=self.blocked):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts.resolve_drafts_folder(account="demo")
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+
+    def test_uniqueness_lookup_reraises_before_append(self) -> None:
+        journal = Mock()
+        with patch.object(
+            drafts.himalaya, "find_envelopes_by_message_id", side_effect=self.blocked
+        ), patch.object(drafts.himalaya, "run_himalaya", return_value="") as append:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts._append_and_verify(
+                    raw_message="Message-ID: <one@example.test>\r\n\r\nbody",
+                    normalized_id="one@example.test",
+                    date_header="2026-11-11",
+                    subject="Subject",
+                    to="a@example.test",
+                    body="body",
+                    cc=None,
+                    from_addr=None,
+                    prepared=(),
+                    folder="Drafts",
+                    account="demo",
+                    journal=journal,
+                    action="save_draft",
+                    record_item=False,
+                )
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+        append.assert_not_called()
+        journal.record_attempt.assert_not_called()
+
+    def _replace_kwargs(self, journal):
+        return dict(
+            old_id="1",
+            expected_old="old@example.test",
+            old_subject="Subject",
+            old_parts=0,
+            raw_message="Message-ID: <new@example.test>\r\n\r\nbody",
+            normalized_id="new@example.test",
+            date_header="2026-11-11",
+            subject="Subject",
+            to="a@example.test",
+            body="body",
+            cc=None,
+            from_addr=None,
+            prepared=(),
+            target_folder="Drafts",
+            bound_account="demo",
+            journal=journal,
+            folders=None,
+        )
+
+    def test_finish_replace_lookup_block_is_not_a_partial_failure(self) -> None:
+        journal = Mock()
+        with patch.object(
+            drafts, "_append_and_verify",
+            return_value={"envelope_id": "2", "date": "2026-11-11"},
+        ), patch.object(
+            drafts.himalaya, "find_envelopes_by_message_id", side_effect=self.blocked
+        ):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts._finish_replace(**self._replace_kwargs(journal))
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+        statuses = [call.kwargs.get("status") for call in journal.record_attempt.call_args_list]
+        self.assertNotIn("old_delete_failed", statuses)
+
+    def test_finish_replace_delete_block_is_not_a_partial_failure(self) -> None:
+        journal = Mock()
+        with patch.object(
+            drafts, "_append_and_verify",
+            return_value={"envelope_id": "2", "date": "2026-11-11"},
+        ), patch.object(
+            drafts.himalaya, "find_envelopes_by_message_id",
+            return_value=(["1"], True),
+        ), patch.object(drafts, "delete_draft", side_effect=self.blocked):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                drafts._finish_replace(**self._replace_kwargs(journal))
+        self.assertEqual(himalaya.TRANSPORT_BLOCKED_REASON, raised.exception.reason_code)
+        statuses = [call.kwargs.get("status") for call in journal.record_attempt.call_args_list]
+        self.assertNotIn("old_delete_failed", statuses)
 
 
 if __name__ == "__main__":
