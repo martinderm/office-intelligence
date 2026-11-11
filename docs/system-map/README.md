@@ -560,6 +560,14 @@ Regression: `skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`,
 `skills/mail-desk/tests/test_batch_runner_reconcile_apply_cli.py`,
 `skills/mail-desk/tests/test_batch_cli_wrapper.py`.
 
+**Issue #103 (2026-11-11)** erweitert diese Skip-Klasse nicht: der
+CLI-Batch-Skip (§15) baut nur eine flüchtige `id → message-id`-Map aus einem
+`envelope thread`-Prozess und unterdrückt einen Einzel-Read ausschließlich dann,
+wenn dieselbe normalisierte Message-ID bereits in `final-location-index.json`
+steht und `id` plus `subject` identisch sind. Map-Treffer erzeugen keine
+gesammelten Daten; fehlende IDs bleiben unbekannt und werden gelesen.
+
+
 ## 10. Issue #67: Rumpf-Batches und Inbox-Zero
 
 Der Signer `mail_desk_sign_manifest.py` akzeptiert `--allow-fewer` und setzt
@@ -742,3 +750,59 @@ L2: [Mail-Desk §43](../../skills/mail-desk/docs/system-map/README.md#43-issue-8
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88),
 [Log-Schema](../../skills/mail-desk/references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
 Tests: `skills/mail-desk/tests/test_sent_handoff.py`.
+
+## 15. Issue #103: CLI-Batch-Skip über `envelope thread` und Transportzähler
+
+**Ziel:** Die Login-Flut großer Postfächer über einen CLI-only-Batch-Skip
+senken, ohne einen zweiten IMAP-Transport. Ist `skip_known` aktiv, startet jeder
+Scan genau einmal `himalaya envelope thread -f <folder> -o json` (60 s, kein
+Retry) und baut eine prozesslokale Map `Envelope-ID → normalisierte
+Message-ID`. Ein Envelope aus `envelope list` wird ohne Einzel-Read
+übersprungen, wenn die Map ihn über gleiche `id` und identisches `subject`
+eindeutig einer Message-ID aus `final-location-index.json` zuordnet. Alles
+andere läuft unverändert über `get_single_email_details`. Kein `imaplib`, keine
+Credentials, kein `UIDVALIDITY`, kein Cache über den Scan hinaus; PR #101 bleibt
+unberührt.
+
+**Fail-closed:** F1 Map nur aus genau einem erfolgreichen Prozess mit gültigem
+JSON-Array aus `[source, target, weight]`-Tripeln (Himalaya
+`ThreadedEnvelopes`); jedes Element muss eine 3er-Liste mit zwei Node-Objekten
+und einem ganzzahligen Gewicht `0..255` sein, sonst wird die ganze Map
+verworfen. F2 dezimale `id != "0"` ohne umgebende Leerzeichen mit genau einer wohlgeformten Message-ID
+(genau ein `@`, keine Leer-/Steuerzeichen, keine `<`/`>`, nichtleere Seiten,
+keine `generated`-Domain); eine wiederholte `id` bleibt nur erhalten, wenn
+**alle** Vorkommen gültig und identisch sind – abweichende oder ungültige
+Duplikate entfernen die `id` vollständig. F3 Bindung nur bei gleicher `id` und
+identischem `subject`; führende Nullen sind signifikant (`0007` ≠ `7`). F4 Map-Treffer erzeugt nie `collected` und fließt nie in
+Index/Journal/Evidence/Anhänge; F5 fehlende ID = unbekannt = Einzel-Read; F6
+bereits der **zweite** aufeinanderfolgende Transportfehler wird sofort als
+strukturierter `mailbox_transport_blocked`-Abbruch ausgelöst (kein dritter
+Prozessstart, kein Verschlucken durch Fallback-Pfade). Budgetprüfung,
+Blockveröffentlichung und tatsächliche Prozess-Erzeugung teilen sich einen
+Spawn-Lock: parallele Worker können weder den letzten Budgetplatz doppelt
+reservieren noch nach veröffentlichtem Block starten. Die Session ist strikt
+auf `inspect`, `draft` und `pipeline` begrenzt; `execute`, `verify`, `search`
+und `sync_sent` behalten Ergebnis- und Fehlerform unverändert. Classifier-
+Full-Read und Attachment-Raw-MIME reichen den Block durch, statt ihn als
+Review-Item oder `fetch_failed` zu degradieren.
+
+**Transportzähler:** `run_himalaya` zählt Prozessstarts, Retries und Fehler je
+Kommandoklasse; das Ergebnis trägt `transport_stats` (nur Zähler,
+`blocked`/`block_reason`, `start_budget`). Das Start-Budget ist über
+`transport_start_budget` im Manifest oder `--transport-start-budget`
+konfigurierbar. Default sind 10.000: das dokumentierte Fallbackfenster von
+2.500 Envelopes kann pro Envelope bis zu zwei Prozesse (Raw-MIME-Export plus
+Read) plus Listen-Tiers, Thread-Map und Readiness auslösen; 10.000 deckt diesen
+Worst Case mit rund 2x Reserve ab und bleibt reiner Runaway-Schutz.
+
+**Grenzen:** CLI-Envelope-ID = IMAP-UID ist eine Implementierungstatsache der
+gebündelten `email-lib`-Generation, nicht dokumentiert; `UIDVALIDITY` ist über
+die CLI nicht sichtbar. Ohne serverseitiges `UID THREAD` (GroupWise) sinkt die
+Abdeckung; F5 hält das Verhalten korrekt. A6 (absenderkontrollierte
+Message-ID) ist als Baseline akzeptiert.
+
+L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
+Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
+[Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
+Tests: `skills/mail-desk/tests/test_batch_runner_cli_batch_skip.py`,
+`skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`.

@@ -267,6 +267,10 @@ def _summary(args: argparse.Namespace, envelope_path: Path, progress_path: Path,
             data["handoff"] = {key: handoff[key] for key in (
                 "state", "pending_count", "written_count", "deferred_count", "file",
             ) if key in handoff}
+        transport_stats = runner_data.get("transport_stats")
+        if isinstance(transport_stats, dict):
+            # Counters only; the full list of command classes stays small.
+            data["transport_stats"] = transport_stats
     return data
 
 

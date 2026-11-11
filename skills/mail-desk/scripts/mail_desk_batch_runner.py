@@ -63,6 +63,15 @@ from core import (
     verify_in_target_folder,
 )
 from core.envelope import build_error, build_success, emit_json
+from core.himalaya import (
+    TRANSPORT_BLOCKED_REASON,
+    HimalayaInvocationError,
+    TransportStats,
+    last_transport_stats,
+    reset_transport_stats,
+    transport_stats_session,
+)
+from core.known_skip import load_envelope_thread_map, thread_map_hit
 from core.sent_handoff import SentHandoffError
 from core.batch_contract import validate_execute_contract
 from core.telemetry import empty_telemetry
@@ -104,6 +113,10 @@ def get_envelopes_list(folder: str, account: str | None = None, max_size: int = 
             envs = json.loads(out)
             if isinstance(envs, list) and envs:
                 return envs
+        except HimalayaInvocationError as exc:
+            if exc.reason_code == TRANSPORT_BLOCKED_REASON:
+                raise
+            continue
         except Exception:
             continue
     return []
@@ -123,6 +136,9 @@ def get_oldest_envelopes(folder: str, count: int, account: str | None = None) ->
         envs = json.loads(out)
         if isinstance(envs, list) and envs:
             return envs[:count]
+    except HimalayaInvocationError as exc:
+        if exc.reason_code == TRANSPORT_BLOCKED_REASON:
+            raise
     except Exception:
         pass
 
@@ -138,6 +154,10 @@ def get_oldest_envelopes(folder: str, count: int, account: str | None = None) ->
                 oldest = envs[-slice_count:]
                 oldest.reverse()
                 return oldest
+        except HimalayaInvocationError as exc:
+            if exc.reason_code == TRANSPORT_BLOCKED_REASON:
+                raise
+            continue
         except Exception:
             continue
     return []
@@ -299,11 +319,28 @@ def _scan_unprocessed_emails(
 
     The skipped-known counter is returned instead of logged so the public wrapper
     can emit a single aggregated summary line per scan phase (OUT-P1, issue #5).
+
+    Issue #103 adds one fail-closed accelerator: when ``skip_known`` is on, one
+    bounded ``envelope thread -o json`` process per scan supplies a process-local
+    ``id -> Message-ID`` map.  A listed envelope is skipped without a read only
+    when the map binds the same ``id`` and the identical subject **and** that
+    Message-ID is in ``final-location-index.json`` (F1-F5).  A map hit never
+    produces ``collected`` data; every miss or mismatch is read individually.
     """
     dd = data_dir or resolve_data_dir()
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
     signature_index = build_signature_index(dd)
+
+    thread_map: dict[str, Any] = {}
+    if skip_known:
+        if tracker:
+            tracker.step("listing_envelope_thread_map")
+        thread_map = load_envelope_thread_map(
+            folder,
+            account=account,
+            run_himalaya_fn=run_himalaya,
+        )
 
     collected: list[dict[str, Any]] = []
     known_count = 0
@@ -345,6 +382,18 @@ def _scan_unprocessed_emails(
             if eid in inspected_eids:
                 continue
             inspected_eids.add(eid)
+
+            # Issue #103: a fail-closed thread-map hit may suppress the read, but
+            # only with an identical id + subject and a Message-ID that is already
+            # in the final-location index.  A hit never produces collected data;
+            # every miss, mismatch or unknown id falls through to the read below.
+            thread_entry = thread_map_hit(thread_map, env)
+            if thread_entry is not None and thread_entry.message_id in known_items:
+                known_count += 1
+                skipped_known += 1
+                # OUT-P1: the public wrapper emits one aggregated summary per
+                # scan; never write one progress step per skipped envelope.
+                continue
 
             # Signature matches are routing hints only.  A physically present
             # envelope may be skipped exclusively by its own Message-ID below;
@@ -400,6 +449,18 @@ def _scan_unprocessed_emails(
             if eid in inspected_eids:
                 continue
             inspected_eids.add(eid)
+
+            # Issue #103: a fail-closed thread-map hit may suppress the read, but
+            # only with an identical id + subject and a Message-ID that is already
+            # in the final-location index.  A hit never produces collected data;
+            # every miss, mismatch or unknown id falls through to the read below.
+            thread_entry = thread_map_hit(thread_map, env)
+            if thread_entry is not None and thread_entry.message_id in known_items:
+                known_count += 1
+                skipped_known += 1
+                # OUT-P1: the public wrapper emits one aggregated summary per
+                # scan; never write one progress step per skipped envelope.
+                continue
 
             # Signature matches are routing hints only.  A physically present
             # envelope may be skipped exclusively by its own Message-ID below;
@@ -465,6 +526,31 @@ def _bind_mailbox_mode(
     }
 
 
+def _transport_start_budget(config: dict[str, Any]) -> int | None:
+    """Return the explicit per-run process-start budget, if configured.
+
+    ``None`` keeps the documented default of
+    :data:`core.himalaya.DEFAULT_TRANSPORT_START_BUDGET`; an explicit manifest
+    value must be a positive integer and is validated before any mailbox read.
+    """
+    raw = config.get("transport_start_budget")
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        raise ValueError("transport_start_budget must be a positive integer")
+    return raw
+
+
+def _ensure_transport_not_blocked(stats: TransportStats) -> None:
+    """Fail closed even when a swallowed error reached the F6 threshold.
+
+    The transport session is scoped to the three mailbox-scanning modes.  This
+    postcondition turns a silently ignored blocked flag into the same
+    structured abort instead of returning a partial or empty success.
+    """
+    stats.raise_if_blocked("batch_mode")
+
+
 def run_inspect_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -475,26 +561,32 @@ def run_inspect_mode(
     Dependencies are resolved at call time so existing runner-level patches stay
     effective during the incremental modularization.
     """
-    dd, binding, failure = _bind_mailbox_mode("inspect", account, data_dir)
-    if failure is not None:
-        return failure
-    return _run_inspect_mode(
-        config,
-        account=binding["account"],
-        data_dir=dd,
-        dependencies={
-            "atomic_write_json": atomic_write_json,
-            "draft_manifest": draft_manifest,
-            "get_oldest_envelopes": get_oldest_envelopes,
-            "get_single_email_details": get_single_email_details,
-            "get_unprocessed_emails": get_unprocessed_emails,
-            "load_final_index": load_final_index,
-            "resolve_data_dir": resolve_data_dir,
-            "resolve_final_index_path": resolve_final_index_path,
-            "run_himalaya": run_himalaya,
-            "sleep": time.sleep,
-        },
-    )
+    dd = data_dir or resolve_data_dir()
+    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+        dd, binding, failure = _bind_mailbox_mode("inspect", account, dd)
+        if failure is not None:
+            result = failure
+        else:
+            result = _run_inspect_mode(
+                config,
+                account=binding["account"],
+                data_dir=dd,
+                dependencies={
+                    "atomic_write_json": atomic_write_json,
+                    "draft_manifest": draft_manifest,
+                    "get_oldest_envelopes": get_oldest_envelopes,
+                    "get_single_email_details": get_single_email_details,
+                    "get_unprocessed_emails": get_unprocessed_emails,
+                    "load_final_index": load_final_index,
+                    "resolve_data_dir": resolve_data_dir,
+                    "resolve_final_index_path": resolve_final_index_path,
+                    "run_himalaya": run_himalaya,
+                    "sleep": time.sleep,
+                },
+            )
+    _ensure_transport_not_blocked(stats)
+    result.setdefault("transport_stats", stats.snapshot())
+    return result
 
 
 # ==============================================================================
@@ -507,23 +599,29 @@ def run_draft_mode(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted draft-mode handler."""
-    dd, binding, failure = _bind_mailbox_mode("draft", account, data_dir)
-    if failure is not None:
-        return failure
-    return _run_draft_mode(
-        config,
-        account=binding["account"],
-        data_dir=dd,
-        dependencies={
-            "BatchProgressTracker": BatchProgressTracker,
-            "atomic_write_json": atomic_write_json,
-            "draft_manifest": draft_manifest,
-            "get_unprocessed_emails": get_unprocessed_emails,
-            "get_single_email_details": get_single_email_details,
-            "load_sent_index": load_sent_index,
-            "resolve_data_dir": resolve_data_dir,
-        },
-    )
+    dd = data_dir or resolve_data_dir()
+    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+        dd, binding, failure = _bind_mailbox_mode("draft", account, dd)
+        if failure is not None:
+            result = failure
+        else:
+            result = _run_draft_mode(
+                config,
+                account=binding["account"],
+                data_dir=dd,
+                dependencies={
+                    "BatchProgressTracker": BatchProgressTracker,
+                    "atomic_write_json": atomic_write_json,
+                    "draft_manifest": draft_manifest,
+                    "get_unprocessed_emails": get_unprocessed_emails,
+                    "get_single_email_details": get_single_email_details,
+                    "load_sent_index": load_sent_index,
+                    "resolve_data_dir": resolve_data_dir,
+                },
+            )
+    _ensure_transport_not_blocked(stats)
+    result.setdefault("transport_stats", stats.snapshot())
+    return result
 
 
 def run_dossier_mode(
@@ -758,27 +856,33 @@ def run_pipeline_mode(
     index_path: Path | None = None,
 ) -> dict[str, Any]:
     """Workspace-bound facade for read-only pipeline preparation."""
-    dd, binding, failure = _bind_mailbox_mode("pipeline", account, data_dir)
-    if failure is not None:
-        return _readiness_stop("pipeline", failure["backend_binding"])
+    dd = data_dir or resolve_data_dir()
     folder = config.get("folder", "INBOX")
-    readiness = mailbox_readiness_preflight(binding, folder=folder, run_himalaya_fn=run_himalaya)
-    if not readiness["success"]:
-        return _readiness_stop("pipeline", readiness)
-    result = _run_pipeline_mode(
-        config,
-        account=binding["account"],
-        data_dir=dd,
-        index_path=index_path,
-        dependencies={
-            "draft_manifest": draft_manifest,
-            "get_unprocessed_emails": get_unprocessed_emails,
-            "get_single_email_details": get_single_email_details,
-            "load_sent_index": load_sent_index,
-            "resolve_data_dir": resolve_data_dir,
-        },
-    )
-    result["readiness_preflight"] = readiness
+    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+        dd, binding, failure = _bind_mailbox_mode("pipeline", account, dd)
+        if failure is not None:
+            result = _readiness_stop("pipeline", failure["backend_binding"])
+        else:
+            readiness = mailbox_readiness_preflight(binding, folder=folder, run_himalaya_fn=run_himalaya)
+            if not readiness["success"]:
+                result = _readiness_stop("pipeline", readiness)
+            else:
+                result = _run_pipeline_mode(
+                    config,
+                    account=binding["account"],
+                    data_dir=dd,
+                    index_path=index_path,
+                    dependencies={
+                        "draft_manifest": draft_manifest,
+                        "get_unprocessed_emails": get_unprocessed_emails,
+                        "get_single_email_details": get_single_email_details,
+                        "load_sent_index": load_sent_index,
+                        "resolve_data_dir": resolve_data_dir,
+                    },
+                )
+                result["readiness_preflight"] = readiness
+    _ensure_transport_not_blocked(stats)
+    result.setdefault("transport_stats", stats.snapshot())
     return result
 
 
@@ -1117,6 +1221,12 @@ def _build_parser() -> EnvelopeArgumentParser:
     parser.add_argument("--folder", "-f", default="INBOX", help="Target mailbox folder (default: INBOX)")
     parser.add_argument("--skip-known", action="store_true", default=True, help="Skip already processed emails")
     parser.add_argument("--no-skip-known", dest="skip_known", action="store_false", help="Do not skip known emails")
+    parser.add_argument(
+        "--transport-start-budget",
+        type=int,
+        default=None,
+        help="Explicit Himalaya process-start budget per run (default: 10000)",
+    )
     filters = parser.add_mutually_exclusive_group()
     filters.add_argument("--query", "-q", help="Search query filter for envelopes (e.g. 'after 2026-05-01')")
     filters.add_argument("--date", help="Exact date filter for envelopes (YYYY-MM-DD)")
@@ -1156,9 +1266,18 @@ def _build_parser() -> EnvelopeArgumentParser:
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     lease_id = getattr(args, "workspace_lease_id", None)
     conversation_id = getattr(args, "workspace_conversation_id", None)
+    transport_start_budget = getattr(args, "transport_start_budget", None)
     if (lease_id is not None or conversation_id is not None) and args.draft is None and args.inspect is None:
         raise ArgumentParseError(
             "--workspace-lease-id/--workspace-conversation-id are valid only with --draft or --inspect"
+        )
+    if transport_start_budget is not None and transport_start_budget < 1:
+        raise ArgumentParseError("--transport-start-budget must be a positive integer")
+    if transport_start_budget is not None and not (
+        args.draft is not None or args.inspect is not None or args.pipeline is not None
+    ):
+        raise ArgumentParseError(
+            "--transport-start-budget is valid only with --inspect, --draft, or --pipeline"
         )
     if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
         raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
@@ -1203,6 +1322,8 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["query"] = args.query
         if args.date:
             cfg["date"] = args.date
+        if transport_start_budget is not None:
+            cfg["transport_start_budget"] = transport_start_budget
         return cfg
     if args.sync_sent is not None:
         return {"mode": "sync_sent", "count": args.sync_sent, "folder": "Sent Items"}
@@ -1247,6 +1368,8 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["lease_id"] = lease_id
         if conversation_id is not None:
             cfg["conversation_id"] = conversation_id
+        if transport_start_budget is not None:
+            cfg["transport_start_budget"] = transport_start_budget
         return cfg
     if args.inspect is not None:
         cfg = {
@@ -1266,6 +1389,8 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["lease_id"] = lease_id
         if conversation_id is not None:
             cfg["conversation_id"] = conversation_id
+        if transport_start_budget is not None:
+            cfg["transport_start_budget"] = transport_start_budget
         return cfg
     return None
 
@@ -1378,6 +1503,7 @@ def _dispatch(
 
 def main() -> int:
     try:
+        reset_transport_stats()
         parser = _build_parser()
         args = parser.parse_args()
         if args.help:
@@ -1450,6 +1576,31 @@ def main() -> int:
     except FileNotFoundError as exc:
         _emit(_failure_envelope(str(exc), error_type="InputNotFound", operation="input_load", state="NotFound"))
         return 1
+    except HimalayaInvocationError as exc:
+        snapshot = last_transport_stats()
+        blocked = (
+            exc.reason_code == TRANSPORT_BLOCKED_REASON and snapshot is not None
+        )
+        if blocked:
+            _emit(_failure_envelope(
+                str(exc) or exc.reason_code,
+                error_type="TransportBlocked",
+                operation="runtime",
+                state="Blocked",
+                details={"reason_code": exc.reason_code, "transport_stats": snapshot},
+            ))
+            return 1
+        details: dict[str, Any] = {"exception_type": type(exc).__name__}
+        if snapshot is not None:
+            details["reason_code"] = exc.reason_code
+            details["transport_stats"] = snapshot
+        _emit(_failure_envelope(
+            str(exc) or exc.reason_code,
+            error_type=type(exc).__name__,
+            operation="runtime",
+            details=details,
+        ))
+        return 1
     except SentHandoffError as exc:
         _emit(_failure_envelope(
             str(exc), error_type="SentHandoffError", operation="runtime", state="Failed",
@@ -1457,12 +1608,18 @@ def main() -> int:
         ))
         return 1
     except Exception as exc:  # noqa: BLE001 - every CLI failure must retain the envelope contract
+        details = {"exception_type": type(exc).__name__}
+        snapshot = last_transport_stats()
+        if snapshot is not None:
+            # Only inspect/draft/pipeline open a transport session; other modes
+            # keep their previous error envelope byte-for-byte.
+            details["transport_stats"] = snapshot
         _emit(
             _failure_envelope(
                 str(exc) or type(exc).__name__,
                 error_type=type(exc).__name__,
                 operation="runtime",
-                details={"exception_type": type(exc).__name__},
+                details=details,
             )
         )
         return 1

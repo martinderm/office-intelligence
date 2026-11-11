@@ -57,6 +57,7 @@ from .matching.topic_matching import (
 )
 from .sent_handoff import STATIC_ALIAS_REASON_CODES
 from .sent_indexer import check_if_replied, load_sent_index, sync_sent_items
+from .himalaya import raise_if_transport_blocked
 
 
 FULL_BODY_ARTIFACT_SIGNALS = (
@@ -325,6 +326,7 @@ def classify_email_two_pass(
             full_item["evidence"] = full_evidence
         return _finish(full_item, full_email)
     except Exception as exc:  # noqa: BLE001 - the manifest must retain reviewable failure context
+        raise_if_transport_blocked(exc)
         return _finish(_full_read_failure(preview_item, triggers, exc), email)
 
 
@@ -977,6 +979,7 @@ def draft_manifest(
                 if batch_dates:
                     sync_sent_items(dates=batch_dates, data_dir=dd, workspace_root=ws, account=account)
             except Exception as error:
+                raise_if_transport_blocked(error)
                 if getattr(error, "reason_code", None) in STATIC_ALIAS_REASON_CODES:
                     raise
         try:

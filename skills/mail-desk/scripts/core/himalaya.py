@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+from contextlib import contextmanager
+from contextvars import ContextVar
 import email
 import email.policy
 import json
@@ -16,7 +18,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 from .attachments import inspect_mime_tree, validate_attachment_candidate_metadata
 from .common import normalize_message_id
@@ -170,6 +172,239 @@ _DIAGNOSTIC_REAP_BUDGET_SECONDS = 5.0
 _POPEN = subprocess.Popen
 
 
+#: Canonical abort reason after two consecutive transport failures or an
+#: exhausted start budget (issue #103, F6).
+TRANSPORT_BLOCKED_REASON = "mailbox_transport_blocked"
+
+#: Failure reasons that count as a *transport* failure.  A normal command or
+#: authentication failure breaks the consecutive-error run instead of counting.
+TRANSPORT_ERROR_REASON_CODES = frozenset(
+    {
+        "himalaya_transient",
+        "himalaya_timeout",
+        "himalaya_launch_failed",
+        "himalaya_stdin_failed",
+    }
+)
+
+#: Explicit, documented process-start budget per transport-stats session.  It is
+#: a runaway guard, not a batch-shaping limit: the documented fallback scan can
+#: read a 2,500-envelope window and may use two processes per envelope (raw-MIME
+#: export plus header/read), plus list tiers and the thread map.  10,000 keeps
+#: roughly 2x headroom above that documented worst case.
+DEFAULT_TRANSPORT_START_BUDGET = 10_000
+
+#: The second consecutive transport failure aborts the run immediately.
+TRANSPORT_MAX_CONSECUTIVE_ERRORS = 2
+
+_ACTIVE_TRANSPORT_STATS: ContextVar["TransportStats | None"] = ContextVar(
+    "mail_desk_active_transport_stats", default=None
+)
+_LAST_TRANSPORT_STATS: dict[str, Any] | None = None
+
+
+def classify_himalaya_command(args: list[str]) -> str:
+    """Return the stable command class of a Himalaya argv (for counters only).
+
+    Only structural tokens are inspected: flags with a value are skipped and
+    the first two positional words are joined (``envelope list``,
+    ``message read``, ``folder list``).  No argument content is stored.
+    """
+    tokens = list(args)
+    flags_with_value = {
+        "-a", "--account", "-c", "--config", "-o", "--output", "-f", "--folder",
+        "-s", "--page-size", "-H", "--header", "-d", "--destination", "-F",
+        "--preview-lines", "-t", "--target",
+    }
+    words: list[str] = []
+    index = 0
+    while index < len(tokens) and len(words) < 2:
+        token = tokens[index]
+        if token in flags_with_value:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        words.append(token)
+        index += 1
+    return " ".join(words) if words else "unknown"
+
+
+class TransportStats:
+    """Process-local counters and the fail-closed transport guard.
+
+    Counters are recorded by :func:`run_himalaya` for the active session:
+    process starts, retries and errors per command class.  The second
+    consecutive transport failure aborts immediately with
+    :data:`TRANSPORT_BLOCKED_REASON`; an exhausted ``start_budget`` blocks every
+    further process start.
+    """
+
+    def __init__(
+        self,
+        *,
+        start_budget: int | None = DEFAULT_TRANSPORT_START_BUDGET,
+        max_consecutive_errors: int = TRANSPORT_MAX_CONSECUTIVE_ERRORS,
+    ) -> None:
+        if start_budget is not None and (
+            isinstance(start_budget, bool)
+            or not isinstance(start_budget, int)
+            or start_budget < 1
+        ):
+            raise ValueError("start_budget must be a positive integer or None")
+        self.start_budget = start_budget
+        self.max_consecutive_errors = max(1, int(max_consecutive_errors))
+        self._lock = threading.Lock()
+        # Serializes budget/block checks with the actual child creation.  The
+        # lock is never held while the child runs; only until Popen returns.
+        self._spawn_lock = threading.Lock()
+        self.process_starts = 0
+        self.retries = 0
+        self.errors = 0
+        self.consecutive_transport_errors = 0
+        self.blocked_reason: str | None = None
+        self.commands: dict[str, dict[str, int]] = {}
+
+    def _bucket(self, command_class: str) -> dict[str, int]:
+        return self.commands.setdefault(
+            command_class, {"starts": 0, "retries": 0, "errors": 0}
+        )
+
+    def start_process(
+        self,
+        command_class: str,
+        factory: Callable[[], Any],
+        *,
+        retry: bool = False,
+    ) -> Any:
+        """Create one child atomically against the budget and the F6 block.
+
+        Budget check, actual ``Popen`` and successful-start accounting happen
+        under one spawn lock.  Two workers can therefore never reserve the same
+        last budget slot, and a block published by :meth:`record_error` cannot
+        slip into the window between the check and child creation: both paths
+        use the same lock.  The lock is released as soon as the child exists;
+        waiting for its output is not serialized.
+        """
+        with self._spawn_lock:
+            with self._lock:
+                if self.blocked_reason:
+                    reason = self.blocked_reason
+                elif self.start_budget is not None and self.process_starts >= self.start_budget:
+                    reason = "start_budget_exhausted"
+                    self.blocked_reason = reason
+                else:
+                    reason = None
+            if reason is not None:
+                raise self.blocked_error(command_class, reason=reason)
+            process = factory()
+            with self._lock:
+                self.process_starts += 1
+                self._bucket(command_class)["starts"] += 1
+                if retry:
+                    self.retries += 1
+                    self._bucket(command_class)["retries"] += 1
+            return process
+
+    def blocked_error(
+        self, command_class: str, *, reason: str | None = None
+    ) -> HimalayaInvocationError:
+        """Return the one structured abort error used for every F6 stop."""
+        reason = reason or self.blocked_reason or "transport_blocked"
+        return HimalayaInvocationError(
+            TRANSPORT_BLOCKED_REASON,
+            f"Himalaya transport blocked ({reason}); no further process was started for '{command_class}'.",
+        )
+
+    def raise_if_blocked(self, command_class: str) -> None:
+        """Raise immediately once the threshold is reached (never swallow it)."""
+        with self._lock:
+            reason = self.blocked_reason
+        if reason:
+            raise self.blocked_error(command_class, reason=reason)
+
+    def record_success(self) -> None:
+        with self._lock:
+            self.consecutive_transport_errors = 0
+
+    def record_error(self, command_class: str, reason_code: str) -> bool:
+        """Record one error and return whether this error reached the F6 threshold.
+
+        The threshold is latched here, not only checked before the next start:
+        the second consecutive transport failure itself is returned as the
+        structured ``mailbox_transport_blocked`` abort, so a caller that
+        swallows a transient error cannot turn the run into a silent success.
+        """
+        with self._spawn_lock:
+            with self._lock:
+                self.errors += 1
+                self._bucket(command_class)["errors"] += 1
+                if reason_code not in TRANSPORT_ERROR_REASON_CODES:
+                    self.consecutive_transport_errors = 0
+                    return False
+                self.consecutive_transport_errors += 1
+                if (
+                    self.blocked_reason is None
+                    and self.consecutive_transport_errors >= self.max_consecutive_errors
+                ):
+                    self.blocked_reason = "two_consecutive_transport_errors"
+                return self.blocked_reason is not None
+
+    def snapshot(self) -> dict[str, Any]:
+        """Return a stable, JSON-safe counter snapshot for the result envelope."""
+        with self._lock:
+            return {
+                "process_starts": self.process_starts,
+                "retries": self.retries,
+                "errors": self.errors,
+                "consecutive_transport_errors": self.consecutive_transport_errors,
+                "start_budget": self.start_budget,
+                "blocked": self.blocked_reason is not None,
+                "block_reason": self.blocked_reason,
+                "commands": {
+                    command: dict(counts) for command, counts in sorted(self.commands.items())
+                },
+            }
+
+
+@contextmanager
+def transport_stats_session(
+    start_budget: int | None = DEFAULT_TRANSPORT_START_BUDGET,
+):
+    """Activate one counter/guard session; nested sessions reuse the active one."""
+    active = _ACTIVE_TRANSPORT_STATS.get()
+    if active is not None:
+        yield active
+        return
+    if start_budget is None:
+        start_budget = DEFAULT_TRANSPORT_START_BUDGET
+    stats = TransportStats(start_budget=start_budget)
+    token = _ACTIVE_TRANSPORT_STATS.set(stats)
+    global _LAST_TRANSPORT_STATS
+    try:
+        yield stats
+    finally:
+        _LAST_TRANSPORT_STATS = stats.snapshot()
+        _ACTIVE_TRANSPORT_STATS.reset(token)
+
+
+def current_transport_stats() -> TransportStats | None:
+    """Return the active transport-stats session, if one is active."""
+    return _ACTIVE_TRANSPORT_STATS.get()
+
+
+def last_transport_stats() -> dict[str, Any] | None:
+    """Return the snapshot of the most recently completed session."""
+    return _LAST_TRANSPORT_STATS
+
+
+def reset_transport_stats() -> None:
+    """Clear the stored last snapshot (test isolation only)."""
+    global _LAST_TRANSPORT_STATS
+    _LAST_TRANSPORT_STATS = None
+
+
 def _write_all_binary(stream: Any, payload: bytes) -> None:
     """Write the full payload, looping over short/no-progress writes.
 
@@ -187,7 +422,14 @@ def _write_all_binary(stream: Any, payload: bytes) -> None:
         total += int(written)
 
 
-def _run_himalaya_diagnostic(cmd: list[str], *, stdin_bytes: bytes, timeout: float, capture: Any) -> str:
+def _run_himalaya_diagnostic(
+    cmd: list[str],
+    *,
+    stdin_bytes: bytes,
+    timeout: float,
+    capture: Any,
+    spawn: Callable[..., Any] | None = None,
+) -> str:
     """Run one bounded diagnostic child through the caller's capture object.
 
     The capture owns the fixed child environment, the resource bounds and the
@@ -226,7 +468,7 @@ def _run_himalaya_diagnostic(cmd: list[str], *, stdin_bytes: bytes, timeout: flo
             pass
 
     try:
-        process = _POPEN(
+        process = (spawn or _POPEN)(
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -453,6 +695,89 @@ def _run_himalaya_diagnostic(cmd: list[str], *, stdin_bytes: bytes, timeout: flo
     return stdout_data.decode("utf-8", errors="replace")
 
 
+def _run_process(
+    cmd: list[str],
+    *,
+    stdin_bytes: bytes | None,
+    timeout: int,
+    env_vars: dict[str, str],
+    stats: "TransportStats | None",
+    command_class: str,
+    retry: bool,
+) -> Any:
+    """Run one child either through the atomic stats gate or the legacy path.
+
+    The stats-active path creates the child with :meth:`TransportStats.start_process`
+    so budget and block checks share one lock with ``Popen``.  The no-session
+    path keeps ``subprocess.run`` unchanged; it has no budget or F6 guard to
+    make atomic.  Both branches return a ``CompletedProcess``-compatible object.
+    """
+    if stats is None:
+        if stdin_bytes is None:
+            return subprocess.run(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env_vars,
+                timeout=timeout,
+            )
+        return subprocess.run(
+            cmd,
+            input=stdin_bytes,
+            capture_output=True,
+            env=env_vars,
+            timeout=timeout,
+        )
+
+    if stdin_bytes is None:
+        process = stats.start_process(
+            command_class,
+            lambda: _POPEN(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env_vars,
+            ),
+            retry=retry,
+        )
+    else:
+        process = stats.start_process(
+            command_class,
+            lambda: _POPEN(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env_vars,
+            ),
+            retry=retry,
+        )
+    try:
+        if stdin_bytes is None:
+            stdout, stderr = process.communicate(timeout=timeout)
+        else:
+            stdout, stderr = process.communicate(input=stdin_bytes, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Mirror subprocess.run: kill and reap before surfacing the timeout.
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            pass
+        try:
+            process.communicate()
+        except (OSError, ValueError):
+            pass
+        raise
+    return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr)
+
+
 def run_himalaya(
     args: list[str],
     account: str | None = None,
@@ -504,15 +829,37 @@ def run_himalaya(
                 "JSON output would bypass stdin."
             )
     cmd = build_himalaya_command(args, account)
+    command_class = classify_himalaya_command(args)
+    stats = current_transport_stats()
     if diagnostic_capture is not None:
         # Opt-in bounded diagnostic branch: exactly one child, bounded drain, no
         # retry.  ``stdin_bytes`` is required (a payload command); validation
         # above already ran.
         if stdin_bytes is None:
             raise ValueError("diagnostic_capture requires a payload stdin_bytes.")
-        return _run_himalaya_diagnostic(
-            cmd, stdin_bytes=stdin_bytes, timeout=float(timeout), capture=diagnostic_capture
-        )
+        spawn = None
+        if stats is not None:
+            def spawn(*args: Any, **kwargs: Any) -> Any:
+                return stats.start_process(
+                    command_class, lambda: _POPEN(*args, **kwargs)
+                )
+        try:
+            output = _run_himalaya_diagnostic(
+                cmd,
+                stdin_bytes=stdin_bytes,
+                timeout=float(timeout),
+                capture=diagnostic_capture,
+                spawn=spawn,
+            )
+        except HimalayaInvocationError as exc:
+            if exc.reason_code == TRANSPORT_BLOCKED_REASON:
+                raise
+            if stats is not None and stats.record_error(command_class, exc.reason_code):
+                raise stats.blocked_error(command_class) from exc
+            raise
+        if stats is not None:
+            stats.record_success()
+        return output
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
 
@@ -522,47 +869,51 @@ def run_himalaya(
     last_err = None
     for attempt in range(attempts):
         try:
-            if stdin_bytes is None:
-                res = subprocess.run(
-                    cmd,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    env=env_vars,
-                    timeout=timeout,
-                )
-            else:
-                res = subprocess.run(
-                    cmd,
-                    input=stdin_bytes,
-                    capture_output=True,
-                    env=env_vars,
-                    timeout=timeout,
-                )
+            res = _run_process(
+                cmd,
+                stdin_bytes=stdin_bytes,
+                timeout=timeout,
+                env_vars=env_vars,
+                stats=stats,
+                command_class=command_class,
+                retry=attempt > 0,
+            )
             if res.returncode != 0:
                 err_msg = _decode_process_stream(res.stderr).strip()
                 # Check for transient connection errors
                 if _is_transient_himalaya_error(err_msg):
+                    if stats is not None and stats.record_error(command_class, "himalaya_transient"):
+                        # The second consecutive failure is the structured abort
+                        # itself; retry/no retry cannot swallow it.
+                        raise stats.blocked_error(command_class)
                     last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
                     if attempt < attempts - 1:
                         time.sleep(2.0 * (attempt + 1))
                         continue
                     break
+                if stats is not None:
+                    stats.record_error(command_class, "himalaya_command_failed")
                 raise HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {err_msg}")
+            if stats is not None:
+                stats.record_success()
             return _decode_process_stream(res.stdout)
         except subprocess.TimeoutExpired as te:
+            if stats is not None and stats.record_error(command_class, "himalaya_timeout"):
+                raise stats.blocked_error(command_class) from te
             raise HimalayaInvocationError(
                 "himalaya_timeout", "Himalaya timed out; refusing to retry the mailbox command."
             ) from te
         except BrokenPipeError as bp:
+            if stats is not None and stats.record_error(command_class, "himalaya_stdin_failed"):
+                raise stats.blocked_error(command_class) from bp
             raise HimalayaInvocationError(
                 "himalaya_stdin_failed",
                 "Himalaya closed its stdin before the message payload was fully written; "
                 "the command was not retried.",
             ) from bp
         except OSError as exc:
+            if stats is not None and stats.record_error(command_class, "himalaya_launch_failed"):
+                raise stats.blocked_error(command_class) from exc
             raise HimalayaInvocationError(
                 "himalaya_launch_failed",
                 "Himalaya could not be launched or communication failed; "
@@ -575,7 +926,28 @@ def run_himalaya(
 def _is_transient_himalaya_error(stderr: str) -> bool:
     """Keep retries narrowly limited to transport failures."""
     message = stderr.lower()
-    return any(token in message for token in ("10054", "tls stream", "cannot connect", "broken pipe", "connection reset", "timed out"))
+    return any(
+        token in message
+        for token in (
+            "10054",
+            "tls stream",
+            "cannot connect",
+            "broken pipe",
+            "connection reset",
+            "connection refused",
+            "connection aborted",
+            "network is unreachable",
+            "network unreachable",
+            "no route to host",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "nodename nor servname",
+            "no address associated with hostname",
+            "could not resolve host",
+            "getaddrinfo",
+            "timed out",
+        )
+    )
 
 
 def fetch_raw_message_eml(
@@ -710,7 +1082,8 @@ def find_envelopes_by_message_id(
                 ["message", "read", "--preview", "-H", "Message-Id", "-f", folder, candidate],
                 account=account, timeout=10, max_retries=1,
             )
-        except Exception:  # noqa: BLE001 - an unreadable envelope makes absence unprovable
+        except Exception as exc:  # noqa: BLE001 - an unreadable envelope makes absence unprovable
+            raise_if_transport_blocked(exc)
             complete = False
             continue
         values = [
@@ -721,6 +1094,12 @@ def find_envelopes_by_message_id(
         if any(normalize_message_id(value) == wanted for value in values):
             matches.append(candidate)
     return matches, complete
+
+
+def raise_if_transport_blocked(error: BaseException) -> None:
+    """Re-raise the structured F6 abort instead of degrading it to fallback data."""
+    if isinstance(error, HimalayaInvocationError) and error.reason_code == TRANSPORT_BLOCKED_REASON:
+        raise error
 
 
 def get_single_email_details(
@@ -828,6 +1207,7 @@ def get_single_email_details(
                 attachment_status = "available" if attachments_list else "none"
                 attachment_error = None
         except Exception as exc:
+            raise_if_transport_blocked(exc)
             attachments_list = []
             attachment_status = "attachment_inventory_unavailable"
             attachment_error = f"Failed to export or inspect message MIME: {exc}"
@@ -851,6 +1231,7 @@ def get_single_email_details(
     try:
         stdout = run_himalaya(args, account=account, timeout=read_timeout, max_retries=2)
     except Exception as e:
+        raise_if_transport_blocked(e)
         last_err = e
 
     fb_from = ""
@@ -895,8 +1276,8 @@ def get_single_email_details(
                 if line.lower().startswith("message-id:"):
                     raw_mid = line.split(":", 1)[1].strip()
                     break
-        except Exception:
-            pass
+        except Exception as exc:
+            raise_if_transport_blocked(exc)
 
         norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
         return {
@@ -968,6 +1349,9 @@ def get_single_email_details(
             "read_level": "full_body" if full_body else "preview",
         }
     except Exception as e:
+        # Issue #103/F6: never degrade the structured transport abort into a
+        # per-envelope result record, even on an unexpected path.
+        raise_if_transport_blocked(e)
         return {
             "envelope_id": str(env_id),
             "folder": folder,
@@ -1030,6 +1414,7 @@ def verify_in_target_folder(
         except Exception as exc:
             # The same failures were previously swallowed at each call site.
             # Classify only known timeouts; never serialize untrusted messages.
+            raise_if_transport_blocked(exc)
             if (isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
                     or isinstance(exc, HimalayaInvocationError) and exc.reason_code == "himalaya_timeout"):
                 outcome = "timeout"

@@ -131,6 +131,7 @@ python3 scripts/mail_desk_batch_runner.py --dossier meshe --max-count 50
 | `--order <oldest\|newest>` | | Verarbeitungsreihenfolge nach Alter (Standard: `oldest`). |
 | `--folder <ORDNER>` | `-f` | Quellordner im Postfach (Standard: `INBOX`). |
 | `--skip-known` / `--no-skip-known` | | Überspringt eine Mail nur bei **eigener** normalisierter Message-ID in `final-location-index.json`/`items` (Standard: `True`); Thread-Replies bleiben sichtbar. |
+| `--transport-start-budget <N>` | | Explizites Prozessstart-Budget je Lauf (positiv; Default 10000); nur mit `--inspect`/`--draft`/`--pipeline`. |
 | `--query <AUSDRUCK>` | `-q` | Himalaya-Suchausdruck für `inspect`/`draft`/`pipeline`, bis zum Envelope-Abruf weitergereicht; nicht mit `--date` kombinieren. |
 | `--date <YYYY-MM-DD>` | | Exakter Himalaya-Datumsfilter für `inspect`/`draft`/`pipeline`; nicht mit `--query` kombinieren. |
 | `--min-confidence <high\|medium\|low>` | | Historische Pipeline-Option; erteilt keine Ausführung und filtert keine Review-Kandidaten. |
@@ -166,6 +167,39 @@ Signaturindex ist nur ein nicht-autoritativer Hinweis und löst weder
 `signature_hint` ist nicht autoritativ (kann im Inspect-Output erscheinen, wird
 aber nicht als Index-/Journal-/Evidence-Entscheidung übernommen); der
 `(subject, "")`-Fallback gilt nur für eindeutige Subjekte.
+
+#### CLI-Batch-Skip über `envelope thread` und Transportzähler
+
+Bei `skip_known` startet jeder Scan genau einmal
+`himalaya envelope thread -f <folder> -o json` (60 s, kein Retry) und baut eine
+prozesslokale Map `Envelope-ID -> Message-ID`; kein zweiter IMAP-Transport,
+keine Credentials, keine Persistenz über den Scan hinaus. Ein Einzel-Read
+entfällt nur, wenn die Map gleiche `id` und identisches `subject` bindet **und**
+die Message-ID in `final-location-index.json` steht. F1: nur ein Prozess mit
+Exit 0, gültigem JSON-Array aus `[source, target, weight]`-Tripeln und innerhalb
+des Timeouts liefert eine Map, sonst wird sie ganz verworfen; jede Position muss
+die Form `[Node-Objekt, Node-Objekt, Ganzzahl 0..255]` haben. F2: dezimale
+`id != "0"` ohne Leerraum, genau eine wohlgeformte Message-ID auf der normalisierten Form
+(ein `@`, keine Leer-/Steuerzeichen oder `<`/`>`, nichtleere Seiten, nicht
+`generated`); eine wiederholte `id` bleibt nur, wenn alle Vorkommen gültig und
+identisch sind, sonst entfällt sie samt ungültiger Duplikate. F3: sonst
+Einzel-Read. F4: ein Treffer erzeugt nie gesammelte Daten und fließt nie in
+Index/Journal/Evidence/Anhänge. F5: fehlende ID ist unbekannt und wird gelesen.
+F6: bereits der zweite aufeinanderfolgende Transportfehler bricht sofort
+strukturiert mit `mailbox_transport_blocked` ab; kein weiterer Prozessstart und
+keine Degradierung durch Fallback-Pfade. Budgetprüfung, Blockveröffentlichung
+und `Popen` teilen einen Spawn-Lock, sodass parallele Worker weder den letzten
+Budgetplatz doppelt reservieren noch nach veröffentlichtem Block starten.
+Start-Budget `transport_start_budget`/`--transport-start-budget`; Default
+10.000, begründet aus dem 2.500er-Fallbackfenster mit bis zu zwei Prozessen je
+Envelope (Raw-MIME-Export plus Read) und Reserve für Listen-Tiers/Thread-Map.
+Die Session gilt nur für `inspect`/`draft`/`pipeline`, `execute`/`verify`/
+`search`/`sync_sent` bleiben unverändert. Classifier-Full-Read und
+Attachment-Raw-MIME reichen F6 durch; bei F6 entstehen keine Manifest- oder
+Inspect-Ausgabedateien. Skip-Progress bleibt eine aggregierte Zeile pro Scan.
+`transport_stats` meldet Prozessstarts, Retries und Fehler je Kommandoklasse
+plus `blocked`/`block_reason` – nur Zähler, keine Mailinhalte.
+
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
 autorisieren dort keine Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht
@@ -512,6 +546,12 @@ Liest Metadaten, Header (`Message-Id`, `In-Reply-To`, `References`, `From`, `To`
       "type": "boolean",
       "default": true,
       "description": "Gleicht Message-IDs gegen Index und Action-Log ab."
+    },
+    "transport_start_budget": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 10000,
+      "description": "Nur inspect/draft/pipeline."
     },
     "output_file": {
       "type": "string",

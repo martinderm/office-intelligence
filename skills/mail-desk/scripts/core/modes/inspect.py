@@ -8,6 +8,7 @@ independent of the CLI module.
 from __future__ import annotations
 
 import concurrent.futures
+import contextvars
 import json
 from pathlib import Path
 import time
@@ -21,7 +22,12 @@ from ..attachment_reclassification import (
 from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
 from ..context_consultation import add_context_consultation_metadata
-from ..himalaya import fetch_raw_message_eml, get_single_email_details, run_himalaya
+from ..himalaya import (
+    fetch_raw_message_eml,
+    get_single_email_details,
+    raise_if_transport_blocked,
+    run_himalaya,
+)
 from ..index import load_final_index
 from ..injection_barrier import (
     annotate_email_for_output,
@@ -47,6 +53,24 @@ def _dependency(
     if dependencies and name in dependencies:
         return dependencies[name]
     return default
+
+
+def submit_with_mail_context(
+    executor: concurrent.futures.Executor,
+    function: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> concurrent.futures.Future[Any]:
+    """Submit a mail read with the caller's transport-stats context (F6).
+
+    ``ThreadPoolExecutor`` workers start with an empty context, so a bare
+    ``submit`` would hide the active ``TransportStats`` session: process starts
+    would go uncounted and the two-failure guard would be bypassed.  Copying
+    the context per submission keeps the same session visible inside the
+    worker without sharing one context object across concurrent runs.
+    """
+    return executor.submit(contextvars.copy_context().run, function, *args, **kwargs)
 
 
 def run_inspect_mode(
@@ -114,7 +138,9 @@ def run_inspect_mode(
             results_map: dict[str, dict[str, Any]] = {}
             with concurrent.futures.ThreadPoolExecutor(max_workers=threads) as executor:
                 futures = {
-                    executor.submit(get_details, envelope_id, folder, account, preview_lines): envelope_id
+                    submit_with_mail_context(
+                        executor, get_details, envelope_id, folder, account, preview_lines
+                    ): envelope_id
                     for envelope_id in target_env_ids
                 }
                 for future in concurrent.futures.as_completed(futures):
@@ -147,7 +173,8 @@ def run_inspect_mode(
                 if "[" in output:
                     output = output[output.find("["):]
                 oldest_envelopes = json.loads(output)
-            except Exception:
+            except Exception as exc:
+                raise_if_transport_blocked(exc)
                 oldest_envelopes = []
 
         envelope_map = {str(envelope.get("id")): envelope for envelope in oldest_envelopes}

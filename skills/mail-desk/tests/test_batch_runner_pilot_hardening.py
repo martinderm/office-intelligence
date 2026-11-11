@@ -123,7 +123,8 @@ class BatchRunnerPilotHardeningTests(unittest.TestCase):
 
         with patch.object(runner, "load_final_index", return_value={"items": known_items}), patch.object(
             runner, "build_signature_index", return_value={},
-        ), patch.object(runner, "get_oldest_envelopes", side_effect=list_envelopes), patch.object(
+        ), patch.object(runner, "run_himalaya", return_value="[]"), patch.object(
+            runner, "get_oldest_envelopes", side_effect=list_envelopes), patch.object(
             runner, "get_single_email_details", side_effect=details,
         ), patch.object(runner.time, "sleep"):
             emails, known_count = runner.get_unprocessed_emails("INBOX", 1, data_dir=self.data_dir)
@@ -253,7 +254,8 @@ class KnownMailSkipSummaryTests(unittest.TestCase):
             ), patch.object(
                 runner, "get_oldest_envelopes",
                 side_effect=lambda _folder, _size, account=None: envelopes,
-            ), patch.object(runner, "get_single_email_details", side_effect=details), patch.object(
+            ), patch.object(runner, "run_himalaya", return_value="[]"), patch.object(
+                runner, "get_single_email_details", side_effect=details), patch.object(
                 runner.time, "sleep",
             ):
                 result = runner.get_unprocessed_emails(

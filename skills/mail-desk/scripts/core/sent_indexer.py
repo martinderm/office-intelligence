@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from .common import atomic_rewrite_jsonl, atomic_write_json, normalize_message_id, utc_now_iso, resolve_data_dir
-from .himalaya import HimalayaInvocationError, run_himalaya, get_single_email_details
+from .himalaya import (
+    HimalayaInvocationError,
+    get_single_email_details,
+    raise_if_transport_blocked,
+    run_himalaya,
+)
 from .sent_handoff import (
     HANDOFF_FILENAME,
     MAX_HANDOFF_ITEMS,
@@ -466,6 +471,9 @@ def _collect_date_candidates(
     except SentHandoffError:
         raise
     except Exception as error:
+        # Issue #103/F6: the structured transport abort must never be rewritten as a
+        # generic RuntimeError; the mode-level guard has to see the blocked reason.
+        raise_if_transport_blocked(error)
         # A verified adapter end marker: asking for a page beyond the last full page
         # can fail with "out of bound".  Only this exact marker on page >= 2 counts as
         # the end; every other error remains fail-closed.
@@ -1383,6 +1391,9 @@ def _sync_sent_items_impl(
         except SentHandoffError:
             raise  # explicit fail-closed window refusal keeps its reason code
         except Exception as error:
+            # Issue #103/F6: a transport block ends the run here; it is not one more
+            # retryable per-date failure (no further CLI start could succeed anyway).
+            raise_if_transport_blocked(error)
             failures.append((date_str, error))
             continue
         if budget is not None and date_candidates and len(candidates) + len(date_candidates) > budget:

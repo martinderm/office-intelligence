@@ -107,6 +107,7 @@ class PagedPathSkipKnownTests(unittest.TestCase):
     def test_paged_path_uses_the_same_message_id_identity(self) -> None:
         with patch.object(runner, "load_final_index", return_value={"items": _known_items()}), \
                 patch.object(runner, "build_signature_index", return_value=_signatures()), \
+                patch.object(runner, "run_himalaya", return_value="[]"), \
                 patch.object(runner, "get_oldest_envelopes", return_value=_envelopes()), \
                 patch.object(runner, "get_single_email_details", side_effect=_details) as read, \
                 patch.object(runner.time, "sleep"):

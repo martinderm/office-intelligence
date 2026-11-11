@@ -8,6 +8,55 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-11 — Issue #103: CLI-Batch-Skip über `envelope thread` + Transportzähler
+
+#### Added
+
+- **mail-desk Scan:** Ist `skip_known` aktiv, liest jeder Scan einmal
+  `himalaya envelope thread -f <folder> -o json` und baut eine prozesslokale Map
+  `Envelope-ID -> normalisierte Message-ID`. Ein bekannter Envelope wird ohne
+  Einzel-Read übersprungen; neue und unbekannte Mails laufen unverändert über
+  `get_single_email_details` (`core/known_skip.py`).
+- **Fail-closed F1–F6:** Map nur aus genau einem erfolgreichen Prozess mit
+  gültigem JSON-Array aus `[source, target, weight]`-Tripeln; dezimale
+  `id != "0"` und genau eine wohlgeformte, normalisierte Message-ID; Bindung
+  nur bei identischer `id` und identischem `subject`; Map-Treffer erzeugt nie
+  `collected`; fehlende ID bleibt unbekannt (Einzel-Read); bereits der zweite
+  aufeinanderfolgende Transportfehler bricht sofort strukturiert mit
+  `mailbox_transport_blocked` ab (kein dritter Start, kein Verschlucken durch
+  Fallback-Pfade). Wiederholte IDs bleiben nur bei ausschließlich gültigen,
+  identischen Vorkommen erhalten.
+- **Transportzähler:** `run_himalaya` zählt erfolgreich erzeugte Prozessstarts,
+  Retries und Fehler je Kommandoklasse; das Ergebnis trägt `transport_stats`
+  (nur Zähler). Budgetprüfung, Blockveröffentlichung und `Popen` laufen unter
+  einem Spawn-Lock, damit parallele Worker weder den letzten Budgetplatz doppelt
+  belegen noch nach veröffentlichtem Block starten. Optionales Start-Budget
+  über `transport_start_budget`/`--transport-start-budget`; Default 10.000
+  (2.500er-Fallbackfenster × bis zu zwei Prozesse je Envelope plus Reserve).
+  Die Session gilt nur für `inspect`/`draft`/`pipeline`; `execute`, `verify`,
+  `search` und `sync_sent` bleiben unverändert. Classifier-Full-Read,
+  Sent-Sync-Aufrufe innerhalb von `inspect`/`draft` und Attachment-Raw-MIME
+  reichen F6 durch; bei F6 entstehen keine Manifest- oder Inspect-Ausgabedateien.
+- **Thread-Kontext:** Inspect-Threadpools kopieren den `contextvars`-Kontext pro
+  Submission, damit Transportzähler und F6-Schutz auch in Worker-Threads gelten.
+- **Drafts-Grenze:** Die F6-Durchreichung in `core/drafts.py` ist defensiv. Die
+  Drafts-API läuft normalerweise außerhalb der Batch-Transport-Session und ist
+  dort inert; innerhalb einer Session bleiben Ordnerliste,
+  Eindeutigkeitsprüfung, APPEND-/Readback-Journal und Replace-Lookup/Delete
+  fail-closed. Ein bereits erfolgter APPEND wird vor dem Block als
+  `appended_unverified` journaliert. Tests:
+  `skills/mail-desk/tests/test_draft_transport.py`.
+- **Doku:** L1/L2-System-Map, Batch-Runner-Vertrag und Himalaya-Backend
+  beschreiben Skip, Normalisierung, Zähler und Abbruch. Tests:
+  `skills/mail-desk/tests/test_batch_runner_cli_batch_skip.py`,
+  `skills/mail-desk/tests/test_batch_runner_mde2_hardening.py`.
+
+#### Notes
+
+- Kein eigener IMAP-Transport, kein `imaplib`, keine Credentials, kein
+  `UIDVALIDITY`, kein Cache über den Scan hinaus; PR #101 und die
+  MIME-/Anhangsstrecke bleiben unberührt. Keine Live-Läufe in Tests.
+
 ### MIME-Anhangsinventur: Fail-closed-Strukturprüfung
 
 - Nichtleere RFC-822-Quellen werden vor der Inventur auf Defekte im gesamten

@@ -169,6 +169,53 @@ class SummaryAliasDetailsTests(unittest.TestCase):
         )
         self.assertNotIn("alias_file", summary["handoff"])
 
+    def test_summary_carries_transport_stats_counters_only(self) -> None:
+        stats = {
+            "process_starts": 3,
+            "retries": 1,
+            "errors": 0,
+            "consecutive_transport_errors": 0,
+            "start_budget": 10000,
+            "blocked": False,
+            "block_reason": None,
+            "commands": {"envelope list": {"starts": 2, "retries": 0, "errors": 0}},
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            envelope_path = root / "draft-envelope.json"
+            progress_path = root / "draft-progress.log"
+            envelope_path.write_text(json.dumps({
+                "success": True,
+                "state": "Completed",
+                "message": "drafted",
+                "data": {"transport_stats": stats},
+            }), encoding="utf-8")
+            progress_path.write_text("", encoding="utf-8")
+            summary = batch_cli._summary(
+                _base_args(mode="draft"), envelope_path, progress_path,
+                subprocess.CompletedProcess(["runner"], 0),
+            )
+        self.assertEqual(stats, summary["transport_stats"])
+        self.assertNotIn("message_ids", json.dumps(summary["transport_stats"]))
+
+    def test_summary_ignores_non_mapping_transport_stats(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            envelope_path = root / "draft-envelope.json"
+            progress_path = root / "draft-progress.log"
+            envelope_path.write_text(json.dumps({
+                "success": True,
+                "state": "Completed",
+                "message": "drafted",
+                "data": {"transport_stats": ["not", "a", "mapping"]},
+            }), encoding="utf-8")
+            progress_path.write_text("", encoding="utf-8")
+            summary = batch_cli._summary(
+                _base_args(mode="draft"), envelope_path, progress_path,
+                subprocess.CompletedProcess(["runner"], 0),
+            )
+        self.assertNotIn("transport_stats", summary)
+
 
 class ReconcileApplyWrapperTests(unittest.TestCase):
     """Issue #65: ``reconcile --apply [--approved-by NAME]`` opt-in threading."""

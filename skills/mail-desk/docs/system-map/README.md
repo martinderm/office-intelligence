@@ -83,12 +83,22 @@ unter `scripts/` (davon 66 unter `scripts/core/`), 113 Testmodule `tests/test_*.
 --others --exclude-standard`, im Lauf frisch erhoben). Sent-Synthese-Handoff: §43. Die Anzahl der Testfälle wird hier
 nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
 
-**Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum `feat/issue-18-raw-eml`
-auf Basis des finalen Code-Head `f3256dd` einschließlich der Härtungsrunden; alle älteren
-Frames dieser Seite sind historisch):** 353 Dateien im Bundle, 216 unter `skills/mail-desk/`, 80 Python-Dateien unter
-`scripts/` (davon 65 unter `scripts/core/`), 112 Testmodule `tests/test_*.py` (`git ls-files --cached
---others --exclude-standard`, im Lauf frisch erhoben). Raw-EML-Import: §42. Die Anzahl der Testfälle
-wird hier nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
+**Issue-#103-Frame, 2026-11-11 (aktuell):** 362 Dateien im Bundle, 221 unter
+`skills/mail-desk/`, 82 Python-Dateien unter `scripts/` (davon 67 unter
+`scripts/core/`), 115 Testmodule `tests/test_*.py` (`git ls-files --cached
+--others --exclude-standard`, im Lauf frisch erhoben). CLI-Batch-Skip über
+`envelope thread` und Transportzähler: §44. Die Anzahl der Testfälle wird hier
+nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
+
+**Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum
+`feat/issue-18-raw-eml` auf Basis des finalen Code-Head `f3256dd` einschließlich
+der Härtungsrunden; ab 2026-11-11 historisch, die Zahlen bleiben als Referenz
+erhalten):** 353 Dateien im Bundle,
+216 unter `skills/mail-desk/`, 80 Python-Dateien unter `scripts/` (davon 65
+unter `scripts/core/`), 112 Testmodule `tests/test_*.py` (`git ls-files --cached
+--others --exclude-standard`, im Lauf frisch erhoben). Raw-EML-Import: §42. Die
+Anzahl der Testfälle wird hier nicht als Literal geführt; sie steht mit Befehl,
+Dauer und Rohlog im PR/Run.
 
 **Frame (Issue #18, erste Lieferung, historisch; erhoben 2026-11-08 im Lane-Arbeitsbaum mit dem Dateisatz des
 Fix-Commits; alle älteren Frames dieser Seite sind historisch):** 325 Dateien im Bundle,
@@ -1818,6 +1828,12 @@ Eintrag.
 Regression: [Skip-Known-Identität](../../tests/test_batch_runner_skip_known_identity.py)
 (Query- und Paged-Pfad, Thread-Reply, Fremdabsender-Fallback, Signatur-Ambiguität).
 
+**Issue #103 (Ergänzung, 2026-11-11):** Der CLI-Batch-Skip (§44) erweitert diese
+Skip-Klasse nicht. Die `envelope thread`-Map ist nur ein flüchtiger
+Lookup-Beschleuniger: Ein Einzel-Read entfällt weiterhin ausschließlich dann,
+wenn dieselbe normalisierte Message-ID bereits in `final-location-index.json`
+steht und zusätzlich `id` plus `subject` beider CLI-Ausgaben identisch sind.
+
 **#65 Reconcile-Evidence:** Der Reconcile-Report vergleicht die normalisierte
 Message-ID case-insensitiv gegen den lowercased Evidenztext; eine leere ID
 matcht nie. Read-only-, Approval- und `check_folders`-Gates bleiben unverändert.
@@ -2487,3 +2503,96 @@ byte-gleicher pending Handoff, `since_ignored`-Envelope-Hinweis (älter/gleich/j
 `test_sent_sync_watermark.py`, `test_sent_indexer_account_binding.py`, `test_batch_runner_modes.py`.
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).
+
+## 44. Issue #103 — CLI-Batch-Skip über `envelope thread` und Transportzähler
+
+**Ziel:** Die Login-Flut großer Postfächer senken, ohne einen zweiten
+IMAP-Transport: bekannte Envelopes sollen ohne Einzel-Read übersprungen werden.
+Ein einmaliger `himalaya envelope thread -f <folder> -o json`-Prozess pro Scan
+liefert die dazu nötige `id → message-id`-Map. **Kein** `imaplib`, keine
+Credentials, kein `UIDVALIDITY`, kein Cache über den Scan hinaus; PR #101 und
+die MIME-/Anhangsstrecke bleiben unberührt.
+
+**Module und Verträge:**
+- [`scripts/core/known_skip.py`](../../scripts/core/known_skip.py) (neu):
+  `is_well_formed_message_id` (normalisiert: genau ein `@`, keine Leer-/
+  Steuerzeichen, keine `<`/`>`, nichtleere Seiten, Domain nicht `generated`),
+  `parse_envelope_thread_map`, `load_envelope_thread_map`,
+  `thread_map_hit`, `canonical_envelope_id`.
+- [`scripts/mail_desk_batch_runner.py`](../../scripts/mail_desk_batch_runner.py):
+  `_scan_unprocessed_emails` baut bei `skip_known` genau eine Map pro Scan und
+  prüft vor jedem Einzel-Read `id` + identisches `subject` + Index-Treffer. Nur
+  die Facades für `inspect`/`draft`/`pipeline` laufen in einer
+  `transport_stats_session`; das Ergebnis trägt `transport_stats`, und eine
+  Nachbedingung macht ein verschlucktes Blocked-Flag wieder zum strukturierten
+  Abbruch. `execute`/`verify`/`search`/`sync_sent` bleiben unverändert.
+- [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
+  `TransportStats`, `transport_stats_session`, `classify_himalaya_command`;
+  `run_himalaya` zählt jeden erfolgreich erzeugten Prozessstart, Retry und
+  Fehler je Kommandoklasse. `start_process` führt Budgetprüfung, Blockprüfung
+  und `Popen` unter einem Spawn-Lock aus; der zweite aufeinanderfolgende
+  Transportfehler wird sofort als `mailbox_transport_blocked` geworfen. Die
+  Session wird über kopierte `contextvars` in Inspect-Threadpools getragen.
+  Classifier-Full-Read, Sent-Sync und Attachment-Raw-MIME reichen den Block
+  unverändert weiter.
+
+**Fail-closed-Regeln:**
+- **F1:** Map nur aus genau einem Prozess mit Exit 0, innerhalb 60 s und
+  gültigem JSON-Array aus `[source, target, weight]`-Tripeln; jedes Element
+  braucht genau drei Positionen, zwei Node-Objekte und ein ganzzahliges Gewicht
+  `0..255`, sonst ganze Map verwerfen.
+- **F2:** Nur dezimale `id != "0"` ohne umgebende Leerzeichen mit genau einer wohlgeformten Message-ID;
+  Wohlgeformtheit auf der normalisierten Form. Eine wiederholte `id` bleibt nur
+  erhalten, wenn alle Vorkommen gültig und identisch sind; abweichende **oder
+  ungültige** Duplikate entfernen die `id` vollständig.
+- **F3:** Bindung nur bei gleicher `id` **und** identischem `subject` aus beiden
+  CLI-Ausgaben; führende Nullen sind signifikant (`0007` ≠ `7`) und erzwingen
+  einen Einzel-Read. Sonst Einzel-Read.
+- **F4:** Ein Map-Treffer erzeugt nie `collected` und fließt nie in Index,
+  Journal, Evidence oder Anhänge; er unterdrückt höchstens den Einzel-Read.
+- **F5:** Fehlt die `id` oder passt das Subject nicht, ist der Status unbekannt:
+  Einzel-Read, nie „neu“ oder „bekannt“.
+- **F6:** Bereits der zweite aufeinanderfolgende Transportfehler wird sofort als
+  strukturierter Abbruch (`mailbox_transport_blocked`) ausgelöst; es folgt kein
+  weiterer CLI-Start, und Fallback-/Sammelpfade dürfen ihn nicht verschlucken.
+  Budgetprüfung, Blockveröffentlichung und `Popen` laufen unter demselben
+  Spawn-Lock: parallele Worker können den letzten Budgetplatz nicht doppelt
+  belegen und nicht nach veröffentlichtem Block starten. Explizites Start-Budget
+  (`transport_start_budget`/`--transport-start-budget`, Default 10.000). Die
+  Session gilt nur für `inspect`/`draft`/`pipeline`; `execute`, `verify`,
+  `search` und `sync_sent` bleiben unverändert.
+
+**`transport_stats` (nur Zähler):** `process_starts`, `retries`, `errors`,
+`consecutive_transport_errors`, `start_budget`, `blocked`, `block_reason` und
+`commands` je Kommandoklasse (`envelope list`, `envelope thread`,
+`message read`, …). Keine Mailinhalte, keine Header, keine Message-IDs. Der
+Batch-CLI-Wrapper reicht `transport_stats` (nur Zähler) in seiner kompakten
+Summary durch.
+
+**Grenzen:** Die Gleichsetzung CLI-Envelope-ID = IMAP-UID ist eine
+Implementierungstatsache der gebündelten `email-lib`-Generation und nicht
+dokumentiert; `UIDVALIDITY` ist über die CLI nicht sichtbar. Ohne serverseitiges
+`UID THREAD` fällt Himalaya auf clientseitiges Threading zurück (GroupWise), was
+die Abdeckung senkt, aber F5 korrekt über Einzel-Reads hält. A6 (absender-
+kontrollierte Message-ID) ist als Baseline akzeptiert; die bestehende
+Skip-Klasse wird nicht erweitert. Die F6-Durchreichung in `core/drafts.py` ist
+defensiv: die Drafts-API läuft normalerweise außerhalb der Batch-Transport-
+Session und ist dort inert; innerhalb einer Session bleiben Ordnerliste,
+Eindeutigkeitsprüfung, APPEND-/Readback-Journal und Replace-Lookup/Delete
+fail-closed, und ein bereits erfolgter APPEND wird vor dem Block als
+`appended_unverified` journaliert.
+
+**Tests:** `tests/test_batch_runner_cli_batch_skip.py` (Normalisierung beider
+Schreibweisen, echte `[source,target,weight]`-Struktur inklusive ungültiger
+Duplikate, F1-F6-Negativa, AK1-Fixpunkt mit begrenzten Prozessstarts über die
+Subprozessgrenze, AK2-Differenztest mit vollständigem
+Vergleich aller `collected`-Datensätze, aggregierte Skip-Progress-Zeile,
+threadübergreifender Transport-Kontext, atomare Budget-/Block-Barrieren,
+Default-Budgetabdeckung des 2.500er-Fensters, F6-Weitergabe aus
+Classifier-Full-Read und schreibfreie Inspect-/Draft-Abbrüche). Angepasste
+Bestandstests patchen die Thread-Map hermetisch.
+`tests/test_batch_runner_mde2_hardening.py` pinnt zusätzlich, dass ein
+Raw-MIME-Blocked-Fehler nicht als `fetch_failed` endet und kein Manifest
+geschrieben wird.
+
+L1: [Paket-System-Map §15](../../../../docs/system-map/README.md#15-issue-103-cli-batch-skip-über-envelope-thread-und-transportzähler).
