@@ -94,9 +94,10 @@ hat dort keine Aufräumlogik.
 | `filemap.json` | nur wenn sich der eine Eintrag ändert | Roh-Splice in die **aktuelle** Datei unter OS-Lock + Base-Hash-Prüfung vor dem Temp-Write und unmittelbar vor dem atomaren `os.replace` — **einziger Commit-Punkt** |
 
 Alles andere bleibt unangetastet: kein Walk, kein Löschen verwaister Mirrors/Derivate,
-keine Quarantäne, keine Archivierung. **Bewusste Scope-Reduktion:** es gibt keine
-Fremdreferenz-Ermittlung (Schutz nur gegen die **eigene** Ziel-Filemap), keine
-Sibling-Koordination und keinen Vollscan-Anteil.
+keine physische Quarantäne, keine Archivierung. **Bewusste Scope-Reduktion:** es gibt
+keine Fremdreferenz-Ermittlung (Schutz nur gegen die **eigene** Ziel-Filemap), keine
+Sibling-Koordination und keinen Vollscan-Anteil. Der rein lesende Retention-Audit
+(§6.1) ist kein Bestandteil dieses Laufs.
 
 **Fehlermodell:** Der Filemap-Replace ist der **einzige** Commit-Punkt. Jeder Fehler davor
 lässt die alte Version aktiv; die neue Version bleibt unreferenziert liegen und wird als
@@ -139,9 +140,56 @@ dem Commit, Fortsetzen nach dem Commit, kein `unlink`/`remove`/`rename`/`replace
 im Recoverypfad, Platzhalter-Quelle/-Ziel-Filemap (fail-closed), doppelte JSON-Schlüssel,
 fremde Einträge der Ziel-Filemap und Checksummen-Abweichungen. **Nicht** getestet und
 ausdrücklich außerhalb des Vertrags: Vollscan-Verträglichkeit des Version-Roots,
-Fremdreferenzen anderer Storages, Quarantäne, Journal-Archivierung und Aufräumlogik.
+Fremdreferenzen anderer Storages, physische Quarantäne, Journal-Archivierung und
+Aufräumlogik. Die logische Klassifikation aus §6.1 ist separat getestet.
 
 **Prozessgrenze:** `--file-timeout` beendet den Worker samt Kindprozessen
 (`terminate_process_tree`: Windows `taskkill /T /F`, POSIX eigene Prozessgruppe via
 `setsid` und `killpg`), damit kein externer Konverter weiterarbeitet. Der Windows-Pfad
 bleibt über `get_safe_path` abgedeckt.
+
+## 6.1 Retention-Audit (Issue #97, rein lesend)
+
+`retention_audit.py` liest eine Ziel-Filemap und den zugehörigen Version-Root und
+gibt einen Bericht aus. Die Umgebungswirkung ist bewusst null:
+
+| Ziel | Wann | Mechanismus |
+| :--- | :--- | :--- |
+| — (kein Write) | jeder Audit | liest Ziel-Filemap, Version-Root, Journal-Zusammenfassung und die Kataloge `projects.json`/`topics.json` (nur Identitätsbindung); nur `open`/`scandir`/`stat`, keine Datei, kein Verzeichnis, keine Filemap und kein Journal wird angelegt, geändert, umbenannt, verschoben, archiviert oder gelöscht |
+| `<output_dir>/_quarantine/` | nie | reservierter Namensraum; der Audit meldet nur `reserved_area_present`, legt den Bereich nicht an und schreibt nicht hinein |
+| `<output_dir>/.only-file-journal/` | nie | nur Zusammenfassung (`journal_not_managed`); keine Archivierung, keine Kandidaten, keine Löschung |
+
+**Klassen und Schwellen:** `active` = von derselben Filemap referenziert (Windows-
+Alias nur auf Windows; auf case-sensitiven Plattformen exakt, sonst `unresolved`);
+`retained` = neueste 2 inaktive Versionen je Quell-Key oder ≤ 90 Tage;
+`quarantine_candidate` = > 365 Tage oder außerhalb des Counts und > 90 Tage. **Die
+365-Tage-Regel hat Vorrang:** eine >365-Tage-Version ist Kandidat, auch wenn sie
+unter den neuesten zwei liegt oder ≤ 90 Tage alt wäre. Das Alter wird ungerundet aus
+der mtime berechnet. Unerwartete Layouts und Links sind Kandidaten; ein
+referenziertes Link-/Junction-Run bleibt `active` und wird nie traversiert.
+Cloud-Platzhalter in Quell-Key-, Run- oder Inhaltsverzeichnissen werden vor
+`realpath`/`scandir` geprüft und nicht traversiert (nicht aktive Versionen werden
+`cloud_placeholder_*`-Kandidaten, referenzierte aktive bleiben `active` mit
+`unsafe: true`). Ein unlesbarer Quell-Key mit aktiver Referenz wird `unresolved`
+(`potentially_active: true`), nicht Kandidat; `references.unresolved` und die
+menschliche Zusammenfassung nennen ihn. Ein Link/Platzhalter auf dem Version-Root
+bricht fail-closed ab. Output, Filemap, Version-Root und Katalogpfade werden
+komponentenweise vor `realpath`/`scandir`/`open` geprüft; Links/Junctions/
+Platzhalter in Output-/Filemap-Vorfahren brechen den Audit fail-closed ab, in
+Katalog-Vorfahren verhindern sie nur das Lesen/Verifikation (Audit läuft
+nicht-autoritativ weiter), auch bei externen Katalogzielen. Eine
+Filemap ohne `output_dir` wird fail-closed abgewiesen; die Identität wird über die
+nur gelesenen `projects.json`/`topics.json` gebunden (`output_json` + `output_dir`,
+inkl. Aliasfelder und synthetisierter Defaults). Jeder Katalog-Lese-/Parsefehler
+verhindert `verified`; ohne genau einen fehlerfreien Treffer ist
+`classification_authoritative: false` und die Kandidaten sind nicht-autoritative
+Prüfhinweise. Die Schwellen sind Empfehlungen, keine Speicherobergrenze.
+
+**Sicherheitsgrenzen:** Alle Einträge tragen `action: "none"`,
+`foreign_reference_risk: "unknown"`, `safe_to_delete: false` und `safe_to_move:
+false`. Andere Filemaps/Konsumenten werden nicht ermittelt; ein manuelles
+Verschieben/Löschen ist außerhalb des Produktvertrags und kann Filemap-Verweise,
+Recovery und fremde Konsumenten brechen. Der Audit ist ein ungelockter Lesesnapshot;
+parallele Schreiber können ihn veralten lassen. Die Vollscan-Grenze aus §5 bleibt
+bestehen: der Audit schützt keine Version vor einem späteren Vollscan. Getestet in
+`tests/test_retention_policy.py`.

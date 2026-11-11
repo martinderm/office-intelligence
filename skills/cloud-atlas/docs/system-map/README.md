@@ -12,7 +12,7 @@ erhalten weiterhin nur den bisherigen Lock-Denial. Anleitung:
 
 > **Typ**: ICM Form 6 (`system-map`), Sub-Skill-Ebene (L2)  
 > **Subsystem**: [`skills/cloud-atlas`](../SKILL.md)  
-> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Stand PR #51, 2026-10-23: 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung.
+> **Ziel**: Kompakte, zitierbare Architekturkarte der Filemap-, Konvertierungs- und Synchronisations-Engine zur Vermeidung von Context-Bloat bei Refactorings und Konvertierungs-Erweiterungen. Letzte vollständige Metrik (PR #51, 2026-10-23): 33 getrackte Dateien (`git ls-files skills/cloud-atlas/`); finale vollständige pytest-Suite: 244 bestanden, 134 Subtests bestanden, 0 Skips, Exit 0 (Parent-Finalframe im Feature-Ledger). Issue #2 (2026-10-16) führte 32 Dateien / 182/182 (15 Ausschluss-Regressionstests); Issue #20 ergänzt den optionalen AcroForm-Formularfelder-Vertrag, seine Status-/Filemap-Persistenz, Besitz-/Retention-Semantik und die literale, einzeilige Zellendarstellung. Issue #97 ergänzt `scripts/core/retention.py`, `retention_audit.py` und `tests/test_retention_policy.py`; die PR-#51-Zahl bleibt als historischer Messpunkt stehen.
 > **Gültig für**: `skills/cloud-atlas/` relativ zum Repository-Root
 
 **Issue #22 (Einzeldatei-Modus `--only-file`, bewusste Scope-Reduktion):** ergänzt
@@ -22,6 +22,33 @@ Symlink-/Junction-Recht übersprungen; Laufzeit 363,7 s). Gesamtsuite
 `skills/cloud-atlas/tests`: **372 Tests, 1 übersprungen, 575,7 s** (vor #22: 259 bestanden).
 Die frühere, größere Ausbaustufe (415 Tests) ist mit der Scope-Reduktion entfallen.
 Die Metrik der Kopfzeile ist davon unberührt (Stand PR #51).
+
+**Issue #97 (Retention-/Quarantäne-Policy, rein lesend):** ergänzt
+`scripts/core/retention.py`, `scripts/retention_audit.py` und
+`tests/test_retention_policy.py`. Der Audit klassifiziert den bestehenden
+Version-Root (`active` = Ziel-Filemap-Referenz, auf Windows alias-/case-insensitiv;
+auf case-sensitiven Plattformen exakt; `retained` = neueste 2 inaktive Versionen je
+Quell-Key oder ≤ 90 Tage; `quarantine_candidate` = > 365 Tage oder außerhalb des
+Counts und > 90 Tage) und meldet unerwartete Layouts/Links. **Die 365-Tage-Regel
+hat Vorrang:** eine >365-Tage-Version ist Kandidat, auch wenn sie unter den neuesten
+zwei liegt oder ≤ 90 Tage alt wäre. Alter wird ungerundet aus der mtime berechnet.
+Referenzierte Link-/Junction-Runs bleiben `active`, werden aber nie traversiert;
+Cloud-Platzhalter in Quell-Key-, Run- oder Inhaltsverzeichnissen werden nicht
+traversiert. Ein unlesbarer Quell-Key mit aktiver Referenz wird `unresolved`
+(`potentially_active: true`) statt Kandidat; `references.unresolved` und die
+menschliche Zusammenfassung nennen ihn. Eine Filemap ohne `output_dir` wird
+fail-closed abgewiesen; die Identität wird über die nur gelesenen
+`projects.json`/`topics.json` (`output_json` + `output_dir`, inkl. Aliasfelder und
+synthetisierter Defaults) gebunden. Ohne genau einen Katalogtreffer bleibt die
+Klassifikation `classification_authoritative: false` (unverifiziert/mehrdeutig) und
+Kandidaten sind nur nicht-autoritative Prüfhinweise. Der komponentenweise Guard
+bricht bei Links/Junctions/Platzhaltern in Output-/Filemap-Vorfahren den Audit ab;
+bei Katalog-Vorfahren verhindert er nur das Lesen und damit die Verifikation, nicht
+den Audit. Er schreibt, verschiebt, löscht
+und archiviert nichts; Journale bleiben `journal_not_managed`. `--only-file` und der
+#22-Vertrag bleiben unverändert. Die Schwellen sind Empfehlungen, keine harte
+Speicherobergrenze; Fremdreferenzen anderer Filemaps/Konsumenten sind unbekannt,
+daher ist kein Eintrag `safe_to_delete`/`safe_to_move`.
 
 Die genannte Cloud-Metrik ist der PDF-Fix-Frame vor Integration von #14/#11.
 PR #23 integriert Main `920ac3a` ohne Änderung an Cloud-Code/Tests; die neue
@@ -78,6 +105,7 @@ Vier-Suiten-Gesamtprüfung und ihre Head-/Tree-Bindung stehen in der Run-Evidenz
 | **Scan-Scope (Issue #2)** | `scripts/core/scan_scope.py` | Gemeinsame Normalisierung, case-insensitiver Komponentenvergleich und Pre-Traversal-Pruning von `exclude_dirs`; Inventar und Rename-Matching bleiben im selben Scope. |
 | **Lokale Zugriffsprüfung (Issue #22)** | `scripts/core/artifact_refs.py` | `is_cloud_placeholder` prüft `OFFLINE`/`RECALL_ON_OPEN`/`RECALL_ON_DATA_ACCESS` und behandelt einen `stat`-Fehler auf existierendem Pfad fail-closed; nur für die Quelle und die Ziel-Filemap des `--only-file`-Laufs. Keine Referenz-Ermittlung, kein Walk, keine Symlink-Verfolgung. |
 | **Einzeldatei-Merge (Issue #22)** | `scripts/core/filemap_merge.py`, `scripts/core/publish_journal.py`, `convert_cloud_docs.py --only-file` | Roh-Splice genau eines Filemap-Eintrags (alle anderen Bytes identisch), strikte Parse-/Schema-Prüfung vor Mutation, unveränderliche versionierte Ziele unter `<output_dir>/_versions/` (direkt geschrieben, kein Verzeichnis-Rename, ohne Aufräumlogik), atomarer Filemap-Replace als einziger Commit-Punkt, minimales Journal `planned → staged → published → committed` (`staged` unmittelbar vor dem Replace), das nie archiviert oder gelöscht wird und dessen Pfad vor jeder Mutation gegen **alle** Einträge der Ziel-Filemap (auch den der Quelle, inkl. Windows-Aliase) geprüft wird (Claim → fail-closed); Recovery meldet nur, setzt nach einem nachweislichen Commit fort und endet sonst fail-closed ohne Writes; kein Scan, kein Cleanup, keine Fremdreferenz-Ermittlung ([`processes.md`](processes.md) Phase 5, [`effects.md`](effects.md) §6). |
+| **Retention-Audit (Issue #97)** | `scripts/core/retention.py`, `scripts/retention_audit.py` | Rein lesende Klassifikation des Version-Roots als `active` (von der Ziel-Filemap referenziert; Windows-Alias nur auf Windows, sonst exakt), `retained` (neueste 2 inaktive Versionen je Quell-Key oder ≤ 90 Tage) oder `quarantine_candidate` (> 365 Tage oder außerhalb des Counts und > 90 Tage; **>365 Tage hat Vorrang vor den neuesten zwei**). Unerwartete Layouts/Links sind Kandidaten; referenzierte Link-Runs bleiben `active` und werden nie traversiert, Cloud-Platzhalter in Quell-Key-/Run-/Inhaltsverzeichnissen ebenfalls nicht. Ein unlesbarer Quell-Key mit aktiver Referenz ist `unresolved`/`potentially_active` statt Kandidat. Identität wird über Katalog-`output_json`+`output_dir` (inkl. Aliasfelder/Defaults) gebunden; jeder Katalog-Lese-/Parsefehler verhindert `verified`, ohne genau einen fehlerfreien Treffer ist die Klassifikation nicht autoritativ. Output-/Filemap-Guardfehler brechen den Audit ab; Katalog-Guardfehler blockieren nur die Verifikation. Filemaps ohne `output_dir` sind fail-closed. Keine Writes, keine physische Quarantäne, kein Move/Delete, keine Journal-Archivierung; alle Einträge `action: "none"`, `safe_to_delete: false`, `safe_to_move: false`, `foreign_reference_risk: "unknown"`. Schwellen sind Empfehlungen, keine Speicherobergrenze ([`processes.md`](processes.md) Phase 6, [`effects.md`](effects.md) §6.1, [`objects.md`](objects.md) §5). |
 
 ---
 

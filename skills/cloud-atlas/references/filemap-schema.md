@@ -52,10 +52,44 @@ Filemap-Temp liegt im Journal-Verzeichnis, daher müssen Journal und Filemap auf
 Dateisystem liegen. Details: [SKILL.md](../SKILL.md).
 
 **Bewusste Scope-Reduktion:** keine Fremdreferenz-Ermittlung (Schutz nur gegen die eigene
-Ziel-Filemap), keine Quarantäne, keine Archivierung, kein Aufräumen, keine
+Ziel-Filemap), keine physische Quarantäne, keine Archivierung, kein Aufräumen, keine
 Sibling-Koordination und kein Vollscan-Anteil. Ein regulärer Vollscan kennt den Version-Root
 nicht; er kann versionierte Quellen erneut konvertieren und versionierte Mirror als Waisen
 entfernen.
+
+## Retention-Klassifikation (Issue #97)
+
+Die Filemap bleibt die einzige Autorität für die aktive Version: Ein
+Versionsverzeichnis unter `<output_dir>/_versions/<quell-key>/<run>/` ist `active`,
+wenn `markdown_mirror` oder `derivative.path` desselben Eintrags dorthin zeigt;
+Windows-Pfadalias (case-insensitiv, abschließende Punkte/Leerzeichen je Komponente
+ignoriert) gilt **nur auf Windows**, auf case-sensitiven Plattformen muss der Pfad
+exakt passen (sonst `unresolved`). Der separate, rein lesende `retention_audit.py`
+klassifiziert weitere Versionen als `retained` (neueste 2 inaktive Versionen je
+Quell-Key oder ≤ 90 Tage) oder `quarantine_candidate` (> 365 Tage oder außerhalb des
+Counts und > 90 Tage). **Die 365-Tage-Regel hat Vorrang:** eine >365-Tage-Version ist
+auch dann Kandidat, wenn sie unter den neuesten zwei liegt oder ≤ 90 Tage alt wäre.
+Das Alter wird ungerundet aus der mtime berechnet. Referenzierte Link-/Junction-Runs
+bleiben `active` und werden nie traversiert; Cloud-Platzhalter in Quell-Key-, Run-
+oder Inhaltsverzeichnissen werden vor Auflösung/Traversierung geprüft und nicht
+traversiert. Ein unlesbarer Quell-Key mit aktiver Referenz wird `unresolved`
+(`potentially_active: true`), nicht Kandidat. Eine Filemap ohne deklariertes
+`output_dir` wird fail-closed abgewiesen. Die Identität wird über die nur gelesenen
+`projects.json`/`topics.json` an `output_json` + `output_dir` gebunden (inkl.
+`filemap_json`/`cloud_mirror_dir` und synthetisierter Defaults); jeder
+Katalog-Lese-/Parsefehler verhindert `verified`, und ohne genau einen fehlerfreien
+Treffer ist `classification_authoritative: false` und Kandidaten sind
+nicht-autoritative Prüfhinweise. Output, Filemap und Katalogpfade werden
+komponentenweise vor `realpath`/`scandir`/`open` geprüft; Links/Junctions/
+Platzhalter in Output-/Filemap-Vorfahren brechen den Audit ab, in
+Katalog-Vorfahren verhindern sie nur das Lesen/Verifikation. Das sind Empfehlungen, keine
+Speicherobergrenze und keine Löschfreigabe: Der Audit schreibt, verschiebt, löscht
+und archiviert nichts, legt `<output_dir>/_quarantine/` nicht an und liest keine
+fremden Filemaps. Journale bleiben `journal_not_managed`.
+Alle Einträge tragen `action: "none"`, `foreign_reference_risk: "unknown"`,
+`safe_to_delete: false` und `safe_to_move: false`; manuelles Verschieben/Löschen
+liegt außerhalb des Produktvertrags. Die #22-Felder der Filemap ändern sich durch
+diese Policy nicht. Details: [SKILL.md](../SKILL.md#retention-policy).
 
 ## Scan-Provenienz: `exclude_dirs` (Issue #2)
 

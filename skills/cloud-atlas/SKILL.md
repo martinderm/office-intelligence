@@ -306,6 +306,7 @@ JSON und beobachten `stderr` für Live-Fortschritt.
 * Orchestrator: `skills/cloud-atlas/scripts/sync_project_cloud.py`
 * Konvertierung: `skills/cloud-atlas/scripts/convert_cloud_docs.py`
 * Generierung: `skills/cloud-atlas/scripts/gen_filemap.py`
+* Retention-Audit (Issue #97, rein lesend): `skills/cloud-atlas/scripts/retention_audit.py`
 
 ### Aufrufe & Parameter
 
@@ -386,7 +387,7 @@ python .agents/skills/cloud-atlas/scripts/convert_cloud_docs.py --topic-id <topi
 
 **Bewusste Scope-Reduktion.** Dieser Modus ist absichtlich klein: genau eine Quelle,
 genau ein Filemap-Eintrag, ein Commit-Punkt. Er hat **keine** Vollscan-Integration, **keine**
-Fremdreferenz-Ermittlung, **keine** Quarantäne, **keine** Journal-Archivierung und **kein**
+Fremdreferenz-Ermittlung, **keine** physische Quarantäne, **keine** Journal-Archivierung und **kein**
 Verschieben oder Löschen im Produktpfad. Die daraus folgenden Grenzen stehen unten
 ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
 
@@ -417,7 +418,7 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
   die Filemap ist die Quelle der Wahrheit. Ein vorhandenes Artefakt wird nie in-place
   überschrieben, umbenannt oder zurückgerollt. Der reservierte Root hat **keine
   Aufräumlogik**: alte Versionen, Reste und Journale bleiben liegen (Retention ist bewusst
-  nicht Teil dieses Modus).
+  nicht Teil dieses Modus; die rein lesende Klassifikation steht in Abschnitt 9).
 * **Commit-Punkt:** Der atomare Filemap-Replace ist der **einzige** Commit-Punkt. Jeder
   Fehler davor — Konvertierungsfehler, Timeout (`--file-timeout`), Validierungs-, Schreib-
   oder Konfliktfehler, Exception — lässt die alte Version aktiv; die neue Version bleibt
@@ -513,9 +514,10 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
     will, betreibt den Modus in einem Storage, der nicht zusätzlich vollgescannt wird.
   - **Keine Fremdreferenz-Discovery:** Verweise anderer Storages/Filemaps auf Pfade dieses
     Outputs werden nicht ermittelt und nicht geschützt.
-  - **Keine Quarantäne, keine Journal-Archivierung, kein Aufräumen:** Journale, Versionen,
-    Reste und Commit-Temps bleiben liegen und sammeln sich an (Follow-up). Nichts wird
-    verschoben oder gelöscht.
+  - **Keine physische Quarantäne, keine Journal-Archivierung, kein Aufräumen:** Journale,
+    Versionen, Reste und Commit-Temps bleiben liegen und sammeln sich an. Nichts wird
+    verschoben oder gelöscht. Die rein lesende logische Retention-Klassifikation aus
+    Abschnitt 9 ändert daran nichts und ist kein Bestandteil dieses Laufs.
   - **Kein Sibling-Schutz:** Ein paralleler Schreiber eines anderen Storages wird nicht
     koordiniert; nur derselbe Storage (Output/Filemap) ist gesperrt.
   - **Kein Roll-forward/Roll-back:** Recovery meldet und blockiert, sie repariert nicht.
@@ -539,6 +541,122 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
     Windows-Extended-Prefix geprüft.
   - **Trust-Boundary:** Same-User-Manipulation (z. B. Hardlink-Restore) liegt außerhalb des
     kooperativen Vertrags; es gibt keine Identitätsgarantie.
+
+<a id="retention-policy"></a>
+#### 9. Retention- und Quarantäne-Policy für versionierte Ziele (Issue #97)
+
+Diese Policy gilt für die von `--only-file` erzeugten Versionsverzeichnisse unter
+`<output_dir>/_versions/`. Sie ist **rein lesend und nachgelagert**: `--only-file`
+selbst behält den #22-Vertrag unverändert (kein Cleanup, keine physische Quarantäne,
+kein Move/Delete). Der Audit ist die nicht-destruktive Bereinigungsstufe: er markiert
+nur und führt nichts aus. Er ändert keine Datei, kein Verzeichnis, kein Journal und
+keine Filemap und ist kein Bestandteil eines Konvertierungs- oder Sync-Laufs. Das
+#22-Envelope-Feld `retained_version` bleibt unverändert und ist **keine** Audit-Klasse.
+
+**Klassifikation (Policy `cloud-atlas-retention-v1`):**
+
+| Klasse | Bedingung | Bedeutung |
+| :--- | :--- | :--- |
+| `active` | Versionsverzeichnis wird von `markdown_mirror` oder `derivative.path` **derselben Ziel-Filemap** referenziert | aktive, von dieser Filemap sichtbare Version; bleibt unangetastet und wird nie Kandidat |
+| `retained` | nicht aktiv und (unter den neuesten **2** inaktiven Versionen je Quell-Key **oder** höchstens **90 Tage** alt) | innerhalb der dokumentierten Aufbewahrungsempfehlung |
+| `quarantine_candidate` | nicht aktiv und (älter als **365 Tage** oder sowohl außerhalb der neuesten 2 inaktiven Versionen als auch älter als 90 Tage) | **logische** Quarantäne-Markierung für die Prüfung durch einen Operator; keine physische Quarantäne |
+
+**Vorrang der 365-Tage-Regel:** Die absolute Altersgrenze hat Vorrang vor der
+Count-/90-Tage-Aufbewahrung. Eine inaktive Version, die älter als 365 Tage ist, ist
+`quarantine_candidate`, **auch wenn sie zu den neuesten zwei inaktiven Versionen gehört
+oder jünger als 90 Tage wäre**; die neuesten zwei/90 Tage können eine >365-Tage-Version
+nicht retten. Umgekehrt bleibt eine aktive Version immer `active`.
+
+Das Alter wird **ungerundet** aus der **mtime des Versionsverzeichnisses** (UTC)
+berechnet; nur das Anzeigefeld `age_days` ist auf drei Nachkommastellen gerundet. Die
+Klassifikation ist ein Lesesnapshot und keine Garantie gegen nachträgliche
+mtime-Manipulation. Filemap-Referenzen werden **nur auf Windows** mit
+Windows-Pfadalias verglichen (case-insensitiv, abschließende Punkte/Leerzeichen je
+Komponente ignoriert). Auf case-sensitiven Plattformen werden unterschiedliche
+Schreibweisen **nicht** gleichgesetzt; eine nicht exakt auflösbare Referenz bleibt
+unaufgelöst und wird nicht als `active` behauptet. Das Quell-Key-Format selbst wird
+unabhängig von Groß-/Kleinschreibung validiert (ein großgeschriebener Key bleibt
+zulässig), die Pfadidentität folgt aber den Plattformregeln. Zusätzlich werden unerwartete
+Einträge unter `_versions/` (fremder Quell-Key, Dateien statt
+Versionsverzeichnissen, nicht auflösbare Layouts) als `quarantine_candidate` mit
+`unexpected_layout` gemeldet. Versionsverzeichnisse mit Symlink/Junction oder mit
+Links im Inhalt werden nicht verfolgt und ebenfalls als Kandidat
+(`unsafe_version_directory`) geführt. Ein **referenziertes** Link-/Junction-Run bleibt
+jedoch `active` und wird nie traversiert; nur nicht referenzierte Links sind Kandidaten.
+Cloud-Platzhalter in Quell-Key-, Run- oder Inhaltsverzeichnissen werden ebenfalls nie
+traversiert: betroffene nicht-aktive Versionen werden `cloud_placeholder_*`-Kandidaten,
+eine referenzierte aktive Version bleibt `active` (mit `unsafe: true`). Wird ein
+Quell-Key-Verzeichnis selbst unlesbar (Link, Platzhalter, Datei/unerwartetes Layout),
+aber eine aktive Referenz zeigt in diesen Key, wird der Key als `unresolved` mit
+`potentially_active: true` geführt und **nicht** als Kandidat markiert; die aktiven
+Referenzen erscheinen unter `references.unresolved` und in der menschlichen
+Zusammenfassung. Ein Link oder Platzhalter auf dem Version-Root selbst bricht den
+Audit fail-closed ab.
+
+**Filemap-Zugehörigkeit:** Die Ziel-Filemap muss ein `output_dir` deklarieren, das zum
+auditierten Output passt, und wird über den Workspace-Katalog (`projects.json` /
+`topics.json`, inkl. Subtopics) an `output_json` + `output_dir` gebunden. Dabei gelten
+die etablierten Aliasfelder `filemap_json`/`cloud_mirror_dir` und die synthetisierten
+Default-Pfade für Projekte/Topics. Nur bei genau einem Katalogtreffer **und ohne
+jeden Katalog-Lese-/Parsefehler** ist `identity.status: "verified"` und die
+Klassifikation autoritativ. Ein Fehler in irgendeinem Katalog, eine nicht
+kataloggebundene oder eine mehrdeutige Filemap ergibt
+`identity.status: "unverified"`/`"ambiguous"`, setzt
+`classification_authoritative: false` und führt Kandidaten nur als nicht-autoritative
+Prüfhinweise; sie wird nicht als autoritative Zielidentität ausgegeben. Eine
+Legacy-Filemap ohne `output_dir` wird **fail-closed** abgewiesen, weil ihre
+Zugehörigkeit nicht bewiesen werden kann. Output, Filemap und jeder Katalogpfad
+werden **komponentenweise vor `realpath`/`scandir`/`open`** geprüft. Ein Link,
+Junction oder Cloud-Platzhalter in einem Output-/Filemap-Vorfahren **bricht den
+Audit fail-closed ab**. Beim Katalogpfad verhindert derselbe Guard nur das Lesen:
+der Audit läuft weiter, die Identität wird `unverified` und die Klassifikation
+nicht autoritativ; ein externes Katalogziel wird dabei nie traversiert.
+
+**Quarantäne-Bereich:** `<output_dir>/_quarantine/` ist als reservierter Namensraum
+dokumentiert, wird von diesem Audit aber **weder angelegt noch beschrieben oder
+gelesen**. Es gibt keine automatische Verschiebung dorthin. Ein manuelles Verschieben
+oder Löschen ist **nicht Teil des Produktvertrags**: Es kann Filemap-Verweise,
+Recovery-Zustände und fremde Konsumenten brechen; Rückholung/Rollback und
+Fremdreferenz-Schutz werden nicht zugesichert.
+
+**Journale:** `<output_dir>/.only-file-journal/` ist kein Retentionsobjekt. Journale
+und Commit-Temps werden nie klassifiziert, archiviert, umbenannt oder gelöscht; der
+Audit meldet sie nur als `journal_not_managed`. Ein unklares Journal blockiert den
+nächsten `--only-file`-Lauf weiterhin fail-closed (Abschnitt 8).
+
+**Fremdreferenzen und Grenzen:** Der Audit liest ausschließlich die angegebene
+Ziel-Filemap, den Version-Root, die Journal-Zusammenfassung und die
+Workspace-Kataloge `memory/references/projects/projects.json` sowie
+`memory/references/topics/topics.json` (nur zur Identitätsbindung). Andere Filemaps,
+Konsumenten und manuelle Verweise werden nicht ermittelt. Deshalb ist **kein**
+Eintrag `safe_to_delete` oder `safe_to_move`; jeder Eintrag trägt
+`foreign_reference_risk: "unknown"` und `action: "none"`. Die Schwellen sind
+Empfehlungen, **keine harte Speicherobergrenze**: Der Version-Root kann weiter
+wachsen; die Bytes werden nur berichtet.
+
+**Vollscan-Grenze (unverändert):** Ein regulärer Vollscan kennt den Version-Root
+nicht, reserviert ihn nicht und kann versionierte Quellen erneut konvertieren sowie
+versionierte Mirror-Dateien als Waisen entfernen (Abschnitt 8, `effects.md` §5). Der
+Retention-Audit repariert das nicht und schützt keine Version vor einem Vollscan.
+Ein Storage, dessen Versionen erhalten bleiben sollen, darf nicht zusätzlich
+vollgescannt werden.
+
+**Aufruf (nur lesend, ohne Lock):**
+
+```bash
+python .agents/skills/cloud-atlas/scripts/retention_audit.py \
+  --workspace-root <workspace> \
+  --output-dir memory/cloud/topics/<topic> \
+  --filemap memory/cloud/topics/<topic>/filemap.json \
+  --json
+```
+
+`--now <RFC-3339>` erlaubt einen reproduzierbaren Stichtag. Der Audit ist ein
+Snapshots lesender Vorgang; parallele Schreiber können das Ergebnis veralten lassen.
+Er liefert einen kanonischen Envelope mit `data.retention` (Policy, Zähler, Bytes,
+Journale, Einträge). Exit 0 bedeutet „Bericht erstellt“ (auch mit Kandidaten), Exit 2
+einen Argumentfehler und Exit 1 ein nicht sicher lesbares Ziel (`phase: retention`).
+Ein `quarantine_candidate` ist eine Prüfempfehlung, keine Löschfreigabe.
 
 ---
 
