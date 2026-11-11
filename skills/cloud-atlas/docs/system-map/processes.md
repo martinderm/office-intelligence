@@ -130,10 +130,16 @@ Filemap-Neuaufbau) wird nicht betreten. Ablauf:
    Staging-Verzeichnis, kein Verzeichnis-Rename; der Mirror ohne Temp/Replace), gefsynct
    und gehasht; das Journal bleibt dabei `planned`. Der Worker löscht keine Artefakte:
    OCR schreibt direkt in das endgültige Derivat (kein `os.replace(x, x)`, Pfadgleichheit
-   nach Entfernen des Windows-Extended-Prefix), und das DOC-Short-Path-Staging samt
-   LibreOffice-Profil liegt — im Short-Path- wie im direkten Pfad — im kurzen Laufverzeichnis
-   `data/ca-doc/<run-id>` (kanonische Data Zone) und bleibt liegen; die Profil-URI bleibt
-   dort unter 120 Zeichen (sonst `conversion_required`).
+   nach Entfernen des Windows-Extended-Prefix). Im `--only-file`-Modus liegt das
+   LibreOffice-Profil in beiden DOC-Zweigen im kurzen Laufverzeichnis
+   `data/ca-doc/<run-id>` (kanonische Data Zone) und bleibt liegen; nur der
+   Short-Path-Zweig hält dort zusätzlich `source.doc` und das gestagte DOCX-Derivat. Er
+   wird initial ab `>= 240` Zeichen geplantem Quell- oder Derivatpfad (Windows) oder
+   einmalig nach einem erkannten LibreOffice-Pfadlängenfehler betreten (auch unterhalb von
+   240 und auf POSIX). Der direkte Pfad übergibt die Cloud-Quelle ohne Kopie. Der Vollscan
+   nutzt für Short-Staging und LibreOffice-Profil temporäre Verzeichnisse; der
+   Word-COM-Pfad hat kein LibreOffice-Profil. Die Profil-URI bleibt bei höchstens 120
+   Zeichen (`<= 120`, sonst `conversion_required`).
 7. **Commit:** Nur der Eintrag ändert sich; die Filemap wird unter OS-Lock in die aktuelle
    Datei gespleißt, Base-Hash vor Temp-Write und unmittelbar vor dem Replace geprüft. Als
    letzter Schritt vor dem atomaren `os.replace` wird `staged` gespeichert; danach
