@@ -410,14 +410,17 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
 * **Versionierte Ziele (direkt geschrieben):** Eine Konvertierung legt ein **neues,
   eindeutiges Versionsverzeichnis** unter dem reservierten Root
   `<output_dir>/_versions/<quell-key>/<zeit-pid-id>/` an und schreibt Mirror und Derivat
-  **direkt hinein** — kein Staging-Verzeichnis, kein Verzeichnis-Rename; Dateien und
+  **direkt hinein** — kein Ziel-Staging, kein Verzeichnis-Rename; Dateien und
   Verzeichnis werden gefsynct (Verzeichnis-fsync nur POSIX). Auch der Mirror wird direkt
   geschrieben (kein Temp, kein Replace). Der Filemap-Eintrag (`markdown_mirror`,
   `derivative.path`) zeigt danach auf diese Version. **Der Mirror-Pfad ist nicht stabil**;
   die Filemap ist die Quelle der Wahrheit. Ein vorhandenes Artefakt wird nie in-place
   überschrieben, umbenannt oder zurückgerollt. Der reservierte Root hat **keine
   Aufräumlogik**: alte Versionen, Reste und Journale bleiben liegen (Retention ist bewusst
-  nicht Teil dieses Modus).
+  nicht Teil dieses Modus). Das separate DOC-Short-Path-Staging ist kein Ziel-Staging:
+  Im `--only-file`-Modus liegt es unter `data/ca-doc/<run-id>` und wird initial ab
+  `>= 240` Zeichen (Windows) oder nach einem erkannten Pfadlängenfehler betreten; der
+  Vollscan nutzt ein temporäres Verzeichnis (siehe unten).
 * **Commit-Punkt:** Der atomare Filemap-Replace ist der **einzige** Commit-Punkt. Jeder
   Fehler davor — Konvertierungsfehler, Timeout (`--file-timeout`), Validierungs-, Schreib-
   oder Konfliktfehler, Exception — lässt die alte Version aktiv; die neue Version bleibt
@@ -426,8 +429,10 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
   Ziel-Filemap und des Journals (Temp-Datei im selben Verzeichnis, notwendige Ausnahme für
   den Commit bzw. den Journal-Record). Es gibt **kein** `os.rename` von Verzeichnissen und
   **kein** `unlink`/`rmtree` im Produktpfad — auch nicht im Worker: OCR schreibt direkt in
-  das endgültige Derivat, ein Short-Path-Staging bleibt liegen, Derivate werden per Kopie
-  (nicht per Replace) übernommen.
+  das endgültige Derivat; im `--only-file`-Modus bleibt ein Short-Path-Staging im kurzen
+  Data-Zone-Laufverzeichnis `data/ca-doc/<run-id>` liegen (Quellkopie `source.doc` nur
+  dort), Derivate werden im Short-Path-Zweig per Kopie (nicht per Replace) übernommen; der
+  direkte Pfad übergibt die Cloud-Quelle ohne Kopie.
 * **Minimales Journal:** Ein atomar geschriebenes Journal
   `<output_dir>/.only-file-journal/<key>.json` hält `planned → staged → published →
   committed`, Quellpfad, Versionsverzeichnis, Zielpfade mit SHA-256 und die
@@ -522,21 +527,32 @@ ausdrücklich; sie sind Vertragsbestandteil, nicht offene Fehler.
   - **Grenze der Platzhalter-Prüfung:** Nur Quelle und Ziel-Filemap werden geprüft; bereits
     erzeugte Mirror-/Derivat-/Versionsdateien im Output werden nicht geprüft. Liegt der
     Output in einem cloud-synchronisierten Ordner, ist das eine dokumentierte Grenze.
-  - **Kein Move/Delete im Worker:** Auch der Konvertierungs-Worker löscht keine Artefakte:
-    das DOC-Short-Path-Staging **und** das LibreOffice-Profil — im Short-Path- und im
-    direkten Pfad — liegen im kurzen, eindeutigen Laufverzeichnis
-    `<workspace>/data/ca-doc/<run-id>` (kanonische Data Zone) und bleiben
-    liegen; ein fehlgeschlagenes OCR-/Derivat-Artefakt bleibt an seinem Pfad. Unser Code
-    legt im `--only-file`-Pfad kein temporäres Verzeichnis außerhalb der Data Zones an; die
-    OCR-Fähigkeitsprobe läuft **nur im Vollscan**. Externe Programme (LibreOffice, OCRmyPDF,
-    Tesseract) verwalten ihre eigenen internen Temp-Dateien selbst. Die Profil-URI wird als
-    reiner `file://`-URI gebildet (ohne Windows-Extended-Prefix, Leerzeichen percent-kodiert,
-    UNC als `file://server/share/…`), damit der Konverter nicht auf ein unauflösbares Profil
-    wartet. Das kurze Laufverzeichnis hält die URI unter der sicheren Grenze von 120 Zeichen;
-    ist der Workspace-Pfad zu tief, endet die Konvertierung fail-closed als
-    `conversion_required` (statt eines Konverter-Absturzes), und es wird nichts gelöscht. OCR schreibt das Derivat
-    direkt (kein `os.replace(x, x)`); die Pfadgleichheit wird nach Entfernen des
-    Windows-Extended-Prefix geprüft.
+  - **Kein Move/Delete im Worker:** Im `--only-file`-Modus löscht der Konvertierungs-Worker
+    keine Artefakte: Dort liegt das LibreOffice-Profil in beiden DOC-Zweigen und das
+    DOC-Short-Path-Staging (Quellkopie `source.doc`, gestagtes Derivat) nur im
+    Short-Path-Zweig — jeweils im kurzen, eindeutigen Laufverzeichnis
+    `<workspace>/data/ca-doc/<run-id>` (kanonische Data Zone) — und bleibt liegen; ein
+    fehlgeschlagenes OCR-/Derivat-Artefakt bleibt an seinem Pfad.
+    Unser Code legt im `--only-file`-Pfad kein temporäres Verzeichnis außerhalb der Data
+    Zones an; die OCR-Fähigkeitsprobe läuft **nur im Vollscan**. Externe Programme
+    (LibreOffice, OCRmyPDF, Tesseract) verwalten ihre eigenen internen Temp-Dateien selbst.
+    Die Profil-URI wird als reiner `file://`-URI gebildet (ohne Windows-Extended-Prefix,
+    Leerzeichen percent-kodiert, UNC als `file://server/share/…`), damit der Konverter nicht
+    auf ein unauflösbares Profil wartet. Das kurze Laufverzeichnis hält die URI bei
+    höchstens 120 Zeichen (`<= 120`); ist der Workspace-Pfad zu tief, endet die Konvertierung
+    fail-closed als `conversion_required` (statt eines Konverter-Absturzes), und es wird
+    nichts gelöscht. Die Windows-Vorabprüfung `>= 240` Zeichen (geplanter Quell- **oder**
+    Derivatpfad) wählt den Short-Path-Zweig initial; auf POSIX ist sie immer `False`.
+    Zusätzlich löst ein eindeutiger Pfadlängenfehler von LibreOffice im direkten Aufruf
+    einmalig denselben Short-Staging-Retry aus — auch unterhalb von 240 und auf POSIX. In
+    diesem Zweig kopiert der Konverter die Quelle als `source.doc` und konvertiert die
+    Kopie; der direkte Pfad übergibt die Cloud-Quelle ohne Kopie an LibreOffice. Auf POSIX
+    werden Separatoren nicht normalisiert; ein Backslash im Dateinamen bleibt Namenszeichen
+    (percent-kodiert als `%5C`). OCR schreibt das Derivat direkt (kein `os.replace(x, x)`);
+    die Pfadgleichheit wird nach Entfernen des Windows-Extended-Prefix geprüft. Der
+    Vollscan ist davon getrennt: Er nutzt für Short-Staging und LibreOffice-Profil
+    temporäre Verzeichnisse und räumt sie auf; der Word-COM-Pfad hat kein
+    LibreOffice-Profil.
   - **Trust-Boundary:** Same-User-Manipulation (z. B. Hardlink-Restore) liegt außerhalb des
     kooperativen Vertrags; es gibt keine Identitätsgarantie.
 

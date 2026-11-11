@@ -345,16 +345,21 @@ def path_to_file_uri(path):
     """Turn a local path into a ``file://`` URI for external tools.
 
     Uses the plain path (never the extended-length form, which would produce a
-    broken ``file://///?/D:/...`` URI), normalizes separators, percent-encodes
-    characters that are not URI-safe (spaces and the like) and maps UNC paths to
+    broken ``file://///?/D:/...`` URI), percent-encodes characters that are not
+    URI-safe (spaces and the like) and maps UNC paths to
     ``file://server/share/...``.
+
+    Separators are normalized and the extended-length prefix is stripped only on
+    Windows.  On POSIX a backslash is a legal filename character, not a separator:
+    it stays part of the name and is percent-encoded as ``%5C``.
     """
     value = os.path.abspath(path)
-    if os.name == "nt" and value.startswith("\\\\?\\"):
-        value = value[4:]
-        if value.upper().startswith("UNC\\"):
-            value = "\\\\" + value[4:]
-    value = value.replace("\\", "/")
+    if os.name == "nt":
+        if value.startswith("\\\\?\\"):
+            value = value[4:]
+            if value.upper().startswith("UNC\\"):
+                value = "\\\\" + value[4:]
+        value = value.replace("\\", "/")
     if value.startswith("//"):
         # UNC: //server/share/...
         return urllib.parse.quote("file:" + value, safe="/:")
@@ -476,14 +481,22 @@ def get_doc_converter():
 
 
 def requires_short_external_converter_paths(*paths):
-    """Return whether a Windows external converter should use a short staging path."""
+    """Return whether a Windows external converter should use a short staging path.
+
+    True when any planned absolute path reaches ``EXTERNAL_CONVERTER_PATH_LIMIT``
+    (``>= 240`` characters) on Windows; always False on POSIX.
+    """
     if os.name != "nt":
         return False
     return any(len(os.path.abspath(path)) >= EXTERNAL_CONVERTER_PATH_LIMIT for path in paths if path)
 
 
 def is_path_length_converter_error(message):
-    """Recognize only unambiguous path-length diagnostics for a controlled retry."""
+    """Recognize only unambiguous path-length diagnostics for a controlled retry.
+
+    The check is OS-independent: the retry is also available on POSIX and below the
+    Windows planned-path threshold.
+    """
     text = str(message or "").lower()
     return bool(re.search(r"(?:path|file ?name).{0,20}too long", text)) or any(marker in text for marker in (
         "path too long", "filename too long", "file name too long",
@@ -531,9 +544,16 @@ def convert_doc_with_short_staging(src_abs, out_dir_abs, converter, timeout=120,
     A unique directory avoids basename collisions across workers.
 
     ``keep_staging`` (``--only-file``) never deletes anything: the staging
-    directory - including the working copy of the cloud source - is created below
-    ``staging_root`` (the run's reserved version directory, i.e. inside the Data
-    Zone) and stays there; the derivative is promoted by direct copy.
+    directory - including the working copy of the cloud source as ``source.doc`` -
+    is created below ``staging_root`` (the run's short ``data/ca-doc/<run-id>``
+    directory inside the Data Zone, not the version directory) and stays there;
+    the derivative is promoted to its final version path by direct copy.
+
+    Only this short-path branch copies the source into the staging directory.  The
+    direct path passes the cloud source straight to the converter; with
+    ``keep_staging`` (``--only-file``) it keeps only the LibreOffice profile in the
+    short run directory, while the full scan uses system temporary directories that
+    are removed afterwards.
     """
     expected_filename = os.path.splitext(os.path.basename(src_abs))[0] + ".docx"
     final_path = os.path.join(out_dir_abs, expected_filename)
@@ -576,8 +596,11 @@ def convert_doc_to_docx_libreoffice(src_abs, out_dir_abs, timeout=120, keep_prof
                                     profile_root=None):
     """Convert .doc to .docx via LibreOffice in headless mode with isolated user profile.
 
-    ``keep_profile`` (``--only-file``) creates the profile inside ``out_dir_abs``
-    (the run's version directory) and leaves it in place: the worker never deletes.
+    ``keep_profile`` (``--only-file``) creates the profile inside ``profile_root``
+    (the run's short ``data/ca-doc/<run-id>`` directory) or, without an explicit
+    root, inside ``out_dir_abs``, and leaves it in place: the worker never deletes.
+    Without ``keep_profile`` the profile is a system temporary directory and is
+    removed afterwards.
     """
     soffice = find_soffice_binary()
     if not soffice:
@@ -675,7 +698,18 @@ def convert_doc_to_docx_word_com(src_abs, out_dir_abs, timeout=120):
         return False, str(e)
 
 def convert_doc_file(src_abs, out_dir_abs, timeout=120, keep_staging=False, staging_root=None):
-    """Convert .doc to .docx derivative using the best available converter."""
+    """Convert .doc to .docx derivative using the best available converter.
+
+    The short-staging branch is chosen up front when a planned source or derivative
+    path reaches the Windows ``>= 240`` threshold.  Independently, a clear
+    path-length error from LibreOffice's direct call is retried once through the
+    same short staging; that retry is not OS-gated and can therefore also trigger
+    below the threshold and on POSIX.
+
+    ``keep_staging`` (``--only-file``) uses the caller's short Data-Zone run
+    directory; the full scan uses system temporary directories.  The Word-COM path
+    has no LibreOffice profile.
+    """
     converter = get_doc_converter()
     if not converter:
         return False, "No suitable converter found (LibreOffice or Microsoft Word required for .doc conversion)", None
@@ -3814,8 +3848,9 @@ def run_only_file_conversion(args, run_state, workspace_root, configs, curation_
         }
         if is_doc and needs_conversion:
             # Short, unique run directory inside the canonical Data Zone `data/`:
-            # the external converter (LibreOffice) and its profile need a short path,
-            # the copied source must not leave the Data Zones and nothing is deleted.
+            # the external DOC converter needs a short path; LibreOffice additionally
+            # keeps its profile here. Word-COM has no profile. The copied source must
+            # not leave the Data Zones and nothing is deleted.
             task["doc_staging_root"] = absolute(
                 f"{DOC_STAGING_ROOT_REL}/{uuid.uuid4().hex[:8]}"
             )
