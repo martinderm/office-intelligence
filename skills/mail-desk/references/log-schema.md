@@ -11,7 +11,7 @@ data/mail-desk/
   replies-needed.jsonl      # nur offene Antwortfälle
   sent-index.jsonl          # leichter Index gesendeter Antworten (Header-/Routingmetadaten)
   new-sent-items.json       # Issue #88: begrenzter Transit-Handoff neuer Sent Items (operative Evidence)
-  sent-synthesis-ledger.jsonl # Issue #88: append-only Konsum-/Dedupe-Ledger der Synthese
+  sent-synthesis-ledger.jsonl # Issue #88/#107: append-only Konsum-/Dedupe-Ledger der Synthese (Outcome/Provenienz)
   final-location-index.json # schneller O(1)-Lookup für finale Backend-Location (nur script-basiert)
   runner-progress.json      # atomare Fortschrittsdatei bei Batch-Läufen
   injection-quarantine/     # Issue #62: operative Evidence, kein Referenzwissen
@@ -235,31 +235,68 @@ Ledger in der Reihenfolge `in_reply_to` → `references` → `thread_key`; `vorg
 ### sent-synthesis-ledger.jsonl (Konsum- und Dedupe-Ledger)
 
 Append-only, ein Objekt je Zeile, Schreiber ist der **Consumer** (nach dauerhaft gesichertem
-Synthese-Ergebnis), z. B. über `core.sent_handoff.record_synthesized(data_dir, items, vorgang_ref=...)`
-oder direktes Anhängen derselben Zeilen:
+Synthese-Ergebnis), z. B. über `core.sent_handoff.record_synthesized(data_dir, items, vorgang_ref=..., evid_id=...)`,
+`core.sent_handoff.record_no_evidence(data_dir, items, reason_code=...)` oder direktes Anhängen derselben Zeilen:
 
 ```json
 {"schema_version": 1, "message_id": "sent@id", "thread_key": "root@id", "vorgang_ref": "V-7",
- "role": "primary|follow_up", "anchored_to": "mid@id|null", "recorded_at": "2026-11-09T09:30:00Z"}
+ "role": "primary|follow_up", "anchored_to": "mid@id|null", "recorded_at": "2026-11-09T09:30:00Z",
+ "outcome": "synthesized|no_evidence", "source": "synthesis|legacy_import",
+ "reason_code": "no_matching_vorgang|null", "evid_id": "EVID-2026-0042|null"}
 ```
 
 **Schema (jede vollständige Zeile wird geprüft, sonst `ledger_invalid`, nichts wird übergeben/indexiert):**
 Pflicht sind `schema_version` (**exakt** int 1, nicht `true`/`1.0`), `message_id` (**bereits normalisiert**: ohne
-Klammern, Kleinschreibung),
-`role` (`primary`/`follow_up`) und `recorded_at` (ISO-8601); optional `thread_key`, `vorgang_ref`, `anchored_to`
-(String oder `null`); weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary`
-verbietet es. Doppelte `message_id` sind zulässig (die erste gültige Zeile gilt und ist für **alle** Indizes
-maßgeblich: eine spätere Dublette mit anderem `thread_key`/`vorgang_ref` führt weder einen Thread-Anker noch
-eine Vorgangs-Zuordnung ein). **Verschiedene** Message-IDs desselben Threads dürfen den Thread-Index auf eine
-Zeile mit vorhandenem `vorgang_ref` verfeinern (erste Zeile je Message-ID bleibt unangetastet). Tief
-verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungültige Zeile (`ledger_invalid`).
+Klammern, Kleinschreibung), `role` (`primary`/`follow_up`) und `recorded_at` (ISO-8601). Optional sind
+`thread_key`, `vorgang_ref` (opaker String), `anchored_to` (String oder `null`) sowie seit Issue #107
+`outcome` (`synthesized`/`no_evidence`), `source` (`synthesis`/`legacy_import`), `reason_code`
+(`null` oder begrenzter Token `^[a-z][a-z0-9_]{1,63}$`) und `evid_id` (`null` oder begrenzter exakter
+opaker Token). Weitere Felder sind unzulässig. `follow_up` verlangt ein `anchored_to`, `primary` verbietet es.
+
+- **Abwärtskompatibilität (Schema 1):** Eine Zeile **ohne** `outcome` gilt als `synthesized`, ohne `source` als
+  `synthesis` (`ledger_outcome`/`ledger_source`). Alte Schema-1-Ledger bleiben unverändert gültig. Neue Writer
+  schreiben `outcome` und `source` explizit; ein alter Reader lehnt die zusätzlichen Felder als `ledger_invalid`
+  ab (fail-closed, keine stille Fehlinterpretation). Deshalb muss der installierte Bundle-Pin vor dem ersten
+  erweiterten Schreibvorgang auf eine Version mit Issue #107 aktualisiert werden (**Versionsskew**).
+- **`no_evidence` (Issue #107):** verlangt einen Begründungscode in `reason_code` und darf **kein** `vorgang_ref`,
+  `anchored_to` oder `evid_id` tragen; `role` ist `primary`. Die Zeile **konsumiert** das Item (Ledger-Präsenz),
+  erzeugt aber weder Vorgang noch EVID- noch Thread-Anker. Ein späterer Reply im selben Thread wird daher nicht
+  an eine `no_evidence`-Zeile verankert. Kanonische Codes: `no_matching_vorgang`, `no_relevant_evidence`,
+  `thread_unresolved`, `source_unavailable`, `headers_incomplete`, `conflicting_evidence`,
+  `legacy_status_no_evidence` (letzterer nur für die ehrliche Herkunft „Legacy-Index sagte `no_evidence` ohne
+  maschinenlesbaren Grund“). Kein Code ersetzt fehlende fachliche Evidenz.
+- **`synthesized`:** darf keinen `reason_code` tragen; `evid_id` ist optional (Altzeilen ohne EVID bleiben gültig).
+  Importierte Synthese-Zeilen (`source: legacy_import`) verlangen dagegen **Vorgang + EVID-ID**; importierte
+  `no_evidence`-Zeilen verlangen den Begründungscode. So erfindet der Import weder Vorgang noch Evidenz.
+- **Konflikte:** Doppelte `message_id`s bleiben lesekompatibel (die erste gültige Zeile gilt für die
+  Leseindizes). **Neue** Operationen (Append, Import, Recovery) prüfen dagegen *alle* Zeilen der Message-ID
+  (`load_ledger()["all_by_message_id"]`) und stoppen bei abweichendem Outcome/Vorgang/EVID/Grund mit
+  `ledger_conflict`; First-line-wins verdeckt keinen neuen Konflikt. Identische Dubletten sind ein idempotenter
+  Skip. **Verschiedene** Message-IDs desselben Threads dürfen den Thread-Index auf eine Zeile mit vorhandenem
+  `vorgang_ref` verfeinern; `no_evidence`-Zeilen sind davon ausgeschlossen.
+- **Idempotenz alter Aufrufe:** Ein wiederholter `record_synthesized`-Aufruf darf `vorgang_ref`/`evid_id`
+  weglassen; ein weggelassenes optionales Feld ist ein Wildcard gegen die bereits dauerhafte Zeile. Ein
+  explizit übergebener, abweichender Wert (auch gegen einen fehlenden Altbestandswert) bleibt
+  `ledger_conflict`. Ebenso muss eine `EVID-ID` zu genau einer Message-ID gehören; zwei verschiedene IDs mit
+  derselben EVID-ID blockieren Import/Recovery (`evid_shared_conflict`).
+- **Legacy-Import und Crash-Recovery:** Dry-run, Approval-Bindung (Target-Fingerprint + Inventar +
+  Ledger-/Handoff-Bytes; keine absoluten Pfade im Report), Konfliktmatrix und das exakte
+  `message_id` + `vorgang_ref` + `EVID-ID`-Tripel stehen in
+  [`sent-ledger-migration.md`](sent-ledger-migration.md). Der Import schreibt `source: legacy_import`; eine
+  Promotion-Recovery schreibt `source: synthesis` mit derselben Zeilenform. Beide Wege sind idempotent und
+  schreiben keine Sonderdatei. Löst die Recovery einen Thread-Anker mit einem anderen nichtleeren Vorgang
+  auf, stoppt `promotion_anchor_conflict` (kein `follow_up` auf einen fremden Vorgang); der Import blockiert
+  eine EVID-ID, die bereits zu einer anderen Message-ID gehört. Konkurrierende Evidence mit derselben
+  EVID-ID aber fehlender `message_id` stoppt als `promotion_recovery_incomplete`; die globale
+  EVID-Besitzerprüfung läuft vor dem `already_consumed`-No-op.
 
 - **Konsum-Status:** ein Handoff-Item gilt als konsumiert genau dann, wenn seine normalisierte `message_id`
-  im Ledger steht. Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht umgeschrieben
-  (`consumed_ignored` zählt konsumierte Reste); sie wird erst beim nächsten Handoff mit neuen Items ersetzt.
-- **Dedupe:** Message-IDs im Ledger werden nie erneut übergeben (`already_synthesized`, trotzdem
-  indexiert). Eine Antwort im selben Thread wird über `anchored_to` am selben `vorgang_ref` verankert
-  (`role: follow_up`), nicht als neuer Vorgang.
+  im Ledger steht (unabhängig von `outcome`). Das ist abgeleiteter Zustand: die Handoff-Datei wird dafür nicht
+  umgeschrieben (`consumed_ignored` zählt konsumierte Reste); sie wird erst beim nächsten Handoff mit neuen
+  Items ersetzt.
+- **Dedupe:** Message-IDs im Ledger werden nie erneut übergeben (`already_synthesized`, trotzdem indexiert).
+  Eine Antwort im selben Thread wird über `anchored_to` am selben `vorgang_ref` verankert (`role: follow_up`),
+  nicht als neuer Vorgang; `no_evidence` ist davon ausgenommen.
 - **Abgerissene Zeilen (Prozess-Absturz beim Append, auch mitten in einem UTF-8-Zeichen):** Dateien werden
   zeilenweise als Bytes gelesen und je Zeile dekodiert; ein nicht parsbarer, nicht mit Zeilenumbruch
   abgeschlossener **letzter** Rest wird ignoriert (`ledger_torn_tail`) und zerstört nichts. Vor dem
@@ -271,6 +308,8 @@ verschachteltes JSON, das nicht parsebar ist (`RecursionError`), ist eine ungül
   Ursachenbehebung; nur `pending_count == 0` bei `state` `none`/`written` ist ein bekannt leeres Handoff
   (`handoff_allows_noop`). Der Consumer (Synthese-Pipeline) liegt außerhalb des Bundles; ledger-Zeile **vor**
   dem Ergebnis zu schreiben verliert Evidence, **nach** dem Ergebnis ist at-least-once (Idempotenz beim Consumer).
+  Nach einem Absturz zwischen dauerhafter Promotion und Ledger-Zeile zuerst
+  `core.sent_ledger.recover_promotion(...)` mit dem vollständigen Tripel prüfen; kein blindes erneutes Promoten.
 
 **Statische Alias-Fehlkonfiguration (`sent_index_alias_invalid`/`ledger_alias_invalid`/`handoff_alias_invalid`):**
 In **allen** Einstiegen (Default, `dates`, Report, Singular/Plural und direkte Append-API) prüft der Sync den
@@ -305,10 +344,14 @@ Handoff vor Index ist dann plattformabhängig.
 | nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index; ein Append-Fehler meldet `write_state: unknown` | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
 | nach Index, vor Konsum | Items im Handoff **und** im Index | `new_count: 0`, `handoff.state: pending`; neue Items → `handoff_pending` bis zum Konsum |
 | während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items gelten als konsumiert |
+| Consumer: Promotion dauerhaft, Ledger-Zeile fehlt | Promotion + EVID existieren, Ledger nicht | `core.sent_ledger.recover_promotion(...)` mit `message_id` + `vorgang_ref` + `EVID-ID`: genau ein Evidence-Treffer und keine widersprüchliche Ledger-Zeile ⇒ höchstens eine Zeile nachtragen; Teil-/Mehrdeutigkeit ⇒ stoppen |
 
-Nicht durch das Bundle lösbar: Absturz des Consumers zwischen Synthese-Ergebnis und Ledger-Zeile
-(Doppel-Promotion möglich), parallele Schreiber ohne Lease und manuelles Löschen der Handoff-Datei (verwirft
-unkonsumierte Items bewusst).
+Nicht durch das Bundle lösbar: parallele Schreiber ohne Lease, manuelles Löschen der Handoff-Datei
+(verwirft unkonsumierte Items bewusst) und ein Consumer, der die Promotion-Recovery nicht aufruft. Die
+Recovery macht das at-least-once-Fenster **prüfbar**, aber nicht exactly-once: Sie liest keine
+Consumer-Dokumente, sondern bewertet ausschließlich die vom Aufrufer vollständig übergebene
+Promotion-Evidence und das Ledger. Exaktes Tripel-Matching und die Lease-Pflicht stehen in
+[`sent-ledger-migration.md`](sent-ledger-migration.md#3-promotion-recovery-nach-crash).
 
 ### Konsumvertrag und Überhang (`sync-sent`)
 

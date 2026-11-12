@@ -743,13 +743,17 @@ Buchführung; beide nur in der Consumer-Datenzone `data/`. Nicht im Bundle: Synt
 Consumer-Pipeline (`pipelines/mail-desk-batch.md`); deren `inbox_zero`-No-op darf weder bei offenem Handoff
 noch bei `handoff.state unknown|invalid` oder `pending_count: null` greifen – dann ist die Synthese blockiert,
 bis ein Mensch die Ursache behebt; nur `pending_count == 0` bei `none|written` gilt als leer.
-Der Issue bleibt offen; ungelöst bleiben der Consumer-Absturz zwischen Ergebnis und Ledger-Zeile und das
-Stehenbleiben der Sent-Indexierung bis zum Konsum.
+Der Issue bleibt offen; ungelöst bleiben Exactly-once, parallele Writer ohne Lease und das manuelle Löschen des
+Handoffs. Seit Issue #107 ist das Consumer-Fenster zwischen dauerhafter Promotion und Ledger-Zeile über
+`recover_promotion` (exaktes Tripel, Teil-/Mehrdeutigkeit stoppt) prüfbar; der Ledger-Vertrag ist additiv um
+`outcome`/`source`/`reason_code`/`evid_id`, begründeten `no_evidence`-Konsum und den gestuften Legacy-Import
+erweitert (§16).
 
 L2: [Mail-Desk §43](../../skills/mail-desk/docs/system-map/README.md#43-issue-88--sent-items-handoff-für-die-synthese-deterministischer-bundle-teil).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#modus-sync_sent-sent-index-und-synthese-handoff-issue-88),
-[Log-Schema](../../skills/mail-desk/references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88).
-Tests: `skills/mail-desk/tests/test_sent_handoff.py`.
+[Log-Schema](../../skills/mail-desk/references/log-schema.md#new-sent-itemsjson-synthese-handoff-issue-88),
+[Sent-Ledger #107](../../skills/mail-desk/references/sent-ledger-migration.md).
+Tests: `skills/mail-desk/tests/test_sent_handoff.py`, `skills/mail-desk/tests/test_sent_ledger_*.py`.
 
 ## 15. Issue #103: CLI-Batch-Skip über `envelope thread` und Transportzähler
 
@@ -806,3 +810,54 @@ Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-ba
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
 Tests: `skills/mail-desk/tests/test_batch_runner_cli_batch_skip.py`,
 `skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`.
+
+## 16. Issue #107: Sent-Ledger-Outcome, Legacy-Import und Crash-Idempotenz
+
+**Ziel:** Die drei Bundle-Lücken aus Issue #88 schließen, ohne einen zweiten Index zu schaffen. Das
+`sent-synthesis-ledger.jsonl` bleibt die einzige Konsum-/Dedupe-Wahrheit.
+
+**Ledger-Schema (weiter Schema 1, additiv):** Jede Zeile kann `outcome` (`synthesized`/`no_evidence`),
+`source` (`synthesis`/`legacy_import`), `reason_code` und `evid_id` tragen. Eine Altzeile ohne
+`outcome`/`source` gilt als `synthesized`/`synthesis`; alte Schema-1-Ledger bleiben gültig. Ein alter Reader
+lehnt die neuen Felder als `ledger_invalid` ab (fail-closed, keine stille Fehlinterpretation); deshalb muss
+der installierte Bundle-Pin vor dem ersten erweiterten Write Issue #107 enthalten (**Versionsskew**).
+
+- **`no_evidence`:** konsumiert das Item (Ledger-Präsenz) mit einem Begründungscode, aber **ohne**
+  `vorgang_ref`, `anchored_to` oder `evid_id` und `role: primary`. Es entstehen kein Vorgang, kein EVID- und
+  kein Thread-Anker; spätere Replies werden nicht an diese Zeile verankert. Kanonische Codes:
+  `no_matching_vorgang`, `no_relevant_evidence`, `thread_unresolved`, `source_unavailable`,
+  `headers_incomplete`, `conflicting_evidence`, `legacy_status_no_evidence`.
+- **Konflikte:** Die Lesesicht bleibt first-line-wins; neue Appends, Import und Recovery prüfen **alle**
+  Zeilen einer Message-ID (`all_by_message_id`) und stoppen bei abweichendem Outcome/Vorgang/EVID/Grund mit
+  `ledger_conflict`. Identische Dubletten sind ein idempotenter Skip. First-line-wins verdeckt keinen neuen
+  Konflikt.
+- **Legacy-Import:** Einmalig und gestuft: striktes JSONL-Inventar → normalisierte Message-ID →
+  Konfliktprüfung → lesender Dry-run mit `plan_id` aus Target-Fingerprint, normalisiertem Inventar und den
+  aktuellen Ledger-/Handoff-Bytes → explizites `approval=plan_id` → Append mit `source: legacy_import`. Fehlende
+  Triade (`vorgang_ref` + `EVID-ID` bei Synthese), `no_evidence` mit EVID, Ledger-/Inventarkonflikte,
+  eine von zwei Message-IDs gemeinsam genutzte EVID-ID (`evid_shared_conflict`) oder ein veralteter Token
+  blockieren vor jedem Write. Ein Teilimport wird über einen frischen Dry-run idempotent fortgesetzt; nach
+  vollständigem Import ist Apply ein sicherer No-op. Keine Report-Sonderdatei.
+- **Crash-Idempotenz:** Vor erneutem Promoten prüft `core.sent_ledger.recover_promotion` gegen das **exakte**
+  Tripel `message_id` + `vorgang_ref` + `EVID-ID`. Genau ein Evidence-Treffer und höchstens eine passende
+  Ledger-Zeile ⇒ höchstens eine fehlende Zeile nachtragen (`already_consumed` sonst No-op); kein Treffer,
+  Teil-/Mehrdeutigkeit, doppelte/widersprüchliche Ledger-Zeilen, eine fremd gebundene EVID-ID,
+  konkurrierende Evidence mit derselben EVID-ID aber fehlender `message_id` oder ein aufgelöster
+  Thread-Anker mit anderem nichtleerem Vorgang (`promotion_anchor_conflict`, `promotion_recovery_incomplete`)
+  stoppen. Die globale EVID-Prüfung läuft vor dem No-op. At-least-once bleibt; exactly-once bleibt außerhalb
+  des Bundles.
+- **Schutz:** Mutierende Import-/Recovery-Pfade verlangen eine invocation-eigene, verifizierte
+  `workspace-lock`-Lease und binden das aufgelöste Ziel an exakt `<workspace>/data/mail-desk`; fremder
+  Workspace, Traversal oder Symlink/Junction/Reparse stoppen mit `workspace_binding_invalid` vor jedem Write.
+  Statische Ledger-/Handoff-/Sidecar-Aliase bleiben fail-closed; ein abgerissener `.torn`-Rest wird vor dem
+  Append ins Sidecar verschoben und nie zerstört. Kein Mailbox-, Netzwerk- oder Consumer-Dokumentzugriff;
+  keine realen Daten in den Tests.
+
+L2: [Mail-Desk §45](../../skills/mail-desk/docs/system-map/README.md#45-issue-107--ledger-outcome-legacy-import-und-crash-idempotenz).
+Vertrag: [Sent-Ledger-Migration](../../skills/mail-desk/references/sent-ledger-migration.md),
+[Log-Schema](../../skills/mail-desk/references/log-schema.md#sent-synthesis-ledgerjsonl-konsum--und-dedupe-ledger),
+[CLI](../../skills/mail-desk/references/cli-operations.md#sent-ledger-legacy-import-und-promotion-recovery-issue-107).
+Tests: `skills/mail-desk/tests/test_sent_ledger_outcomes.py`,
+`skills/mail-desk/tests/test_sent_ledger_legacy_import.py`,
+`skills/mail-desk/tests/test_sent_ledger_recovery.py`,
+`skills/mail-desk/tests/test_sent_ledger_cli.py`.

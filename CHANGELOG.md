@@ -8,6 +8,59 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-11 - Issue #107: Sent-Ledger-Outcome, Legacy-Import und Crash-Idempotenz
+
+#### Added
+
+- **Ledger-Outcome (Schema 1, additiv):** `sent-synthesis-ledger.jsonl` trägt optional `outcome`
+  (`synthesized`/`no_evidence`), `source` (`synthesis`/`legacy_import`), `reason_code` und `evid_id`.
+  Altzeilen ohne `outcome`/`source` gelten unverändert als `synthesized`/`synthesis`; alte Reader lehnen
+  neue Felder als `ledger_invalid` ab (fail-closed, Bundle-Pin vor erweitertem Write).
+- **`no_evidence`:** `core.sent_handoff.record_no_evidence(data_dir, items, reason_code=...)` konsumiert mit
+  Begründungscode, aber ohne Vorgang/EVID-/Thread-Anker. Kanonische Codes: `no_matching_vorgang`,
+  `no_relevant_evidence`, `thread_unresolved`, `source_unavailable`, `headers_incomplete`,
+  `conflicting_evidence`, `legacy_status_no_evidence`. `record_synthesized(..., evid_id=...)` schreibt die
+  Synthese-Zeile mit optionalem EVID-Anker.
+- **Konfliktschutz:** Leseindizes bleiben first-line-wins; neue Appends, Legacy-Import und Promotion-Recovery
+  prüfen alle Zeilen einer Message-ID (`load_ledger()["all_by_message_id"]`) und stoppen bei abweichendem
+  Outcome/Vorgang/EVID/Grund mit `ledger_conflict`; identische Dubletten sind ein idempotenter Skip.
+  Ein wiederholter `record_synthesized`-Aufruf darf optionale `vorgang_ref`/`evid_id` weglassen (Wildcard
+  gegen die dauerhafte Zeile); aus späteren Thread-Ankern **abgeleitete** Werte brechen alte No-ops nicht,
+  explizit übergebene, abweichende Werte bleiben `ledger_conflict`.
+- **Workspace-Bindung:** Mutierende Import-/Recovery-Pfade binden das aufgelöste Ziel vor der Lease und vor
+  jedem Write an exakt `<workspace>/data/mail-desk`. Ein `--data-dir` in einem anderen Workspace, Traversal
+  oder eine Symlink-/Junction-/Reparse-Komponente in `data`/`data/mail-desk` stoppt mit
+  `workspace_binding_invalid`; eine Lease für Workspace A autorisiert nie Workspace B.
+- **EVID-Eindeutigkeit:** Legacy-Dry-run blockiert `evid_shared_conflict`, wenn dieselbe `evid_id` innerhalb
+  des Inventars oder gegen eine andere Message-ID im bestehenden Ledger verwendet wird.
+- **Legacy-Import:** `core/sent_ledger.py` und `scripts/mail_desk_sent_ledger.py` mit striktem JSONL-Inventar,
+  lesendem Dry-run (`build_legacy_import_plan`), deterministischem `plan_id` aus Target-Fingerprint
+  (`target_workspace_id`, kein absoluter Pfad im Report), normalisiertem Inventar und aktuellen
+  Ledger-/Handoff-Bytes sowie explizitem `apply_legacy_import(..., approval=plan_id)` unter verifizierter
+  Workspace-Lease. Ein Token von Workspace A ist für identische Daten in B stale. Konflikte, fehlende Triade
+  (`vorgang_ref` + `EVID-ID`) oder ein veralteter Token schreiben nichts; Teilimporte werden über einen
+  frischen Dry-run idempotent fortgesetzt, nach vollständigem Import ist Apply ein sicherer No-op. Keine
+  Report-Sonderdatei.
+- **Crash-Recovery:** `core.sent_ledger.recover_promotion(...)` prüft das exakte Tripel `message_id` +
+  `vorgang_ref` + `EVID-ID` inklusive Teil- und Mehrdeutigkeitskonflikten, doppelten Ledger-Zeilen und fremd
+  gebundener EVID-ID. Konkurrierende Evidence mit derselben EVID-ID aber fehlender `message_id` stoppt
+  `promotion_recovery_incomplete`; die globale EVID-Prüfung läuft vor dem `already_consumed`-No-op. Löst der
+  Thread-Anker einen anderen nichtleeren Vorgang auf, stoppt `promotion_anchor_conflict` (kein `follow_up`
+  auf einen fremden Vorgang). Genau ein Evidence-Treffer und höchstens eine passende Ledger-Zeile ⇒
+  höchstens eine fehlende Zeile nachtragen; sonst stoppen. At-least-once bleibt, exactly-once bleibt
+  außerhalb des Bundles.
+- **Schutz:** Mutierende Import-/Recovery-Pfade verlangen eine invocation-eigene, verifizierte
+  `workspace-lock`-Lease; statische Symlink-/Hardlink-Aliase und `.torn`-Verhalten bleiben fail-closed.
+- **Doku:** L1/L2-System-Map, SKILL, Log-Schema, Batch-Runner und CLI-Operations beschreiben Outcome,
+  Provenienz, Dry-run/Approval, Konfliktmatrix, Promotion-Tripel und Versionsskew; neuer Vertrag
+  `skills/mail-desk/references/sent-ledger-migration.md`. Tests:
+  `skills/mail-desk/tests/test_sent_ledger_{outcomes,legacy_import,recovery,cli}.py`.
+
+#### Notes
+
+- Kein Live-/Consumer-Zugriff, kein realer Backfill, keine Änderung an der externen SOP in boku-user, kein
+  zweiter Index und keine neue Retention-/MIME-/Transportfunktion. Hermetische Fixtures only.
+
 ### 2026-11-11 — Issue #103: CLI-Batch-Skip über `envelope thread` + Transportzähler
 
 #### Added

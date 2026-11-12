@@ -675,16 +675,30 @@ sync-sent
 
 Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) → Promotion des ersten Items →
   record_synthesized (Ledger, Anker erneut aufgelöst) → load_pending_handoff erneut … bis pending_count == 0
+  ODER record_no_evidence(reason_code) für eine begründete No-op-Entscheidung (konsumiert ohne Anker)
+  Crash zwischen dauerhafter Promotion und Ledger: recover_promotion (message_id + exakter vorgang_ref +
+  EVID-ID; genau ein Evidence-Treffer, höchstens eine fehlende Ledger-Zeile) → sonst stoppen
 ```
 
 * **Trigger-Regel:** `handoff.pending_count > 0`, nicht `new_count`. Die Synthese-Phase ist bei `inbox_zero`
   nur dann No-op, wenn auch kein Handoff offen ist (Consumer-Pipeline, außerhalb des Bundles).
 * **Idempotenz:** Erkennung relativ zum Index; Merge per normalisierter Message-ID; Ledger-Treffer werden
   indexiert, aber nie erneut übergeben (`already_synthesized`); Folge-Mails im Thread tragen `anchored_to`.
+  `no_evidence` ist ebenfalls ein Konsum-Treffer, erzeugt aber keinen Vorgang/EVID-/Thread-Anker.
 * **Absturzfenster:** Handoff geschrieben/Index nicht ⇒ Wiederholung erkennt dieselben Items, kein Duplikat;
   Index geschrieben/nicht konsumiert ⇒ Items bleiben `pending`; Tabelle in
-  [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Nicht lösbar im Bundle:
-  Consumer-Absturz zwischen Ergebnis und Ledger-Zeile (at-least-once).
+  [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Das Consumer-Fenster zwischen
+  dauerhafter Promotion und Ledger-Zeile ist über `core.sent_ledger.recover_promotion` prüfbar (exaktes
+  Tripel, Teil-/Mehrdeutigkeit stoppt); exactly-once bleibt außerhalb des Bundles, at-least-once gilt weiter.
+* **Outcome/Import/Recovery (Issue #107):** `record_no_evidence` schreibt einen begründeten Konsum ohne
+  Evidenz; neue Appends/Import/Recovery prüfen alle Ledger-Zeilen (`all_by_message_id`) und stoppen bei
+  Konflikt statt First-line-wins. Der Legacy-Import ist zweistufig: `build_legacy_import_plan` (lesend,
+  Konfliktbericht inkl. `evid_shared_conflict`, `plan_id` aus normalisiertem Inventar + aktuellen
+  Ledger-/Handoff-Bytes) und `apply_legacy_import` (exakter Token, verifizierte Lease und Bindung an
+  `<workspace>/data/mail-desk`, idempotenter Teil-/No-op, keine Reportdatei). `recover_promotion` prüft das
+  exakte Tripel und stoppt bei `promotion_anchor_conflict`, wenn der Thread-Anker einen anderen nichtleeren
+  Vorgang trägt.
+  Details: [`sent-ledger-migration.md`](../../references/sent-ledger-migration.md).
 * **Fehlersemantik:** `write_state` in `ok:false`-Envelopes: `none` (Ablehnung/Fehler vor jedem Write, z. B.
   `sync_invalid_count`, `backend_binding`, `handoff_pending`, `handoff_invalid`, `ledger_invalid`,
   `sent_window_truncated`, `sync_window_failed`), `state` (nur persistierte Coverage-Schranke/Marker, kein

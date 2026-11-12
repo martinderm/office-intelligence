@@ -576,15 +576,46 @@ Schema und Beispiele: [`references/log-schema.md`](../../references/log-schema.m
 * **Rolle:** Konsum-Status, Dedupe-Quelle und Thread-Anker-Quelle. Append-only, Schreiber ist der Consumer.
 * **Zeile (Schema 1, strikt geprüft, sonst `ledger_invalid`):** Pflicht `schema_version`, `message_id`
   (bereits normalisiert), `role` (`primary`/`follow_up`), `recorded_at` (ISO); optional `thread_key`, `vorgang_ref`
-  (opak), `anchored_to`; `follow_up` ⇔ `anchored_to` gesetzt; keine weiteren Felder.
-* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger. Es gibt
-  keinen Prune-Write: konsumierte Reste in der Handoff-Datei werden ignoriert (`consumed_ignored`).
+  (opak), `anchored_to` sowie seit Issue #107 `outcome` (`synthesized`/`no_evidence`), `source`
+  (`synthesis`/`legacy_import`), `reason_code` und `evid_id`; `follow_up` ⇔ `anchored_to` gesetzt; keine
+  weiteren Felder. Eine Altzeile ohne `outcome`/`source` gilt als `synthesized`/`synthesis`; Schema 1 bleibt,
+  ein alter Reader lehnt neue Felder fail-closed ab (Bundle-Pin vor erweitertem Write).
+* **Outcome:** `synthesized` darf keinen `reason_code` tragen, `evid_id` ist optional. `no_evidence` verlangt
+  einen Begründungscode (`^[a-z][a-z0-9_]{1,63}$`), `role: primary` und **kein** `vorgang_ref`/`anchored_to`/
+  `evid_id`: die Zeile konsumiert, erzeugt aber keinen Vorgang, EVID- oder Thread-Anker. Kanonische Codes:
+  `no_matching_vorgang`, `no_relevant_evidence`, `thread_unresolved`, `source_unavailable`,
+  `headers_incomplete`, `conflicting_evidence`, `legacy_status_no_evidence`. Importierte Synthese verlangt
+  Vorgang + EVID; importierte `no_evidence` verlangt den Grund (keine erfundene Evidenz).
+* **Konflikte:** Leseindizes bleiben first-line-wins; neue Appends, Import und Recovery prüfen **alle** Zeilen
+  (`all_by_message_id`) und stoppen bei abweichendem Outcome/Vorgang/EVID/Grund mit `ledger_conflict`.
+  Identische Dubletten sind idempotent; `no_evidence` erscheint nie im Thread-Index.
+* **Zustandsableitung:** Item `pending` ⇔ normalisierte Message-ID nicht im Ledger; `consumed` ⇔ im Ledger
+  (unabhängig von `outcome`). Es gibt keinen Prune-Write: konsumierte Reste in der Handoff-Datei werden
+  ignoriert (`consumed_ignored`).
 * **Abgerissene Zeilen:** zeilenweise Byte-Dekodierung; ein unparsbarer unterminierter Rest (auch ein halbes
   UTF-8-Zeichen) wird ignoriert und vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben (auch für
   `sent-index.jsonl`).
+* **Legacy-Import/Recovery:** Dry-run + deterministischer `plan_id` aus normalisiertem Inventar und aktuellen
+  Ledger-/Handoff-Bytes; Apply nur mit exaktem Token unter verifizierter Lease, Konflikte/fehlende Triade
+  blockieren, Teilimport wird per frischem Dry-run idempotent fortgesetzt, keine Report-Sonderdatei.
+  `recover_promotion` prüft `message_id` + exakte `vorgang_ref`/`evid_id`, genau einen Evidence-Treffer und
+  höchstens eine passende Ledger-Zeile; Teil-/Mehrdeutigkeit stoppt. Vertrag:
+  [`sent-ledger-migration.md`](../../references/sent-ledger-migration.md).
 
 ### 10.3 Helfer (rein, deterministisch, ohne LLM)
 `thread_key`, `thread_anchor_ids`, `resolve_thread_anchor` (Reihenfolge `in_reply_to` → `references` nächster Vorfahr
-zuerst → `thread_key`), `is_synthesized`, `record_synthesized` (idempotent; löst den Anker beim Schreiben frisch
-gegen das aktuelle Ledger auf), `load_pending_handoff` (Konsumsicht: validiert, nur unkonsumiert, frisch verankert,
-Vorfahren zuerst, `waits_for`), `peek_handoff_state` (read-only, wirft nie), `parse_address_list`.
+zuerst → `thread_key`; `no_evidence`-Zeilen werden übersprungen), `is_synthesized` (Konsum unabhängig vom Outcome),
+`record_synthesized` (idempotent; löst den Anker beim Schreiben frisch gegen das aktuelle Ledger auf; optional
+`evid_id`), `record_no_evidence` (begründeter Konsum ohne Anker), `record_outcome` (gemeinsamer Schema-/Konfliktkern),
+`append_ledger_records` (validierter Low-Level-Append für Import), `load_pending_handoff` (Konsumsicht: validiert,
+nur unkonsumiert, frisch verankert, Vorfahren zuerst, `waits_for`), `peek_handoff_state` (read-only, wirft nie),
+`parse_address_list`.
+
+### 10.4 Import-/Recovery-Fassade (`scripts/core/sent_ledger.py`, Issue #107)
+`SentLedgerError` plus `build_legacy_import_plan` (rein lesend, Konfliktbericht inkl. `evid_shared_conflict`,
+`plan_id`), `apply_legacy_import` (exakter Token, verifizierte Lease **und** Bindung an
+`<workspace>/data/mail-desk`, idempotenter Teil-/No-op, keine Reportdatei), `read_legacy_inventory`
+(striktes JSONL mit `status`/`message_id`/`recorded_at` und optionalem `vorgang_ref`/`evid_id`/`reason_code`/
+`thread_key`) und `recover_promotion` (exaktes Tripel, Teil-/Mehrdeutigkeitskonflikte, `evid_shared_conflict`
+und `promotion_anchor_conflict` bei abweichendem Anker-Vorgang). CLI:
+`scripts/mail_desk_sent_ledger.py` (`plan`/`apply`/`recover-promotion`).

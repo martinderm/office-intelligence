@@ -327,5 +327,18 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
 * **Consumer-Trigger:** `pending_count > 0` startet die Synthese; `handoff.state` `unknown`/`invalid` oder
   `pending_count: null` **blockiert** Synthese **und** `inbox_zero`-No-op bis zur manuellen Behebung. Nur
   `pending_count == 0` bei `state` `none`/`written` gilt als bekannt leer (`handoff_allows_noop`).
-* **Offene Grenze:** bricht der Consumer zwischen Synthese-Ergebnis und Ledger-Zeile ab, ist eine Doppel-Promotion
-  möglich (Consumer-Idempotenz nötig).
+* **Outcome/Import/Recovery (Issue #107):** `record_no_evidence` konsumiert mit Begründungscode, aber ohne
+  Vorgang/EVID-/Thread-Anker; neue Appends, Import und Recovery prüfen alle Ledger-Zeilen und stoppen bei
+  Konflikt (`ledger_conflict`) statt First-line-wins. Ein wiederholter `record_synthesized`-Aufruf darf
+  optionale `vorgang_ref`/`evid_id` weglassen (Wildcard); explizite Widersprüche bleiben Konflikt. Der
+  Legacy-Import schreibt nur mit exaktem Dry-run-`plan_id`, verifizierter Lease und ohne Konflikt; eine von
+  zwei Message-IDs geteilte EVID-ID blockiert (`evid_shared_conflict`). Ein Teilimport wird über einen
+  frischen Dry-run idempotent fortgesetzt, keine Report-Sonderdatei. `recover_promotion` prüft das exakte
+  Tripel `message_id` + `vorgang_ref` + `EVID-ID` (genau ein Evidence-Treffer, höchstens eine passende
+  Ledger-Zeile); Teil-/Mehrdeutigkeit, fremd gebundene EVID-ID, widersprüchlicher Anker-Vorgang
+  (`promotion_anchor_conflict`) oder Konflikt stoppen vor dem Write.
+* **Offene Grenze:** Das Bundle macht das Consumer-Fenster zwischen dauerhafter Promotion und Ledger-Zeile
+  über `recover_promotion` prüfbar; exactly-once bleibt außerhalb des Bundles, at-least-once gilt weiter.
+  Ein Consumer, der die Recovery nicht aufruft, kann weiterhin doppelt promoten. Mutierende Import-/Recovery-
+  Pfade binden das aufgelöste Ziel an `<workspace>/data/mail-desk` (`workspace_binding_invalid` bei fremdem
+  Workspace, Traversal oder Symlink/Junction/Reparse).
