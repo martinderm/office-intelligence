@@ -34,6 +34,12 @@ lane 2026-11-11-lane-103-cli-batch-skip): MAX_WORDS 8250 → 8300 (measured 8299
 words, rounded to the next fifty). The documented contract now also covers the
 atomic spawn gate, the 10,000 default budget and F6 no-write behaviour. All
 floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-11, issue #107, lane
+2026-11-11-lane-107-sent-ledger): MAX_WORDS 8300 → 8350 (measured 8334 words,
+rounded to the next fifty). The sync_sent consumer paragraph now names the
+reasoned `no_evidence` outcome and the exact promotion-recovery triad. All
+floors unchanged.
 """
 
 from __future__ import annotations
@@ -46,12 +52,13 @@ import unittest
 BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 
-#: Size gate: 20-40% reduction from the 8754-word baseline; raised four times
+#: Size gate: 20-40% reduction from the 8754-word baseline; raised five times
 #: for the MD-P1 promotion-preflight module contract, the FR-28
 #: review-correction/verify/recovery docs, the issue-#103 scan accelerator
-#: contract, and its atomic-spawn/default-budget follow-up (see docstring history).
+#: contract, its atomic-spawn/default-budget follow-up, and the issue-#107
+#: sync_sent outcome/recovery paragraph (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8300
+MAX_WORDS = 8350
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (

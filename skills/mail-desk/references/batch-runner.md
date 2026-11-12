@@ -1113,7 +1113,11 @@ Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|
 **Trigger für den Consumer:** `pending_count > 0`, nicht `new_count` (Absturz: `new_count` 0 bei offenen Items).
 `state` `unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und** No-op bis zur manuellen
 Behebung; nur `0` bei `none`/`written` ist leer (`handoff_allows_noop`). Consumer:
-`pipelines/mail-desk-batch.md` (extern), liest `load_pending_handoff`, schreibt `record_synthesized`.
+`pipelines/mail-desk-batch.md` (extern), liest `load_pending_handoff`, schreibt `record_synthesized`
+oder für eine begründete No-op-Entscheidung `record_no_evidence` (Issue #107: konsumiert ohne Vorgang/EVID-/
+Thread-Anker). Nach einem Crash zwischen dauerhafter Promotion und Ledger-Zeile zuerst
+`recover_promotion` mit `message_id` + exaktem `vorgang_ref` + `EVID-ID` prüfen; Teil-/Mehrdeutigkeit stoppt.
+Vertrag: [`sent-ledger-migration.md`](sent-ledger-migration.md).
 
 **Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
 jedem Write; `state` = nur Coverage-Marker/-Schranke (`sent-sync-state.json`) wurde persistiert, kein

@@ -241,6 +241,31 @@ Fehler-Envelopes unterscheidet `write_state` `none`/`state`/`unknown` (`partial`
 Vorfahren zuerst) und schreibt über `record_synthesized`. Die Synthese selbst und das
 Ledger-Schreiben gehören der Consumer-Pipeline, nicht dem Bundle.
 
+**Ledger-Outcome, Legacy-Import und Crash-Idempotenz (Issue #107):** Jede Ledger-Zeile trägt optional
+`outcome` (`synthesized`/`no_evidence`), `source` (`synthesis`/`legacy_import`), `reason_code` und `evid_id`;
+eine Altzeile ohne `outcome`/`source` gilt unverändert als `synthesized`/`synthesis` (Schema 1 bleibt, alte
+Reader lehnen neue Felder fail-closed ab – Bundle-Pin vor dem ersten erweiterten Write prüfen).
+`record_no_evidence(data_dir, items, reason_code=...)` konsumiert mit Begründungscode, aber **ohne**
+Vorgang/EVID/Thread-Anker; `no_evidence` wird nie zum Anker für spätere Replies. Ein wiederholter
+`record_synthesized`-Aufruf darf optionale `vorgang_ref`/`evid_id` weglassen (Wildcard gegen die dauerhafte
+Zeile); abgeleitete Werte aus späteren Thread-Ankern brechen alte No-ops nicht, explizit widersprüchliche
+Werte bleiben `ledger_conflict`. Neue Appends, Import und
+Recovery prüfen alle Ledger-Zeilen einer Message-ID und stoppen bei Konflikt (`ledger_conflict`), statt
+First-line-wins einen Konflikt verdecken zu lassen. Der Legacy-Import ist zweistufig:
+`build_legacy_import_plan` (rein lesend, Konfliktbericht inkl. `evid_shared_conflict`, deterministischer
+`plan_id` aus Target-Fingerprint + normalisiertem Inventar + aktuellen Ledger-/Handoff-Bytes; keine absoluten
+Pfade im Report) und `apply_legacy_import(..., approval=plan_id)` unter verifizierter Lease und Bindung an
+exakt `<workspace>/data/mail-desk`; ein Token von Workspace A ist für B stale. Konflikte, fehlende Triade,
+fremder Workspace/Traversal/Symlink oder ein veralteter Token schreiben nichts, ein Teilimport wird über einen
+frischen Dry-run idempotent fortgesetzt, keine Report-Sonderdatei. Nach einem Crash zwischen dauerhafter
+Promotion und Ledger-Zeile prüft `core.sent_ledger.recover_promotion(...)` das exakte Tripel `message_id` +
+`vorgang_ref` + `EVID-ID` inklusive Teil-/Mehrdeutigkeitskonflikten; konkurrierende Evidence mit derselben
+EVID-ID aber fehlender `message_id` stoppt (`promotion_recovery_incomplete`), die globale EVID-Prüfung läuft
+vor dem `already_consumed`-No-op. Genau ein Evidence-Treffer und keine widersprüchliche Ledger-Zeile ⇒
+höchstens eine Zeile nachtragen, sonst stoppen. Ein aufgelöster Thread-Anker mit anderem nichtleerem Vorgang
+stoppt mit `promotion_anchor_conflict` (kein `follow_up` auf einen fremden Vorgang). Details und CLI:
+[`sent-ledger-migration.md`](references/sent-ledger-migration.md).
+
 ## Mutationen, Identität und Backend
 
 Vor jeder lokalen oder externen Mutation besteht verifizierte `workspace-lock`-

@@ -282,6 +282,63 @@ Konsument weiterbetrieben werden muss; nie für neue Aufrufer.
    oder `--workspace <root>` setzen; bei falschem CWD endet der Aufruf read-only
    mit `Catalog file not found.` (Exit 1).
 
+## Sent-Ledger: Legacy-Import und Promotion-Recovery (Issue #107)
+
+`scripts/mail_desk_sent_ledger.py` ist die schmale CLI für das erweiterte
+`sent-synthesis-ledger.jsonl`; sie berührt weder Mailbox noch Netzwerk und schreibt
+keine Report-Sonderdatei. Vollständiger Vertrag:
+[`sent-ledger-migration.md`](sent-ledger-migration.md).
+
+```bash
+# 1) Lesender Dry-run mit Konfliktbericht und deterministischem Approval-Token.
+python3 scripts/mail_desk_sent_ledger.py plan \
+  --workspace <consumer> --data-dir data/mail-desk --inventory <legacy-inventory.jsonl>
+
+# 2) Nur der exakte plan_id wird akzeptiert; mutierend unter verifizierter Lease.
+python3 scripts/mail_desk_sent_ledger.py apply \
+  --workspace <consumer> --data-dir data/mail-desk --inventory <legacy-inventory.jsonl> \
+  --approval sha256:<plan_id> --workspace-lease-id <lease>
+
+# 3) Crash zwischen dauerhafter Promotion und Ledger-Zeile: exaktes Tripel prüfen.
+python3 scripts/mail_desk_sent_ledger.py recover-promotion \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --message-id '<sent@id>' --vorgang-ref V-7 --evid-id EVID-2026-0042 \
+  --evidence-file <durable-promotions.json> --workspace-lease-id <lease>
+```
+
+- `plan` ist rein lesend und braucht keine Lease. Es liefert `entries`,
+  `conflicts`, `summary`, `plan_id`, `target_workspace_id` (Target-Hash, kein Pfad),
+  `blocked` und `approval{required,token,binds}`. Der `plan_id` bindet den
+  Target-Fingerprint; identische Daten in einem anderen Workspace ergeben einen
+  anderen Token (A-Token ist für B stale). Der Report enthält keine absoluten Pfade.
+  `blocked: true` bedeutet: kein Token, kein Write.
+- `apply` verifiziert die invocation-eigene `workspace-lock`-Lease vor dem ersten
+  Write, bindet das aufgelöste Ziel an genau `<workspace>/data/mail-desk` (fremder
+  Workspace, Traversal oder Symlink/Junction/Reparse ⇒ `workspace_binding_invalid`,
+  nichts geschrieben), baut den Plan gegen den aktuellen Ledger-/Handoff-Stand neu
+  und stoppt bei Konflikt (`legacy_import_conflict`) oder abweichendem Token
+  (`legacy_import_approval_stale`). Ein Teilimport wird nach frischem Dry-run
+  idempotent fortgesetzt; nach vollständigem Import ist ein erneutes Apply ein
+  sicherer No-op (`already_complete`). `legacy_import_write_failed` meldet
+  `state: unknown`, nie „nichts geschrieben“.
+- `recover-promotion` vergleicht normalisierte `message_id` plus **exakte**
+  `vorgang_ref`/`evid_id`-Token. Kein Treffer, Teiltreffer, mehrere Treffer,
+  widersprüchliche/doppelte Ledger-Zeilen, eine fremd gebundene EVID-ID, konkurrierende
+  Evidence mit derselben EVID-ID aber fehlender `message_id` oder ein aufgelöster
+  Thread-Anker mit **anderem nichtleerem** Vorgang stoppen
+  (`promotion_not_found`, `promotion_conflict`, `promotion_ambiguous`,
+  `promotion_recovery_incomplete`, `ledger_conflict`, `ledger_ambiguous`,
+  `evid_shared_conflict`, `promotion_anchor_conflict`). Die globale EVID-Prüfung
+  läuft vor dem `already_consumed`-No-op. Nur ein eindeutiger Treffer hängt
+  höchstens eine Ledger-Zeile an; `workspace_binding_invalid` gilt wie bei `apply`.
+- Exit `0` = Erfolg/No-op, `2` = fail-closed, `1` = unerwarteter Fehler. Statische
+  Ledger-/Handoff-/Sidecar-Aliase bleiben fail-closed; ein `.torn`-Rest wird vor
+  dem Append ins Sidecar verschoben und nicht zerstört.
+- **Versionsskew:** `schema_version` bleibt 1; alte Zeilen ohne `outcome`/`source`
+  gelten als `synthesized`/`synthesis`. Ein alter Bundle-Reader lehnt neue Felder
+  als `ledger_invalid` ab; vor dem ersten erweiterten Write den installierten
+  Bundle-Pin auf Issue #107 aktualisieren.
+
 ## Begrenzte Ziel-Verifikationsdiagnose (Issue #12)
 
 `verify_in_target_folder(..., diagnostics=<dict>)` ergänzt `header_reads` für

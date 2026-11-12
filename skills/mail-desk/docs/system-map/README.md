@@ -102,7 +102,7 @@ CLI-Batch-Skip über `envelope thread` und Transportzähler: §44.
 `envelope thread` und Transportzähler: §44. Die Anzahl der Testfälle wird hier
 nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
 
-**Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum
+**Aktueller Frame (Issue #18, Raw-EML, erhoben 2026-11-08 im Lane-Arbeitsbaum
 `feat/issue-18-raw-eml` auf Basis des finalen Code-Head `f3256dd` einschließlich
 der Härtungsrunden; ab 2026-11-11 historisch, die Zahlen bleiben als Referenz
 erhalten):** 353 Dateien im Bundle,
@@ -2421,9 +2421,11 @@ werden indexiert, aber nie übergeben. Ein Handoff mit offenen Items wird nie ü
 
 **Crash-Vertrag:** Handoff vor Index. (a) Absturz nach Handoff/vor Index: Wiederholung erkennt dieselben Items,
 Merge per Message-ID, kein Duplikat. (b) Absturz nach Index/vor Konsum: Items bleiben `pending`, `new_count` ist 0,
-`pending_count` zeigt sie. (c) Wiederholungslauf: keine Duplikate in Handoff oder Index. Bewusst **nicht** gelöst:
-Consumer-Absturz zwischen Synthese-Ergebnis und Ledger-Zeile; konkurrierende Writer ohne Lease; manuelles Löschen
-des Handoffs. Detail: [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent).
+`pending_count` zeigt sie. (c) Wiederholungslauf: keine Duplikate in Handoff oder Index. Seit Issue #107 ist der
+Consumer-Absturz zwischen dauerhafter Promotion und Ledger-Zeile über `core.sent_ledger.recover_promotion` mit dem
+exakten Tripel `message_id` + `vorgang_ref` + `EVID-ID` prüfbar; Teil- und Mehrdeutigkeit stoppen. Bewusst weiter
+offen: Exactly-once, konkurrierende Writer ohne Lease und manuelles Löschen des Handoffs. Detail:
+[`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent).
 
 **Grenzen und Folgen:** Solange ein Handoff unkonsumiert ist, indexiert `sync-sent` keine weiteren neuen Items
 (`handoff_pending`), also steht auch die Antwort-Abgleich-Basis (`sent-index.jsonl`) still, bis der Consumer das
@@ -2519,6 +2521,10 @@ byte-gleicher pending Handoff, `since_ignored`-Envelope-Hinweis (älter/gleich/j
 
 L1: [Paket-System-Map §14](../../../../docs/system-map/README.md).
 
+Issue #107 erweitert denselben Ledger additiv um Outcome/Provenienz, begründeten `no_evidence`-Konsum,
+den gestuften Legacy-Import und die Promotion-Recovery; siehe §45. Der Crash-Vertrag Handoff-vor-Index
+bleibt unverändert.
+
 ## 44. Issue #103 — CLI-Batch-Skip über `envelope thread` und Transportzähler
 
 **Ziel:** Die Login-Flut großer Postfächer senken, ohne einen zweiten
@@ -2611,3 +2617,71 @@ Raw-MIME-Blocked-Fehler nicht als `fetch_failed` endet und kein Manifest
 geschrieben wird.
 
 L1: [Paket-System-Map §15](../../../../docs/system-map/README.md#15-issue-103-cli-batch-skip-über-envelope-thread-und-transportzähler).
+
+---
+
+## 45. Issue #107 — Ledger-Outcome, Legacy-Import und Crash-Idempotenz
+
+**Ziel:** Die drei Bundle-Lücken aus Issue #88 schließen, ohne einen zweiten Index zu schaffen. Das
+`sent-synthesis-ledger.jsonl` bleibt die einzige Konsum-/Dedupe-Wahrheit; keine Report-Sonderdatei, kein
+Mailbox-/Netzwerk-/Consumer-Dokumentzugriff, keine realen Daten in Tests.
+
+**Entscheidung:** Schema 1 bleibt und wird additiv erweitert. `outcome` (`synthesized`/`no_evidence`),
+`source` (`synthesis`/`legacy_import`), `reason_code` und `evid_id` sind optional; eine Altzeile ohne
+`outcome`/`source` gilt als `synthesized`/`synthesis`. Ein alter Reader lehnt neue Felder als `ledger_invalid`
+ab (fail-closed); der installierte Bundle-Pin muss vor dem ersten erweiterten Write Issue #107 enthalten.
+
+**Outcome:**
+- `record_no_evidence(data_dir, items, reason_code=...)` konsumiert mit Begründungscode, aber ohne
+  `vorgang_ref`/`anchored_to`/`evid_id` und mit `role: primary`. Kein Vorgang, kein EVID- und kein Thread-Anker;
+  `by_thread_key`/`resolve_thread_anchor` überspringen solche Zeilen.
+- `record_synthesized(..., evid_id=...)` schreibt `outcome: synthesized`, `source: synthesis`; Altaufrufe ohne
+  `evid_id` bleiben kompatibel. `record_outcome` ist der gemeinsame Schema-/Konfliktkern.
+- Konflikte: Leseindizes bleiben first-line-wins, aber neue Appends/Import/Recovery prüfen alle Zeilen
+  (`all_by_message_id`) und stoppen mit `ledger_conflict`; identische Dubletten sind idempotent.
+
+**Legacy-Import:** `scripts/core/sent_ledger.py` + `scripts/mail_desk_sent_ledger.py`.
+1. Strikte JSONL-Inventarisierung (`status`, normalisierte `message_id`, Pflicht-`recorded_at`, optional
+   `vorgang_ref`/`evid_id`/`reason_code`/`thread_key`); strukturelle Fehler ⇒ `legacy_inventory_invalid`,
+   semantische Lücken (fehlende Triade, `no_evidence` mit EVID) ⇒ Dry-run-Konflikt. Dieselbe `evid_id`
+   für zwei Inventar- oder Ledger-Message-IDs ⇒ `evid_shared_conflict`.
+2. `build_legacy_import_plan` ist rein lesend: `entries` (`import`/`already_present`), `conflicts`, `summary`,
+   `blocked`; `plan_id` bindet Target-Fingerprint (`target_workspace_id`), normalisiertes Inventar und die
+   aktuellen Ledger-/Handoff-Bytes; der Report enthält keine absoluten Pfade.
+3. `apply_legacy_import(..., approval=plan_id)` verifiziert die Lease und bindet das aufgelöste Ziel an exakt
+   `<workspace>/data/mail-desk` (fremder Workspace, Traversal oder Symlink/Junction/Reparse ⇒
+   `workspace_binding_invalid`) vor dem ersten Write, baut den Plan gegen den aktuellen Stand neu, stoppt bei
+   Konflikt/abweichendem Token und hängt nur `import`-Einträge mit `source: legacy_import` an. Teilimporte
+   werden über einen frischen Dry-run idempotent fortgesetzt; nach vollständigem Import ist Apply ein sicherer
+   No-op. Schreibfehler melden `state: unknown`.
+
+**Crash-Recovery:** `recover_promotion(data_dir, message_id, vorgang_ref, evid_id, promotion_evidence=...)`
+vergleicht die normalisierte Message-ID und die **exakten** opaken Token `vorgang_ref`/`evid_id`. Genau ein
+Evidence-Treffer und höchstens eine passende Ledger-Zeile ⇒ höchstens eine Zeile nachtragen
+(`already_consumed` sonst No-op). Kein Treffer (`promotion_not_found`), mehrere Treffer
+(`promotion_ambiguous`), Teiltreffer (`promotion_conflict`), doppelte/widersprüchliche Ledger-Zeilen
+(`ledger_ambiguous`/`ledger_conflict`), eine bereits an eine andere Message-ID gebundene EVID-ID
+(`evid_shared_conflict`), konkurrierende Evidence mit derselben EVID-ID aber fehlender `message_id`
+(`promotion_recovery_incomplete`) oder ein aufgelöster Thread-Anker mit anderem nichtleerem Vorgang
+(`promotion_anchor_conflict`) stoppen vor dem Write. Die globale EVID-Prüfung läuft vor dem
+`already_consumed`-No-op. Optional übergebene Thread-Metadaten dienen nur der Verknüpfung, nie dem
+Tripel-Matching. At-least-once bleibt; exactly-once bleibt außerhalb des Bundles.
+
+**Idempotenz:** Ein wiederholter `record_synthesized`-Aufruf darf `vorgang_ref`/`evid_id` weglassen; ein
+weggelassenes optionales Feld ist ein Wildcard gegen die dauerhafte Zeile. Explizit übergebene, abweichende
+Werte (auch gegen einen fehlenden Altbestandswert) bleiben `ledger_conflict`.
+
+**Schutz:** Mutierende Pfade verlangen eine invocation-eigene, verifizierte `workspace-lock`-Lease und die
+kanonische Bindung an `<workspace>/data/mail-desk` (`workspace_binding_invalid`). Statische
+Ledger-/Handoff-/Sidecar-Aliase bleiben fail-closed; ein `.torn`-Rest wird vor dem Append ins Sidecar
+verschoben und nicht zerstört. Der Import verändert die Handoff-Datei nicht.
+
+**Tests:** `tests/test_sent_ledger_outcomes.py`, `tests/test_sent_ledger_legacy_import.py`,
+`tests/test_sent_ledger_recovery.py`, `tests/test_sent_ledger_cli.py`; bestehende
+`tests/test_sent_handoff.py` unverändert grün.
+
+**Vertrag:** [`references/sent-ledger-migration.md`](../../references/sent-ledger-migration.md),
+[`references/log-schema.md`](../../references/log-schema.md#sent-synthesis-ledgerjsonl-konsum--und-dedupe-ledger),
+[`references/cli-operations.md`](../../references/cli-operations.md#sent-ledger-legacy-import-und-promotion-recovery-issue-107).
+
+L1: [Paket-System-Map §16](../../../../docs/system-map/README.md#16-issue-107-sent-ledger-outcome-legacy-import-und-crash-idempotenz).
