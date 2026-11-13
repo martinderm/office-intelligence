@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import sys
@@ -11,7 +12,166 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .common import replace_with_retry, utc_now_iso
+from .common import atomic_write_json, replace_with_retry, utc_now_iso
+
+
+#: Bounded reason a killed run's leftover ``running`` state is settled with.
+PROGRESS_INTERRUPTED_REASON = "interrupted: the runner process is no longer running"
+
+#: Trackers that are still ``running`` in this process.  A graceful interpreter
+#: exit (normal end, exception, ``KeyboardInterrupt``) aborts them so no
+#: ``status: running`` survives; an OS kill is caught by the reader-side
+#: :func:`settle_stale_runner_progress` through the persisted owner pid.
+_ACTIVE_TRACKERS: list["BatchProgressTracker"] = []
+
+
+def _process_is_alive(pid: int) -> bool | None:
+    """Best-effort liveness of one owner pid (``None`` when unknowable)."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return None
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            synchronize = 0x00100000
+            handle = kernel32.OpenProcess(synchronize, False, pid)
+            if not handle:
+                # ERROR_ACCESS_DENIED: the process exists but is not inspectable.
+                return True if ctypes.get_last_error() == 5 else False
+            kernel32.CloseHandle(handle)
+            return True
+        except Exception:  # noqa: BLE001 - unknown liveness must not rewrite state
+            return None
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def _stale_running_state(state: dict[str, Any]) -> bool:
+    """Whether ``state`` is a running record whose owner process is gone.
+
+    Legacy states without an owner pid keep their status: ownership is not
+    provable, and guessing could overwrite a live run from an older version.
+    """
+    if state.get("status") != "running":
+        return False
+    pid = state.get("pid")
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    if pid == os.getpid():
+        return False
+    return _process_is_alive(pid) is False
+
+
+def _settled_state(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the terminal ``aborted`` variant of one stale running state."""
+    settled = dict(state)
+    now = utc_now_iso()
+    settled["status"] = "aborted"
+    settled["updated_at"] = now
+    settled["interrupted_at"] = now
+    settled["error"] = PROGRESS_INTERRUPTED_REASON
+    progress = settled.get("progress")
+    if isinstance(progress, dict):
+        progress = dict(progress)
+        progress["current_step"] = "interrupted"
+        settled["progress"] = progress
+    timing = settled.get("timing")
+    if isinstance(timing, dict):
+        timing = dict(timing)
+        timing["estimated_remaining_seconds"] = 0.0
+        timing["eta_timestamp"] = None
+        timing["recommended_next_timer_seconds"] = 0
+        settled["timing"] = timing
+    return settled
+
+
+def _load_progress_state(path: Path) -> dict[str, Any] | None:
+    """Read one progress document; ``None`` when missing or unreadable."""
+    try:
+        raw = path.read_text(encoding="utf-8")
+        state = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _settled_view(state: dict[str, Any]) -> dict[str, Any]:
+    """Return the liveness-checked view without writing anything."""
+    return _settled_state(state) if _stale_running_state(state) else state
+
+
+def settle_stale_runner_progress(path: Path) -> dict[str, Any] | None:
+    """Read progress state and *mutate* a killed run's leftover ``running`` state.
+
+    This is the writer-side settlement; it runs inside the tracker constructor
+    (and therefore inside the owning run's lease).  A pure reader must use
+    :func:`read_runner_progress`, which returns the same liveness-checked view
+    without writing.
+    """
+    state = _load_progress_state(path)
+    if state is None or not _stale_running_state(state):
+        return state
+    # Narrow the read/write race: settle only the exact record that was
+    # classified stale.  A newer run that wrote in between is returned as-is.
+    latest = _load_progress_state(path)
+    if latest is None:
+        return _settled_state(state)
+    if (
+        latest.get("run_id") != state.get("run_id")
+        or latest.get("pid") != state.get("pid")
+        or latest.get("status") != "running"
+    ):
+        return _settled_view(latest)
+    settled = _settled_state(state)
+    try:
+        atomic_write_json(path, settled)
+    except Exception:  # noqa: BLE001 - the settled view is still returned
+        pass
+    return settled
+
+
+def read_runner_progress(path: Path) -> dict[str, Any] | None:
+    """Return the liveness-checked progress view; never writes and needs no lease."""
+    state = _load_progress_state(path)
+    return _settled_view(state) if state is not None else None
+
+
+def _abort_active_trackers(reason: str) -> int:
+    """Abort every tracker that is still running in this process (best effort)."""
+    aborted = 0
+    for tracker in list(_ACTIVE_TRACKERS):
+        try:
+            if tracker._abort_for_exit(reason):
+                aborted += 1
+        except Exception:  # noqa: BLE001 - exit paths must never raise
+            pass
+        finally:
+            try:
+                _ACTIVE_TRACKERS.remove(tracker)
+            except ValueError:
+                pass
+    return aborted
+
+
+def abort_active_trackers(reason: str = PROGRESS_INTERRUPTED_REASON) -> int:
+    """Public helper for a harness that catches an interruption itself."""
+    return _abort_active_trackers(reason)
+
+
+atexit.register(lambda: _abort_active_trackers(PROGRESS_INTERRUPTED_REASON))
 
 
 class BatchProgressTracker:
@@ -35,6 +195,24 @@ class BatchProgressTracker:
         self.last_item_time = self.start_time
         self.item_durations: list[float] = []
         self.progress_file = data_dir / "runner-progress.json"
+        # A previous run may have been killed before it could write a terminal
+        # state.  Settle it now and keep its bounded identity in the new state;
+        # if the new write fails, the old file is already no longer "running".
+        previous = settle_stale_runner_progress(self.progress_file)
+        self.interrupted_previous_run: dict[str, Any] | None = None
+        if (
+            isinstance(previous, dict)
+            and previous.get("status") == "aborted"
+            and previous.get("error") == PROGRESS_INTERRUPTED_REASON
+        ):
+            progress = previous.get("progress") if isinstance(previous.get("progress"), dict) else {}
+            self.interrupted_previous_run = {
+                "run_id": previous.get("run_id"),
+                "mode": previous.get("mode"),
+                "status": "interrupted",
+                "completed_items": progress.get("completed_items"),
+                "updated_at": previous.get("updated_at"),
+            }
 
         # Baseline average seconds per item based on IMAP benchmarks
         if mode in ("draft", "inspect"):
@@ -46,6 +224,7 @@ class BatchProgressTracker:
 
         self.current_step = "initializing"
         self.status = "running"
+        _ACTIVE_TRACKERS.append(self)
         self._write_state()
 
     def _write_state(
@@ -75,6 +254,8 @@ class BatchProgressTracker:
             "run_id": self.run_id,
             "mode": self.mode,
             "status": self.status,
+            "pid": os.getpid(),
+            "heartbeat_at": utc_now_iso(),
             "started_at": datetime.fromtimestamp(self.start_time).strftime("%Y-%m-%dT%H:%M:%S"),
             "updated_at": utc_now_iso(),
             "progress": {
@@ -95,6 +276,8 @@ class BatchProgressTracker:
             },
             "error": error,
         }
+        if self.interrupted_previous_run is not None:
+            state["interrupted_previous_run"] = dict(self.interrupted_previous_run)
 
         temp_path: str | None = None
         try:
@@ -169,6 +352,7 @@ class BatchProgressTracker:
         self.current_step = "done"
         self.completed_items = self.total_items
         self._write_state()
+        self._unregister()
         if self.console_log:
             elapsed = round(time.time() - self.start_time, 1)
             sys.stdout.write(f"\n[OK] {message} (Total: {elapsed}s for {self.total_items} items)\n")
@@ -179,6 +363,7 @@ class BatchProgressTracker:
         self.status = "failed"
         self.current_step = "failed"
         self._write_state(error=error_message)
+        self._unregister()
         if self.console_log:
             sys.stderr.write(f"\n[ERROR] Batch failed: {error_message}\n")
             sys.stderr.flush()
@@ -188,6 +373,24 @@ class BatchProgressTracker:
         self.status = "aborted"
         self.current_step = "aborted"
         self._write_state(error=reason)
+        self._unregister()
         if self.console_log:
             sys.stderr.write(f"\n[ABORTED] Batch interrupted: {reason}\n")
             sys.stderr.flush()
+
+    def _unregister(self) -> None:
+        try:
+            _ACTIVE_TRACKERS.remove(self)
+        except ValueError:
+            pass
+
+    def _abort_for_exit(self, reason: str) -> bool:
+        """Silently settle a still-running tracker before the process exits."""
+        if self.status != "running":
+            self._unregister()
+            return False
+        self.status = "aborted"
+        self.current_step = "interrupted"
+        self._write_state(error=reason)
+        self._unregister()
+        return True

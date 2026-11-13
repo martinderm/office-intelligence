@@ -790,14 +790,46 @@ und `sync_sent` behalten Ergebnis- und Fehlerform unverändert. Classifier-
 Full-Read und Attachment-Raw-MIME reichen den Block durch, statt ihn als
 Review-Item oder `fetch_failed` zu degradieren.
 
+**Item-Isolation und Telemetrie (Follow-up 2026-11-13):** Ein Timeout von
+`message read`/`message export` für genau einen Envelope ist ein Item-Fehler,
+kein Transportausfall: Der Lauf läuft weiter, damit der Preview-Fail-safe des
+Draft-Pfads das Item als Review-Kandidat behält (`read_error_reason: "timeout"`,
+`read_escalation.fallback: "preview"`). Erst `ITEM_FAILURE_MAX_CONSECUTIVE = 5`
+Item-Timeouts **ohne erfolgreichen Befehl dazwischen** blocken mit
+`consecutive_item_failures_without_progress`; Netz-, Start-, Stdin- und
+Nicht-Item-Timeouts behalten den unveränderten Zwei-Fehler-Schwellwert
+`two_consecutive_transport_errors`. `transport_stats` bleibt das stabile
+Zählerobjekt (`commands` mit `starts`/`retries`/`errors`); additiv liefert
+`command_telemetry` je Kommandoklasse `duration_ms_total`, die letzten 20
+Dauern, `last_exit_code`/`last_reason_code` (`duration_samples_per_command`
+nennt das Limit), und `block_trigger` (im
+`TransportBlocked`-Envelope als `transport_trigger`) nennt den auslösenden
+Aufruf mit Kommandoklasse, Envelope-ID, Dauer, Exit und Reason. Als Fortschritt
+zählt jeder erfolgreiche Befehl (auch der Preview-Read des nächsten Items);
+eine Folge, in der nur Full-Reads timeouten, blockt daher nicht, sondern
+erzeugt Review-Items. Ein Item-Timeout setzt einen laufenden
+Transportfehler-Zähler nicht zurück (konservativ).
+`runner-progress.json` trägt additiv `pid`/`heartbeat_at`;
+`read_runner_progress` liefert eine read-only, liveness-geprüfte Sicht und
+meldet einen verwaisten `status: "running"`-Zustand als `aborted` mit
+`interrupted_at` und genullter ETA; `settle_stale_runner_progress` (mutierend,
+im lease-gebundenen Lauf) oder der nächste Tracker schreibt ihn fest. Die
+Pid-Prüfung ist best-effort und konservativ (unbekannt = lebend); PID-
+Namespaces/-Reuse können einen toten Lauf als lebend erscheinen lassen, nie
+umgekehrt. `heartbeat_at` ist informativ.
+
 **Transportzähler:** `run_himalaya` zählt Prozessstarts, Retries und Fehler je
-Kommandoklasse; das Ergebnis trägt `transport_stats` (nur Zähler,
-`blocked`/`block_reason`, `start_budget`). Das Start-Budget ist über
-`transport_start_budget` im Manifest oder `--transport-start-budget`
-konfigurierbar. Default sind 10.000: das dokumentierte Fallbackfenster von
-2.500 Envelopes kann pro Envelope bis zu zwei Prozesse (Raw-MIME-Export plus
-Read) plus Listen-Tiers, Thread-Map und Readiness auslösen; 10.000 deckt diesen
-Worst Case mit rund 2x Reserve ab und bleibt reiner Runaway-Schutz.
+Kommandoklasse; das Ergebnis trägt `transport_stats` (Zähler,
+`blocked`/`block_reason`, `start_budget`). Additiv liefert `command_telemetry`
+je Klasse begrenzte Dauern (letzte 20), `last_exit_code` und
+`last_reason_code`; `block_trigger`/`transport_trigger` nennen den auslösenden
+Aufruf mit Kommandoklasse, Envelope-ID, Dauer, Exit und Reason. Das
+Start-Budget ist über `transport_start_budget` im Manifest oder
+`--transport-start-budget` konfigurierbar. Default sind 10.000: das
+dokumentierte Fallbackfenster von 2.500 Envelopes kann pro Envelope bis zu zwei
+Prozesse (Raw-MIME-Export plus Read) plus Listen-Tiers, Thread-Map und
+Readiness auslösen; 10.000 deckt diesen Worst Case mit rund 2x Reserve ab und
+bleibt reiner Runaway-Schutz.
 
 **Grenzen:** CLI-Envelope-ID = IMAP-UID ist eine Implementierungstatsache der
 gebündelten `email-lib`-Generation, nicht dokumentiert; `UIDVALIDITY` ist über
@@ -809,7 +841,9 @@ L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-1
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
 Tests: `skills/mail-desk/tests/test_batch_runner_cli_batch_skip.py`,
-`skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`.
+`skills/mail-desk/tests/test_batch_runner_skip_known_identity.py`,
+`skills/mail-desk/tests/test_issue103_transport_item_isolation.py`
+(Item-Isolation, F6-Negativa, Telemetrie/Block-Trigger, Progress-Liveness).
 
 ## 16. Issue #107: Sent-Ledger-Outcome, Legacy-Import und Crash-Idempotenz
 

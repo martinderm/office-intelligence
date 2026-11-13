@@ -100,6 +100,57 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   offener Gate. Die Zielbindung (fremder Workspace, Traversal) läuft dagegen ungemockt und
   fail-closed vor dem Verifier.
 
+### 2026-11-13 — Issue #103: Transport-Guard-Item-Isolation, Telemetrie und Progress-Liveness
+
+#### Fixed
+
+- **Item-Timeout tötet nicht mehr den Lauf:** `message read`/`message export` für genau
+  einen Envelope werden über Kommandoklasse + dezimale Envelope-ID als item-bezogen erkannt.
+  Ein `himalaya_timeout` dieser Aufrufe ist ein Item-Fehler (begrenzt als
+  `read_error_reason: "timeout"` sichtbar) und der Batch läuft weiter; der Draft-Pfad kann
+  den Preview-Fail-safe ausführen (`read_escalation.fallback: "preview"`,
+  `review_required: true`). Erst `ITEM_FAILURE_MAX_CONSECUTIVE = 5` Item-Timeouts ohne
+  dazwischenliegenden erfolgreichen Befehl brechen mit
+  `consecutive_item_failures_without_progress` ab.
+- **F6 unverändert:** Netz-/Start-/Stdin-Fehler sowie Timeouts von
+  `envelope list`/`envelope thread`/`folder list` behalten den Zwei-Fehler-Schwellwert
+  `two_consecutive_transport_errors`; `mailbox_transport_blocked` bleibt der einzige
+  strukturierte Abbruch und wird weiter durch Fallback-Pfade re-raised.
+- **Kein `status: running` eines gekillten Laufs:** `runner-progress.json` trägt additiv
+  `pid`/`heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
+  liveness-geprüfte Sicht und meldet einen verwaisten `running`-Zustand als `aborted` mit
+  `interrupted_at` und genullter ETA, ohne die Datei zu verändern;
+  `settle_stale_runner_progress` (mutierend, im lease-gebundenen Lauf) oder der nächste
+  Tracker schreibt den Zustand fest und bewahrt die Identität unter
+  `interrupted_previous_run`. Reguläre Prozessenden beenden aktive Tracker über
+  `abort_active_trackers`; Legacy-Zustände ohne `pid` bleiben unangetastet. Die Pid-Prüfung
+  ist best-effort und konservativ (unbekannt = lebend); `heartbeat_at` ist informativ.
+- **Stabiler Review-Vertrag:** `read_escalation.error.type` bleibt bei
+  Full-Read-Timeouts `RuntimeError`; der Item-Grund steht additiv getrennt in
+  `read_escalation.reason` (`timeout`/`read_failed`) und `fallback: "preview"`.
+
+#### Added
+
+- **Transport-Telemetrie:** `transport_stats.commands` bleibt im stabilen
+  `starts`/`retries`/`errors`-Format; additiv liefert `command_telemetry` je Kommandoklasse
+  `duration_ms_total`, die letzten 20 `durations_ms`, `last_duration_ms`, `last_exit_code`
+  und `last_reason_code`. Bei einem Block nennt `block_trigger` (und im Envelope
+  `transport_trigger`) den auslösenden Aufruf mit Klasse, Envelope-ID, Dauer, Exit und
+  Reason; `transport_stats` ergänzt `consecutive_item_failures` und
+  `duration_samples_per_command`.
+- **Doku:** L1/L2-System-Map, Batch-Runner-, Himalaya-Backend- und Log-Schema-Referenz
+  beschreiben Item-Isolation, Telemetrie, Fortschrittsbegriff und Progress-Liveness. Tests:
+  `skills/mail-desk/tests/test_issue103_transport_item_isolation.py` (19 Fälle:
+  Item-Timeouts für Read/Export, Nicht-Item-/Netz-/Start-/Listen-Negativa, gemischte
+  Fehlerfolge, Fünf-Item-Schwelle, Preview-Fallback, Per-Class-Dauern/Exit,
+  Block-Envelope-Trigger, Dead-/Live-Pid, Read-only-View, Tracker-Settlement).
+
+#### Notes
+
+- Kein Live-Lauf, keine Mailbox-Aktion, keine Consumer-Daten, keine Änderung an der
+  Skip-Mechanik aus #105; `execute`/`verify`/`search`/`sync_sent` bleiben ohne
+  Transport-Session und unverändert.
+
 ### 2026-11-11 - Issue #107: Sent-Ledger-Outcome, Legacy-Import und Crash-Idempotenz
 
 #### Added

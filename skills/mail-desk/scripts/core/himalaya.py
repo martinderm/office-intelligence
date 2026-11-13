@@ -25,11 +25,22 @@ from .common import normalize_message_id
 
 
 class HimalayaInvocationError(RuntimeError):
-    """A fail-closed, classified Himalaya bootstrap or command failure."""
+    """A fail-closed, classified Himalaya bootstrap or command failure.
 
-    def __init__(self, reason_code: str, message: str) -> None:
+    ``details`` is an optional, JSON-safe structured channel for bounded call
+    metadata (command class, envelope id, duration, exit status).  It never
+    carries mail content, headers or raw stderr.
+    """
+
+    def __init__(
+        self,
+        reason_code: str,
+        message: str,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
+        self.details = dict(details) if details else {}
 
 
 _WINDOWS_DRIVE_PATH_REGEX = re.compile(r"^([A-Za-z]):[\\/](.*)$")
@@ -187,6 +198,24 @@ TRANSPORT_ERROR_REASON_CODES = frozenset(
     }
 )
 
+#: Command classes that operate on exactly one specific item (envelope).  A
+#: timeout of such a call is an item failure, not evidence that the transport
+#: itself is down; every other transport failure keeps the unchanged F6
+#: fail-closed behaviour.
+ITEM_SCOPED_COMMAND_CLASSES = frozenset({"message read", "message export"})
+
+#: Bounded number of durations kept per command class in ``transport_stats``.
+TRANSPORT_DURATION_SAMPLES = 20
+
+#: Several consecutive item timeouts *without any successful command between
+#: them* mean no progress at all and abort fail-closed.  Two slow messages must
+#: never end a run (the live defect behind #103); a run where every single item
+#: times out must not grind through the whole mailbox either.
+ITEM_FAILURE_MAX_CONSECUTIVE = 5
+
+#: Block reason when item failures accumulate without any mailbox progress.
+ITEM_FAILURE_BLOCK_REASON = "consecutive_item_failures_without_progress"
+
 #: Explicit, documented process-start budget per transport-stats session.  It is
 #: a runaway guard, not a batch-shaping limit: the documented fallback scan can
 #: read a 2,500-envelope window and may use two processes per envelope (raw-MIME
@@ -203,13 +232,8 @@ _ACTIVE_TRANSPORT_STATS: ContextVar["TransportStats | None"] = ContextVar(
 _LAST_TRANSPORT_STATS: dict[str, Any] | None = None
 
 
-def classify_himalaya_command(args: list[str]) -> str:
-    """Return the stable command class of a Himalaya argv (for counters only).
-
-    Only structural tokens are inspected: flags with a value are skipped and
-    the first two positional words are joined (``envelope list``,
-    ``message read``, ``folder list``).  No argument content is stored.
-    """
+def _positional_words(args: list[str], limit: int) -> list[str]:
+    """Return up to ``limit`` positional tokens after skipping flags and values."""
     tokens = list(args)
     flags_with_value = {
         "-a", "--account", "-c", "--config", "-o", "--output", "-f", "--folder",
@@ -218,7 +242,7 @@ def classify_himalaya_command(args: list[str]) -> str:
     }
     words: list[str] = []
     index = 0
-    while index < len(tokens) and len(words) < 2:
+    while index < len(tokens) and len(words) < limit:
         token = tokens[index]
         if token in flags_with_value:
             index += 2
@@ -228,17 +252,49 @@ def classify_himalaya_command(args: list[str]) -> str:
             continue
         words.append(token)
         index += 1
+    return words
+
+
+def classify_himalaya_command(args: list[str]) -> str:
+    """Return the stable command class of a Himalaya argv (for counters only).
+
+    Only structural tokens are inspected: flags with a value are skipped and
+    the first two positional words are joined (``envelope list``,
+    ``message read``, ``folder list``).  No argument content is stored.
+    """
+    words = _positional_words(args, 2)
     return " ".join(words) if words else "unknown"
+
+
+def item_envelope_id(args: list[str]) -> str | None:
+    """Return the envelope id of one item-scoped command, if the argv binds one.
+
+    Only ``message read`` and ``message export`` are item-scoped.  The id is
+    the third positional token and must be a decimal envelope id; anything
+    else is not treated as item-bound.
+    """
+    words = _positional_words(args, 3)
+    if len(words) < 3:
+        return None
+    if " ".join(words[:2]) not in ITEM_SCOPED_COMMAND_CLASSES:
+        return None
+    candidate = words[2].strip()
+    return candidate if candidate.isascii() and candidate.isdigit() else None
 
 
 class TransportStats:
     """Process-local counters and the fail-closed transport guard.
 
     Counters are recorded by :func:`run_himalaya` for the active session:
-    process starts, retries and errors per command class.  The second
-    consecutive transport failure aborts immediately with
-    :data:`TRANSPORT_BLOCKED_REASON`; an exhausted ``start_budget`` blocks every
-    further process start.
+    process starts, retries, errors and bounded durations per command class.
+    A transport failure without item relation (network, launch, process
+    communication) aborts with :data:`TRANSPORT_BLOCKED_REASON` on the second
+    consecutive occurrence, unchanged from F6.  A timeout of one item-scoped
+    command (``message read``/``message export`` for one envelope) is an item
+    failure instead: it is counted, does not abort, and only
+    :data:`ITEM_FAILURE_MAX_CONSECUTIVE` item failures *without any successful
+    command in between* abort the run.  An exhausted ``start_budget`` blocks
+    every further process start.
     """
 
     def __init__(
@@ -246,6 +302,7 @@ class TransportStats:
         *,
         start_budget: int | None = DEFAULT_TRANSPORT_START_BUDGET,
         max_consecutive_errors: int = TRANSPORT_MAX_CONSECUTIVE_ERRORS,
+        max_consecutive_item_failures: int = ITEM_FAILURE_MAX_CONSECUTIVE,
     ) -> None:
         if start_budget is not None and (
             isinstance(start_budget, bool)
@@ -255,6 +312,7 @@ class TransportStats:
             raise ValueError("start_budget must be a positive integer or None")
         self.start_budget = start_budget
         self.max_consecutive_errors = max(1, int(max_consecutive_errors))
+        self.max_consecutive_item_failures = max(1, int(max_consecutive_item_failures))
         self._lock = threading.Lock()
         # Serializes budget/block checks with the actual child creation.  The
         # lock is never held while the child runs; only until Popen returns.
@@ -263,13 +321,66 @@ class TransportStats:
         self.retries = 0
         self.errors = 0
         self.consecutive_transport_errors = 0
+        self.consecutive_item_failures = 0
         self.blocked_reason: str | None = None
+        self.block_trigger: dict[str, Any] | None = None
+        # The stable F6 counters map keeps its exact three-key shape; the
+        # detailed per-class telemetry is additive under ``command_telemetry``.
         self.commands: dict[str, dict[str, int]] = {}
+        self.command_telemetry: dict[str, dict[str, Any]] = {}
 
     def _bucket(self, command_class: str) -> dict[str, int]:
         return self.commands.setdefault(
             command_class, {"starts": 0, "retries": 0, "errors": 0}
         )
+
+    def _timing_bucket(self, command_class: str) -> dict[str, Any]:
+        return self.command_telemetry.setdefault(
+            command_class,
+            {
+                "duration_ms_total": 0,
+                "durations_ms": [],
+                "last_duration_ms": None,
+                "last_exit_code": None,
+                "last_reason_code": None,
+            },
+        )
+
+    def _record_timing_locked(
+        self,
+        command_class: str,
+        duration_ms: int | None,
+        exit_code: int | None,
+        reason_code: str | None,
+    ) -> None:
+        if duration_ms is None:
+            return
+        bucket = self._timing_bucket(command_class)
+        clamped = max(0, int(duration_ms))
+        bucket["duration_ms_total"] += clamped
+        samples = bucket["durations_ms"]
+        samples.append(clamped)
+        if len(samples) > TRANSPORT_DURATION_SAMPLES:
+            del samples[: len(samples) - TRANSPORT_DURATION_SAMPLES]
+        bucket["last_duration_ms"] = clamped
+        bucket["last_exit_code"] = exit_code
+        bucket["last_reason_code"] = reason_code
+
+    @staticmethod
+    def _trigger(
+        command_class: str,
+        reason_code: str,
+        duration_ms: int | None,
+        exit_code: int | None,
+        envelope_id: str | None,
+    ) -> dict[str, Any]:
+        return {
+            "command_class": command_class,
+            "envelope_id": envelope_id,
+            "duration_ms": None if duration_ms is None else max(0, int(duration_ms)),
+            "exit_code": exit_code,
+            "reason_code": reason_code,
+        }
 
     def start_process(
         self,
@@ -311,10 +422,19 @@ class TransportStats:
         self, command_class: str, *, reason: str | None = None
     ) -> HimalayaInvocationError:
         """Return the one structured abort error used for every F6 stop."""
-        reason = reason or self.blocked_reason or "transport_blocked"
+        with self._lock:
+            reason = reason or self.blocked_reason or "transport_blocked"
+            trigger = dict(self.block_trigger) if self.block_trigger else {
+                "command_class": command_class,
+                "envelope_id": None,
+                "duration_ms": None,
+                "exit_code": None,
+                "reason_code": reason,
+            }
         return HimalayaInvocationError(
             TRANSPORT_BLOCKED_REASON,
             f"Himalaya transport blocked ({reason}); no further process was started for '{command_class}'.",
+            details={"block_reason": reason, "trigger": trigger},
         )
 
     def raise_if_blocked(self, command_class: str) -> None:
@@ -324,22 +444,61 @@ class TransportStats:
         if reason:
             raise self.blocked_error(command_class, reason=reason)
 
-    def record_success(self) -> None:
+    def record_success(
+        self,
+        *,
+        command_class: str | None = None,
+        duration_ms: int | None = None,
+        exit_code: int | None = 0,
+    ) -> None:
+        """Record one successful command as progress for both guard dimensions."""
         with self._lock:
             self.consecutive_transport_errors = 0
+            self.consecutive_item_failures = 0
+            if command_class is not None:
+                self._record_timing_locked(command_class, duration_ms, exit_code, None)
 
-    def record_error(self, command_class: str, reason_code: str) -> bool:
-        """Record one error and return whether this error reached the F6 threshold.
+    def record_error(
+        self,
+        command_class: str,
+        reason_code: str,
+        *,
+        duration_ms: int | None = None,
+        exit_code: int | None = None,
+        item_scoped: bool = False,
+        envelope_id: str | None = None,
+    ) -> bool:
+        """Record one error and return whether this error reached an abort.
 
         The threshold is latched here, not only checked before the next start:
-        the second consecutive transport failure itself is returned as the
-        structured ``mailbox_transport_blocked`` abort, so a caller that
-        swallows a transient error cannot turn the run into a silent success.
+        the abort-triggering failure itself is returned as the structured
+        ``mailbox_transport_blocked`` error, so a caller that swallows a
+        transient error cannot turn the run into a silent success.
+
+        An item-scoped timeout is an item failure: it is counted and reported,
+        but it only aborts when several item failures occur without any
+        successful command in between (no progress at all).
         """
+        trigger = self._trigger(
+            command_class, reason_code, duration_ms, exit_code, envelope_id
+        )
         with self._spawn_lock:
             with self._lock:
                 self.errors += 1
                 self._bucket(command_class)["errors"] += 1
+                self._record_timing_locked(
+                    command_class, duration_ms, exit_code, reason_code
+                )
+                if item_scoped and reason_code == "himalaya_timeout":
+                    self.consecutive_item_failures += 1
+                    if (
+                        self.blocked_reason is None
+                        and self.consecutive_item_failures
+                        >= self.max_consecutive_item_failures
+                    ):
+                        self.blocked_reason = ITEM_FAILURE_BLOCK_REASON
+                        self.block_trigger = trigger
+                    return self.blocked_reason is not None
                 if reason_code not in TRANSPORT_ERROR_REASON_CODES:
                     self.consecutive_transport_errors = 0
                     return False
@@ -349,22 +508,43 @@ class TransportStats:
                     and self.consecutive_transport_errors >= self.max_consecutive_errors
                 ):
                     self.blocked_reason = "two_consecutive_transport_errors"
+                    self.block_trigger = trigger
                 return self.blocked_reason is not None
 
     def snapshot(self) -> dict[str, Any]:
         """Return a stable, JSON-safe counter snapshot for the result envelope."""
         with self._lock:
+            telemetry: dict[str, dict[str, Any]] = {}
+            for command in sorted(set(self.commands) | set(self.command_telemetry)):
+                counts = self.commands.get(command, {"starts": 0, "retries": 0, "errors": 0})
+                timing = self.command_telemetry.get(command, {})
+                telemetry[command] = {
+                    "starts": counts["starts"],
+                    "retries": counts["retries"],
+                    "errors": counts["errors"],
+                    "duration_ms_total": timing.get("duration_ms_total", 0),
+                    "durations_ms": list(timing.get("durations_ms", ())),
+                    "last_duration_ms": timing.get("last_duration_ms"),
+                    "last_exit_code": timing.get("last_exit_code"),
+                    "last_reason_code": timing.get("last_reason_code"),
+                }
             return {
                 "process_starts": self.process_starts,
                 "retries": self.retries,
                 "errors": self.errors,
                 "consecutive_transport_errors": self.consecutive_transport_errors,
+                "consecutive_item_failures": self.consecutive_item_failures,
                 "start_budget": self.start_budget,
                 "blocked": self.blocked_reason is not None,
                 "block_reason": self.blocked_reason,
+                "block_trigger": (
+                    dict(self.block_trigger) if self.block_trigger else None
+                ),
+                "duration_samples_per_command": TRANSPORT_DURATION_SAMPLES,
                 "commands": {
                     command: dict(counts) for command, counts in sorted(self.commands.items())
                 },
+                "command_telemetry": telemetry,
             }
 
 
@@ -830,6 +1010,8 @@ def run_himalaya(
             )
     cmd = build_himalaya_command(args, account)
     command_class = classify_himalaya_command(args)
+    envelope_id = item_envelope_id(args)
+    item_scoped = envelope_id is not None
     stats = current_transport_stats()
     if diagnostic_capture is not None:
         # Opt-in bounded diagnostic branch: exactly one child, bounded drain, no
@@ -843,6 +1025,7 @@ def run_himalaya(
                 return stats.start_process(
                     command_class, lambda: _POPEN(*args, **kwargs)
                 )
+        started = time.monotonic()
         try:
             output = _run_himalaya_diagnostic(
                 cmd,
@@ -852,13 +1035,23 @@ def run_himalaya(
                 spawn=spawn,
             )
         except HimalayaInvocationError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
             if exc.reason_code == TRANSPORT_BLOCKED_REASON:
                 raise
-            if stats is not None and stats.record_error(command_class, exc.reason_code):
+            if stats is not None and stats.record_error(
+                command_class,
+                exc.reason_code,
+                duration_ms=duration_ms,
+                item_scoped=item_scoped,
+                envelope_id=envelope_id,
+            ):
                 raise stats.blocked_error(command_class) from exc
             raise
         if stats is not None:
-            stats.record_success()
+            stats.record_success(
+                command_class=command_class,
+                duration_ms=int((time.monotonic() - started) * 1000),
+            )
         return output
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
@@ -868,6 +1061,7 @@ def run_himalaya(
     attempts = 1 if stdin_bytes is not None else max_retries
     last_err = None
     for attempt in range(attempts):
+        started = time.monotonic()
         try:
             res = _run_process(
                 cmd,
@@ -878,12 +1072,20 @@ def run_himalaya(
                 command_class=command_class,
                 retry=attempt > 0,
             )
+            duration_ms = int((time.monotonic() - started) * 1000)
             if res.returncode != 0:
                 err_msg = _decode_process_stream(res.stderr).strip()
                 # Check for transient connection errors
                 if _is_transient_himalaya_error(err_msg):
-                    if stats is not None and stats.record_error(command_class, "himalaya_transient"):
-                        # The second consecutive failure is the structured abort
+                    if stats is not None and stats.record_error(
+                        command_class,
+                        "himalaya_transient",
+                        duration_ms=duration_ms,
+                        exit_code=res.returncode,
+                        item_scoped=item_scoped,
+                        envelope_id=envelope_id,
+                    ):
+                        # The abort-triggering failure is the structured abort
                         # itself; retry/no retry cannot swallow it.
                         raise stats.blocked_error(command_class)
                     last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
@@ -892,19 +1094,44 @@ def run_himalaya(
                         continue
                     break
                 if stats is not None:
-                    stats.record_error(command_class, "himalaya_command_failed")
+                    stats.record_error(
+                        command_class,
+                        "himalaya_command_failed",
+                        duration_ms=duration_ms,
+                        exit_code=res.returncode,
+                        item_scoped=item_scoped,
+                        envelope_id=envelope_id,
+                    )
                 raise HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {err_msg}")
             if stats is not None:
-                stats.record_success()
+                stats.record_success(
+                    command_class=command_class,
+                    duration_ms=duration_ms,
+                    exit_code=res.returncode,
+                )
             return _decode_process_stream(res.stdout)
         except subprocess.TimeoutExpired as te:
-            if stats is not None and stats.record_error(command_class, "himalaya_timeout"):
+            duration_ms = int((time.monotonic() - started) * 1000)
+            if stats is not None and stats.record_error(
+                command_class,
+                "himalaya_timeout",
+                duration_ms=duration_ms,
+                item_scoped=item_scoped,
+                envelope_id=envelope_id,
+            ):
                 raise stats.blocked_error(command_class) from te
             raise HimalayaInvocationError(
                 "himalaya_timeout", "Himalaya timed out; refusing to retry the mailbox command."
             ) from te
         except BrokenPipeError as bp:
-            if stats is not None and stats.record_error(command_class, "himalaya_stdin_failed"):
+            duration_ms = int((time.monotonic() - started) * 1000)
+            if stats is not None and stats.record_error(
+                command_class,
+                "himalaya_stdin_failed",
+                duration_ms=duration_ms,
+                item_scoped=item_scoped,
+                envelope_id=envelope_id,
+            ):
                 raise stats.blocked_error(command_class) from bp
             raise HimalayaInvocationError(
                 "himalaya_stdin_failed",
@@ -912,7 +1139,14 @@ def run_himalaya(
                 "the command was not retried.",
             ) from bp
         except OSError as exc:
-            if stats is not None and stats.record_error(command_class, "himalaya_launch_failed"):
+            duration_ms = int((time.monotonic() - started) * 1000)
+            if stats is not None and stats.record_error(
+                command_class,
+                "himalaya_launch_failed",
+                duration_ms=duration_ms,
+                item_scoped=item_scoped,
+                envelope_id=envelope_id,
+            ):
                 raise stats.blocked_error(command_class) from exc
             raise HimalayaInvocationError(
                 "himalaya_launch_failed",
@@ -1102,6 +1336,17 @@ def raise_if_transport_blocked(error: BaseException) -> None:
         raise error
 
 
+def _read_failure_reason(error: object) -> str | None:
+    """Return the bounded item-level reason for one failed read."""
+    if error is None:
+        return None
+    if isinstance(error, HimalayaInvocationError):
+        return "timeout" if error.reason_code == "himalaya_timeout" else "read_failed"
+    if isinstance(error, (TimeoutError, subprocess.TimeoutExpired)):
+        return "timeout"
+    return "read_failed"
+
+
 def get_single_email_details(
     env_id: str | int,
     folder: str = "INBOX",
@@ -1180,6 +1425,7 @@ def get_single_email_details(
                 "attachment_status": attachment_status,
                 "attachment_error": attachment_error,
                 "error": None,
+                "read_error_reason": None,
                 "read_level": "full_body" if full_body else "preview",
             }
         except Exception as exc:
@@ -1266,6 +1512,7 @@ def get_single_email_details(
                 "attachment_status": attachment_status,
                 "attachment_error": attachment_error,
                 "error": str(last_err) if last_err else "Full message read failed.",
+                "read_error_reason": _read_failure_reason(last_err) or "read_failed",
                 "read_level": "full_body",
             }
         # Lightweight fallback: try reading just Message-ID
@@ -1298,6 +1545,7 @@ def get_single_email_details(
             "attachment_status": attachment_status,
             "attachment_error": attachment_error,
             "error": None if norm_mid else str(last_err),
+            "read_error_reason": _read_failure_reason(last_err),
             "read_level": "preview",
         }
 
@@ -1346,6 +1594,7 @@ def get_single_email_details(
             "attachment_status": attachment_status,
             "attachment_error": attachment_error,
             "error": read_error,
+            "read_error_reason": None,
             "read_level": "full_body" if full_body else "preview",
         }
     except Exception as e:
@@ -1370,6 +1619,7 @@ def get_single_email_details(
             "attachment_status": attachment_status,
             "attachment_error": attachment_error,
             "error": str(e),
+            "read_error_reason": "read_failed",
             "read_level": "full_body" if full_body else "preview",
         }
 

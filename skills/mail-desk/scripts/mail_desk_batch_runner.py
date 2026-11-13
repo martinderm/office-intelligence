@@ -72,6 +72,7 @@ from core.himalaya import (
     transport_stats_session,
 )
 from core.known_skip import load_envelope_thread_map, thread_map_hit
+from core.progress import abort_active_trackers
 from core.sent_handoff import SentHandoffError
 from core.batch_contract import validate_execute_contract
 from core.telemetry import empty_telemetry
@@ -1577,17 +1578,24 @@ def main() -> int:
         _emit(_failure_envelope(str(exc), error_type="InputNotFound", operation="input_load", state="NotFound"))
         return 1
     except HimalayaInvocationError as exc:
+        abort_active_trackers("interrupted: batch run ended before completion")
         snapshot = last_transport_stats()
         blocked = (
             exc.reason_code == TRANSPORT_BLOCKED_REASON and snapshot is not None
         )
         if blocked:
+            block_details: dict[str, Any] = {
+                "reason_code": exc.reason_code,
+                "transport_stats": snapshot,
+            }
+            if exc.details.get("trigger"):
+                block_details["transport_trigger"] = dict(exc.details["trigger"])
             _emit(_failure_envelope(
                 str(exc) or exc.reason_code,
                 error_type="TransportBlocked",
                 operation="runtime",
                 state="Blocked",
-                details={"reason_code": exc.reason_code, "transport_stats": snapshot},
+                details=block_details,
             ))
             return 1
         details: dict[str, Any] = {"exception_type": type(exc).__name__}
@@ -1602,12 +1610,14 @@ def main() -> int:
         ))
         return 1
     except SentHandoffError as exc:
+        abort_active_trackers("interrupted: batch run ended before completion")
         _emit(_failure_envelope(
             str(exc), error_type="SentHandoffError", operation="runtime", state="Failed",
             details={"reason_code": exc.reason_code, **exc.details},
         ))
         return 1
     except Exception as exc:  # noqa: BLE001 - every CLI failure must retain the envelope contract
+        abort_active_trackers("interrupted: batch run ended before completion")
         details = {"exception_type": type(exc).__name__}
         snapshot = last_transport_stats()
         if snapshot is not None:
