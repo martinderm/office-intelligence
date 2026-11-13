@@ -2548,14 +2548,23 @@ die MIME-/Anhangsstrecke bleiben unberührt.
   Nachbedingung macht ein verschlucktes Blocked-Flag wieder zum strukturierten
   Abbruch. `execute`/`verify`/`search`/`sync_sent` bleiben unverändert.
 - [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
-  `TransportStats`, `transport_stats_session`, `classify_himalaya_command`;
-  `run_himalaya` zählt jeden erfolgreich erzeugten Prozessstart, Retry und
-  Fehler je Kommandoklasse. `start_process` führt Budgetprüfung, Blockprüfung
-  und `Popen` unter einem Spawn-Lock aus; der zweite aufeinanderfolgende
-  Transportfehler wird sofort als `mailbox_transport_blocked` geworfen. Die
-  Session wird über kopierte `contextvars` in Inspect-Threadpools getragen.
+  `TransportStats`, `transport_stats_session`, `classify_himalaya_command`,
+  `item_envelope_id`; `run_himalaya` zählt jeden erfolgreich erzeugten
+  Prozessstart, Retry, Fehler und die Dauer je Kommandoklasse. `start_process`
+  führt Budgetprüfung, Blockprüfung und `Popen` unter einem Spawn-Lock aus; der
+  zweite aufeinanderfolgende Transportfehler wird sofort als
+  `mailbox_transport_blocked` geworfen. Item-Timeouts
+  (`message read`/`message export` mit Envelope-ID) laufen getrennt als
+  Item-Fehler; erst fünf ohne Fortschritt blocken. Die Session wird über
+  kopierte `contextvars` in Inspect-Threadpools getragen.
   Classifier-Full-Read, Sent-Sync und Attachment-Raw-MIME reichen den Block
-  unverändert weiter.
+  unverändert weiter. `read_error_reason` markiert Item-Fehler begrenzt
+  (`timeout`/`read_failed`).
+- [`scripts/core/progress.py`](../../scripts/core/progress.py):
+  `BatchProgressTracker`, `read_runner_progress`,
+  `settle_stale_runner_progress`, `abort_active_trackers`; persistierter
+  Owner-Pid, Liveness-Settlement verwaister `running`-Zustände und
+  `interrupted_previous_run` als begrenzte Identität des unterbrochenen Laufs.
 
 **Fail-closed-Regeln:**
 - **F1:** Map nur aus genau einem Prozess mit Exit 0, innerhalb 60 s und
@@ -2576,6 +2585,7 @@ die MIME-/Anhangsstrecke bleiben unberührt.
 - **F6:** Bereits der zweite aufeinanderfolgende Transportfehler wird sofort als
   strukturierter Abbruch (`mailbox_transport_blocked`) ausgelöst; es folgt kein
   weiterer CLI-Start, und Fallback-/Sammelpfade dürfen ihn nicht verschlucken.
+  Item-Timeouts sind hiervon ausgenommen (siehe Item-Isolation unten).
   Budgetprüfung, Blockveröffentlichung und `Popen` laufen unter demselben
   Spawn-Lock: parallele Worker können den letzten Budgetplatz nicht doppelt
   belegen und nicht nach veröffentlichtem Block starten. Explizites Start-Budget
@@ -2583,12 +2593,58 @@ die MIME-/Anhangsstrecke bleiben unberührt.
   Session gilt nur für `inspect`/`draft`/`pipeline`; `execute`, `verify`,
   `search` und `sync_sent` bleiben unverändert.
 
-**`transport_stats` (nur Zähler):** `process_starts`, `retries`, `errors`,
-`consecutive_transport_errors`, `start_budget`, `blocked`, `block_reason` und
-`commands` je Kommandoklasse (`envelope list`, `envelope thread`,
-`message read`, …). Keine Mailinhalte, keine Header, keine Message-IDs. Der
-Batch-CLI-Wrapper reicht `transport_stats` (nur Zähler) in seiner kompakten
-Summary durch.
+**Item-Isolation (Follow-up 2026-11-13):** Ein Timeout von `message read` oder
+`message export` für genau einen Envelope ist ein Item-Fehler, kein
+Transportausfall: `run_himalaya` erkennt die Bindung über die Kommandoklasse und
+die dezimale Envelope-ID, zählt den Fehler in `transport_stats`
+(`consecutive_item_failures`) und lässt den Lauf weiterlaufen, damit der
+Preview-Fail-safe des Draft-Pfads das Item als Review-Kandidat bleibt
+(`read_error_reason: "timeout"`, `read_escalation.fallback: "preview"`,
+`read_escalation.reason: "timeout"`; der persistierte `error.type` bleibt
+`RuntimeError`). Erst
+`ITEM_FAILURE_MAX_CONSECUTIVE = 5` Item-Timeouts **ohne dazwischenliegenden
+erfolgreichen Befehl** blocken mit
+`consecutive_item_failures_without_progress`. Netz-/Start-/Stdin-Fehler und
+Timeouts von `envelope list`/`envelope thread`/`folder list` behalten den
+unveränderten Zwei-Fehler-Schwellwert `two_consecutive_transport_errors`; der
+Guard wird nicht abgeschwächt, und `mailbox_transport_blocked` bleibt der
+einzige strukturierte Abbruchzustand. Als Fortschritt zählt jeder erfolgreiche
+Befehl, auch der Preview-Read des nächsten Items; eine Folge, in der nur
+Full-Reads timeouten, blockt daher nicht, sondern erzeugt Review-Items. Ein
+Item-Timeout setzt einen bereits laufenden Transportfehler-Zähler nicht zurück
+(konservativ): Netz → Item-Timeout → Netz blockt weiterhin.
+
+**`transport_stats` (nur Zähler und begrenzte Zeit-/Exit-Werte):**
+`process_starts`, `retries`, `errors`, `consecutive_transport_errors`,
+`consecutive_item_failures`, `start_budget`, `blocked`, `block_reason`,
+`block_trigger` und `commands` je Kommandoklasse (`envelope list`,
+`envelope thread`, `message read`, …) mit unverändertem Dreischlüssel-Format
+(`starts`/`retries`/`errors`). Additiv liefert `command_telemetry` je Klasse
+`starts`, `retries`, `errors`, `duration_ms_total`, die letzten
+`TRANSPORT_DURATION_SAMPLES = 20` Dauern, `last_duration_ms`,
+`last_exit_code` und `last_reason_code`. `block_trigger` nennt Kommandoklasse,
+Envelope-ID, Dauer, Exit und Reason des auslösenden Aufrufs; der
+`TransportBlocked`-Envelope führt ihn als `transport_trigger`.
+`duration_samples_per_command` nennt das Sample-Limit (20). Bei einem
+Start-Budget-Block ist der Trigger synthetisch (Klasse/Reason, Dauer/Exit
+`null`). Keine Mailinhalte, keine Header, keine Message-IDs. Der Batch-CLI-
+Wrapper reicht `transport_stats` (nur Zähler und begrenzte Metadaten) in seiner
+kompakten Summary durch.
+
+**Fortschritt nach Kill:** `runner-progress.json` trägt additiv `pid` und
+`heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
+liveness-geprüfte Sicht: Ein `status: "running"` ohne lebenden Owner erscheint
+als `aborted`/`progress.current_step: "interrupted"` mit `interrupted_at` und
+genullter ETA, ohne die Datei zu verändern. `settle_stale_runner_progress`
+(mutierend, im Kontext eines lease-gebundenen Laufs) schreibt den Zustand
+atomar fest; ein neuer Tracker settle't vor dem eigenen Write und bewahrt die
+Identität unter `interrupted_previous_run`. Beim regulären Prozessende beendet
+`abort_active_trackers` noch laufende Tracker; ein OS-Kill wird über den
+fehlenden Owner erkannt. Legacy-Zustände ohne `pid` bleiben unangetastet. Die
+Pid-Prüfung ist best-effort: unbekannte oder nicht prüfbare Zustände gelten
+konservativ als lebend; PID-Namespaces/-Reuse können einen toten Lauf als
+lebend erscheinen lassen, nie umgekehrt. `heartbeat_at` ist informativ, kein
+Liveness-Kriterium.
 
 **Grenzen:** Die Gleichsetzung CLI-Envelope-ID = IMAP-UID ist eine
 Implementierungstatsache der gebündelten `email-lib`-Generation und nicht
@@ -2612,6 +2668,11 @@ threadübergreifender Transport-Kontext, atomare Budget-/Block-Barrieren,
 Default-Budgetabdeckung des 2.500er-Fensters, F6-Weitergabe aus
 Classifier-Full-Read und schreibfreie Inspect-/Draft-Abbrüche). Angepasste
 Bestandstests patchen die Thread-Map hermetisch.
+`tests/test_issue103_transport_item_isolation.py` pinnt die Item-Isolation
+(zwei Item-Timeouts ohne Abbruch, F6 unverändert für Netz/Start/Liste, fünf
+Item-Timeouts ohne Fortschritt), `command_telemetry`/`block_trigger` und die
+Progress-Liveness (verwaister `running`-Zustand wird `aborted`, lebender Owner
+und Legacy-Zustand bleiben unverändert).
 `tests/test_batch_runner_mde2_hardening.py` pinnt zusätzlich, dass ein
 Raw-MIME-Blocked-Fehler nicht als `fetch_failed` endet und kein Manifest
 geschrieben wird.

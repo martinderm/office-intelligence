@@ -146,21 +146,44 @@ def full_body_triggers(email: dict[str, Any], preview_item: dict[str, Any]) -> l
     return list(dict.fromkeys(triggers))
 
 
+class _FullReadItemError(RuntimeError):
+    """Carry the bounded item failure reason from the reader to the fallback."""
+
+    def __init__(self, message: str, read_error_reason: object = None) -> None:
+        super().__init__(message)
+        reason = str(read_error_reason or "").strip()
+        self.read_error_reason = reason or "read_failed"
+
+
 def _full_read_failure(
     preview_item: dict[str, Any],
     triggers: list[str],
     error: object,
 ) -> dict[str, Any]:
-    """Fail closed: leave a full-read failure in review, never as a certain result."""
+    """Fail closed: leave a full-read failure in review, never as a certain result.
+
+    A failed full-body escalation keeps the already classified preview as its
+    fallback source; the bounded reason names the item-level failure
+    (``timeout`` or ``read_failed``) without any raw exception text beyond the
+    existing error type/message fields.
+    """
     decision = dict(preview_item.get("decision", {}))
     decision["confidence"] = "low"
     decision["review_required"] = True
     decision["review_reason"] = "read_escalation_failed"
+    # Keep the persisted error type stable for the pre-existing RuntimeError
+    # contract; the item reason is carried separately.
+    error_type = "RuntimeError" if isinstance(error, _FullReadItemError) else type(error).__name__
     decision["read_escalation"] = {
         "level": "full_body",
         "triggers": triggers,
         "status": "failed",
-        "error": {"type": type(error).__name__, "message": str(error)},
+        "fallback": "preview",
+        "reason": (
+            getattr(error, "read_error_reason", None)
+            or ("timeout" if getattr(error, "reason_code", "") == "himalaya_timeout" else "read_failed")
+        ),
+        "error": {"type": error_type, "message": str(error)},
     }
     preview_item["decision"] = decision
     preview_item["action"] = {"type": "keep_in_folder", "target_folder": "INBOX"}
@@ -286,7 +309,10 @@ def classify_email_two_pass(
         if not isinstance(full_email_details, dict):
             raise TypeError("Full message reader returned no email object.")
         if full_email_details.get("error"):
-            raise RuntimeError(str(full_email_details["error"]))
+            raise _FullReadItemError(
+                str(full_email_details["error"]),
+                full_email_details.get("read_error_reason"),
+            )
         full_email = dict(email)
         for field in (
             "message_id", "raw_message_id", "subject", "from", "to", "date",

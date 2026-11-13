@@ -185,20 +185,21 @@ die Form `[Node-Objekt, Node-Objekt, Ganzzahl 0..255]` haben. F2: dezimale
 identisch sind, sonst entfällt sie samt ungültiger Duplikate. F3: sonst
 Einzel-Read. F4: ein Treffer erzeugt nie gesammelte Daten und fließt nie in
 Index/Journal/Evidence/Anhänge. F5: fehlende ID ist unbekannt und wird gelesen.
-F6: bereits der zweite aufeinanderfolgende Transportfehler bricht sofort
-strukturiert mit `mailbox_transport_blocked` ab; kein weiterer Prozessstart und
-keine Degradierung durch Fallback-Pfade. Budgetprüfung, Blockveröffentlichung
-und `Popen` teilen einen Spawn-Lock, sodass parallele Worker weder den letzten
-Budgetplatz doppelt reservieren noch nach veröffentlichtem Block starten.
-Start-Budget `transport_start_budget`/`--transport-start-budget`; Default
-10.000, begründet aus dem 2.500er-Fallbackfenster mit bis zu zwei Prozessen je
-Envelope (Raw-MIME-Export plus Read) und Reserve für Listen-Tiers/Thread-Map.
-Die Session gilt nur für `inspect`/`draft`/`pipeline`, `execute`/`verify`/
-`search`/`sync_sent` bleiben unverändert. Classifier-Full-Read und
-Attachment-Raw-MIME reichen F6 durch; bei F6 entstehen keine Manifest- oder
-Inspect-Ausgabedateien. Skip-Progress bleibt eine aggregierte Zeile pro Scan.
-`transport_stats` meldet Prozessstarts, Retries und Fehler je Kommandoklasse
-plus `blocked`/`block_reason` – nur Zähler, keine Mailinhalte.
+F6: der zweite aufeinanderfolgende Transportfehler bricht
+mit `mailbox_transport_blocked` ab; kein weiterer Prozessstart, keine
+Fallbacks. Item-Isolation: ein Timeout von `message read`/
+`message export` je Envelope ist Item-Fehler
+(`read_error_reason`) und lässt den Lauf (Preview-Fail-safe)
+weiterlaufen; fünf Item-Timeouts ohne erfolgreichen Befehl dazwischen
+blocken (`consecutive_item_failures_without_progress`). Netz-/Start-/Stdin- und
+Nicht-Item-Timeouts behalten den Zwei-Fehler-Schwellwert. Start-Budget
+`transport_start_budget`/`--transport-start-budget`, Default 10.000
+(2.500er-Fenster). Session nur `inspect`/`draft`/`pipeline`;
+Classifier-Full-Read/Attachment-Raw-MIME reichen F6 durch; F6 schreibt keine
+Manifest-/Inspect-Ausgabe. `transport_stats` meldet Starts/Retries/Fehler,
+`command_telemetry` (letzte 20 Dauern, `last_exit_code`,
+`last_reason_code`) und `block_trigger` (Klasse, Envelope-ID, Dauer, Exit,
+Reason; `transport_trigger`).
 
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
@@ -1241,13 +1242,14 @@ Reparaturmanifest `data/mail-desk/batch-reconcile.json`:
 ## Live-Fortschritts-Monitoring & Zeitschätzung (`core/progress.py`)
 
 - Mutierende Läufe (`--draft`/`execute`/`--inspect`) führen `data/mail-desk/runner-progress.json` (Schema: [`log-schema.md`](log-schema.md)) atomar mit Zählern, Prozentwert, Schritten und deterministischer ETA; `pipeline` schreibt keine Statusdatei.
+- **Liveness statt rohem `running`:** `pid`/`heartbeat_at`; `read_runner_progress` liefert read-only `aborted` (ETA 0) für `running` ohne lebenden Owner; `settle_stale_runner_progress`/der nächste Tracker schreibt fest; `abort_active_trackers` beendet aktive Tracker beim Exit; roher Datei-Read settle't nicht; Legacy ohne `pid` unverändert.
 - Ungepuffertes Live-Streaming in stdout/`task.log`: jeder Schritt wird sofort sichtbar geloggt (`[11/20 - 55.0%] Env 7081: 'Antw: Re: ATAEL...' (16.7s | ETA: 183s)`).
 - **Bekannte Mails sind aggregiert:** genau eine Zeile `skipped N known envelopes` pro Scan-Phase statt einer Zeile je Envelope (OUT-P1, Issue #5); `known_count` und Progressdatei bleiben unverändert.
 - **Standardweg:** [`CLI-Wrapper`](cli-operations.md) für `draft`/`execute`/`reconcile`/`sync-sent` mit shared Lock ohne Legacy-Bypass; Lease-/Conversation-Flags nur bei `draft` delegiert. `--data-dir`/`tmp/mail-batch`: kanonisch, jede Reparse-Komponente; Abweichungen stoppen vor mkdir/Prune/Child. Statische Prüfung: TOCTOU/Hardlink erfordert OS-Isolation (#91). Runner-stdout/-stderr unter `<workspace>/tmp/mail-batch/`; nur der Summary erreicht den Caller, Fehler enden mit Nichtnull-Exit. Ein Envelope pro Runner; Doppelungen aus Harness/Shell.
 - **Kompakter Fehler-Envelope:** Bei `PartialFailure` listet `data.results` nur fehlgeschlagene Items; erfolgreiche zählen als `succeeded_count`/`succeeded_envelope_ids` (das Journal führt die Liste). `execute_summary` und Success-Envelope bleiben unverändert (OUT-P1, Issue #6).
 - **Verbindliche Timer-Regel (60s $\rightarrow$ 75%-ETA-Formel):**
   1. Batch im Hintergrund mit initialem Timer von **60 Sekunden** starten (Warmup für $\bar{T}_{\text{item}}$ über mehrere IMAP-Operationen).
-  2. Beim Aufwachen `runner-progress.json` lesen: `status == "completed"` $\rightarrow$ Vollzugsmeldung; `status == "running"` $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen; wiederholen.
+  2. Beim Aufwachen den **settle-ten** Zustand lesen: `completed` $\rightarrow$ Vollzug; `running` (nur mit lebendem `pid`) $\rightarrow$ nächsten Timer auf $\Delta t = \max(30, \min(0.75 \times \text{estimated\_remaining\_seconds}, 360))$ Sekunden setzen; `aborted`/`failed` $\rightarrow$ beenden und Grund melden; wiederholen.
   3. Reduziert Polling und schont Context Window/Ressourcen.
 - **Repair-Nachführung:** `reconcile --apply` führt eine vorhandene `runner-progress.json` nach (siehe Abschnitt `reconcile`).
 

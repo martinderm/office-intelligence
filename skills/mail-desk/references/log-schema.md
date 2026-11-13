@@ -560,6 +560,8 @@ Live-Fortschritts- und ETA-Statusdatei unter `data/mail-desk/runner-progress.jso
   "run_id": "execute_20260831_125605",
   "mode": "draft|execute|pipeline|inspect",
   "status": "running|completed|failed|aborted|repaired",
+  "pid": 4242,
+  "heartbeat_at": "2026-08-31T10:56:35Z",
   "started_at": "2026-08-31T12:56:05",
   "updated_at": "2026-08-31T10:56:35Z",
   "progress": {
@@ -579,6 +581,11 @@ Live-Fortschritts- und ETA-Statusdatei unter `data/mail-desk/runner-progress.jso
   "error": null
 }
 ```
+
+- **`pid`/`heartbeat_at` (additiv, Schema bleibt 1):** `pid` ist der Owner-Prozess des Laufs. `status: "running"` ist nur mit lebendem `pid` gültig. `core.progress.read_runner_progress` liefert die liveness-geprüfte **read-only** Sicht (kein Lease nötig): Ein verwaister `running`-Zustand erscheint dort als `aborted` mit `progress.current_step: "interrupted"`, `error: "interrupted: the runner process is no longer running"`, `interrupted_at` und genullter ETA. Ein direktes Lesen der JSON-Datei ist **kein** Settlement; erst `settle_stale_runner_progress` (mutierend, im Kontext eines lease-gebundenen Laufs) oder der nächste Tracker schreibt den Zustand atomar fest. Der neue Tracker bewahrt die begrenzte Identität des unterbrochenen Laufs unter `interrupted_previous_run` (`run_id`, `mode`, `status: "interrupted"`, `completed_items`, `updated_at`).
+- **Legacy-Zustand:** Fehlt `pid`, bleibt der Status unverändert (Eigentümerschaft nicht beweisbar); neue Läufe schreiben `pid` immer.
+- **Liveness-Grenzen:** Die Prüfung ist best-effort über den Owner-Pid (Windows `OpenProcess`, POSIX `kill(pid, 0)`). Ein unbekannter oder nicht prüfbarer Zustand gilt konservativ als lebend; PID-Namespaces, Container/WSL-Grenzen und PID-Reuse können einen toten Lauf als lebend erscheinen lassen, nie umgekehrt. `heartbeat_at` ist informativ und kein Liveness-Kriterium; es wird nur bei Zustands-Writes aktualisiert.
+- **Terminale Zustände:** `completed`/`failed`/`aborted`/`repaired` werden nie durch die Exit-/Reader-Settlement überschrieben. Beim regulären Prozessende beendet `abort_active_trackers` noch laufende Tracker (`error = "interrupted: batch run ended before completion"` bei einem abgebrochenen Runner); ein OS-Kill wird über den fehlenden Owner-Pid erkannt.
 
 ## injection-quarantine/ (Issue #62)
 
