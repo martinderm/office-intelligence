@@ -185,17 +185,17 @@ die Form `[Node-Objekt, Node-Objekt, Ganzzahl 0..255]` haben. F2: dezimale
 identisch sind, sonst entfällt sie samt ungültiger Duplikate. F3: sonst
 Einzel-Read. F4: ein Treffer erzeugt nie gesammelte Daten und fließt nie in
 Index/Journal/Evidence/Anhänge. F5: fehlende ID ist unbekannt und wird gelesen.
-F6: der zweite aufeinanderfolgende Transportfehler bricht
-mit `mailbox_transport_blocked` ab; kein weiterer Prozessstart, keine
-Fallbacks. Item-Isolation: ein Timeout von `message read`/
+F6: der zweite Transportfehler bricht
+mit `mailbox_transport_blocked` ab; kein weiterer Prozessstart.
+Ein Timeout von `message read`/
 `message export` je Envelope ist Item-Fehler
 (`read_error_reason`) und lässt den Lauf (Preview-Fail-safe)
 weiterlaufen; fünf Item-Timeouts ohne erfolgreichen Befehl dazwischen
 blocken (`consecutive_item_failures_without_progress`). Netz-/Start-/Stdin- und
-Nicht-Item-Timeouts behalten den Zwei-Fehler-Schwellwert. Start-Budget
-`transport_start_budget`/`--transport-start-budget`, Default 10.000
-(2.500er-Fenster). Session nur `inspect`/`draft`/`pipeline`;
-Classifier-Full-Read/Attachment-Raw-MIME reichen F6 durch; F6 schreibt keine
+Nicht-Item-Timeouts behalten F6. Start-Budget
+`transport_start_budget`/`--transport-start-budget`, Default 10.000.
+Session: `inspect`/`draft`/`pipeline`;
+Classifier-Full-Read/Attachment-Raw-MIME reichen F6 durch; F6: keine
 Manifest-/Inspect-Ausgabe. `transport_stats` meldet Starts/Retries/Fehler,
 `command_telemetry` (letzte 20 Dauern, `last_exit_code`,
 `last_reason_code`) und `block_trigger` (Klasse, Envelope-ID, Dauer, Exit,
@@ -1111,14 +1111,15 @@ Anker, `headers_complete`, `already_synthesized`), `handoff` (`state` ∈ `none|
 `new_count`/`new_items` sind exakte, bestätigte Ergebnisse; nur bei `write_state: unknown` ist `new_count: null`
 (und `new_items_unavailable: true`).
 
-**Trigger für den Consumer:** `pending_count > 0`, nicht `new_count` (Absturz: `new_count` 0 bei offenen Items).
-`state` `unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und** No-op bis zur manuellen
-Behebung; nur `0` bei `none`/`written` ist leer (`handoff_allows_noop`). Consumer:
-`pipelines/mail-desk-batch.md` (extern), liest `load_pending_handoff`, schreibt `record_synthesized`
-oder für eine begründete No-op-Entscheidung `record_no_evidence` (Issue #107: konsumiert ohne Vorgang/EVID-/
-Thread-Anker). Nach einem Crash zwischen dauerhafter Promotion und Ledger-Zeile zuerst
-`recover_promotion` mit `message_id` + exaktem `vorgang_ref` + `EVID-ID` prüfen; Teil-/Mehrdeutigkeit stoppt.
-Vertrag: [`sent-ledger-migration.md`](sent-ledger-migration.md).
+**Trigger:** `pending_count > 0`, nicht `new_count` (Absturz: `new_count` 0 bei offenen Items).
+`state` `unknown`/`invalid` oder `pending_count: null` **blockiert** Synthese **und** No-op; nur `0` bei
+`none`/`written` ist leer (`handoff_allows_noop`). Ein Handoff mit
+`pending_count == 0` und ausschließlich konsumierten Resten (`consumed_ignored == handoff_item_count`)
+blockiert den Sync nicht; eine **fehlende** Datei bleibt kein Leerbeweis. Consumer:
+`pipelines/mail-desk-batch.md` (extern) liest `... pending`, schreibt ausgewertete Items über
+`... consume --evaluations <sent-evaluation.json>` (`not_evaluated` bleibt offen); ein
+Append bleibt `... record`. Crash: `... crash-check` vor `... recover-promotion`. Vertrag:
+[`sent-ledger-migration.md`](sent-ledger-migration.md).
 
 **Fail-closed (Exit ≠ 0, `ok: false`, `data.reason_code`) und `write_state`:** `none` = Ablehnung/Fehler vor
 jedem Write; `state` = nur Coverage-Marker/-Schranke (`sent-sync-state.json`) wurde persistiert, kein

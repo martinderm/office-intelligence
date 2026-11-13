@@ -609,7 +609,8 @@ zuerst → `thread_key`; `no_evidence`-Zeilen werden übersprungen), `is_synthes
 `record_synthesized` (idempotent; löst den Anker beim Schreiben frisch gegen das aktuelle Ledger auf; optional
 `evid_id`), `record_no_evidence` (begründeter Konsum ohne Anker), `record_outcome` (gemeinsamer Schema-/Konfliktkern),
 `append_ledger_records` (validierter Low-Level-Append für Import), `load_pending_handoff` (Konsumsicht: validiert,
-nur unkonsumiert, frisch verankert, Vorfahren zuerst, `waits_for`), `peek_handoff_state` (read-only, wirft nie),
+nur unkonsumiert, frisch verankert, Vorfahren zuerst, `waits_for`), `pending_handoff_view` (derselbe reine
+Anker-/Ordnungsschritt auf einem bereits geladenen Ledger, ohne zweiten Read), `peek_handoff_state` (read-only, wirft nie),
 `parse_address_list`.
 
 ### 10.4 Import-/Recovery-Fassade (`scripts/core/sent_ledger.py`, Issue #107)
@@ -618,5 +619,24 @@ nur unkonsumiert, frisch verankert, Vorfahren zuerst, `waits_for`), `peek_handof
 `<workspace>/data/mail-desk`, idempotenter Teil-/No-op, keine Reportdatei), `read_legacy_inventory`
 (striktes JSONL mit `status`/`message_id`/`recorded_at` und optionalem `vorgang_ref`/`evid_id`/`reason_code`/
 `thread_key`) und `recover_promotion` (exaktes Tripel, Teil-/Mehrdeutigkeitskonflikte, `evid_shared_conflict`
-und `promotion_anchor_conflict` bei abweichendem Anker-Vorgang). CLI:
-`scripts/mail_desk_sent_ledger.py` (`plan`/`apply`/`recover-promotion`).
+und `promotion_anchor_conflict` bei abweichendem Anker-Vorgang).
+
+**Konsum-Adapter (#88):** `build_pending_view` (read-only, stabile Pending-Envelope ohne Rohinhalte,
+mit gekürzten Hash-Refs — keine Anonymisierung —, `consumed_outcomes`/`consumed_sources`, optionalem
+Account-/Mailbox-Gate; keine Envelope-/Message-ID, Körperlese-Gate offen; `handoff_item_count > 0`
+bei `pending_count: 0` = konsumierte Reste, kein offenes Pending), `record_pending_outcome`
+(genau eine Konsumzeile; Lease + Zielbindung vor dem Append, EVID-/Anker-/Vorfahren-Prüfung gegen alle
+Ledger-Zeilen inkl. `anchor_ambiguous` und `handoff_metadata_incomplete` — der Anker-Gate läuft nur
+für `synthesized` —, `ancestor_pending` für offene Vorfahren, idempotenter No-op,
+`ledger_conflict` bei abweichender Identität), `consume_evaluated_items` (Batch-Konsum eines strikt
+validierten Evaluationsdokuments: nur `synthesized`/`no_evidence`, `not_evaluated` bleibt offen,
+Vorprüfung auf doppelte Ziele/geteilte EVID/widersprüchliche dauerhafte Identität, jeder Append über
+`record_pending_outcome`, `--dry-run` ohne Lease/Write, `pending_before`/`pending_after`,
+`consume_blocked` bei fachlichem Item-Konflikt) und `check_crash_triad` (read-only, exakte
+`message_id`/`vorgang_ref`/`evid_id`-Triade, `unique`/`absent`/`conflict`, konservative Ankerprüfung
+mit Handoff-/Evidence-Metadaten, strikt typgeprüfter Evidence-Thread-Metadaten
+(`promotion_metadata_invalid`) und Vorfahren-Gate (`ancestor_pending`, dann nie
+`safe_to_append: true`), optionales Evidence-Inventar, nie schreibend). `read_sent_evaluations`
+liest das Consumer-Dokument (`kind: mail-desk.sent-evaluation`) strikt. CLI:
+`scripts/mail_desk_sent_ledger.py` (`plan`/`apply`/`recover-promotion` sowie
+`pending`/`record`/`consume`/`crash-check`).

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""CLI for Issue #107 sent-ledger outcomes, legacy import and crash recovery.
+"""CLI for Issue #107/#88 sent-ledger outcomes, legacy import, crash recovery and
+the consumer consumption adapter.
 
 Commands are deliberately offline-only and operate on a consumer's
 ``data/mail-desk`` directory:
@@ -8,8 +9,21 @@ Commands are deliberately offline-only and operate on a consumer's
 * ``apply``: appends an approved plan under a verified workspace lease.
 * ``recover-promotion``: verifies a durable promotion triad before appending at
   most one missing ledger line.
+* ``pending``: read-only view of the open ledger/handoff items (counters and
+  truncated hash references; never raw mail content or raw IDs).
+* ``record``: appends exactly one consumption outcome for one open item under a
+  verified workspace lease; append equals consumption, normalized Message-ID is
+  the idempotency key.
+* ``consume``: appends every open item the consumer has already evaluated
+  (``synthesized``/``no_evidence``) in one lease-bound round; ``not_evaluated``
+  items stay open.  ``--dry-run`` validates and projects without a lease or write.
+* ``crash-check``: read-only exact triad classification (``unique``/``conflict``/
+  ``absent``) without any write or lease.
 
-No mailbox, network or consumer-document access happens here.
+No mailbox, network or consumer-document access happens here beyond the explicitly
+supplied evaluation document of ``consume``; that file is input, not a ledger
+report.  ``--json`` is accepted for the documented consumer calls; JSON is the
+only output mode.
 """
 
 from __future__ import annotations
@@ -26,6 +40,11 @@ from core.sent_ledger import (
     SentLedgerError,
     apply_legacy_import,
     build_legacy_import_plan,
+    build_pending_view,
+    check_crash_triad,
+    consume_evaluated_items,
+    read_sent_evaluations,
+    record_pending_outcome,
     recover_promotion,
 )
 
@@ -41,6 +60,11 @@ def _add_common(parser: argparse.ArgumentParser, *, mutating: bool) -> None:
                             help="invocation-owned workspace lease id")
         parser.add_argument("--workspace-conversation-id", default=None,
                             help="harness conversation id bound to the lease")
+    parser.add_argument(
+        "--json", action="store_true",
+        help="emit the canonical JSON envelope (the only output mode; accepted for "
+             "documented consumer calls)",
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -67,6 +91,69 @@ def _parser() -> argparse.ArgumentParser:
     recover.add_argument(
         "--evidence-file", required=True,
         help="JSON array of durable promotion records (or {\"promotions\": [...]})",
+    )
+
+    pending = subparsers.add_parser(
+        "pending", help="read-only view of the open ledger/handoff items",
+    )
+    _add_common(pending, mutating=False)
+    pending.add_argument(
+        "--account", default=None,
+        help="verified workspace account; one foreign open item stops the whole view",
+    )
+
+    record = subparsers.add_parser(
+        "record", help="append one consumption outcome for one open handoff item",
+    )
+    _add_common(record, mutating=True)
+    selector = record.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--message-id", default=None,
+                          help="raw Message-ID of the open item")
+    selector.add_argument("--item-ref", default=None,
+                          help="stable sha256 item reference from the pending view")
+    record.add_argument("--outcome", required=True,
+                        choices=("synthesized", "no_evidence"))
+    record.add_argument("--vorgang-ref", default=None,
+                        help="exact Vorgang reference (required for synthesized)")
+    record.add_argument("--evid-id", default=None,
+                        help="optional EVID anchor (synthesized only)")
+    record.add_argument("--reason-code", default=None,
+                        help="documented reason code (required for no_evidence)")
+    record.add_argument(
+        "--account", default=None,
+        help="verified workspace account; one foreign open item stops the round",
+    )
+
+    consume = subparsers.add_parser(
+        "consume",
+        help="append every already evaluated open handoff item in one lease-bound round",
+    )
+    _add_common(consume, mutating=True)
+    consume.add_argument(
+        "--evaluations", required=True,
+        help="consumer evaluation JSON (schema_version 1, kind mail-desk.sent-evaluation)",
+    )
+    consume.add_argument(
+        "--account", default=None,
+        help="verified workspace account; one foreign open item stops the whole round",
+    )
+    consume.add_argument(
+        "--dry-run", action="store_true",
+        help="validate and project only; no lease is taken and nothing is written",
+    )
+
+    crash = subparsers.add_parser(
+        "crash-check",
+        help="read-only crash classification of one exact message_id/Vorgang/EVID triad",
+    )
+    _add_common(crash, mutating=False)
+    crash.add_argument("--message-id", required=True)
+    crash.add_argument("--vorgang-ref", required=True)
+    crash.add_argument("--evid-id", required=True)
+    crash.add_argument(
+        "--evidence-file", default=None,
+        help="optional complete durable promotion evidence (JSON array or "
+             "{\"promotions\": [...]})",
     )
     return parser
 
@@ -103,20 +190,65 @@ def _read_promotion_evidence(path: Path) -> list[dict[str, Any]]:
 
 def _command(args: argparse.Namespace) -> dict[str, Any]:
     data_dir = _data_dir(args)
+    workspace = Path(args.workspace).expanduser() if args.workspace else None
     if args.command == "plan":
         return build_legacy_import_plan(
             data_dir,
             Path(args.inventory).expanduser(),
-            workspace_root=Path(args.workspace).expanduser() if args.workspace else None,
+            workspace_root=workspace,
         )
     if args.command == "apply":
         return apply_legacy_import(
             data_dir,
             Path(args.inventory).expanduser(),
             approval=args.approval,
-            workspace_root=Path(args.workspace).expanduser() if args.workspace else None,
+            workspace_root=workspace,
             lease_id=args.workspace_lease_id,
             conversation_id=args.workspace_conversation_id,
+        )
+    if args.command == "pending":
+        return build_pending_view(
+            data_dir,
+            workspace_root=workspace,
+            requested_account=args.account,
+        )
+    if args.command == "record":
+        return record_pending_outcome(
+            data_dir,
+            outcome=args.outcome,
+            message_id=args.message_id,
+            item_ref=args.item_ref,
+            vorgang_ref=args.vorgang_ref,
+            evid_id=args.evid_id,
+            reason_code=args.reason_code,
+            requested_account=args.account,
+            workspace_root=workspace,
+            lease_id=args.workspace_lease_id,
+            conversation_id=args.workspace_conversation_id,
+        )
+    if args.command == "consume":
+        return consume_evaluated_items(
+            data_dir,
+            evaluations=read_sent_evaluations(Path(args.evaluations).expanduser()),
+            dry_run=bool(args.dry_run),
+            requested_account=args.account,
+            workspace_root=workspace,
+            lease_id=args.workspace_lease_id,
+            conversation_id=args.workspace_conversation_id,
+        )
+    if args.command == "crash-check":
+        evidence = (
+            _read_promotion_evidence(Path(args.evidence_file).expanduser())
+            if args.evidence_file
+            else None
+        )
+        return check_crash_triad(
+            data_dir,
+            message_id=args.message_id,
+            vorgang_ref=args.vorgang_ref,
+            evid_id=args.evid_id,
+            promotion_evidence=evidence,
+            workspace_root=workspace,
         )
     evidence = _read_promotion_evidence(Path(args.evidence_file).expanduser())
     return recover_promotion(
@@ -125,7 +257,7 @@ def _command(args: argparse.Namespace) -> dict[str, Any]:
         vorgang_ref=args.vorgang_ref,
         evid_id=args.evid_id,
         promotion_evidence=evidence,
-        workspace_root=Path(args.workspace).expanduser() if args.workspace else None,
+        workspace_root=workspace,
         lease_id=args.workspace_lease_id,
         conversation_id=args.workspace_conversation_id,
     )

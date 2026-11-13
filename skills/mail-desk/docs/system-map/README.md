@@ -84,7 +84,7 @@ unter `scripts/` (davon 66 unter `scripts/core/`), 113 Testmodule `tests/test_*.
 --others --exclude-standard`, im Lauf frisch erhoben). Sent-Synthese-Handoff: §43. Die Anzahl der Testfälle wird hier
 nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
 
-**HEAD-Frame, 2026-11-11 (`9a04cd0`, aktuell):** 365 Dateien im Bundle, 221 unter
+**HEAD-Frame, 2026-11-11 (`9a04cd0`, historisch):** 365 Dateien im Bundle, 221 unter
 `skills/mail-desk/`, 82 Python-Dateien rekursiv unter `scripts/` (davon 67 unter
 `scripts/core/` und 14 `.py`-Dateien unter `scripts/core/modes/` inklusive
 `__init__.py`), 115 Testmodule `tests/test_*.py`. Gezählt mit `git ls-files --cached
@@ -94,6 +94,13 @@ alle Dateien dieses Befehls, „Testmodule“ = Dateinamen `test_*.py` unter
 Testfallzahlen sind nicht Teil dieses Frames, weil für diesen Doku-Commit kein
 Testlauf erhoben wurde; sie stehen mit Befehl, Dauer und Rohlog im jeweiligen PR/Run.
 CLI-Batch-Skip über `envelope thread` und Transportzähler: §44.
+
+**HEAD-Frame, 2026-11-13 (Issue #88, Arbeitsbaum auf Basis `1bc5c52`):**
+120 Testmodule `tests/test_*.py` (`git ls-files --cached --others --exclude-standard`,
+inklusive des neuen `test_sent_ledger_adapter.py`). Die übrigen Datei-/Python-Zahlen
+des vorherigen Frames wurden für diesen Stand nicht neu erhoben; sie bleiben als
+historische Messung von `9a04cd0` stehen. Testfallzahlen stehen mit Befehl, Dauer
+und Rohlog im PR/Run.
 
 **Issue-#103-Frame, 2026-11-11 (historisch):** 362 Dateien im Bundle, 221 unter
 `skills/mail-desk/`, 82 Python-Dateien unter `scripts/` (davon 67 unter
@@ -2746,3 +2753,86 @@ verschoben und nicht zerstört. Der Import verändert die Handoff-Datei nicht.
 [`references/cli-operations.md`](../../references/cli-operations.md#sent-ledger-legacy-import-und-promotion-recovery-issue-107).
 
 L1: [Paket-System-Map §16](../../../../docs/system-map/README.md#16-issue-107-sent-ledger-outcome-legacy-import-und-crash-idempotenz).
+
+---
+
+## 46. Issue #88 — Pending-/Ledger-Konsum-Adapter
+
+**Ziel:** Den im #88-Review fehlenden, geprüften Bundle-Einstieg für den
+Pending-/Ledger-Konsum bereitstellen, ohne eine zweite CLI oder einen zweiten Index zu bauen.
+Die bestehende `scripts/mail_desk_sent_ledger.py` wird um `pending`, `record`, `consume`
+und `crash-check`
+erweitert; `core/sent_ledger.py` trägt die Logik.
+
+**Entscheidung:** `pending`, `crash-check` und `consume --dry-run` sind rein lesend (keine
+Lease), `record` und `consume` sind
+mutierend. Alle binden das aufgelöste Ziel an `<workspace>/data/mail-desk`; `record`/`consume`
+verifizieren zusätzlich die invocation-eigene Lease **vor** dem ersten Append, weil
+`record_outcome` selbst keinen Guard besitzt.
+
+- **`pending`:** stabile JSON-Envelope (`kind: mail-desk.sent-ledger.pending-view`,
+  `view_version: 1`) mit `handoff_state` (`none`/`pending`; nie `written`),
+  `handoff_present`/`handoff_item_count` (fehlende vs. leere Datei), `pending_count`,
+  `consumed_ignored`, `consumed_outcomes`/`consumed_sources`, `counts` und `ledger`
+  (Zeilen, Dubletten, Outcome-/Source-Histogramm, `torn_tail`, Hash). `handoff_item_count > 0` bei
+  `pending_count == 0` sind ausschließlich konsumierte Reste und blockieren den Sync nicht; eine
+  fehlende Datei bleibt kein Leerbeweis. `items[]` liefert nur
+  gekürzte SHA-256-Refs (`item_ref`, `thread_ref`, `waits_for`; **keine** Anonymisierung),
+  `headers_complete`, `truncated_fields` (Feldnamen), `anchored` und `anchor`; keine Betreffzeile,
+  Adresse, Datum, Envelope-ID oder rohe Message-ID. `--account` prüft jedes offene Item gegen die
+  Workspace-Bindung (`mailbox_mismatch` stoppt die ganze Runde, gehashte `mismatch_refs`). Der
+  Körperleseweg ist ein offener Gate (kein freigegebener `read`-Aufruf; keine Envelope-/Message-ID
+  in der Sicht).
+- **`record`:** genau eine Konsumzeile; Append = Konsum, normalisierte Message-ID = Idempotenz.
+  `synthesized` verlangt eine exakte `vorgang_ref`, verbietet `reason_code`, erlaubt optional
+  `evid_id` und prüft fremde EVID-Bindungen (`evid_shared_conflict`) sowie die frische
+  Ankerreferenz gegen **alle** Ledger-Zeilen (`anchor_conflict`, `anchor_ambiguous`,
+  `reference_anchor_unresolved`, `handoff_metadata_incomplete`). Der Anker-Gate läuft nur für
+  `synthesized`; `no_evidence` verlangt einen schema-gültigen Begründungscode und verbietet jeden
+  Anker, hat aber keinen Anker-Gate. Offene Vorfahren blockieren
+  (`ancestor_pending`). Passende dauerhafte Identität ⇒ `already_consumed` (No-op); abweichende
+  ⇒ `ledger_conflict`. Das Handoff bleibt byte-gleich (`handoff_unchanged`). `norm_message_id`
+  erscheint nur bei expliziter `--message-id`-Auswahl; `--account` ist optional (ohne ihn kein
+  Account-Gate, Consumer-Pflicht).
+- **`consume`:** Batch-Konsum eines consumer-eigenen Evaluationsdokuments
+  (`kind: mail-desk.sent-evaluation`). Nur `synthesized`/`no_evidence` werden appendet;
+  `not_evaluated` und Items ohne Eintrag bleiben offen (nur gehashte `item_ref`). Selektoren
+  `item_ref` oder `message_id`. Das ganze Dokument wird vor dem ersten Write validiert;
+  doppelte Ziele (`evaluation_duplicate`), widersprüchliche dauerhafte Identität
+  (`ledger_conflict`) und mehrfach gebundene EVID-IDs (`evid_shared_conflict`) stoppen vor
+  jedem Append. Jeder Append nutzt dieselben Gates wie `record`; offene Vorfahren werden
+  `deferred`/`ancestor_pending` und nach dem Vorfahren erneut versucht. Ein fachlicher
+  Item-Konflikt endet als `consume_blocked` (Exit 2, frühere Appends bleiben dauerhaft,
+  Rerun idempotent). `--dry-run` nimmt keine Lease, schreibt nichts und meldet
+  `would_consume`/`projected_pending_after`. Envelope mit
+  `pending_before`/`pending_after`, `consumed`/`appended`, `already_consumed`,
+  `not_evaluated`, `deferred`, `blocked`, `unmatched_evaluations`, `handoff_unchanged`.
+- **`crash-check`:** rein lesend; exakte Triade (normalisierte `message_id`, byte-/case-exakte
+  Token, keine Substrings). `unique`/`absent` = Exit 0, `conflict` = Fehler-Envelope mit Exit 2
+  (doppelte/widersprüchliche Zeilen, fremde EVID auch ohne Ziel-Datensatz, Thread-Anker-Konflikte,
+  offener Vorfahre). Mit Handoff-/Evidence-Metadaten werden alle Anker geprüft
+  (`promotion_anchor_conflict`, `promotion_anchor_ambiguous`, `promotion_anchor_unresolved`,
+  `handoff_metadata_incomplete`, `promotion_metadata_conflict`,
+  `promotion_metadata_invalid`); Evidence-Thread-Metadaten sind strikt typgeprüft (`references` nur
+  Liste nichtleerer Strings, `in_reply_to`/`thread_key` nur Strings), ohne `norm_id`-Coercion. Ein
+  offenes Item mit offenem Vorfahren ist `ancestor_pending`, `safe_to_append` ist dann **nie** `true`.
+  Mit `--evidence-file` zusätzlich `evidence_state`; `safe_to_append` nur bei eindeutiger Evidence,
+  fehlender Ledger-Zeile und konsistentem Anker ohne offenen Vorfahren. Kein Ersatz für
+  `recover-promotion`; beide nutzen dieselbe konservative Anker- und Vorfahrenprüfung.
+
+**Tests:** `tests/test_sent_ledger_adapter.py` mit
+`tests/sent_ledger_adapter_fixtures.py` (synthetisch, offline): Pending (leer/fehlend, Rohinhalts-
+und ID-Freiheit, `no_evidence`/`legacy_import`-Konsum, Anker, Account-Gate, kaputtes JSON,
+Fremd-Workspace), Record (Append, No-op, Konflikt, EVID-/Anker-/Vorfahren-Gate, Lease/Bindung,
+kaputtes Handoff), Consume (nur ausgewertete Items, `not_evaluated` offen, Dry-Run ohne Lease/Write,
+Idempotenz, Vorfahren-Reihenfolge/`follow_up`, `consume_blocked`, doppelte Ziele, geteilte EVID,
+Identitätskonflikt, Account-Gate, keine rohen IDs), Crash-Check (absent/unique/conflict, Dubletten,
+fremde EVID, Evidence, Ankerkonflikt, Read-only-Hashes) sowie die Regressionen für offenes
+Vorfahren-Pending (`ancestor_pending`, `safe_to_append: false`, keine Writes) und strikt typgeprüfte
+Evidence-Thread-Metadaten (`promotion_metadata_invalid`, fehlendes Handoff).
+
+**Vertrag:** [`references/sent-ledger-migration.md`](../../references/sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88),
+[`references/log-schema.md`](../../references/log-schema.md#konsum-adapter-pending-sicht-append-batch-konsum-crash-check-issue-88),
+[`references/cli-operations.md`](../../references/cli-operations.md#konsum-adapter-pendingrecordconsumecrash-check-issue-88).
+
+L1: [Paket-System-Map §17](../../../../docs/system-map/README.md#17-issue-88--pending-ledger-konsum-adapter).

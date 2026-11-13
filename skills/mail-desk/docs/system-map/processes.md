@@ -673,11 +673,12 @@ sync-sent
   ├─ 5. sent-index.jsonl fortschreiben                  ◄── erst nach 4 (Crash-Vertrag)
   └─ 6. Envelope: new_count, new_items[], handoff{state, pending_count, …}, write_state bei ok:false
 
-Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) → Promotion des ersten Items →
-  record_synthesized (Ledger, Anker erneut aufgelöst) → load_pending_handoff erneut … bis pending_count == 0
-  ODER record_no_evidence(reason_code) für eine begründete No-op-Entscheidung (konsumiert ohne Anker)
-  Crash zwischen dauerhafter Promotion und Ledger: recover_promotion (message_id + exakter vorgang_ref +
-  EVID-ID; genau ein Evidence-Treffer, höchstens eine fehlende Ledger-Zeile) → sonst stoppen
+Consumer (extern): pending (read-only, Lease-frei) → erstes Item ohne offene waits_for →
+  consume --evaluations <sent-evaluation.json> (nur synthesized/no_evidence; not_evaluated bleibt offen;
+  Lease + Zielbindung, frische Ankerprüfung) → pending erneut … bis pending_count == 0
+  ODER record für genau eine Zeile bzw. record_no_evidence für eine begründete No-op-Entscheidung
+  Crash zwischen dauerhafter Promotion und Ledger: crash-check (lesend) → nur bei safe_to_append
+  recover_promotion/recover-promotion (message_id + exakter vorgang_ref + EVID-ID) → sonst stoppen
 ```
 
 * **Trigger-Regel:** `handoff.pending_count > 0`, nicht `new_count`. Die Synthese-Phase ist bei `inbox_zero`
@@ -688,8 +689,9 @@ Consumer (extern): load_pending_handoff (frisch verankert, Vorfahren zuerst) →
 * **Absturzfenster:** Handoff geschrieben/Index nicht ⇒ Wiederholung erkennt dieselben Items, kein Duplikat;
   Index geschrieben/nicht konsumiert ⇒ Items bleiben `pending`; Tabelle in
   [`log-schema.md`](../../references/log-schema.md#absturzfenster-sync-sent). Das Consumer-Fenster zwischen
-  dauerhafter Promotion und Ledger-Zeile ist über `core.sent_ledger.recover_promotion` prüfbar (exaktes
-  Tripel, Teil-/Mehrdeutigkeit stoppt); exactly-once bleibt außerhalb des Bundles, at-least-once gilt weiter.
+  dauerhafter Promotion und Ledger-Zeile ist über `crash-check` (read-only) und
+  `core.sent_ledger.recover_promotion` prüfbar (exaktes Tripel, Teil-/Mehrdeutigkeit stoppt,
+  `safe_to_append` nie bei offenem Vorfahren); exactly-once bleibt außerhalb des Bundles, at-least-once gilt weiter.
 * **Outcome/Import/Recovery (Issue #107):** `record_no_evidence` schreibt einen begründeten Konsum ohne
   Evidenz; neue Appends/Import/Recovery prüfen alle Ledger-Zeilen (`all_by_message_id`) und stoppen bei
   Konflikt statt First-line-wins. Der Legacy-Import ist zweistufig: `build_legacy_import_plan` (lesend,

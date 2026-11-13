@@ -895,3 +895,78 @@ Tests: `skills/mail-desk/tests/test_sent_ledger_outcomes.py`,
 `skills/mail-desk/tests/test_sent_ledger_legacy_import.py`,
 `skills/mail-desk/tests/test_sent_ledger_recovery.py`,
 `skills/mail-desk/tests/test_sent_ledger_cli.py`.
+
+## 17. Issue #88 — Pending-/Ledger-Konsum-Adapter
+
+**Ziel:** Den fehlenden, geprüften Bundle-Einstieg für den Pending-/Ledger-Konsum bereitstellen,
+damit der #88-Consumer nicht auf einen Ad-hoc- oder Inline-Ersatz angewiesen ist. Keine zweite CLI:
+`skills/mail-desk/scripts/mail_desk_sent_ledger.py` wird um `pending`, `record`,
+`consume` und `crash-check`
+erweitert; die Logik liegt in `core/sent_ledger.py`.
+
+- **`pending` (read-only, keine Lease):** stabile JSON-Envelope
+  (`kind: mail-desk.sent-ledger.pending-view`, `view_version: 1`) mit `handoff_state`
+  (`none`/`pending`, nie `written`), `handoff_present`/`handoff_item_count` (fehlende vs. leere
+  Datei), `pending_count`, `consumed_ignored`, `consumed_outcomes`/`consumed_sources` (auch
+  `no_evidence`/`legacy_import`), `counts` und `ledger` (Zeilen, Dubletten, Outcome-/Source-
+  Histogramm, `torn_tail`, Hash). `handoff_item_count > 0` bei `pending_count == 0` sind
+  ausschließlich konsumierte Reste und blockieren den Sync nicht; eine fehlende Datei bleibt kein
+  Leerbeweis. `items[]` enthält nur gekürzte SHA-256-Refs (`item_ref`,
+  `thread_ref`, `waits_for`; **keine** Anonymisierung, keine Unumkehrbarkeits-Zusage),
+  `headers_complete`, `truncated_fields` (Feldnamen), `anchored` und
+  `anchor`; keine Betreffzeile, Adresse, Datum, Envelope-ID oder rohe Message-ID. `--account`
+  prüft jedes offene Item gegen die Workspace-Bindung; ein Abweicher stoppt die ganze Runde
+  (`mailbox_mismatch`, gehashte `mismatch_refs`). Der Körperleseweg ist ein ausdrücklich offener
+  Gate (kein freigegebener `read`-Aufruf, keine Envelope-/Message-ID in der Sicht).
+- **`record` (mutierend):** genau eine Konsumzeile; Append = Konsum, normalisierte Message-ID =
+  Idempotenz. Lease **und** kanonische `<workspace>/data/mail-desk`-Bindung werden vor dem ersten
+  Append verifiziert (`record_outcome` selbst hat keinen Guard). `synthesized` braucht eine exakte
+  `vorgang_ref`, verbietet `reason_code`, erlaubt optional `evid_id` und prüft fremde EVID-Bindungen
+  (`evid_shared_conflict`) sowie die frische Ankerreferenz gegen **alle** Ledger-Zeilen
+  (`anchor_conflict`, `anchor_ambiguous`, `reference_anchor_unresolved`,
+  `handoff_metadata_incomplete`). Der Anker-Gate läuft nur für `synthesized`; `no_evidence` verlangt
+  einen schema-gültigen Begründungscode und verbietet jeden Anker, hat aber keinen Anker-Gate.
+  Offene Vorfahren blockieren (`ancestor_pending`); passende dauerhafte
+  Identität ist ein No-op (`already_consumed`), eine abweichende `ledger_conflict`. Das Handoff
+  bleibt byte-gleich. `norm_message_id` erscheint nur bei expliziter `--message-id`-Auswahl;
+  `--account` ist optional (ohne ihn kein Account-Gate, Consumer-Pflicht).
+- **`consume` (Batch-Konsum):** liest ein consumer-eigenes Evaluationsdokument
+  (`kind: mail-desk.sent-evaluation`, `items[]`) und appendet nur bereits ausgewertete Items
+  (`synthesized` mit exakter `vorgang_ref`/optionaler `evid_id`, `no_evidence` mit
+  schema-gültigem `reason_code`); `not_evaluated` und Items ohne Eintrag bleiben offen und werden
+  nur als gehashte `item_ref` gemeldet. Selektoren `item_ref` oder `message_id`. Das Dokument wird
+  vor dem ersten Write vollständig validiert; doppelte Ziele (`evaluation_duplicate`),
+  widersprüchliche dauerhafte Identität (`ledger_conflict`) und mehrfach gebundene EVID-IDs
+  (`evid_shared_conflict`) stoppen vor jedem Append. Jeder Append nutzt dieselben Gates wie
+  `record` (Lease/Bindung, frischer Anker, offene Vorfahren, Account). Offene Vorfahren werden
+  `deferred`/`ancestor_pending` und nach dem Vorfahren erneut versucht; ein fachlicher Item-Konflikt
+  endet als `consume_blocked` (Exit 2, frühere Appends bleiben dauerhaft, Rerun idempotent).
+  `--dry-run` nimmt keine Lease, schreibt nichts und meldet
+  `would_consume`/`projected_pending_after`. Envelope mit
+  `pending_before`/`pending_after`, `consumed`/`appended`, `already_consumed`, `not_evaluated`,
+  `deferred`, `blocked`, `unmatched_evaluations` und `handoff_unchanged`; keine rohen Message-IDs.
+- **`crash-check` (read-only, keine Lease):** exakte Triade aus normalisierter `message_id` und
+  byte-/case-exakten Token (keine Substrings). `unique`/`absent` = Exit 0; `conflict` = Fehler-
+  Envelope mit Exit 2 (doppelte/widersprüchliche Ledger-Zeilen, fremde EVID auch ohne Ziel-Datensatz,
+  Thread-Anker-Konflikte, offener Vorfahre). Mit Handoff-/Evidence-Metadaten werden alle Anker geprüft
+  (`promotion_anchor_conflict`, `promotion_anchor_ambiguous`, `promotion_anchor_unresolved`,
+  `handoff_metadata_incomplete`, `promotion_metadata_conflict`,
+  `promotion_metadata_invalid`); strikt typgeprüfte Evidence-Thread-Metadaten
+  (`references` nur Liste nichtleerer Strings, `in_reply_to`/`thread_key` nur Strings) verhindern eine
+  `norm_id`-Coercion. Ein offenes Item mit offenem Vorfahren ist `ancestor_pending`, `safe_to_append`
+  ist dann **nie** `true`. Mit `--evidence-file` zusätzlich
+  `evidence_state`; `safe_to_append` nur bei eindeutiger Evidence, fehlender Ledger-Zeile und
+  konsistentem Anker ohne offenen Vorfahren. Der Aufruf schreibt nie und ersetzt `recover-promotion`
+  nicht; beide nutzen dieselbe konservative Anker- und Vorfahrenprüfung.
+- **Abgrenzung:** Der Adapter liest keine Mailbox, keine Consumer-Mailinhalte und kein Netzwerk;
+  das Evaluationsdokument von `consume` ist Eingabe (kein Ledger-Report). Er
+  ersetzt weder die fachliche Promotion noch den Legacy-Import. Offene Consumer-Entscheidungen
+  (u. a. strengere No-Evidence-Politik, referenzloser Anker) bleiben offen; das Bundle erzwingt nur
+  den Schema- und Sicherheitsvertrag.
+
+L2: [Mail-Desk §46](../../skills/mail-desk/docs/system-map/README.md#46-issue-88--pending-ledger-konsum-adapter).
+Vertrag: [Sent-Ledger-Migration](../../skills/mail-desk/references/sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88),
+[Log-Schema](../../skills/mail-desk/references/log-schema.md#konsum-adapter-pending-sicht-append-batch-konsum-crash-check-issue-88),
+[CLI](../../skills/mail-desk/references/cli-operations.md#konsum-adapter-pendingrecordconsumecrash-check-issue-88).
+Tests: `skills/mail-desk/tests/test_sent_ledger_adapter.py`,
+`skills/mail-desk/tests/sent_ledger_adapter_fixtures.py`.
