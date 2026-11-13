@@ -84,7 +84,7 @@ unter `scripts/` (davon 66 unter `scripts/core/`), 113 Testmodule `tests/test_*.
 --others --exclude-standard`, im Lauf frisch erhoben). Sent-Synthese-Handoff: §43. Die Anzahl der Testfälle wird hier
 nicht als Literal geführt; sie steht mit Befehl, Dauer und Rohlog im PR/Run.
 
-**HEAD-Frame, 2026-11-11 (`9a04cd0`, aktuell):** 365 Dateien im Bundle, 221 unter
+**HEAD-Frame, 2026-11-11 (`9a04cd0`, historisch):** 365 Dateien im Bundle, 221 unter
 `skills/mail-desk/`, 82 Python-Dateien rekursiv unter `scripts/` (davon 67 unter
 `scripts/core/` und 14 `.py`-Dateien unter `scripts/core/modes/` inklusive
 `__init__.py`), 115 Testmodule `tests/test_*.py`. Gezählt mit `git ls-files --cached
@@ -94,6 +94,13 @@ alle Dateien dieses Befehls, „Testmodule“ = Dateinamen `test_*.py` unter
 Testfallzahlen sind nicht Teil dieses Frames, weil für diesen Doku-Commit kein
 Testlauf erhoben wurde; sie stehen mit Befehl, Dauer und Rohlog im jeweiligen PR/Run.
 CLI-Batch-Skip über `envelope thread` und Transportzähler: §44.
+
+**HEAD-Frame, 2026-11-13 (Issue #88, Arbeitsbaum auf Basis `1bc5c52`):**
+120 Testmodule `tests/test_*.py` (`git ls-files --cached --others --exclude-standard`,
+inklusive des neuen `test_sent_ledger_adapter.py`). Die übrigen Datei-/Python-Zahlen
+des vorherigen Frames wurden für diesen Stand nicht neu erhoben; sie bleiben als
+historische Messung von `9a04cd0` stehen. Testfallzahlen stehen mit Befehl, Dauer
+und Rohlog im PR/Run.
 
 **Issue-#103-Frame, 2026-11-11 (historisch):** 362 Dateien im Bundle, 221 unter
 `skills/mail-desk/`, 82 Python-Dateien unter `scripts/` (davon 67 unter

@@ -109,6 +109,7 @@ class PendingViewTests(AdapterTestBase):
         self.assertEqual("sent_ledger_pending", data["mode"])
         self.assertTrue(data["read_only"])
         self.assertEqual(1, data["view_version"])
+        self.assertIn("handoff file is missing", data["next"])
         self.assertEqual(before, snapshot(self.root))
 
     def test_empty_handoff_file_differs_from_missing(self) -> None:
@@ -120,6 +121,7 @@ class PendingViewTests(AdapterTestBase):
         self.assertTrue(data["handoff_present"])
         self.assertEqual(0, data["handoff_item_count"])
         self.assertEqual(0, data["pending_count"])
+        self.assertIn("present and known empty", data["next"])
 
     def test_pending_view_has_no_raw_mail_content_or_identifiers(self) -> None:
         items = [

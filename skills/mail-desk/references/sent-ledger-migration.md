@@ -171,7 +171,7 @@ muss der installierte Bundle-Pin Issue #107 enthalten. Kein stiller Fallback, ke
 
 ## 6. Konsum-Adapter für den Consumer (Issue #88)
 
-`pending`, `record`, `consume` und `crash-check` sind die geprüften, offline-only
+`pending`, `record`, `consume` und `crash-check` sind die offline getesteten
 Einstiege des Bundles für den Pending-/Ledger-Konsum. Sie ersetzen keinen zweiten
 Index und keine zweite CLI: `scripts/mail_desk_sent_ledger.py` bleibt die einzige
 Sent-Ledger-CLI. Rein lesend sind `pending`, `crash-check` und `consume --dry-run`

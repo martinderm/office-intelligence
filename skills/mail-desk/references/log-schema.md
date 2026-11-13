@@ -392,7 +392,9 @@ Der Consumer konsumiert ausschließlich über die Sent-Ledger-CLI (Vertrag:
   `projected_pending_after` (Dry-Run), Ledger-/Handoff-Hashes und
   `handoff_unchanged`. Ein fachlicher Item-Konflikt endet als `consume_blocked`
   (Exit `2`), bereits geschriebene Zeilen bleiben dauerhaft; ein zweiter Lauf ist
-  idempotent. Die Antwort enthält keine rohen Message-IDs.
+  idempotent. Die Antwort enthält keine rohen Message-IDs. Das
+  Evaluationsdokument ist Consumer-Transit, kann rohe `message_id`-Selektoren
+  enthalten, ist personenbezogen und wird **nie gestaged**.
 - **`crash-check` (read-only):** exakte Triade aus normalisierter `message_id` und
   byte-/case-exakten Token; `unique`/`absent` sind Exit `0`, `conflict` ist ein
   Fehler-Envelope mit Exit `2`. Doppelte/widersprüchliche Ledger-Zeilen, eine fremd

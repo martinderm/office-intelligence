@@ -341,7 +341,7 @@ python3 scripts/mail_desk_sent_ledger.py recover-promotion \
 
 ### Konsum-Adapter (`pending`/`record`/`consume`/`crash-check`, Issue #88)
 
-Dieselbe CLI ist der geprüfte Consumer-Einstieg; eine zweite Adapter-CLI gibt es
+Dieselbe CLI ist der offline getestete Consumer-Einstieg; eine zweite Adapter-CLI gibt es
 nicht. Vertrag, Feldpfade und Grenzen: [`sent-ledger-migration.md`](sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88).
 
 ```bash
@@ -414,7 +414,9 @@ python3 scripts/mail_desk_sent_ledger.py crash-check \
   `blocked`, `evaluation_entries`, `unmatched_evaluations` und
   `handoff_unchanged` stehen in der Antwort; rohe Message-IDs werden nicht
   ausgegeben. `--dry-run` nimmt keine Lease, schreibt nichts und meldet
-  `would_consume`/`projected_pending_after`.
+  `would_consume`/`projected_pending_after`. Das Evaluationsdokument ist
+  Consumer-Transit, kann rohe `message_id`-Selektoren enthalten, ist
+  personenbezogen und wird **nie gestaged**.
 - `crash-check` ist rein lesend, vergleicht die exakte Triade (keine Substrings) und
   liefert `unique`/`absent` als Erfolg (Exit `0`), `conflict` als Fehler-Envelope
   (Exit `2`, nie `success: true`). Mit `--evidence-file` wird zusätzlich die

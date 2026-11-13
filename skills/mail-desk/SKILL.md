@@ -266,7 +266,7 @@ höchstens eine Zeile nachtragen, sonst stoppen. Ein aufgelöster Thread-Anker m
 stoppt mit `promotion_anchor_conflict` (kein `follow_up` auf einen fremden Vorgang). Details und CLI:
 [`sent-ledger-migration.md`](references/sent-ledger-migration.md).
 
-**Konsum-Adapter (Issue #88):** `scripts/mail_desk_sent_ledger.py` ist auch der geprüfte
+**Konsum-Adapter (Issue #88):** `scripts/mail_desk_sent_ledger.py` ist auch der offline getestete
 Consumer-Einstieg (keine zweite Adapter-CLI). `pending` liest rein lesend die offene Sicht als stabile
 JSON-Envelope mit Zählern und gekürzten SHA-256-Referenzen (`item_ref`, `thread_ref`, `waits_for`;
 **keine** Anonymisierung, keine Unumkehrbarkeits-Zusage),

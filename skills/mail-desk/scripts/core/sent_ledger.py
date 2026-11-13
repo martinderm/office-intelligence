@@ -1127,6 +1127,7 @@ def build_pending_view(
     line_count, duplicate_ids, outcomes, sources = _ledger_composition(ledger)
     pending_views = [_pending_item_view(item) for item in ordered]
     pending_count = len(pending_views)
+    handoff_present = (dd / HANDOFF_FILENAME).exists()
     return {
         "ok": True,
         "mode": "sent_ledger_pending",
@@ -1135,7 +1136,7 @@ def build_pending_view(
         "read_only": True,
         "status": "pending" if pending_count else "empty",
         "handoff_state": "pending" if pending_count else "none",
-        "handoff_present": (dd / HANDOFF_FILENAME).exists(),
+        "handoff_present": handoff_present,
         "handoff_item_count": len(items),
         "pending_count": pending_count,
         "consumed_ignored": len(items) - pending_count,
@@ -1164,7 +1165,12 @@ def build_pending_view(
             "Consume the evaluated items in one lease-bound 'consume' round (or one item "
             "through 'record'); the handoff file is never rewritten."
             if pending_count
-            else "No open ledger item; the handoff is known empty."
+            else (
+                "No open ledger item; the handoff file is present and known empty."
+                if handoff_present
+                else "No open ledger item; the handoff file is missing, so this is not "
+                     "proof of an empty handoff."
+            )
         ),
     }
 
