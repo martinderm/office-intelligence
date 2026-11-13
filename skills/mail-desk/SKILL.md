@@ -266,6 +266,48 @@ höchstens eine Zeile nachtragen, sonst stoppen. Ein aufgelöster Thread-Anker m
 stoppt mit `promotion_anchor_conflict` (kein `follow_up` auf einen fremden Vorgang). Details und CLI:
 [`sent-ledger-migration.md`](references/sent-ledger-migration.md).
 
+**Konsum-Adapter (Issue #88):** `scripts/mail_desk_sent_ledger.py` ist auch der geprüfte
+Consumer-Einstieg (keine zweite Adapter-CLI). `pending` liest rein lesend die offene Sicht als stabile
+JSON-Envelope mit Zählern und gekürzten SHA-256-Referenzen (`item_ref`, `thread_ref`, `waits_for`;
+**keine** Anonymisierung, keine Unumkehrbarkeits-Zusage),
+`handoff_state` (`none`/`pending`, nie `written`), `handoff_present`/`handoff_item_count` (fehlende vs.
+leere Datei; `handoff_item_count > 0` bei `pending_count: 0` sind konsumierte Reste und blockieren den
+Sync nicht), `consumed_ignored`, `consumed_outcomes`/`consumed_sources` (auch `no_evidence` und
+`legacy_import`) und `ledger`; Betreff, Adressen, Datum, Envelope-ID und rohe Message-IDs fehlen. Der
+Körperleseweg ist ein ausdrücklich **offener Gate** (kein freigegebener `read`-Aufruf), bis ein
+geprüftes JSON-Manifest mit Account-/Ordner-/Envelope-/Message-ID-Bindung vorliegt. Mit
+`--account` prüft `pending` jedes offene Item gegen die Workspace-Bindung (`mailbox_mismatch` stoppt die
+ganze Runde). `record` appendet genau eine Zeile (Append = Konsum): Lease **und** Bindung an
+`<workspace>/data/mail-desk` werden vor dem ersten Write verifiziert, `synthesized` braucht eine exakte
+`vorgang_ref` (optional `evid_id`, keine fremde EVID-Bindung), `no_evidence` einen schema-gültigen
+Begründungscode ohne Anker. Die frische Ankerreferenz wird unmittelbar vor dem Append gegen **alle**
+Ledger-Zeilen geprüft (`anchor_conflict`, `anchor_ambiguous`, `reference_anchor_unresolved`,
+`handoff_metadata_incomplete`); der Anker-Gate läuft nur für `synthesized`, `no_evidence` hat keinen.
+`--account` ist bei `record` optional und das Gate dann Consumer-Pflicht
+(die SOP setzt es immer). Eine passende bereits dauerhafte Identität ist ein No-op
+(`already_consumed`), eine abweichende `ledger_conflict`. `consume` ist der dünne
+Batch-Pfad: Der Consumer liefert seine bereits getroffene Auswertung als
+Evaluationsdokument (`kind: mail-desk.sent-evaluation`, je Item `synthesized`/
+`no_evidence`/`not_evaluated`); das Bundle appendet nur `synthesized`/`no_evidence`
+über dieselben Gates wie `record` und lässt `not_evaluated` ausdrücklich offen.
+Das Dokument wird vor dem ersten Write vollständig validiert (doppelte Ziele,
+widersprüchliche dauerhafte Identität, mehrfach gebundene EVID-ID stoppen);
+offene Vorfahren werden zurückgestellt, ein fachlicher Item-Konflikt endet als
+`consume_blocked` (Exit 2, frühere Appends bleiben dauerhaft, Rerun idempotent).
+`pending_before`/`pending_after` und `handoff_unchanged` stehen im Envelope;
+`--dry-run` nimmt keine Lease und schreibt nichts. Der Consumer behält damit nur
+die inhaltliche Auswertung, keine eigene Ledger-Schreiblogik.
+`crash-check` klassifiziert rein lesend die
+exakte Triade als `unique`/`absent` (Exit 0) oder `conflict` (Fehler-Envelope, Exit 2, nie
+`success: true`) und prüft mit Handoff-/Evidence-Metadaten alle Anker
+(`promotion_anchor_conflict`, `promotion_anchor_ambiguous`, `promotion_anchor_unresolved`,
+`handoff_metadata_incomplete`, `promotion_metadata_conflict`, `promotion_metadata_invalid`); ein offener
+Vorfahre ist `ancestor_pending`, und `safe_to_append` ist nur bei eindeutiger
+Evidence, fehlender Ledger-Zeile und konsistentem Anker **ohne offenen Vorfahren** `true`; es ersetzt
+`recover-promotion` nicht.
+Details:
+[`sent-ledger-migration.md`](references/sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88).
+
 ## Mutationen, Identität und Backend
 
 Vor jeder lokalen oder externen Mutation besteht verifizierte `workspace-lock`-

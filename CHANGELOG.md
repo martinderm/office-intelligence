@@ -8,6 +8,98 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-13 - Issue #88: Pending-/Ledger-Konsum-Adapter
+
+#### Added
+
+- **`pending` (read-only):** `mail_desk_sent_ledger.py pending` liefert die offene
+  Ledger-/Handoff-Sicht als stabile JSON-Envelope (`kind: mail-desk.sent-ledger.pending-view`,
+  `view_version: 1`) mit `handoff_state` (`none`/`pending`, nie `written`),
+  `handoff_present`/`handoff_item_count` (fehlende vs. leere Datei), `pending_count`,
+  `consumed_ignored`, `consumed_outcomes`/`consumed_sources` (inkl. `no_evidence` und
+  `legacy_import`), `counts` und Ledger-Histogramm. `handoff_item_count > 0` bei
+  `pending_count == 0` sind ausschließlich konsumierte Reste und blockieren den Sync nicht;
+  eine fehlende Datei bleibt kein Leerbeweis. `items[]` enthält nur gekürzte
+  SHA-256-Referenzen (`item_ref`, `thread_ref`, `waits_for`; **keine** Anonymisierung, keine
+  Unumkehrbarkeits-Zusage), `headers_complete`,
+  `truncated_fields` (Feldnamen), `anchored` und `anchor`; keine Betreffzeile, Adresse, Datum,
+  Envelope-ID oder rohe/normalisierte Message-ID. `--account` prüft jedes offene Item gegen die
+  Workspace-Bindung (`mailbox_mismatch` stoppt die ganze Runde, gehashte `mismatch_refs`).
+  Keine Lease nötig; kaputtes JSON, Schema- und Aliasfehler enden fail-closed ohne Write. Der
+  Körperleseweg bleibt ein ausdrücklich offener Gate (kein freigegebener `read`-Aufruf).
+- **`record` (append = Konsum):** genau ein Selektor (`--item-ref` aus der Pending-Sicht oder
+  `--message-id`); Lease **und** kanonische `<workspace>/data/mail-desk`-Bindung werden vor dem
+  ersten Append verifiziert (`record_outcome` hat selbst keinen Guard). `synthesized` verlangt eine
+  exakte `vorgang_ref`, verbietet `reason_code`, erlaubt optional `evid_id` und prüft fremde
+  EVID-Bindungen sowie die frische Ankerreferenz gegen **alle** Ledger-Zeilen (`anchor_conflict`,
+  `anchor_ambiguous`, `reference_anchor_unresolved`, `handoff_metadata_incomplete`); der Anker-Gate
+  läuft nur für `synthesized`. `no_evidence` verlangt einen schema-gültigen Begründungscode und
+  verbietet jeden Anker, hat aber keinen Anker-Gate. Offene
+  Vorfahren blockieren (`ancestor_pending`); passende dauerhafte Identität ist ein No-op
+  (`already_consumed`), abweichende `ledger_conflict`. Das Handoff bleibt byte-gleich.
+  `norm_message_id` erscheint nur bei expliziter `--message-id`-Auswahl; `--account` ist optional
+  (ohne ihn kein Account-Gate, Consumer-Pflicht).
+- **`consume` (Batch-Konsum bereits ausgewerteter Items):** liest ein consumer-eigenes
+  Evaluationsdokument (`schema_version: 1`, `kind: mail-desk.sent-evaluation`, `items[]`) und
+  appendet in **einer** lease-gebundenen Runde nur `synthesized` (exakte `vorgang_ref`, optionale
+  `evid_id`) und `no_evidence` (schema-gültiger `reason_code`). `not_evaluated` und Items ohne
+  Eintrag bleiben offen und werden nur als gehashte `item_ref` gemeldet; es wird kein Outcome
+  erfunden. Selektoren sind `item_ref` aus `pending` oder die rohe `message_id`. Das gesamte
+  Dokument wird **vor** dem ersten Append validiert; doppelte Ziele (`evaluation_duplicate`), eine
+  widersprüchliche dauerhafte Identität (`ledger_conflict`) und eine mehrfach gebundene EVID-ID
+  (`evid_shared_conflict`) stoppen ohne Write. Jeder Append nutzt dieselben Gates wie `record`
+  (Lease/Bindung, frischer Anker, offene Vorfahren, Account); ein Item mit offenem Vorfahren wird
+  `deferred`/`ancestor_pending` und nach dem Vorfahren in derselben Runde erneut versucht. Ein
+  fachlicher Item-Konflikt endet als `consume_blocked` (Exit 2), bereits geschriebene Zeilen bleiben
+  dauerhaft, ein zweiter Lauf ist idempotent. `--dry-run` nimmt keine Lease, schreibt nichts und
+  meldet `would_consume`/`projected_pending_after`. Der Envelope trägt
+  `pending_before`/`pending_after`, `consumed`/`appended`, `already_consumed`, `not_evaluated`,
+  `deferred`, `blocked`, `evaluation_entries`, `unmatched_evaluations`, Ledger-/Handoff-Hashes und
+  `handoff_unchanged`; rohe Message-IDs werden nicht ausgegeben. Der Consumer behält damit nur die
+  inhaltliche Auswertung, keine eigene Ledger-Schreiblogik.
+- **`crash-check` (read-only):** exakte Triade `message_id` + `vorgang_ref` + `EVID-ID`
+  (normalisierte Message-ID, byte-/case-exakte Token, keine Substrings). `unique`/`absent` = Exit 0;
+  `conflict` = Fehler-Envelope mit Exit 2 (doppelte/widersprüchliche Ledger-Zeilen, fremde EVID auch
+  ohne Ziel-Datensatz, Thread-Anker-Konflikte, offener Vorfahre). Mit Handoff-/Evidence-Metadaten
+  werden alle Anker geprüft (`promotion_anchor_conflict`, `promotion_anchor_ambiguous`,
+  `promotion_anchor_unresolved`, `handoff_metadata_incomplete`, `promotion_metadata_conflict`);
+  Evidence-Thread-Metadaten sind strikt typgeprüft (`references` nur Liste nichtleerer Strings,
+  `in_reply_to`/`thread_key` nur Strings), sonst `promotion_metadata_invalid` statt
+  `norm_id`-Coercion. Ein offenes Item mit offenem Vorfahren ist `ancestor_pending`;
+  `safe_to_append` ist dann **nie** `true`. Optionales `--evidence-file` ergänzt `evidence_state`
+  und `safe_to_append` (nur bei eindeutiger
+  Evidence, fehlender Zeile und konsistentem Anker ohne offenen Vorfahren); der Aufruf schreibt nie
+  und ersetzt `recover-promotion` nicht — beide nutzen dieselbe konservative Anker- und
+  Vorfahrenprüfung.
+- **`recover-promotion` (gehärtet):** liest das Handoff-Item und alle Anker-Kandidaten; abweichende
+  Doppelzeilen, fremde Anker-Vorgänge, referenzlose Anker, unvollständige Header, ein noch offener
+  Vorfahre (`ancestor_pending`), malformed Evidence-Thread-Metadaten (`promotion_metadata_invalid`)
+  und widersprechende Handoff-/Evidence-Metadaten stoppen vor jedem Append.
+- **`--json`:** für den dokumentierten Consumer-Aufruf akzeptiert (JSON bleibt der einzige
+  Ausgabemodus); alle Befehle liefern die kanonische sechs-Schlüssel-Envelope.
+- **API:** `core.sent_ledger.build_pending_view`, `record_pending_outcome`,
+  `consume_evaluated_items`, `read_sent_evaluations`, `check_crash_triad`;
+  `core.sent_handoff.pending_handoff_view` als reiner Anker-/Ordnungsschritt auf einem bereits
+  geladenen Ledger (kein zweiter, potenziell inkonsistenter Read).
+- **Doku:** L1/L2-System-Map (§17/§46), SKILL, Log-Schema, CLI-Operations,
+  Batch-Runner-Vertrag und `sent-ledger-migration.md` beschreiben den Adapter; Tests:
+  `skills/mail-desk/tests/test_sent_ledger_adapter.py` mit
+  `skills/mail-desk/tests/sent_ledger_adapter_fixtures.py`.
+
+#### Notes
+
+- Kein Live-/Mailbox-Zugriff, kein Apply, kein Consumer-Write, keine neue Retention-/MIME-/
+  Transportfunktion und keine zweite CLI. Der Körperleseweg bleibt ein offener Gate (kein
+  freigegebener `read`-Aufruf). Offene Consumer-Entscheidungen (u. a. strengere
+  No-Evidence-Politik, referenzloser Anker, Datenschutz-/Staging-Freigabe) bleiben offen; das
+  Bundle erzwingt nur Schema und Sicherheitsvertrag.
+- **Ehrlichkeit der Abnahme:** Die positiven Lease-Pfade (`record`, `consume`, `apply`,
+  `recover-promotion`) und die Lease-Ablehnung sind in den Offline-Tests mit einem
+  **gemockten** Verifier (`verify_workspace_lock`) geprüft; der echte `workspace-lock`-Guard
+  und ein Live-/Apply-Lauf in `boku-user` sind **nicht** Teil dieser Abnahme und bleiben ein
+  offener Gate. Die Zielbindung (fremder Workspace, Traversal) läuft dagegen ungemockt und
+  fail-closed vor dem Verifier.
+
 ### 2026-11-11 - Issue #107: Sent-Ledger-Outcome, Legacy-Import und Crash-Idempotenz
 
 #### Added

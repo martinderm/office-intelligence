@@ -339,6 +339,94 @@ python3 scripts/mail_desk_sent_ledger.py recover-promotion \
   als `ledger_invalid` ab; vor dem ersten erweiterten Write den installierten
   Bundle-Pin auf Issue #107 aktualisieren.
 
+### Konsum-Adapter (`pending`/`record`/`consume`/`crash-check`, Issue #88)
+
+Dieselbe CLI ist der geprüfte Consumer-Einstieg; eine zweite Adapter-CLI gibt es
+nicht. Vertrag, Feldpfade und Grenzen: [`sent-ledger-migration.md`](sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88).
+
+```bash
+# 1) Read-only Pending-Sicht: Zähler + gekürzte Hash-Refs, keine Rohinhalte.
+python3 scripts/mail_desk_sent_ledger.py pending \
+  --workspace <consumer> --data-dir data/mail-desk --account <ACCOUNT> --json
+
+# 2) Genau eine Konsumzeile; Append = Konsum, normalisierte Message-ID = Idempotenz.
+python3 scripts/mail_desk_sent_ledger.py record \
+  --workspace <consumer> --data-dir data/mail-desk --item-ref sha256:<ref> \
+  --outcome synthesized --vorgang-ref V-7 --evid-id EVID-2026-0042 \
+  --account <ACCOUNT> --workspace-lease-id <lease>
+python3 scripts/mail_desk_sent_ledger.py record ... \
+  --outcome no_evidence --reason-code no_relevant_evidence \
+  --account <ACCOUNT> --workspace-lease-id <lease>
+# `no_relevant_evidence` ist ein Platzhalter, keine Empfehlung; solange die
+# No-Evidence-Politik offen ist, wird keine `no_evidence`-Zeile geschrieben.
+
+# 2b) Batch-Konsum bereits ausgewerteter Items (ein Lease-gebundener Aufruf).
+python3 scripts/mail_desk_sent_ledger.py consume \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --evaluations data/mail-desk/sent-evaluation.json \
+  --account <ACCOUNT> --workspace-lease-id <lease>
+# Prognose ohne Lease/Write:
+python3 scripts/mail_desk_sent_ledger.py consume ... --dry-run
+
+# 3) Read-only Crash-/Triad-Klassifikation (unique|conflict|absent).
+python3 scripts/mail_desk_sent_ledger.py crash-check \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --message-id '<sent@id>' --vorgang-ref V-7 --evid-id EVID-2026-0042 \
+  [--evidence-file <durable-promotions.json>]
+```
+
+- `pending` ist rein lesend und braucht keine Lease. Es liefert `handoff_state`
+  (`none`/`pending`; nie `written`), `handoff_present`, `handoff_item_count`,
+  `pending_count`, `consumed_ignored`, `consumed_outcomes`/`consumed_sources`,
+  `ledger{lines,duplicate_message_ids,outcomes,sources,torn_tail,sha256}` und
+  `items[]` mit `item_ref`/`thread_ref`/`waits_for` (gekürzte SHA-256-Referenzen;
+  **keine** Anonymisierung), `headers_complete`, `truncated_fields`, `anchored` und
+  `anchor`. `handoff_item_count > 0` bei `pending_count == 0` sind ausschließlich
+  konsumierte Reste und blockieren den Sync nicht; eine fehlende Handoff-Datei bleibt
+  kein Leerbeweis. Betreff, Adressen, Datum, Envelope-ID und rohe Message-IDs fehlen;
+  deshalb ist der Körperleseweg ein offener Gate (kein freigegebener `read`-Aufruf,
+  siehe `sent-ledger-migration.md` §6.5). `--account` prüft jedes offene Item gegen
+  die Workspace-Bindung; ein Abweicher stoppt die ganze Runde (`mailbox_mismatch`).
+- `record` verifiziert invocation-eigene Lease **und** die kanonische
+  `<workspace>/data/mail-desk`-Bindung vor dem ersten Append. `synthesized` verlangt
+  eine exakte `vorgang_ref`, verbietet `reason_code`, erlaubt optional `evid_id` und
+  prüft die frische Ankerreferenz gegen **alle** Ledger-Zeilen (`anchor_conflict`,
+  `anchor_ambiguous`, `reference_anchor_unresolved`, `handoff_metadata_incomplete`).
+  Der Anker-Gate läuft nur für `synthesized`; `no_evidence` verlangt einen
+  schema-gültigen Begründungscode und verbietet jeden Anker, hat aber keinen
+  Anker-Gate. Eine bereits passende Zeile ist ein No-op (`already_consumed`); eine
+  abweichende Identität ist `ledger_conflict`. `norm_message_id` erscheint nur bei
+  expliziter `--message-id`-Auswahl; `--account` ist optional (ohne ihn kein
+  Account-Gate — Consumer-Pflicht, in der SOP immer gesetzt).
+- `consume` ist der Batch-Pfad und verifiziert invocation-eigene Lease **und** die
+  kanonische `<workspace>/data/mail-desk`-Bindung einmal vor der Runde (und erneut
+  vor jedem Append). Es liest `--evaluations` (JSON,
+  `kind: mail-desk.sent-evaluation`) und appendet nur `synthesized`/`no_evidence`;
+  `not_evaluated` und Items ohne Eintrag bleiben offen. Das ganze Dokument wird vor
+  dem ersten Write validiert; doppelte Ziele (`evaluation_duplicate`), eine
+  widersprüchliche dauerhafte Identität (`ledger_conflict`) und eine mehrfach
+  gebundene EVID-ID (`evid_shared_conflict`) stoppen vor jedem Write. Jeder Append
+  nutzt dieselben Gates wie `record`. Ein Item mit offenem Vorfahren wird
+  `deferred`/`ancestor_pending` und nach dem Vorfahren erneut versucht; ein
+  fachlicher Item-Konflikt endet als `consume_blocked` (Exit `2`), bereits
+  geschriebene Zeilen bleiben dauerhaft. `pending_before`/`pending_after`,
+  `consumed`/`appended`, `already_consumed`, `not_evaluated`, `deferred`,
+  `blocked`, `evaluation_entries`, `unmatched_evaluations` und
+  `handoff_unchanged` stehen in der Antwort; rohe Message-IDs werden nicht
+  ausgegeben. `--dry-run` nimmt keine Lease, schreibt nichts und meldet
+  `would_consume`/`projected_pending_after`.
+- `crash-check` ist rein lesend, vergleicht die exakte Triade (keine Substrings) und
+  liefert `unique`/`absent` als Erfolg (Exit `0`), `conflict` als Fehler-Envelope
+  (Exit `2`, nie `success: true`). Mit `--evidence-file` wird zusätzlich die
+  vollständige Promotion-Evidence klassifiziert; mit Handoff-Item werden dessen
+  Header und alle Anker-Kandidaten geprüft (`handoff_metadata_incomplete`,
+  `promotion_metadata_conflict`, `promotion_metadata_invalid`,
+  `promotion_anchor_ambiguous`, `promotion_anchor_conflict`,
+  `promotion_anchor_unresolved`). Ein offenes Item mit offenem Vorfahren ist
+  `ancestor_pending`; `safe_to_append` ist nur bei eindeutiger Evidence, fehlender
+  Ledger-Zeile und konsistentem Anker **ohne offenen Vorfahren** `true`. Evidence-
+  Thread-Metadaten werden strikt typgeprüft, ohne `norm_id`-Coercion.
+
 ## Begrenzte Ziel-Verifikationsdiagnose (Issue #12)
 
 `verify_in_target_folder(..., diagnostics=<dict>)` ergänzt `header_reads` für

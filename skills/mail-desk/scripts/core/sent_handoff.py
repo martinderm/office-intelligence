@@ -1143,24 +1143,19 @@ def unconsumed(items: list[dict[str, Any]], ledger: dict[str, Any]) -> list[dict
     return [item for item in items if item["norm_message_id"] not in consumed]
 
 
-def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
-    """Consumer view: the unconsumed items, re-anchored against the *current* ledger.
+def pending_handoff_view(
+    items: list[dict[str, Any]],
+    ledger: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Resolve and order the unconsumed handoff items against a loaded ledger.
 
-    Read-only.  Each returned item carries a fresh ``anchored_to`` and ``waits_for``
-    (pending ancestors from the same handoff, which must be promoted and recorded
-    first); items are ordered ancestors first, otherwise in handoff order.  Consume
-    loop: take the first item, promote it, ``record_synthesized`` it, call this
-    again -- replies then resolve against their just-recorded ancestors.
-    Raises ``SentHandoffError`` for an invalid or aliased handoff/ledger.
+    Pure and read-only.  Each returned item carries a fresh ``anchored_to`` and
+    ``waits_for`` (pending ancestors from the same handoff, which must be promoted
+    and recorded first); items are ordered ancestors first, otherwise in handoff
+    order.  ``no_evidence`` lines are consumed state but never resolve an anchor
+    (see ``resolve_thread_anchor``).  Callers that already loaded the ledger use
+    this view to avoid a second, potentially inconsistent read.
     """
-    reject_static_aliases(
-        data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
-    )
-    reject_static_aliases(
-        data_dir / HANDOFF_FILENAME, reason_code="handoff_alias_invalid", label="handoff",
-    )
-    ledger = load_ledger(data_dir)
-    items = read_handoff(data_dir)
     pending = unconsumed(items, ledger)
     pending_ids = {item["norm_message_id"] for item in pending}
     resolved = [
@@ -1184,7 +1179,33 @@ def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
         else:  # ancestry cycle in untrusted headers: keep handoff order for the rest
             ordered.extend(remaining)
             break
-    return {"items": ordered, "pending_count": len(ordered), "consumed_ignored": len(items) - len(pending)}
+    return ordered
+
+
+def load_pending_handoff(data_dir: Path) -> dict[str, Any]:
+    """Consumer view: the unconsumed items, re-anchored against the *current* ledger.
+
+    Read-only.  Each returned item carries a fresh ``anchored_to`` and ``waits_for``
+    (pending ancestors from the same handoff, which must be promoted and recorded
+    first); items are ordered ancestors first, otherwise in handoff order.  Consume
+    loop: take the first item, promote it, ``record_synthesized`` it, call this
+    again -- replies then resolve against their just-recorded ancestors.
+    Raises ``SentHandoffError`` for an invalid or aliased handoff/ledger.
+    """
+    reject_static_aliases(
+        data_dir / LEDGER_FILENAME, reason_code="ledger_alias_invalid", label="ledger",
+    )
+    reject_static_aliases(
+        data_dir / HANDOFF_FILENAME, reason_code="handoff_alias_invalid", label="handoff",
+    )
+    ledger = load_ledger(data_dir)
+    items = read_handoff(data_dir)
+    ordered = pending_handoff_view(items, ledger)
+    return {
+        "items": ordered,
+        "pending_count": len(ordered),
+        "consumed_ignored": len(items) - len(ordered),
+    }
 
 
 def handoff_allows_noop(handoff: Mapping[str, Any] | None) -> bool:

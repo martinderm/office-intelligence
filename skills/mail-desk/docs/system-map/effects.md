@@ -271,6 +271,14 @@ Details: L2-§40, [`objects.md`](objects.md) §8, [`processes.md`](processes.md)
   `fsync`). Der Vertrag gilt für Prozess-Absturz, nicht für Stromausfall auf Plattformen ohne Verzeichnis-`fsync`
   (Windows). Eine abgerissene letzte Zeile in `sent-index.jsonl`/Ledger (auch mitten im UTF-8-Zeichen) blockiert kein
   Lesen und wird vor dem nächsten Append ins Sidecar `<datei>.torn` verschoben; vollständige Einträge bleiben.
+* **Konsum-Adapter (Issue #88):** `record` schreibt genau eine, `consume` mehrere bereits ausgewertete
+  Ledger-Zeilen (append = Konsum, `source: synthesis`, `outcome: synthesized|no_evidence`); beide verifizieren
+  invocation-eigene Lease und Bindung an `<workspace>/data/mail-desk` vor dem ersten Append und schreiben das
+  Handoff nie um. `consume` liest ein consumer-eigenes Evaluationsdokument (`kind: mail-desk.sent-evaluation`,
+  personenbezogen, Consumer-Transit, nie stagen) und appendet nur `synthesized`/`no_evidence`; `not_evaluated`
+  bleibt offen. Vorprüfung auf doppelte Ziele, geteilte EVID-IDs und widersprüchliche dauerhafte Identität vor
+  dem ersten Write; ein fachlicher Item-Konflikt endet als `consume_blocked` (Exit 2), frühere Zeilen bleiben
+  dauerhaft. `pending`/`crash-check` sind read-only und brauchen keine Lease.
 * **Fail-closed:** ungültiges Manifest (`sync_invalid_count`, `backend_binding`), unkonsumiertes Handoff + weitere
   neue Items (`handoff_pending`), ungültiges/übergroßes Handoff (`handoff_invalid`, inkl. fremdes Konto und
   Feldlängen), ungültiges Ledger (`ledger_invalid`) stoppen vor jedem Write, Exit ≠ 0. Statische

@@ -264,7 +264,9 @@ opaker Token). Weitere Felder sind unzulässig. `follow_up` verlangt ein `anchor
   an eine `no_evidence`-Zeile verankert. Kanonische Codes: `no_matching_vorgang`, `no_relevant_evidence`,
   `thread_unresolved`, `source_unavailable`, `headers_incomplete`, `conflicting_evidence`,
   `legacy_status_no_evidence` (letzterer nur für die ehrliche Herkunft „Legacy-Index sagte `no_evidence` ohne
-  maschinenlesbaren Grund“). Kein Code ersetzt fehlende fachliche Evidenz.
+  maschinenlesbaren Grund“). Kein Code ersetzt fehlende fachliche Evidenz. Das Schema erzwingt nur einen
+  begrenzten Token; **welche** Codes konsumieren dürfen, ist eine offene Rollout-Entscheidung (No-Evidence-Politik) und
+  keine Schema-Whitelist. Solange sie offen ist, bleiben unklare Fälle `pending`.
 - **`synthesized`:** darf keinen `reason_code` tragen; `evid_id` ist optional (Altzeilen ohne EVID bleiben gültig).
   Importierte Synthese-Zeilen (`source: legacy_import`) verlangen dagegen **Vorgang + EVID-ID**; importierte
   `no_evidence`-Zeilen verlangen den Begründungscode. So erfindet der Import weder Vorgang noch Evidenz.
@@ -331,6 +333,80 @@ prüft Ledger und Handoff statisch und meldet `unknown`/`null` statt eines falsc
 Aliasfehler überspringen den Peek ganz. Der Check ist keine Zusage gegen einen konkurrierenden Same-User-Mutator
 (Issue #91).
 
+### Konsum-Adapter (Pending-Sicht, Append, Batch-Konsum, Crash-Check, Issue #88)
+
+Der Consumer konsumiert ausschließlich über die Sent-Ledger-CLI (Vertrag:
+[`sent-ledger-migration.md`](sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88)):
+
+- **`pending` (read-only):** kanonische JSON-Envelope mit
+  `data.kind: mail-desk.sent-ledger.pending-view`, `view_version: 1`,
+  `handoff_state` (`none`/`pending`), `handoff_present`, `handoff_item_count`,
+  `pending_count`, `consumed_ignored`, `consumed_outcomes`, `consumed_sources`,
+  `counts` und `ledger`. `items[]` enthält nur `item_ref`/`thread_ref`/`waits_for`
+  als gekürzte SHA-256-Referenzen (16 Hex-Zeichen; **keine** Anonymisierung, keine
+  Unumkehrbarkeits-Zusage), `headers_complete`, `truncated_fields` (Feldnamen),
+  `anchored` und `anchor` (`vorgang_ref`, gehashte `matched_ref`, `match_type`). Keine
+  Betreffzeile, Adresse, Datum, Envelope-ID oder rohe/normalisierte Message-ID im
+  Report. Die Sicht liefert bewusst keinen Envelope-/Message-ID-Locator; der
+  Körperleseweg ist ein offener Gate (siehe `sent-ledger-migration.md` §6.5).
+- **Konsumzählung:** `consumed_ignored` umfasst Handoff-Reste mit beliebiger
+  Ledger-Zeile; `consumed_outcomes` (`synthesized`/`no_evidence`) und
+  `consumed_sources` (`synthesis`/`legacy_import`) weisen die Zusammensetzung aus.
+  Eine `no_evidence`-Zeile konsumiert, ist aber kein Thread-Anker; eine
+  `legacy_import`-Zeile konsumiert und verankert nur, wenn sie `synthesized` ist.
+- **Fehlende vs. leere Handoff-Datei:** beide melden `handoff_state: none` und
+  `pending_count: 0`; `handoff_present`/`handoff_item_count` unterscheiden sie.
+  `handoff_item_count > 0` bei `pending_count: 0` heißt ausschließlich konsumierte
+  Reste (`consumed_ignored == handoff_item_count`), kein offenes Pending; das
+  blockiert den Sync nicht. Eine fehlende Datei bleibt kein Leerbeweis.
+- **`record` (append = Konsum):** genau ein Selektor (`--item-ref` aus der
+  Pending-Sicht oder normalisierte/normalisierbare `--message-id`). Vor dem Append
+  werden Lease und kanonische `<workspace>/data/mail-desk`-Bindung verifiziert
+  (`record_outcome` selbst hat keinen Guard). `synthesized` verlangt eine exakte
+  `vorgang_ref`, verbietet `reason_code`, erlaubt optional `evid_id` und prüft die
+  frische Ankerreferenz gegen **alle** Ledger-Zeilen: fremder Vorgang
+  (`anchor_conflict`), widersprüchliche Doppelzeilen (`anchor_ambiguous`),
+  referenzloser Anker (`reference_anchor_unresolved`), unvollständige Header bei
+  `synthesized` (`handoff_metadata_incomplete`; der Anker-Gate läuft nicht für
+  `no_evidence`); eine EVID-ID gehört zu genau einer Message-ID
+  (`evid_shared_conflict`). `no_evidence` verlangt einen schema-gültigen
+  Begründungscode und verbietet jeden Anker. Passende bereits dauerhafte Identität ⇒
+  `already_consumed` (No-op); abweichende Identität ⇒ `ledger_conflict`. Das Handoff
+  bleibt byte-gleich. `norm_message_id` steht nur bei expliziter
+  `--message-id`-Auswahl in der Antwort. `--account` ist optional; ohne ihn findet
+  **kein** Account-Gate statt (Consumer-Pflicht, in der SOP immer gesetzt).
+- **`consume` (Batch-Konsum):** liest ein consumer-eigenes Evaluationsdokument
+  (`schema_version: 1`, `kind: mail-desk.sent-evaluation`, `items[]`) und appendet
+  **nur** bereits ausgewertete Items (`synthesized` mit exakter `vorgang_ref` und
+  optionaler `evid_id`, `no_evidence` mit schema-gültigem `reason_code`).
+  `not_evaluated` und Items ohne Eintrag bleiben offen und werden nur als
+  gehashte `item_ref` gemeldet. Selektoren sind `item_ref` aus `pending` oder die
+  rohe `message_id`; doppelte Ziele, widersprüchliche dauerhafte Identitäten und
+  eine mehrfach gebundene `evid_id` stoppen **vor** dem ersten Append. Jeder
+  Append nutzt dieselben Gates wie `record` (Lease/Bindung, frischer Anker,
+  offene Vorfahren, Account). `--dry-run` validiert und projiziert ohne Lease und
+  ohne Write. Envelope: `data.kind: mail-desk.sent-ledger.consume`,
+  `view_version: 1`, `dry_run`, `pending_before`/`pending_after`,
+  `consumed`/`appended`, `already_consumed`, `not_evaluated`, `deferred`,
+  `blocked`, `evaluation_entries`, `unmatched_evaluations`,
+  `projected_pending_after` (Dry-Run), Ledger-/Handoff-Hashes und
+  `handoff_unchanged`. Ein fachlicher Item-Konflikt endet als `consume_blocked`
+  (Exit `2`), bereits geschriebene Zeilen bleiben dauerhaft; ein zweiter Lauf ist
+  idempotent. Die Antwort enthält keine rohen Message-IDs.
+- **`crash-check` (read-only):** exakte Triade aus normalisierter `message_id` und
+  byte-/case-exakten Token; `unique`/`absent` sind Exit `0`, `conflict` ist ein
+  Fehler-Envelope mit Exit `2`. Doppelte/widersprüchliche Ledger-Zeilen, eine fremd
+  gebundene EVID-ID (auch ohne Ziel-Datensatz), Thread-Anker-Konflikte und ein offener
+  Vorfahre zählen als Konflikt; mit Handoff-Item werden dessen Header und alle
+  Anker-Kandidaten geprüft (`handoff_metadata_incomplete`,
+  `promotion_metadata_conflict`, `promotion_metadata_invalid`,
+  `promotion_anchor_ambiguous`, `promotion_anchor_conflict`,
+  `promotion_anchor_unresolved`, `ancestor_pending`). Evidence-Thread-Metadaten sind
+  strikt typgeprüft (`references` nur Liste nichtleerer Strings, `in_reply_to`/
+  `thread_key` nur Strings); keine `norm_id`-Coercion. `safe_to_append` ist nur bei
+  eindeutiger Evidence, fehlender Ledger-Zeile und konsistentem Anker ohne offenen
+  Vorfahren `true`; der Aufruf schreibt nie.
+
 ### Absturzfenster (`sync-sent`)
 
 Der Vertrag gilt für **Prozess-Absturz/-Abbruch**. Dateiinhalte werden vor dem Ersetzen/Anhängen mit `fsync`
@@ -344,7 +420,7 @@ Handoff vor Index ist dann plattformabhängig.
 | nach Handoff, vor/während Index-Append | Items im Handoff, nicht (voll) im Index; ein Append-Fehler meldet `write_state: unknown` | erkennt dieselben Items wieder, Merge per Message-ID, kein Duplikat |
 | nach Index, vor Konsum | Items im Handoff **und** im Index | `new_count: 0`, `handoff.state: pending`; neue Items → `handoff_pending` bis zum Konsum |
 | während Konsum | Ledger enthält Teilmenge | nur die ledgerten Items gelten als konsumiert |
-| Consumer: Promotion dauerhaft, Ledger-Zeile fehlt | Promotion + EVID existieren, Ledger nicht | `core.sent_ledger.recover_promotion(...)` mit `message_id` + `vorgang_ref` + `EVID-ID`: genau ein Evidence-Treffer und keine widersprüchliche Ledger-Zeile ⇒ höchstens eine Zeile nachtragen; Teil-/Mehrdeutigkeit ⇒ stoppen |
+| Consumer: Promotion dauerhaft, Ledger-Zeile fehlt | Promotion + EVID existieren, Ledger nicht | zuerst `crash-check` (lesend, exakte Triade) mit der vollständigen Evidence; `unique` + `append_required` ⇒ `core.sent_ledger.recover_promotion(...)`; `absent`/`conflict` ⇒ stoppen |
 
 Nicht durch das Bundle lösbar: parallele Schreiber ohne Lease, manuelles Löschen der Handoff-Datei
 (verwirft unkonsumierte Items bewusst) und ein Consumer, der die Promotion-Recovery nicht aufruft. Die
@@ -356,12 +432,19 @@ Promotion-Evidence und das Ledger. Exaktes Tripel-Matching und die Lease-Pflicht
 ### Konsumvertrag und Überhang (`sync-sent`)
 
 **Konsumvertrag (Consumer):** Items nicht blind aus Envelope oder Datei übernehmen, sondern über
-`core.sent_handoff.load_pending_handoff(data_dir)` lesen: validiert Handoff und Ledger vollständig
-(fail-closed), liefert nur unkonsumierte Items, löst `anchored_to` frisch gegen das aktuelle Ledger auf und
-ordnet Vorfahren aus demselben Handoff zuerst (`waits_for`). Schleife: erstes Item promoten →
-`record_synthesized` (löst den Anker erneut auf, auch gegen frühere Items desselben Aufrufs) →
-`load_pending_handoff` erneut. Eine Antwort im selben Handoff wird so erst nach der Promotion ihres Vorfahren
-verankert (`follow_up`, gleicher `vorgang_ref`).
+die Sent-Ledger-CLI lesen: `pending` ist die read-only Sicht (Zähler, gekürzte Hash-Referenz
+`item_ref` — keine Anonymisierung —,
+`waits_for`; keine Rohinhalte), `consume` appendet in einer lease-gebundenen Runde genau die
+bereits ausgewerteten Items (`synthesized`/`no_evidence`) aus einem Evaluationsdokument und lässt
+`not_evaluated` offen, `record` appendet genau eine Konsumzeile (Lease- und
+Zielbindung vor dem Write, frische Ankerprüfung, Idempotenz über die normalisierte Message-ID).
+Der Consumer behält nur die inhaltliche Auswertung; die Ledger-Schreiblogik liegt im Bundle.
+Die Python-API `core.sent_handoff.load_pending_handoff(data_dir)` bleibt der darunterliegende
+Lesekern: validiert Handoff und Ledger vollständig (fail-closed), liefert nur unkonsumierte Items,
+löst `anchored_to` frisch gegen das aktuelle Ledger auf und ordnet Vorfahren aus demselben Handoff
+zuerst (`waits_for`). Schleife: erstes Item promoten → `consume`/`record` (löst den Anker erneut
+auf, auch gegen frühere Items desselben Aufrufs) → `pending` erneut. Eine Antwort im selben Handoff
+wird so erst nach der Promotion ihres Vorfahren verankert (`follow_up`, gleicher `vorgang_ref`).
 
 **Schreibregel:** Der Handoff wird nur ersetzt, wenn der Lauf neue Items übergibt **und** nichts Unkonsumiertes
 pending ist; Pending-Items werden nie überschrieben, erweitert oder ausgeräumt. Konsumierte Reste in der Datei
