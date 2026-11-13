@@ -89,6 +89,14 @@ beyond the scan.
 - The second consecutive transport failure ends the run immediately with the
   structured `mailbox_transport_blocked` reason; no third process starts and
   fallback paths re-raise it instead of degrading it to empty or partial data.
+  A *timeout of one item-scoped command* (`message read`/`message export` for
+  one envelope) is explicitly **not** such a transport failure: it is reported
+  as an item failure (`himalaya_timeout`), counted in `transport_stats`, and the
+  batch continues so the draft path's preview fail-safe can keep the item in
+  review. Only several item timeouts in a row **without any successful command
+  in between** (`ITEM_FAILURE_MAX_CONSECUTIVE = 5`) abort with
+  `consecutive_item_failures_without_progress`; network, launch, stdin and
+  non-item list/thread timeouts keep the unchanged two-error F6 threshold.
   Budget check, block publication and `Popen` share one spawn lock, so parallel
   workers cannot double-book the last budget slot or start after a block is
   published. Classifier full reads, Sent-Sync calls inside the batch modes and
@@ -100,8 +108,12 @@ beyond the scan.
   per envelope (raw-MIME export plus read) plus list tiers and thread map. The
   session is scoped to `inspect`/`draft`/`pipeline`; `execute`, `verify`,
   `search` and `sync_sent` keep their previous behaviour. The result envelope
-  reports `transport_stats` (starts, retries, errors total and per command
-  class), counters only, never mail content.
+  reports `transport_stats` (counts, errors and retries per command class) plus
+  the additive `command_telemetry` map with bounded durations
+  (`TRANSPORT_DURATION_SAMPLES = 20`), last exit code and last reason code. On a
+  block, `block_trigger` (and the failure envelope's `transport_trigger`) names
+  the triggering command class, envelope id, duration and exit code. Counters
+  only, never mail content.
 
 ### Message reads and body preview
 
@@ -117,6 +129,14 @@ lines**. The result reports `read_level`:
   (`full_body=True`, for example the classifier's escalation read), which
   bypasses line truncation and is **not** reachable through the `read` CLI
   subcommand or manifest action.
+
+A failed read keeps the item isolated: `error` stays bounded and the additive
+`read_error_reason` names `timeout` or `read_failed`. If a full-body escalation
+times out, the two-pass classifier keeps the already classified preview and
+marks `read_escalation.fallback: "preview"`, `read_escalation.reason: "timeout"`
+with `review_required: true`; the persisted `read_escalation.error.type` stays
+`RuntimeError`. The transport guard no longer preempts that fail-safe for a
+single slow item.
 
 ```bash
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json
