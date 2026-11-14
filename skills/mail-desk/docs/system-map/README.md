@@ -2760,11 +2760,13 @@ L1: [Paket-System-Map §16](../../../../docs/system-map/README.md#16-issue-107-s
 
 **Ziel:** Den im #88-Review fehlenden, geprüften Bundle-Einstieg für den
 Pending-/Ledger-Konsum bereitstellen, ohne eine zweite CLI oder einen zweiten Index zu bauen.
-Die bestehende `scripts/mail_desk_sent_ledger.py` wird um `pending`, `record`, `consume`
-und `crash-check`
+Die bestehende `scripts/mail_desk_sent_ledger.py` wird um `pending`, `record`, `consume`,
+`crash-check` sowie die read-only Inventar-Subcommands `inventory-legacy` und
+`inventory-promotion` (F21)
 erweitert; `core/sent_ledger.py` trägt die Logik.
 
-**Entscheidung:** `pending`, `crash-check` und `consume --dry-run` sind rein lesend (keine
+**Entscheidung:** `pending`, `crash-check`, `consume --dry-run`, `inventory-legacy` und
+`inventory-promotion` sind rein lesend (keine
 Lease), `record` und `consume` sind
 mutierend. Alle binden das aufgelöste Ziel an `<workspace>/data/mail-desk`; `record`/`consume`
 verifizieren zusätzlich die invocation-eigene Lease **vor** dem ersten Append, weil
@@ -2819,6 +2821,34 @@ verifizieren zusätzlich die invocation-eigene Lease **vor** dem ersten Append, 
   Mit `--evidence-file` zusätzlich `evidence_state`; `safe_to_append` nur bei eindeutiger Evidence,
   fehlender Ledger-Zeile und konsistentem Anker ohne offenen Vorfahren. Kein Ersatz für
   `recover-promotion`; beide nutzen dieselbe konservative Anker- und Vorfahrenprüfung.
+- **`inventory-legacy` (rein lesend):** validiert das strikte JSONL-Inventar über
+  `read_legacy_inventory` (exakt `INVENTORY_FIELDS`; Pflicht `schema_version`, `message_id`,
+  `status` ∈ {`synthesized`, `no_evidence`}, `recorded_at`; optional `vorgang_ref`, `evid_id`,
+  `reason_code`, `thread_key`) und meldet den festen Report
+  (`kind: mail-desk.sent-ledger.legacy-inventory-report`, `view_version: 1`) mit Zählern,
+  `status_counts`, `conflicts` (problematische Datensätze, doppelte Message-IDs, geteilte
+  EVID-IDs), deklariertem `schema` und je Datensatz nur `item_ref`/`thread_ref` als gekürzte
+  SHA-256-Referenzen plus `status`/`problem`. Keine rohe Message-ID, kein Vorgang, keine EVID-ID,
+  kein Grund- oder Thread-Wert; das Ziel wird gebunden, nichts geschrieben. Der eigentliche
+  Konflikt-Gate bleibt der `plan`-Dry-run.
+- **`inventory-promotion` (rein lesend):** validiert die übergebene Promotion-Evidence
+  (JSON-Array oder `{"promotions": [...]}`) gegen das deklarierte Schema `message_id`/`vorgang_ref`/
+  `evid_id` plus optionale Thread-Metadaten (`in_reply_to`, `references`, `thread_key`) und
+  meldet `entry_count`, `conflict_free`, `classification_counts`
+  (`unique`/`duplicate_message_id`/`shared_evid`), `issue_counts` je Issue-Typ, `conflicts`,
+  `thread_metadata`, das `schema` und je Eintrag nur gekürzte SHA-256-Referenzen
+  (`item_ref`, `vorgang_ref`, `evid_ref`, `thread_ref`), `classification`, `issues`,
+  `thread_metadata` und `follow_up`. Die Thread-Metadaten-Typprüfung ist identisch mit
+  `crash-check`/`recover-promotion`; Pflichtfelder und Typen werden hier jedoch für **jeden**
+  Eintrag geprüft, dort nur für den passenden Datensatz — für alle Einträge ist das Inventar
+  damit strenger. `conflict_free` ist `false` bei doppelten Message-IDs oder geteilten
+  EVID-IDs; `next` verlangt dann zuerst das Auflösen der Konflikte.
+  `classification` folgt der festen Rangfolge `duplicate_message_id` **vor** `shared_evid`;
+  `issues` nennt weiterhin beide Fakten. Ein Schemaverstoß ist fail-closed
+  `promotion_inventory_invalid` (Exit 2); Duplikate/geteilte EVID-IDs bleiben Zähler, weil sie
+  erst die spätere Recovery mehrdeutig machen. Keine Roh-IDs, keine Thread-Werte, keine Lease,
+  kein Write. Gekürzte Hash-Referenzen sind **keine** Anonymisierung und keine
+  Unumkehrbarkeits-Zusage; sie sind personenbezogen zu behandeln.
 
 **Tests:** `tests/test_sent_ledger_adapter.py` mit
 `tests/sent_ledger_adapter_fixtures.py` (synthetisch, offline): Pending (leer/fehlend, Rohinhalts-
@@ -2830,6 +2860,30 @@ Identitätskonflikt, Account-Gate, keine rohen IDs), Crash-Check (absent/unique/
 fremde EVID, Evidence, Ankerkonflikt, Read-only-Hashes) sowie die Regressionen für offenes
 Vorfahren-Pending (`ancestor_pending`, `safe_to_append: false`, keine Writes) und strikt typgeprüfte
 Evidence-Thread-Metadaten (`promotion_metadata_invalid`, fehlendes Handoff).
+`tests/test_sent_ledger_consumer_harness.py` mit `tests/sent_ledger_consumer_harness.py` deckt
+die deklarierten Startfälle F1/F2/F3/F5/F17/F19/F21/F22 ab. `tests/test_sent_ledger_inventory_tools.py`
+fährt beide Inventarwerkzeuge laufend: gültige/doppelte/geteilte Einträge, fehlende Pflichtfelder,
+`legacy_inventory_invalid`/`promotion_inventory_invalid` (Exit 2), keine Roh-IDs, Read-only-Hashes,
+Zielbindung bei fremdem `--data-dir` und Lease-Freiheit.
+
+**Automatisierungsstand der Fallmatrix (G1, offline-acceptance §4):** automatisiert sind
+F1/F2/F3/F5/F17/F19/F21/F22. F4/F6–F10/F15/F16/F18/F20 sind **noch offen**; F11–F14 bleiben
+begründete Skips. Ein Skip oder eine fehlende Abdeckung ist **kein** Pass und hebt Issue #88
+nicht auf.
+
+### 46.1 Consumer-Register-Write-Contract (SOP/L2, kein Bundle-Code)
+
+Der eigentliche Write in ein Consumer-eigenes Register gehört der SOP/Consumer-Seite; das Bundle
+stellt dafür keinen Writer bereit. Verbindlich:
+
+- Vor dem Write den erwarteten SHA-256-Hash der beabsichtigten Bytes festhalten und den
+  aktuellen Hash des Zielregisters als Basis prüfen.
+- Nach dem Write das Register erneut lesen und den Hash gegen die Erwartung vergleichen.
+- Weicht der beobachtete Hash von der Erwartung ab, genau **einmal** neu lesen (kooperativer
+  Writer). Bleibt die Abweichung danach bestehen, fail-loud stoppen; kein blinder
+  Wiederholungs-Write, keine blinde Überschreibung.
+- Keine Multi-File-Atomarität behaupten: mehrere Registerdateien sind nie eine Transaktion,
+  jeder Write wird einzeln verifiziert.
 
 **Vertrag:** [`references/sent-ledger-migration.md`](../../references/sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88),
 [`references/log-schema.md`](../../references/log-schema.md#konsum-adapter-pending-sicht-append-batch-konsum-crash-check-issue-88),

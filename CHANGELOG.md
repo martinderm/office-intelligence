@@ -8,6 +8,57 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-14 - Issue #88: Deklarierte Inventarwerkzeuge (F21)
+
+#### Added
+
+- **`inventory-legacy` (read-only):** `mail_desk_sent_ledger.py inventory-legacy` fasst das
+  strikte Legacy-Inventar über `read_legacy_inventory` zusammen (exakt `INVENTORY_FIELDS`:
+  Pflicht `schema_version`, `message_id`, `status` ∈ {`synthesized`, `no_evidence`},
+  `recorded_at`; optional `vorgang_ref`, `evid_id`, `reason_code`, `thread_key`). Der feste
+  Report (`kind: mail-desk.sent-ledger.legacy-inventory-report`, `view_version: 1`,
+  `read_only: true`) liefert `record_count`, `status_counts`, `conflicts` (problematische
+  Datensätze, doppelte Message-IDs, geteilte EVID-IDs), das deklarierte `schema` und
+  `records[]` mit nur `item_ref`/`thread_ref` (gekürzte SHA-256-Referenzen), `status` und
+  `problem`. Keine Lease, kein Write, keine rohe Message-ID/Vorgang/EVID/Thread-Wert.
+- **`inventory-promotion` (read-only):** validiert die durable Promotion-Evidence (JSON-Array
+  oder `{"promotions": [...]}`) gegen das feste Schema `message_id`/`vorgang_ref`/`evid_id`
+  plus optionale, strikt typgeprüfte Thread-Metadaten (`in_reply_to`, `references`,
+  `thread_key`). Der feste Report (`kind: mail-desk.sent-ledger.promotion-evidence-inventory`,
+  `view_version: 1`, `read_only: true`) liefert `entry_count`, `conflict_free`,
+  `classification_counts` (`unique`/`duplicate_message_id`/`shared_evid`), `issue_counts` je
+  Issue-Typ, `conflicts`, `thread_metadata`, das deklarierte `schema` und `records[]` mit
+  gekürzten `item_ref`/`vorgang_ref`/`evid_ref`/`thread_ref`. `conflict_free` ist `false` bei
+  doppelten Message-IDs oder geteilten EVID-IDs; `next` verlangt
+  dann zuerst deren Auflösung. `classification` folgt der Rangfolge `duplicate_message_id` vor
+  `shared_evid`. Ein Schemaverstoß ist fail-closed `promotion_inventory_invalid` (Exit 2);
+  Duplikate und geteilte EVID-IDs bleiben Zähler.
+- **API:** `core.sent_ledger.read_promotion_evidence` (gemeinsamer read-only Leser für
+  `crash-check`/`recover-promotion`/`inventory-promotion`), `build_legacy_inventory_report`,
+  `build_promotion_inventory_report`; `__all__` exportiert die neuen Helfer und
+  `INVENTORY_REPORT_VERSION`/`LEGACY_INVENTORY_REPORT_KIND`/`PROMOTION_INVENTORY_REPORT_KIND`.
+- **Tests:** `skills/mail-desk/tests/test_sent_ledger_inventory_tools.py` fährt beide
+  Inventarwerkzeuge laufend (gültig/Duplikat/geteilt, fehlende Pflichtfelder, Exit 2,
+  keine Roh-IDs, Read-only-Hashes, Zielbindung, Lease-Freiheit).
+- **Doku:** L1/L2-System-Map (§17/§46), `objects.md` §10.3–10.4, `cli-operations.md`,
+  `log-schema.md` und `sent-ledger-migration.md` §6.6/§7 beschreiben die Inventarwerkzeuge,
+  ihre festen Schemata und dass das Inventar bei Pflichtfeldern und Typen jeden Eintrag
+  strenger als `crash-check` prüft
+  (identische Thread-Metadaten-Typprüfung). Die L2-Map §46.1 dokumentiert zusätzlich den
+  Consumer-Register-Write-Contract (Hash vor/nach dem Write, genau ein Re-Read oder
+  fail-loud, keine blinde Überschreibung, keine Multi-File-Atomarität).
+
+#### Notes
+
+- Beide Werkzeuge sind rein lesend (keine Lease, keine Writes), binden das Ziel an
+  `<workspace>/data/mail-desk` und geben nur Zähler, Status-/Klassifikationsverteilung,
+  Schemafelder und gekürzte SHA-256-Referenzen aus. Gekürzte Hash-Refs sind **keine**
+  Anonymisierung und keine Unumkehrbarkeits-Zusage; sie sind personenbezogen zu behandeln.
+  Der Consumer-Register-Write-Contract ist in der L2-Map §46.1 dokumentiert; er bleibt
+  SOP/Consumer-Aufgabe und ist nicht Teil des Bundle-Codes.
+- Keine Verhaltensänderung an `plan`/`apply`/`recover-promotion`/`pending`/`record`/`consume`/
+  `crash-check`; der gemeinsame Evidence-Leser behält Reason-Codes und Meldungen.
+
 ### 2026-11-13 - Issue #88: Pending-/Ledger-Konsum-Adapter
 
 #### Added

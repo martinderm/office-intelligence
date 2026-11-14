@@ -305,6 +305,16 @@ exakte Triade als `unique`/`absent` (Exit 0) oder `conflict` (Fehler-Envelope, E
 Vorfahre ist `ancestor_pending`, und `safe_to_append` ist nur bei eindeutiger
 Evidence, fehlender Ledger-Zeile und konsistentem Anker **ohne offenen Vorfahren** `true`; es ersetzt
 `recover-promotion` nicht.
+`inventory-legacy` und `inventory-promotion` sind die deklarierten, rein lesenden
+Inventarwerkzeuge (F21): festes Schema, keine Lease und keine Writes, Zielbindung an
+`<workspace>/data/mail-desk`, nur Zähler, Status-/Klassifikationsverteilung, Schemafelder und
+gekürzte SHA-256-Referenzen (keine rohen Message-IDs/Vorgänge/EVID-IDs/Thread-Werte).
+Gekürzte Hash-Referenzen sind **keine** Anonymisierung und keine Unumkehrbarkeits-Zusage;
+sie sind personenbezogen zu behandeln. Der Promotion-Report meldet `conflict_free` und
+`issue_counts` je Issue-Typ (`classification`: `duplicate_message_id` vor `shared_evid`) und
+verlangt bei Konflikten zuerst deren Auflösung. Ein Schemaverstoß endet fail-closed als
+`legacy_inventory_invalid` bzw. `promotion_inventory_invalid` (Exit 2); `inventory-promotion`
+prüft bei Pflichtfeldern und Typen jeden Eintrag strenger als `crash-check`, die Thread-Metadaten-Typprüfung ist identisch.
 Details:
 [`sent-ledger-migration.md`](references/sent-ledger-migration.md#6-konsum-adapter-für-den-consumer-issue-88).
 
