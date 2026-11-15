@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -55,6 +56,33 @@ def run_execute_mode(
         index_path=index_path,
         dependencies=dependencies,
     )
+
+
+def _extract_message_ids(raw: Any) -> list[str]:
+    """Extract ordered unique bracketed message IDs from a header string or list."""
+    if not raw:
+        return []
+    values: list[str] = []
+    if isinstance(raw, str):
+        values.append(raw)
+    elif isinstance(raw, (list, tuple, set)):
+        for val in raw:
+            if val:
+                values.append(str(val))
+    else:
+        values.append(str(raw))
+    combined = " ".join(values).strip()
+    if not combined:
+        return []
+    mids: list[str] = []
+    for match in re.finditer(r"<([^>]+)>|([^\s<>,;]+)", combined):
+        candidate = match.group(1) if match.group(1) is not None else match.group(2)
+        candidate = candidate.strip()
+        if candidate:
+            bracketed = f"<{candidate}>"
+            if bracketed not in mids:
+                mids.append(bracketed)
+    return mids
 
 
 def _action_log_contains(data_dir: Path, message_id: str) -> bool:
@@ -293,7 +321,24 @@ def _execute_with_journal(
                     append_action(dd, {"timestamp": now(), "envelope_id": env_id, "message_id": message_id, "subject": str(item.get("subject", "")), "from": str(item.get("from", "")), "action": {"type": action_type, "source_folder": source, "target_folder": final_folder, "new_envelope_id": str(final_env or env_id)}, "decision": item.get("decision", {}), "notes": str(item.get("notes", ""))})
                 metadata_ok = True
                 if item.get("decision", {}).get("needs_reply") and not _reply_log_contains(dd, message_id):
-                    append_reply(dd, {"timestamp": now(), "envelope_id": str(final_env or env_id), "message_id": message_id, "subject": str(item.get("subject", "")), "from": str(item.get("from", "")), "folder": final_folder, "reply_status": "needed", "reply_note": str(item.get("notes", ""))})
+                    item_date = str(item.get("date") or item.get("at") or "")
+                    raw_irt = item.get("in_reply_to")
+                    item_irt = str(raw_irt) if raw_irt else ""
+                    raw_refs = item.get("references")
+                    item_refs = _extract_message_ids(raw_refs)
+                    append_reply(dd, {
+                        "timestamp": now(),
+                        "envelope_id": str(final_env or env_id),
+                        "message_id": message_id,
+                        "subject": str(item.get("subject", "")),
+                        "from": str(item.get("from", "")),
+                        "folder": final_folder,
+                        "reply_status": "needed",
+                        "reply_note": str(item.get("notes", "")),
+                        "date": item_date,
+                        "in_reply_to": item_irt,
+                        "references": item_refs,
+                    })
                 _checkpoint(dependencies, "after_reply", item)
                 journal.transition(record, "logged", final_envelope_id=str(final_env or env_id), final_folder=final_folder)
                 _checkpoint(dependencies, "after_log", item)
