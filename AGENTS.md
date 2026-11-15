@@ -33,6 +33,13 @@ installed shared `workspace-lock` skill holds the only lock machinery; see the
   never copied into this bundle. A missing, foreign, or unverifiable lock stops
   the mutation.
 
+## Shell Execution
+
+The global OpenCode instruction and the central shell contract
+(`Shared-Memory/agent-architecture/standards/platform/harness-engineering-and-mcp.md`
+§3.1) apply. Resolve shared skills through the consumer's project-relative
+`.agents/skills/...` junction, never through `../../../skills/...`.
+
 ## Dual Evidence
 
 - Keep operational evidence (mails, transcripts, downloads) strictly separate
