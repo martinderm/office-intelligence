@@ -2851,7 +2851,7 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         for stale in ("caldav_url", "auth_type", "CALENDAR_READ_ONLY", "*.apply-receipt.json", "Close & Remove Journal", "199+"):
             self.assertNotIn(stale, l2_readme, f"Stale identifier '{stale}' found in {l2_readme_path.as_posix()}")
 
-        for required in ("principal_url", "write_policy", "dry_run_and_approval", "CALENDAR_WRITE_FORBIDDEN", "calendar-desk-register/1", "RECOVERY_REQUIRED", "240 Testmethoden"):
+        for required in ("principal_url", "write_policy", "dry_run_and_approval", "CALENDAR_WRITE_FORBIDDEN", "calendar-desk-register/1", "RECOVERY_REQUIRED", "244 Testmethoden"):
             self.assertIn(required, l2_readme, f"Required identifier '{required}' missing from {l2_readme_path.as_posix()}")
 
         # 2. skills/calendar-desk/SKILL.md and skills/calendar-desk/references/data-model.md
@@ -2903,7 +2903,7 @@ class TestDocumentationAndSystemMapSync(unittest.TestCase):
         l1_readme_path = repo_root / "docs" / "system-map" / "README.md"
         self.assertTrue(l1_readme_path.is_file(), f"File missing: {l1_readme_path}")
         l1_readme = l1_readme_path.read_text(encoding="utf-8")
-        self.assertIn("240 Tests", l1_readme, f"Required test count '240 Tests' missing from {l1_readme_path.as_posix()}")
+        self.assertIn("244 Tests", l1_readme, f"Required test count '244 Tests' missing from {l1_readme_path.as_posix()}")
 
         # 5. CONTRIBUTING.md
         contrib_path = repo_root / "CONTRIBUTING.md"

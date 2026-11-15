@@ -216,6 +216,30 @@ class TestTimezoneResolution(unittest.TestCase):
             resolve_tzid("Moon/Sea_of_Tranquility")
         self.assertEqual(ctx.exception.code, "ICAL_TIMEZONE_ERROR")
 
+    def test_windows_tz_aliases_cldr_mappings(self) -> None:
+        """Issue #94: Verify standard CLDR Windows timezone aliases and validity."""
+        self.assertIn("FLE Standard Time", WINDOWS_TZ_ALIASES)
+        self.assertEqual(WINDOWS_TZ_ALIASES["FLE Standard Time"], "Europe/Helsinki")
+        self.assertEqual(WINDOWS_TZ_ALIASES["Central Europe Standard Time"], "Europe/Budapest")
+        self.assertEqual(WINDOWS_TZ_ALIASES["E. Europe Standard Time"], "Europe/Chisinau")
+        self.assertEqual(WINDOWS_TZ_ALIASES["GTB Standard Time"], "Europe/Bucharest")
+        self.assertEqual(WINDOWS_TZ_ALIASES["Russian Standard Time"], "Europe/Moscow")
+        self.assertEqual(WINDOWS_TZ_ALIASES["Turkey Standard Time"], "Europe/Istanbul")
+        self.assertEqual(WINDOWS_TZ_ALIASES["Greenwich Standard Time"], "Atlantic/Reykjavik")
+        self.assertEqual(WINDOWS_TZ_ALIASES["SA Pacific Standard Time"], "America/Bogota")
+        self.assertEqual(WINDOWS_TZ_ALIASES["E. Africa Standard Time"], "Africa/Nairobi")
+
+        # Every alias in WINDOWS_TZ_ALIASES must resolve to a valid ZoneInfo instance
+        for alias in WINDOWS_TZ_ALIASES:
+            zi = resolve_tzid(alias)
+            self.assertIsInstance(zi, ZoneInfo)
+
+    def test_resolve_tzid_fle_standard_time(self) -> None:
+        """Issue #94: Resolve FLE Standard Time alias to Europe/Helsinki ZoneInfo."""
+        tz = resolve_tzid("FLE Standard Time")
+        self.assertIsInstance(tz, ZoneInfo)
+        self.assertEqual(tz.key, "Europe/Helsinki")
+
 
 class TestParseIcsToRecords(unittest.TestCase):
     """Test parse_ics_to_records on various VEVENT structures."""
@@ -367,6 +391,58 @@ class TestParseIcsToRecords(unittest.TestCase):
         self.assertEqual(rec["start"]["tzid"], "America/New_York")
         # In America/New_York in Nov (EST = UTC-5): 10:00 local is 15:00 UTC
         self.assertEqual(rec["start"]["utc"], "2026-11-10T15:00:00Z")
+
+    def test_parse_ics_windows_fle_standard_time(self) -> None:
+        """Issue #94: Parse event with TZID='FLE Standard Time' and normalize to UTC."""
+        raw = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:fle-tz-event-001\r\n"
+            "DTSTART;TZID=\"FLE Standard Time\":20260601T120000\r\n"
+            "DTEND;TZID=\"FLE Standard Time\":20260601T130000\r\n"
+            "SUMMARY:Helsinki Summer Meeting\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        records = parse_ics_to_records(raw)
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["uid"], "fle-tz-event-001")
+        self.assertEqual(rec["summary"], "Helsinki Summer Meeting")
+        self.assertEqual(rec["start"]["tzid"], "Europe/Helsinki")
+        self.assertEqual(rec["start"]["local"], "2026-06-01T12:00:00+03:00")
+        # In Europe/Helsinki in June (EEST, UTC+3): 12:00 local is 09:00 UTC
+        self.assertEqual(rec["start"]["utc"], "2026-06-01T09:00:00Z")
+        self.assertEqual(rec["end"]["local"], "2026-06-01T13:00:00+03:00")
+        self.assertEqual(rec["end"]["utc"], "2026-06-01T10:00:00Z")
+
+    def test_parse_ics_windows_fle_standard_time_unquoted_winter(self) -> None:
+        """Issue #94: Parse unquoted TZID=FLE Standard Time during winter (EET, UTC+2)."""
+        raw = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:fle-tz-event-002\r\n"
+            "DTSTART;TZID=FLE Standard Time:20260115T120000\r\n"
+            "DTEND;TZID=FLE Standard Time:20260115T130000\r\n"
+            "SUMMARY:Helsinki Winter Meeting\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        records = parse_ics_to_records(raw)
+        self.assertEqual(len(records), 1)
+        rec = records[0]
+        self.assertEqual(rec["uid"], "fle-tz-event-002")
+        self.assertEqual(rec["summary"], "Helsinki Winter Meeting")
+        self.assertEqual(rec["start"]["tzid"], "Europe/Helsinki")
+        self.assertEqual(rec["start"]["local"], "2026-01-15T12:00:00+02:00")
+        # In Europe/Helsinki in January (EET, UTC+2): 12:00 local is 10:00 UTC
+        self.assertEqual(rec["start"]["utc"], "2026-01-15T10:00:00Z")
+        self.assertEqual(rec["end"]["local"], "2026-01-15T13:00:00+02:00")
+        self.assertEqual(rec["end"]["utc"], "2026-01-15T11:00:00Z")
 
 
 class TestExtractCalendarObjectRef(unittest.TestCase):
