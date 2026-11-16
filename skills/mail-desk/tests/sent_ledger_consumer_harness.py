@@ -40,6 +40,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -109,8 +110,27 @@ DECLARED_TOOLS = (
     },
 )
 
-#: Cases this harness drives today; the full G1 matrix stays declared in the run.
+#: Cases the reviewed start driver covers; the full G1 matrix stays declared in the run.
+#: Deliberately unchanged: the remaining G1 cases are declared separately below so a
+#: follow-up dispatch can never silently widen the reviewed start set.
 HARNESS_CASE_IDS = ("F1", "F2", "F3", "F5", "F17", "F19", "F21", "F22")
+
+#: Follow-up G1 cases (F4, F6-F10, F15, F16, F18, F20) driven by the separate
+#: ``test_sent_ledger_g1_remaining.py`` module on the same declared harness.
+G1_REMAINING_CASE_IDS = ("F4", "F6", "F7", "F8", "F9", "F10", "F15", "F16", "F18", "F20")
+
+#: The twelve strictly separated crash-recovery variants of F18 (a)-(l).
+F18_VARIANTS = tuple("abcdefghijkl")
+
+#: The confirmed consumer recovery gate (contract decision A) plus its accepted
+#: F18(h) exception.  When an append is required, a mutating
+#: ``recover-promotion`` call needs a proven-complete evidence list, a ``unique``
+#: crash classification **and** ``safe_to_append: true``.  Without a required
+#: append, ``already_consumed`` is a consumer no-op: exit 0, no recovery call and
+#: no write, and ``safe_to_append: false`` is explicitly not a trigger.
+#: ``crash-check`` derives ``safe_to_append`` from ``append_required``, so the
+#: exception is what keeps the documented (h) path reachable.
+CONSUMER_RECOVERY_GATE = ("completeness_proven", "unique", "safe_to_append")
 
 WORKSPACE_LOCK_SKILL = "workspace-lock"
 WORKSPACE_LOCK_GUARD = Path("scripts") / "workspace_lock_guard.py"
@@ -236,6 +256,83 @@ def _git_head(root: Path) -> str | None:
     if len(value) < 40 or any(char not in "0123456789abcdef" for char in value.lower()):
         return None
     return value
+
+
+# ---------------------------------------------------------------------------
+# Filesystem link fixtures (F4)
+# ---------------------------------------------------------------------------
+
+def _is_junction(path: Path, info: os.stat_result) -> bool:
+    """Detect an NTFS directory junction without requiring Python 3.12.
+
+    ``os.path.isjunction`` exists only from Python 3.12.  The fallback reads the
+    reparse tag that ``os.lstat`` exposes on Windows (3.8+); an unknown tag is
+    reported as *not* a junction so the F4 fixture skips instead of claiming the
+    wrong link kind.
+    """
+    probe = getattr(os.path, "isjunction", None)
+    if callable(probe):
+        try:
+            return bool(probe(path))
+        except OSError:  # pragma: no cover - unreadable component
+            return False
+    attributes = getattr(info, "st_file_attributes", 0)
+    if not attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+        return False
+    reparse_tag = getattr(info, "st_reparse_tag", None)
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+    return isinstance(reparse_tag, int) and reparse_tag == mount_point
+
+
+def link_kind(path: Path) -> str | None:
+    """``symlink``/``junction``/``reparse``/``unverifiable`` for one path, else ``None``."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - unreadable component
+        return "unverifiable"
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if _is_junction(path, info):
+        return "junction"
+    attributes = getattr(info, "st_file_attributes", 0)
+    if attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+        return "reparse"
+    return None
+
+
+def make_directory_link(link: Path, target: Path) -> str | None:
+    """Create a real directory junction on Windows, a directory symlink elsewhere.
+
+    Windows uses ``cmd /c mklink /J`` exactly like the established batch-wrapper
+    and promotion fixtures: a junction is a genuine NTFS reparse point and needs no
+    ``SeCreateSymbolicLinkPrivilege``.  A *symlink* is deliberately not substituted
+    for a junction on Windows (different semantics); if the junction cannot be
+    created the fixture reports ``None`` and the test skips with its own reason
+    instead of silently testing a different object.
+
+    Returns the created link kind (``junction``/``symlink``) or ``None``.
+    """
+    link = Path(link)
+    target = Path(target)
+    if not target.exists():
+        raise HarnessError(f"a directory link needs an existing target: {target.name}")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if os.name == "nt":
+            # Bytes only: ``mklink`` writes localized (non-UTF-8) console text.
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True, check=False, timeout=60,
+            )
+            if completed.returncode != 0:
+                return None
+        else:  # pragma: no cover - POSIX runner
+            link.symlink_to(target, target_is_directory=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return link_kind(link)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +481,42 @@ class CaseRunner:
             transport=transport,
             details=dict(self.details),
         )
+
+
+def consumer_recovery_gate(
+    *,
+    completeness_proven: bool,
+    status: str | None,
+    safe_to_append: bool,
+    append_required: bool,
+    exit_code: int,
+) -> tuple[str, tuple[str, ...]]:
+    """Decide the consumer action for one crash classification.
+
+    Returns ``(decision, unmet)``.  ``recovery`` authorizes the mutating
+    ``recover-promotion`` call; ``consumer_noop`` means the item is already
+    consumed and the consumer reports exit 0 without calling recovery and without
+    a write; ``refuse`` stops.  ``unmet`` names the unsatisfied entries of
+    :data:`CONSUMER_RECOVERY_GATE` for a refusal (F18(b), F18(c)).  A missing
+    append is never a recovery trigger, so ``safe_to_append: false`` alone does not
+    make a no-op a refusal (F18(h)).
+    """
+    satisfied = {
+        "completeness_proven": bool(completeness_proven),
+        "unique": status == "unique",
+        "safe_to_append": bool(safe_to_append),
+    }
+    unmet = tuple(name for name in CONSUMER_RECOVERY_GATE if not satisfied[name])
+    if int(exit_code) != 0:
+        return "refuse", unmet
+    if bool(append_required):
+        return ("recovery", ()) if not unmet else ("refuse", unmet)
+    if status == "unique":
+        # Accepted F18(h) exception: already consumed, no append required.  The
+        # consumer reports exit 0 without calling recovery and without a write;
+        # ``safe_to_append: false`` is not a trigger here.
+        return "consumer_noop", ()
+    return "refuse", unmet
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1075,74 @@ def consume(
     )
 
 
+def crash_check(
+    workspace: SyntheticWorkspace,
+    *,
+    message_id: str,
+    vorgang_ref: str,
+    evid_id: str,
+    evidence_file: Path | None = None,
+) -> CliResult:
+    """Read-only exact-triad classification (``unique``/``conflict``/``absent``)."""
+    evidence = ["--evidence-file", str(evidence_file)] if evidence_file is not None else []
+    return run_cli(
+        "crash-check", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--message-id", message_id,
+        "--vorgang-ref", vorgang_ref, "--evid-id", evid_id, *evidence,
+    )
+
+
+def recover_promotion(
+    workspace: SyntheticWorkspace,
+    *,
+    message_id: str,
+    vorgang_ref: str,
+    evid_id: str,
+    evidence_file: Path,
+    lease_id: str | None = None,
+) -> CliResult:
+    """Mutating recovery; the caller proves the crash-check gate before calling it."""
+    lease = ["--workspace-lease-id", lease_id] if lease_id is not None else []
+    return run_cli(
+        "recover-promotion", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--message-id", message_id,
+        "--vorgang-ref", vorgang_ref, "--evid-id", evid_id,
+        "--evidence-file", str(evidence_file), *lease,
+    )
+
+
+def legacy_plan(workspace: SyntheticWorkspace, inventory: Path) -> CliResult:
+    """Read-only legacy-import dry run (``plan``) without a lease."""
+    return run_cli(
+        "plan", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+    )
+
+
+def legacy_apply(
+    workspace: SyntheticWorkspace,
+    inventory: Path,
+    *,
+    approval: str,
+    lease_id: str | None = None,
+) -> CliResult:
+    """Approved legacy import (``apply``); needs a verified lease before any write."""
+    lease = ["--workspace-lease-id", lease_id] if lease_id is not None else []
+    return run_cli(
+        "apply", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+        "--approval", approval, *lease,
+    )
+
+
+def inventory_legacy(workspace: SyntheticWorkspace, inventory: Path) -> CliResult:
+    """Read-only legacy-inventory report (declared F21 tool)."""
+    return run_cli(
+        "inventory-legacy", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Capability probe (P1)
 # ---------------------------------------------------------------------------
@@ -1098,6 +1299,9 @@ __all__ = [
     "CaseRunner",
     "CliResult",
     "DECLARED_TOOLS",
+    "CONSUMER_RECOVERY_GATE",
+    "F18_VARIANTS",
+    "G1_REMAINING_CASE_IDS",
     "HARNESS_CASE_IDS",
     "HARNESS_KIND",
     "HARNESS_VERSION",
@@ -1118,14 +1322,21 @@ __all__ = [
     "assert_no_host_paths",
     "capability_probe",
     "consume",
+    "crash_check",
     "declared_subcommands",
     "handoff_item",
+    "inventory_legacy",
     "item_ref",
+    "legacy_apply",
+    "legacy_plan",
     "ledger_cli_path",
     "ledger_line",
+    "link_kind",
+    "make_directory_link",
     "norm_id",
     "pending",
     "record",
+    "recover_promotion",
     "repository_root",
     "require_workspace_lock_root",
     "run_case",
