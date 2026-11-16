@@ -81,6 +81,7 @@ from sent_ledger_consumer_harness import (  # noqa: E402
     TransportStub,
     assert_no_host_paths,
     consume,
+    consumer_gate_problems,
     consumer_recovery_gate,
     crash_check,
     handoff_item,
@@ -1156,12 +1157,16 @@ class F18CrashRecoveryTest(G1RemainingCase):
             workspace, message_id=self.MID, vorgang_ref=self.REF, evid_id=self.EVID,
             evidence_file=evidence_file,
         )
-        status = crash.data.get("status") if crash.exit_code == 0 else None
-        append_required = bool(crash.data.get("append_required"))
-        safe_to_append = bool(crash.data.get("safe_to_append"))
+        status = crash.data.get("status")
+        ledger_state = crash.data.get("ledger_state")
+        # Pass the adapter fields through uncoerced: a missing or mistyped field
+        # must be refused by the gate, never silently converted by bool().
+        append_required = crash.data.get("append_required")
+        safe_to_append = crash.data.get("safe_to_append")
         decision, unmet = consumer_recovery_gate(
             completeness_proven=completeness_proven,
             status=status,
+            ledger_state=ledger_state,
             safe_to_append=safe_to_append,
             append_required=append_required,
             exit_code=crash.exit_code,
@@ -1188,6 +1193,7 @@ class F18CrashRecoveryTest(G1RemainingCase):
         gate = {
             "completeness_proven": completeness_proven,
             "status": status,
+            "ledger_state": ledger_state,
             "append_required": append_required,
             "safe_to_append": safe_to_append,
             "requirements": list(CONSUMER_RECOVERY_GATE),
@@ -1376,6 +1382,7 @@ class F18CrashRecoveryTest(G1RemainingCase):
             {
                 "completeness_proven": True,
                 "status": "unique",
+                "ledger_state": "unique",
                 "append_required": False,
                 "safe_to_append": False,
                 "requirements": ["completeness_proven", "unique", "safe_to_append"],
@@ -1500,32 +1507,113 @@ class ConsumerRecoveryGateTableTest(unittest.TestCase):
     claim a production consumer implementation.
     """
 
+    def test_rev019_missing_append_required_cannot_become_a_consumer_noop(self) -> None:
+        # REV-019: bool(None) must not turn a missing adapter field into False.
+        base = dict(
+            completeness_proven=True, status="unique", ledger_state="unique",
+            safe_to_append=False, exit_code=0,
+        )
+        self.assertEqual(
+            consumer_recovery_gate(append_required=None, **base),
+            ("refuse", CONSUMER_RECOVERY_GATE),
+        )
+        self.assertEqual(
+            consumer_recovery_gate(**base),
+            ("refuse", CONSUMER_RECOVERY_GATE),
+            msg="an omitted append_required was accepted as a no-op",
+        )
+        self.assertEqual(
+            consumer_recovery_gate(append_required=False, **base),
+            ("consumer_noop", ()),
+        )
+
+    def test_noop_requires_a_proven_unique_ledger_state(self) -> None:
+        base = dict(
+            completeness_proven=True, status="unique", safe_to_append=False,
+            append_required=False, exit_code=0,
+        )
+        self.assertEqual(
+            consumer_recovery_gate(ledger_state="unique", **base),
+            ("consumer_noop", ()),
+        )
+        for ledger_state in (None, "absent", "conflict"):
+            with self.subTest(ledger_state=ledger_state):
+                decision, _unmet = consumer_recovery_gate(
+                    ledger_state=ledger_state, **base,
+                )
+                self.assertEqual(
+                    decision, "refuse",
+                    msg=f"ledger_state {ledger_state!r} reached a consumer no-op",
+                )
+
+    def test_gate_problems_name_missing_mistyped_and_contradictory_fields(self) -> None:
+        base = dict(
+            completeness_proven=True, status="unique", ledger_state="absent",
+            safe_to_append=True, append_required=True, exit_code=0,
+        )
+        self.assertEqual(consumer_gate_problems(**base), ())
+        cases = (
+            ("completeness_proven missing",
+             {key: value for key, value in base.items() if key != "completeness_proven"},
+             "completeness_proven:missing"),
+            ("completeness_proven None", {**base, "completeness_proven": None},
+             "completeness_proven:type"),
+            ("append_required missing",
+             {key: value for key, value in base.items() if key != "append_required"},
+             "append_required:missing"),
+            ("append_required None", {**base, "append_required": None},
+             "append_required:type"),
+            ("append_required string", {**base, "append_required": "false"},
+             "append_required:type"),
+            ("safe_to_append None", {**base, "safe_to_append": None},
+             "safe_to_append:type"),
+            ("ledger_state missing",
+             {key: value for key, value in base.items() if key != "ledger_state"},
+             "ledger_state:missing"),
+            ("ledger_state None", {**base, "ledger_state": None},
+             "ledger_state:type"),
+            ("ledger_state unknown", {**base, "ledger_state": "unknown"},
+             "ledger_state:value"),
+            ("status non-string", {**base, "status": 1}, "status:type"),
+            ("status unknown", {**base, "status": "unknown"}, "status:value"),
+            ("exit_code bool", {**base, "exit_code": True}, "exit_code:type"),
+            ("status conflict with append", {**base, "status": "conflict"},
+             "status:contradiction"),
+            ("ledger unique with append", {**base, "ledger_state": "unique"},
+             "ledger_state:contradiction"),
+            ("safe true without append", {**base, "append_required": False},
+             "safe_to_append:contradiction"),
+            ("append true with exit 2", {**base, "exit_code": 2},
+             "exit_code:contradiction"),
+            ("append false with unique and absent",
+             {**base, "append_required": False, "safe_to_append": False},
+             "append_required:contradiction"),
+        )
+        for label, inputs, expected in cases:
+            with self.subTest(case=label):
+                self.assertIn(expected, consumer_gate_problems(**inputs), msg=label)
+                self.assertEqual(
+                    consumer_recovery_gate(**inputs)[0], "refuse", msg=label,
+                )
+
     def test_gate_a_requires_every_condition_when_an_append_is_required(self) -> None:
         cases = (
             ("all satisfied", dict(
-                completeness_proven=True, status="unique", safe_to_append=True,
-                append_required=True, exit_code=0,
+                completeness_proven=True, status="unique", ledger_state="absent",
+                safe_to_append=True, append_required=True, exit_code=0,
             ), "recovery", ()),
-            ("status conflict", dict(
-                completeness_proven=True, status="conflict", safe_to_append=True,
-                append_required=True, exit_code=0,
-            ), "refuse", ("unique",)),
-            ("status unknown", dict(
-                completeness_proven=True, status=None, safe_to_append=True,
-                append_required=True, exit_code=0,
-            ), "refuse", ("unique",)),
             ("safe_to_append false", dict(
-                completeness_proven=True, status="unique", safe_to_append=False,
-                append_required=True, exit_code=0,
+                completeness_proven=True, status="unique", ledger_state="absent",
+                safe_to_append=False, append_required=True, exit_code=0,
             ), "refuse", ("safe_to_append",)),
             ("completeness unproven", dict(
-                completeness_proven=False, status="unique", safe_to_append=True,
-                append_required=True, exit_code=0,
+                completeness_proven=False, status="unique", ledger_state="absent",
+                safe_to_append=True, append_required=True, exit_code=0,
             ), "refuse", ("completeness_proven",)),
-            ("non-zero crash exit", dict(
-                completeness_proven=True, status="unique", safe_to_append=True,
-                append_required=True, exit_code=2,
-            ), "refuse", ()),
+            ("coherent non-zero crash exit", dict(
+                completeness_proven=True, status="absent", ledger_state="absent",
+                safe_to_append=False, append_required=False, exit_code=2,
+            ), "refuse", ("unique", "safe_to_append")),
         )
         for label, inputs, decision, unmet in cases:
             with self.subTest(condition=label):
@@ -1537,8 +1625,8 @@ class ConsumerRecoveryGateTableTest(unittest.TestCase):
     def test_only_already_consumed_without_append_is_a_consumer_noop(self) -> None:
         self.assertEqual(
             consumer_recovery_gate(
-                completeness_proven=True, status="unique", safe_to_append=False,
-                append_required=False, exit_code=0,
+                completeness_proven=True, status="unique", ledger_state="unique",
+                safe_to_append=False, append_required=False, exit_code=0,
             ),
             ("consumer_noop", ()),
         )
@@ -1547,8 +1635,8 @@ class ConsumerRecoveryGateTableTest(unittest.TestCase):
         # already-consumed case is a no-op.
         self.assertEqual(
             consumer_recovery_gate(
-                completeness_proven=True, status="conflict", safe_to_append=False,
-                append_required=False, exit_code=0,
+                completeness_proven=True, status="conflict", ledger_state="absent",
+                safe_to_append=False, append_required=False, exit_code=0,
             ),
             ("refuse", ("unique", "safe_to_append")),
         )

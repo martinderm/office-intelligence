@@ -126,11 +126,19 @@ F18_VARIANTS = tuple("abcdefghijkl")
 #: F18(h) exception.  When an append is required, a mutating
 #: ``recover-promotion`` call needs a proven-complete evidence list, a ``unique``
 #: crash classification **and** ``safe_to_append: true``.  Without a required
-#: append, ``already_consumed`` is a consumer no-op: exit 0, no recovery call and
-#: no write, and ``safe_to_append: false`` is explicitly not a trigger.
-#: ``crash-check`` derives ``safe_to_append`` from ``append_required``, so the
-#: exception is what keeps the documented (h) path reachable.
+#: append, ``already_consumed`` is a consumer no-op only when the fresh
+#: classification proves ``ledger_state == "unique"`` and ``append_required`` is
+#: exactly ``False``: exit 0, no recovery call and no write.  ``safe_to_append:
+#: false`` is explicitly not a trigger.  Missing, mistyped or contradictory
+#: adapter fields fail closed and never become a no-op (REV-019).
 CONSUMER_RECOVERY_GATE = ("completeness_proven", "unique", "safe_to_append")
+
+#: Sentinel for an adapter field that was not supplied at all.  A missing field
+#: is a refusal; it is never coerced to ``False``.
+GATE_MISSING = object()
+
+GATE_STATUS_VALUES = frozenset({"unique", "conflict", "absent"})
+GATE_LEDGER_STATE_VALUES = frozenset({"unique", "conflict", "absent"})
 
 WORKSPACE_LOCK_SKILL = "workspace-lock"
 WORKSPACE_LOCK_GUARD = Path("scripts") / "workspace_lock_guard.py"
@@ -483,13 +491,75 @@ class CaseRunner:
         )
 
 
+def consumer_gate_problems(
+    *,
+    completeness_proven: object = GATE_MISSING,
+    status: object = GATE_MISSING,
+    ledger_state: object = GATE_MISSING,
+    safe_to_append: object = GATE_MISSING,
+    append_required: object = GATE_MISSING,
+    exit_code: object = GATE_MISSING,
+) -> tuple[str, ...]:
+    """Return typed-field and contradiction problems for one gate input.
+
+    Missing fields are ``<field>:missing``, wrong runtime types ``<field>:type``
+    (``bool`` is accepted neither as ``int`` nor vice versa), out-of-domain
+    strings ``<field>:value`` and incoherent adapter combinations
+    ``<field>:contradiction``.  Only an empty tuple is accepted by the gate.
+    """
+    problems: list[str] = []
+
+    def check(name: str, value: object, expected: type) -> bool:
+        if value is GATE_MISSING:
+            problems.append(f"{name}:missing")
+            return False
+        if expected is bool:
+            valid = type(value) is bool
+        elif expected is int:
+            valid = type(value) is int
+        else:
+            valid = isinstance(value, str)
+        if not valid:
+            problems.append(f"{name}:type")
+        return valid
+
+    check("completeness_proven", completeness_proven, bool)
+    status_ok = check("status", status, str)
+    ledger_ok = check("ledger_state", ledger_state, str)
+    safe_ok = check("safe_to_append", safe_to_append, bool)
+    append_ok = check("append_required", append_required, bool)
+    exit_ok = check("exit_code", exit_code, int)
+
+    if status_ok and status not in GATE_STATUS_VALUES:
+        problems.append("status:value")
+        status_ok = False
+    if ledger_ok and ledger_state not in GATE_LEDGER_STATE_VALUES:
+        problems.append("ledger_state:value")
+        ledger_ok = False
+
+    if safe_ok and append_ok and safe_to_append is True and append_required is False:
+        problems.append("safe_to_append:contradiction")
+    if append_ok and append_required is True:
+        if status_ok and status != "unique":
+            problems.append("status:contradiction")
+        if ledger_ok and ledger_state != "absent":
+            problems.append("ledger_state:contradiction")
+        if exit_ok and exit_code != 0:
+            problems.append("exit_code:contradiction")
+    elif append_ok and append_required is False and status_ok and ledger_ok:
+        if status == "unique" and ledger_state == "absent":
+            problems.append("append_required:contradiction")
+    return tuple(problems)
+
+
 def consumer_recovery_gate(
     *,
-    completeness_proven: bool,
-    status: str | None,
-    safe_to_append: bool,
-    append_required: bool,
-    exit_code: int,
+    completeness_proven: object = GATE_MISSING,
+    status: object = GATE_MISSING,
+    ledger_state: object = GATE_MISSING,
+    safe_to_append: object = GATE_MISSING,
+    append_required: object = GATE_MISSING,
+    exit_code: object = GATE_MISSING,
 ) -> tuple[str, tuple[str, ...]]:
     """Decide the consumer action for one crash classification.
 
@@ -497,24 +567,37 @@ def consumer_recovery_gate(
     ``recover-promotion`` call; ``consumer_noop`` means the item is already
     consumed and the consumer reports exit 0 without calling recovery and without
     a write; ``refuse`` stops.  ``unmet`` names the unsatisfied entries of
-    :data:`CONSUMER_RECOVERY_GATE` for a refusal (F18(b), F18(c)).  A missing
-    append is never a recovery trigger, so ``safe_to_append: false`` alone does not
-    make a no-op a refusal (F18(h)).
+    :data:`CONSUMER_RECOVERY_GATE` for a refusal (F18(b), F18(c)).
+
+    Missing, mistyped or contradictory fields are refused with the full gate
+    tuple, never coerced with ``bool()``.  The F18(h) no-op additionally requires
+    a proven ``ledger_state == "unique"`` and ``append_required is False``; a
+    missing append is never a recovery trigger, so ``safe_to_append: false`` alone
+    does not make a no-op a refusal.
     """
+    if consumer_gate_problems(
+        completeness_proven=completeness_proven,
+        status=status,
+        ledger_state=ledger_state,
+        safe_to_append=safe_to_append,
+        append_required=append_required,
+        exit_code=exit_code,
+    ):
+        return "refuse", CONSUMER_RECOVERY_GATE
     satisfied = {
-        "completeness_proven": bool(completeness_proven),
+        "completeness_proven": completeness_proven is True,
         "unique": status == "unique",
-        "safe_to_append": bool(safe_to_append),
+        "safe_to_append": safe_to_append is True,
     }
     unmet = tuple(name for name in CONSUMER_RECOVERY_GATE if not satisfied[name])
-    if int(exit_code) != 0:
+    if exit_code != 0:
         return "refuse", unmet
-    if bool(append_required):
+    if append_required is True:
         return ("recovery", ()) if not unmet else ("refuse", unmet)
-    if status == "unique":
-        # Accepted F18(h) exception: already consumed, no append required.  The
-        # consumer reports exit 0 without calling recovery and without a write;
-        # ``safe_to_append: false`` is not a trigger here.
+    if status == "unique" and ledger_state == "unique":
+        # Accepted F18(h) exception: already consumed and no append required.
+        # The consumer reports exit 0 without calling recovery and without a
+        # write; ``safe_to_append: false`` is not a trigger here.
         return "consumer_noop", ()
     return "refuse", unmet
 
@@ -1302,6 +1385,9 @@ __all__ = [
     "CONSUMER_RECOVERY_GATE",
     "F18_VARIANTS",
     "G1_REMAINING_CASE_IDS",
+    "GATE_LEDGER_STATE_VALUES",
+    "GATE_MISSING",
+    "GATE_STATUS_VALUES",
     "HARNESS_CASE_IDS",
     "HARNESS_KIND",
     "HARNESS_VERSION",
@@ -1322,6 +1408,7 @@ __all__ = [
     "assert_no_host_paths",
     "capability_probe",
     "consume",
+    "consumer_gate_problems",
     "crash_check",
     "declared_subcommands",
     "handoff_item",
