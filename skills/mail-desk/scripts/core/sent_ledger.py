@@ -67,6 +67,9 @@ from .sent_handoff import (
 
 INVENTORY_KIND = "mail-desk.sent-ledger.legacy-inventory"
 INVENTORY_SCHEMA_VERSION = 1
+LEGACY_INVENTORY_REPORT_KIND = "mail-desk.sent-ledger.legacy-inventory-report"
+PROMOTION_INVENTORY_REPORT_KIND = "mail-desk.sent-ledger.promotion-evidence-inventory"
+INVENTORY_REPORT_VERSION = 1
 PLAN_KIND = "mail-desk.sent-ledger.legacy-import-plan"
 PLAN_VERSION = 1
 PENDING_VIEW_KIND = "mail-desk.sent-ledger.pending-view"
@@ -89,6 +92,17 @@ INVENTORY_FIELDS = frozenset({
     "reason_code", "recorded_at", "thread_key",
 })
 INVENTORY_STATUSES = ("synthesized", "no_evidence")
+INVENTORY_REQUIRED_FIELDS = ("schema_version", "message_id", "status", "recorded_at")
+INVENTORY_OPTIONAL_FIELDS = ("vorgang_ref", "evid_id", "reason_code", "thread_key")
+
+#: Fixed promotion-evidence schema consumed by ``recover-promotion``/``crash-check``:
+#: the durable triad plus optional thread metadata.  The inventory tool never
+#: emits the raw values of these fields.
+PROMOTION_INVENTORY_FIELDS = frozenset({
+    "message_id", "vorgang_ref", "evid_id", "in_reply_to", "references", "thread_key",
+})
+PROMOTION_INVENTORY_REQUIRED_FIELDS = ("message_id", "vorgang_ref", "evid_id")
+PROMOTION_INVENTORY_OPTIONAL_FIELDS = ("in_reply_to", "references", "thread_key")
 
 #: Documented ``no_evidence`` reason codes.  The schema accepts any bounded
 #: ``[a-z][a-z0-9_]{1,63}`` token; these are the canonical choices.
@@ -264,6 +278,315 @@ def read_legacy_inventory(path: Path) -> list[dict[str, Any]]:
             {"reason": "empty", "state": "invalid"},
         )
     return records
+
+
+def _promotion_inventory_error(index: int, reason: str) -> SentLedgerError:
+    return SentLedgerError(
+        "promotion_inventory_invalid",
+        f"Promotion evidence entry {index} is invalid ({reason}); nothing was read "
+        "into the inventory. Recovery: correct the evidence record and rerun the "
+        "read-only inventory.",
+        {"invalid_entry": index, "reason": reason, "state": "invalid"},
+    )
+
+
+def _optional_metadata_id(raw: Mapping[str, Any], name: str, index: int) -> str:
+    """Strict optional Message-ID metadata: absent, exactly empty, or a real id."""
+    value = raw.get(name)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise _promotion_inventory_error(index, f"{name}_invalid")
+    normalized = norm_id(value)
+    if not normalized:
+        if value == "":
+            return ""
+        raise _promotion_inventory_error(index, f"{name}_invalid")
+    return normalized
+
+
+def _optional_metadata_references(raw: Mapping[str, Any], index: int) -> list[str]:
+    """Strict optional references: a list of non-empty strings, never one string."""
+    value = raw.get("references")
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise _promotion_inventory_error(index, "references_invalid")
+    normalized: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or not entry.strip():
+            raise _promotion_inventory_error(index, "references_invalid")
+        reference = norm_id(entry)
+        if not reference:
+            raise _promotion_inventory_error(index, "references_invalid")
+        normalized.append(reference)
+    return normalized
+
+
+def _normalize_promotion_inventory_record(raw: Any, index: int) -> dict[str, Any]:
+    """Validate one durable promotion record without interpreting its content.
+
+    The tool validates and reports exactly the triad plus the optional thread
+    metadata that ``crash-check``/``recover-promotion`` already type-check; any
+    further field is ignored, exactly as the recovery consumer ignores it.  Raw
+    values are kept only in memory for classification; the report emits truncated
+    hash references.
+    """
+    if not isinstance(raw, Mapping):
+        raise _promotion_inventory_error(index, "not_a_json_object")
+    for name in PROMOTION_INVENTORY_REQUIRED_FIELDS:
+        if name not in raw:
+            raise _promotion_inventory_error(index, f"missing_field:{name}")
+    raw_message_id = raw["message_id"]
+    if not isinstance(raw_message_id, str) or not raw_message_id.strip():
+        raise _promotion_inventory_error(index, "missing_message_id")
+    message_id = norm_id(raw_message_id)
+    if not message_id:
+        raise _promotion_inventory_error(index, "missing_message_id")
+    for name in ("vorgang_ref", "evid_id"):
+        if not is_reference_token(raw[name]):
+            raise _promotion_inventory_error(index, f"{name}_invalid")
+    in_reply_to = _optional_metadata_id(raw, "in_reply_to", index)
+    thread_key = _optional_metadata_id(raw, "thread_key", index)
+    references = _optional_metadata_references(raw, index)
+    return {
+        "message_id": message_id,
+        "vorgang_ref": raw["vorgang_ref"],
+        "evid_id": raw["evid_id"],
+        "in_reply_to": in_reply_to,
+        "references": references,
+        "thread_key": thread_key,
+    }
+
+
+def read_promotion_evidence(path: Path) -> list[dict[str, Any]]:
+    """Read the caller-supplied durable promotion evidence (never writes).
+
+    The document is a JSON array of objects or ``{"promotions": [...]}``.  This is
+    the same read-only input contract as ``crash-check``/``recover-promotion``.
+    """
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
+        raise SentLedgerError(
+            "promotion_recovery_incomplete",
+            f"Promotion evidence '{path}' could not be read as JSON "
+            f"({type(error).__name__}); nothing was written.",
+            {"reason": "evidence_unreadable", "state": "incomplete"},
+        ) from error
+    if isinstance(document, dict) and set(document) == {"promotions"}:
+        document = document["promotions"]
+    if not isinstance(document, list) or not all(isinstance(item, dict) for item in document):
+        raise SentLedgerError(
+            "promotion_recovery_incomplete",
+            "Promotion evidence must be a JSON array of objects; nothing was written.",
+            {"reason": "evidence_not_a_list", "state": "incomplete"},
+        )
+    return document
+
+
+def _duplicate_id_counts(ids: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in ids:
+        counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _shared_evid_counts(records: Iterable[Mapping[str, Any]]) -> dict[str, set[str]]:
+    owners: dict[str, set[str]] = {}
+    for record in records:
+        evid_id = record.get("evid_id")
+        if isinstance(evid_id, str) and evid_id:
+            owners.setdefault(evid_id, set()).add(record["message_id"])
+    return owners
+
+
+def build_legacy_inventory_report(
+    data_dir: Path,
+    inventory_path: Path,
+    *,
+    workspace_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only summary of the strictly validated legacy inventory (no lease).
+
+    The report is a fixed schema derived exclusively from
+    :func:`read_legacy_inventory`: counters, the status distribution, the declared
+    ``INVENTORY_FIELDS`` schema and truncated SHA-256 references.  No raw
+    Message-ID, Vorgang, EVID, reason or thread value is emitted, no ledger line is
+    read or written, and the target is bound to ``<workspace>/data/mail-desk``.
+    Cross-record anomalies are reported as counters so the subsequent
+    ``plan``/``apply`` dry run stays the only conflict gate.
+    """
+    workspace, _bound = _bind_workspace_data_dir(Path(data_dir), workspace_root)
+    source = Path(inventory_path)
+    records = read_legacy_inventory(source)
+    status_counts = {status: 0 for status in INVENTORY_STATUSES}
+    problem_counts: dict[str, int] = {}
+    for record in records:
+        status_counts[record["status"]] = status_counts.get(record["status"], 0) + 1
+        problem = record.get("problem")
+        if problem is not None:
+            problem_counts[problem] = problem_counts.get(problem, 0) + 1
+    message_counts = _duplicate_id_counts(record["message_id"] for record in records)
+    evid_owners = _shared_evid_counts(records)
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        entry: dict[str, Any] = {
+            "item_ref": _ref_token(record["message_id"]),
+            "status": record["status"],
+        }
+        thread_key = record.get("thread_key")
+        if thread_key:
+            entry["thread_ref"] = _ref_token(thread_key)
+        if record.get("problem") is not None:
+            entry["problem"] = record["problem"]
+        entries.append(entry)
+    return {
+        "ok": True,
+        "mode": "sent_ledger_inventory_legacy",
+        "kind": LEGACY_INVENTORY_REPORT_KIND,
+        "view_version": INVENTORY_REPORT_VERSION,
+        "read_only": True,
+        "status": "complete",
+        "target_workspace_ref": _ref_token(str(workspace)),
+        "inventory_sha256": _file_sha256(source),
+        "record_count": len(records),
+        "status_counts": status_counts,
+        "conflicts": {
+            "problem_records": sum(problem_counts.values()),
+            "problem_counts": dict(sorted(problem_counts.items())),
+            "duplicate_message_ids": sum(
+                1 for count in message_counts.values() if count > 1
+            ),
+            "shared_evid_ids": sum(
+                1 for owners in evid_owners.values() if len(owners) > 1
+            ),
+        },
+        "schema": {
+            "kind": INVENTORY_KIND,
+            "schema_version": INVENTORY_SCHEMA_VERSION,
+            "fields": sorted(INVENTORY_FIELDS),
+            "required": list(INVENTORY_REQUIRED_FIELDS),
+            "optional": list(INVENTORY_OPTIONAL_FIELDS),
+            "statuses": list(INVENTORY_STATUSES),
+        },
+        "records": entries,
+        "next": (
+            "Use the read-only 'plan' dry run for the approval token; only 'apply' "
+            "writes and requires a verified workspace lease."
+        ),
+    }
+
+
+def build_promotion_inventory_report(
+    data_dir: Path,
+    evidence_path: Path,
+    *,
+    workspace_root: str | Path | None = None,
+) -> dict[str, Any]:
+    """Read-only summary of the durable promotion evidence (no lease).
+
+    Every entry is validated against the fixed triad-plus-thread-metadata schema
+    that ``recover-promotion``/``crash-check`` consume.  The thread-metadata type
+    check is identical, but it applies to *every* entry here, while
+    ``crash-check``/``recover-promotion`` type-check only the one matching record.
+    A schema violation is a fail-closed ``promotion_inventory_invalid``.  Duplicate
+    Message-IDs and shared EVID-IDs are reported as counters because they make a
+    later recovery ambiguous but are not schema errors; ``conflict_free`` is false
+    for such entries.  The classification of one entry is its first issue in the
+    fixed precedence ``duplicate_message_id`` before ``shared_evid``.
+    The report emits only counters and truncated SHA-256 references, never a raw
+    Message-ID/Vorgang/EVID/thread value.
+    """
+    workspace, _bound = _bind_workspace_data_dir(Path(data_dir), workspace_root)
+    source = Path(evidence_path)
+    raw_records = read_promotion_evidence(source)
+    records = [
+        _normalize_promotion_inventory_record(raw, index)
+        for index, raw in enumerate(raw_records, start=1)
+    ]
+    message_counts = _duplicate_id_counts(record["message_id"] for record in records)
+    evid_owners = _shared_evid_counts(records)
+    classification_counts = {"unique": 0, "duplicate_message_id": 0, "shared_evid": 0}
+    issue_counts = {"duplicate_message_id": 0, "shared_evid": 0}
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        message_id = record["message_id"]
+        issues: list[str] = []
+        if message_counts[message_id] > 1:
+            issues.append("duplicate_message_id")
+        if len(evid_owners.get(record["evid_id"], set())) > 1:
+            issues.append("shared_evid")
+        for issue in issues:
+            issue_counts[issue] += 1
+        # Fixed precedence: an entry that is both duplicated and shares its EVID is
+        # classified as the duplicate first; ``issues`` keeps both facts.
+        classification = issues[0] if issues else "unique"
+        classification_counts[classification] += 1
+        entry: dict[str, Any] = {
+            "item_ref": _ref_token(message_id),
+            "vorgang_ref": _ref_token(record["vorgang_ref"]),
+            "evid_ref": _ref_token(record["evid_id"]),
+            "classification": classification,
+            "issues": issues,
+            "thread_metadata": bool(
+                record["in_reply_to"] or record["references"] or record["thread_key"]
+            ),
+            "follow_up": bool(record["in_reply_to"] or record["references"]),
+        }
+        if record["thread_key"]:
+            entry["thread_ref"] = _ref_token(record["thread_key"])
+        entries.append(entry)
+    with_metadata = sum(1 for entry in entries if entry["thread_metadata"])
+    conflict_free = not any(issue_counts.values())
+    if conflict_free:
+        next_hint = (
+            "Pass this exact evidence document to 'crash-check' or "
+            "'recover-promotion'; only the latter writes, under a verified "
+            "workspace lease."
+        )
+    else:
+        next_hint = (
+            "Resolve the reported duplicate Message-IDs or shared EVID-IDs first; they "
+            "make a later 'crash-check'/'recover-promotion' ambiguous. Only after that, "
+            "pass this exact evidence document to one of those steps."
+        )
+    return {
+        "ok": True,
+        "mode": "sent_ledger_inventory_promotion",
+        "kind": PROMOTION_INVENTORY_REPORT_KIND,
+        "view_version": INVENTORY_REPORT_VERSION,
+        "read_only": True,
+        "status": "complete",
+        "conflict_free": conflict_free,
+        "target_workspace_ref": _ref_token(str(workspace)),
+        "evidence_sha256": _file_sha256(source),
+        "entry_count": len(records),
+        "classification_counts": classification_counts,
+        "issue_counts": issue_counts,
+        "conflicts": {
+            "duplicate_message_ids": sum(
+                1 for count in message_counts.values() if count > 1
+            ),
+            "shared_evid_ids": sum(
+                1 for owners in evid_owners.values() if len(owners) > 1
+            ),
+        },
+        "thread_metadata": {
+            "with_metadata": with_metadata,
+            "without_metadata": len(entries) - with_metadata,
+            "follow_ups": sum(1 for entry in entries if entry["follow_up"]),
+        },
+        "schema": {
+            "kind": "mail-desk.sent-ledger.promotion-evidence",
+            "schema_version": INVENTORY_SCHEMA_VERSION,
+            "fields": sorted(PROMOTION_INVENTORY_FIELDS),
+            "required": list(PROMOTION_INVENTORY_REQUIRED_FIELDS),
+            "optional": list(PROMOTION_INVENTORY_OPTIONAL_FIELDS),
+        },
+        "records": entries,
+        "next": next_hint,
+    }
 
 
 def _inventory_identity(record: Mapping[str, Any]) -> tuple[Any, ...]:
@@ -2348,19 +2671,25 @@ __all__ = [
     "EVALUATION_KIND",
     "EVALUATION_SCHEMA_VERSION",
     "INVENTORY_KIND",
+    "INVENTORY_REPORT_VERSION",
     "INVENTORY_SCHEMA_VERSION",
+    "LEGACY_INVENTORY_REPORT_KIND",
     "NO_EVIDENCE_REASON_CODES",
     "PENDING_VIEW_KIND",
     "PENDING_VIEW_VERSION",
     "PLAN_KIND",
     "PLAN_VERSION",
+    "PROMOTION_INVENTORY_REPORT_KIND",
     "SentLedgerError",
     "apply_legacy_import",
     "build_legacy_import_plan",
+    "build_legacy_inventory_report",
     "build_pending_view",
+    "build_promotion_inventory_report",
     "check_crash_triad",
     "consume_evaluated_items",
     "read_legacy_inventory",
+    "read_promotion_evidence",
     "read_sent_evaluations",
     "record_pending_outcome",
     "recover_promotion",

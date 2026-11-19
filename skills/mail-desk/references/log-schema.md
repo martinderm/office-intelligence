@@ -409,6 +409,38 @@ Der Consumer konsumiert ausschließlich über die Sent-Ledger-CLI (Vertrag:
   eindeutiger Evidence, fehlender Ledger-Zeile und konsistentem Anker ohne offenen
   Vorfahren `true`; der Aufruf schreibt nie.
 
+### Inventar-Reports (`inventory-legacy`/`inventory-promotion`, Issue #88/F21)
+
+Beide Reports sind rein lesend (keine Lease, keine Writes, Zielbindung an
+`<workspace>/data/mail-desk`) und liefern ein festes Schema ohne Roh-IDs:
+
+- **`inventory-legacy`:** `kind: mail-desk.sent-ledger.legacy-inventory-report`,
+  `view_version: 1`, `read_only: true`, `record_count`, `status_counts` für
+  `synthesized`/`no_evidence`, `conflicts` (problematische Datensätze, doppelte
+  Message-IDs, geteilte EVID-IDs), `schema` (exakt `INVENTORY_FIELDS`, Pflicht-
+  und optionale Felder) sowie `records[]` mit `item_ref`/`thread_ref` als
+  gekürzten SHA-256-Referenzen, `status` und `problem`. Das Inventar wird über
+  `read_legacy_inventory` strikt validiert; ein Verstoß ist
+  `legacy_inventory_invalid` (Exit `2`).
+- **`inventory-promotion`:** `kind: mail-desk.sent-ledger.promotion-evidence-inventory`,
+  `view_version: 1`, `read_only: true`, `entry_count`, `conflict_free`,
+  `classification_counts` (`unique`/`duplicate_message_id`/`shared_evid`),
+  `issue_counts` je Issue-Typ, `conflicts`, `thread_metadata` und `schema`
+  (`message_id`/`vorgang_ref`/`evid_id`, optional
+  `in_reply_to`/`references`/`thread_key`). `records[]` trägt nur gekürzte
+  `item_ref`/`vorgang_ref`/`evid_ref`/`thread_ref`, `classification`, `issues`,
+  `thread_metadata` und `follow_up`. Ein Schemaverstoß ist
+  `promotion_inventory_invalid` (Exit `2`). `conflict_free` ist `false` bei
+  doppelten Message-IDs oder geteilten EVID-IDs; `next`
+  verlangt dann zuerst das Auflösen der Konflikte. `classification` ist
+  `duplicate_message_id` **vor** `shared_evid`; `issues` nennt beide Fakten.
+- Keine rohe Message-ID, kein Vorgang, keine EVID-ID, kein Begründungs- oder
+  Thread-Wert; nur Zähler, Status-/Klassifikationsverteilung, Schemafelder und
+  gekürzte SHA-256-Referenzen. Gekürzte Hash-Referenzen sind **keine**
+  Anonymisierung und keine Unumkehrbarkeits-Zusage; sie sind personenbezogen zu
+  behandeln. Die vollständigen Dateihashes
+  (`inventory_sha256`/`evidence_sha256`) binden die Integrität ohne Pfad.
+
 ### Absturzfenster (`sync-sent`)
 
 Der Vertrag gilt für **Prozess-Absturz/-Abbruch**. Dateiinhalte werden vor dem Ersetzen/Anhängen mit `fsync`

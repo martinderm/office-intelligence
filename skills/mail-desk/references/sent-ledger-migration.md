@@ -171,13 +171,15 @@ muss der installierte Bundle-Pin Issue #107 enthalten. Kein stiller Fallback, ke
 
 ## 6. Konsum-Adapter für den Consumer (Issue #88)
 
-`pending`, `record`, `consume` und `crash-check` sind die offline getesteten
+`pending`, `record`, `consume`, `crash-check` sowie die Inventarwerkzeuge
+`inventory-legacy` und `inventory-promotion` sind die offline getesteten
 Einstiege des Bundles für den Pending-/Ledger-Konsum. Sie ersetzen keinen zweiten
 Index und keine zweite CLI: `scripts/mail_desk_sent_ledger.py` bleibt die einzige
-Sent-Ledger-CLI. Rein lesend sind `pending`, `crash-check` und `consume --dry-run`
+Sent-Ledger-CLI. Rein lesend sind `pending`, `crash-check`, `consume --dry-run`,
+`inventory-legacy` und `inventory-promotion`
 (keine Lease, keine Schreibzugriffe); mutierend sind `record` und `consume`.
 
-Alle vier binden ein explizites `--workspace` (oder ein kanonisches absolutes
+Alle binden ein explizites `--workspace` (oder ein kanonisches absolutes
 `--data-dir`) an genau `<workspace>/data/mail-desk`; ein fremder Workspace,
 Traversal oder eine Symlink-/Junction-/Reparse-Komponente stoppt mit
 `workspace_binding_invalid` vor Lesen/Schreiben. Statische Ledger-/Handoff-Aliase
@@ -439,6 +441,66 @@ Datenschutz-/Manifestentscheidung vorliegt. Bis dahin gilt: Item bleibt offen, k
 Promotion, keine Konsumzeile, kein Ad-hoc-/Inline-Ersatz. Ein direkter
 `read`-Subcommand ist technische Fähigkeit, aber keine freigegebene SOP-Option.
 
+### 6.6 Inventarwerkzeuge (read-only, F21)
+
+`inventory-legacy` und `inventory-promotion` sind die deklarierten, geprüften
+Werkzeuge für die beiden mehrschrittigen Inventaraufgaben des SOP-/Abnahmepfads
+(offline-acceptance §4 F21). Beide sind rein lesend: keine Lease, keine Writes,
+keine Mailbox und kein Netz; sie binden nur das Ziel an `<workspace>/data/mail-desk`
+und lesen ausschließlich die explizit übergebene Datei.
+
+```bash
+python3 scripts/mail_desk_sent_ledger.py inventory-legacy \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --inventory <legacy-inventory.jsonl> --json
+
+python3 scripts/mail_desk_sent_ledger.py inventory-promotion \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --evidence-file <durable-promotions.json> --json
+```
+
+- **Legacy-Schema (exakt `INVENTORY_FIELDS`):** Pflicht `schema_version` (`1`),
+  `message_id`, `status` (`synthesized`/`no_evidence`), `recorded_at` (ISO);
+  optional `vorgang_ref`, `evid_id`, `reason_code`, `thread_key`. Die Validierung
+  läuft über `read_legacy_inventory`; ein Verstoß ist `legacy_inventory_invalid`
+  (Exit `2`), ohne Write.
+- **Legacy-Report** (`kind: mail-desk.sent-ledger.legacy-inventory-report`,
+  `view_version: 1`, `read_only: true`): `record_count`, `status_counts`,
+  `conflicts` (`problem_records`/`problem_counts`, doppelte Message-IDs, geteilte
+  EVID-IDs), das deklarierte `schema` und `records[]` mit nur `item_ref`/
+  `thread_ref` (gekürzte SHA-256-Referenzen), `status` und `problem`. Der Report
+  ersetzt den `plan`-Konflikt-Gate nicht; er bereitet ihn lesend vor.
+- **Promotion-Schema:** Liste von Objekten (oder `{"promotions": [...]}`) mit
+  Pflicht `message_id`, `vorgang_ref`, `evid_id` und optional `in_reply_to`
+  (String), `references` (Liste nichtleerer Strings), `thread_key` (String). Die
+  Thread-Metadaten-Typprüfung ist **identisch** mit `crash-check`/`recover-promotion`;
+  das Inventar prüft Pflichtfelder und Typen jedoch für **jeden** Eintrag, während
+  `crash-check`/`recover-promotion` die Metadaten nur des einen passenden Datensatzes
+  typprüfen. Für alle Einträge ist das Inventar damit **strenger** als `crash-check`.
+  Weitere Felder werden wie dort ignoriert, nicht interpretiert. Ein Verstoß gegen die
+  deklarierten Felder ist fail-closed `promotion_inventory_invalid` (Exit `2`) mit
+  `invalid_entry`/`reason`; eine unlesbare Datei oder ein Nicht-Listen-Dokument
+  bleibt wie bei `crash-check` `promotion_recovery_incomplete`.
+- **Promotion-Report** (`kind: mail-desk.sent-ledger.promotion-evidence-inventory`,
+  `view_version: 1`, `read_only: true`): `entry_count`, `conflict_free`,
+  `classification_counts` (`unique`/`duplicate_message_id`/`shared_evid`),
+  `issue_counts` je Issue-Typ, `conflicts` (doppelte Message-IDs, geteilte
+  EVID-IDs), `thread_metadata`, das deklarierte `schema` und `records[]` mit
+  gekürzten `item_ref`/`vorgang_ref`/`evid_ref`/`thread_ref`, `classification`,
+  `issues`, `thread_metadata` und `follow_up`. `conflict_free` ist `false`, sobald
+  eine Message-ID doppelt vorkommt oder eine EVID-ID geteilt wird; `next` empfiehlt dann
+  zuerst das Auflösen dieser Konflikte statt einen weiteren Recovery-Schritt. `classification` folgt einer festen Rangfolge:
+  `duplicate_message_id` **vor** `shared_evid`; `issues` nennt weiterhin beide
+  Fakten. Duplikate und geteilte EVID-IDs sind Zähler, kein Schemafehler; sie machen
+  erst die spätere Recovery mehrdeutig.
+- **Datenminimierung:** kein Rohwert von `message_id`, `vorgang_ref`, `evid_id`,
+  `reason_code`, `thread_key`, `in_reply_to` oder `references`; nur Zähler,
+  Status-/Klassifikationsverteilung, Schemafelder und gekürzte SHA-256-Referenzen.
+  Gekürzte Hash-Referenzen sind **keine** Anonymisierung und keine
+  Unumkehrbarkeits-Zusage; sie sind personenbezogen zu behandeln. Die vollständigen
+  Dateihashes (`inventory_sha256`/`evidence_sha256`) binden die
+  Integrität ohne Pfad.
+
 ## 7. CLI
 
 ```text
@@ -467,16 +529,26 @@ python3 "$MAIL_DESK_SKILL/scripts/mail_desk_sent_ledger.py" crash-check \
   --message-id '<sent@id>' --vorgang-ref V-7 --evid-id EVID-2026-0042 \
   [--evidence-file <durable-promotions.json>]
 
+python3 "$MAIL_DESK_SKILL/scripts/mail_desk_sent_ledger.py" inventory-legacy \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --inventory <legacy-inventory.jsonl> --json
+
+python3 "$MAIL_DESK_SKILL/scripts/mail_desk_sent_ledger.py" inventory-promotion \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --evidence-file <durable-promotions.json> --json
+
 python3 "$MAIL_DESK_SKILL/scripts/mail_desk_sent_ledger.py" recover-promotion \
   --workspace <consumer> --data-dir data/mail-desk \
   --message-id '<sent@id>' --vorgang-ref V-7 --evid-id EVID-2026-0042 \
   --evidence-file <durable-promotions.json> --workspace-lease-id <lease>
 ```
 
-`plan`, `pending`, `crash-check` und `consume --dry-run` sind lesend; `pending`,
-`crash-check` und `consume --dry-run` brauchen keine Lease.
+`plan`, `pending`, `crash-check`, `consume --dry-run`, `inventory-legacy` und
+`inventory-promotion` sind lesend; `pending`, `crash-check`, `consume --dry-run`
+und beide Inventarwerkzeuge brauchen keine Lease.
 `apply`, `record`, `consume` und `recover-promotion` sind mutierend, verlangen eine verifizierte Lease **und** die
 kanonische Bindung des Ziels an `<workspace>/data/mail-desk`; Exit `0` = Erfolg/No-op, `2` = fail-closed
-(Konflikt, Approval, Lease, Workspace-Bindung, Alias, crash-check-Konflikt, `consume_blocked`), `1` = unerwarteter Fehler.
+(Konflikt, Approval, Lease, Workspace-Bindung, Alias, crash-check-Konflikt, `consume_blocked`,
+`legacy_inventory_invalid`, `promotion_inventory_invalid`), `1` = unerwarteter Fehler.
 Die Evidence-Datei ist ein JSON-Array von Objekten oder `{"promotions": [...]}`; sie ist Eingabe, kein
 Bundle-Report.

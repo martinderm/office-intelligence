@@ -901,8 +901,8 @@ Tests: `skills/mail-desk/tests/test_sent_ledger_outcomes.py`,
 **Ziel:** Den fehlenden, geprüften Bundle-Einstieg für den Pending-/Ledger-Konsum bereitstellen,
 damit der #88-Consumer nicht auf einen Ad-hoc- oder Inline-Ersatz angewiesen ist. Keine zweite CLI:
 `skills/mail-desk/scripts/mail_desk_sent_ledger.py` wird um `pending`, `record`,
-`consume` und `crash-check`
-erweitert; die Logik liegt in `core/sent_ledger.py`.
+`consume`, `crash-check` sowie die read-only Inventar-Subcommands `inventory-legacy` und
+`inventory-promotion` (F21) erweitert; die Logik liegt in `core/sent_ledger.py`.
 
 - **`pending` (read-only, keine Lease):** stabile JSON-Envelope
   (`kind: mail-desk.sent-ledger.pending-view`, `view_version: 1`) mit `handoff_state`
@@ -958,6 +958,30 @@ erweitert; die Logik liegt in `core/sent_ledger.py`.
   `evidence_state`; `safe_to_append` nur bei eindeutiger Evidence, fehlender Ledger-Zeile und
   konsistentem Anker ohne offenen Vorfahren. Der Aufruf schreibt nie und ersetzt `recover-promotion`
   nicht; beide nutzen dieselbe konservative Anker- und Vorfahrenprüfung.
+- **`inventory-legacy` (read-only, keine Lease):** validiert das strikte JSONL-Inventar über
+  `read_legacy_inventory` (exakt `INVENTORY_FIELDS`; Pflicht `schema_version`, `message_id`,
+  `status ∈ {synthesized, no_evidence}`, `recorded_at`; optional `vorgang_ref`, `evid_id`,
+  `reason_code`, `thread_key`) und liefert einen festen Report
+  (`kind: mail-desk.sent-ledger.legacy-inventory-report`, `view_version: 1`) mit `record_count`,
+  `status_counts`, `conflicts` (problematische Datensätze, doppelte Message-IDs, geteilte
+  EVID-IDs), dem deklarierten `schema` und je Datensatz nur `item_ref`/`thread_ref` als gekürzte
+  SHA-256-Referenzen plus `status`/`problem`. Keine rohe Message-ID, kein Vorgang, keine EVID-ID,
+  kein Grund- oder Thread-Wert im Report; das Ziel wird an `<workspace>/data/mail-desk` gebunden,
+  nichts wird gelesen außer dem übergebenen Inventar und nichts geschrieben.
+- **`inventory-promotion` (read-only, keine Lease):** validiert die übergebene
+  Promotion-Evidence (JSON-Array oder `{"promotions": [...]}`) gegen das deklarierte Schema
+  `message_id`/`vorgang_ref`/`evid_id` plus optionale Thread-Metadaten (`in_reply_to`,
+  `references`, `thread_key`) und liefert einen festen Report
+  (`kind: mail-desk.sent-ledger.promotion-evidence-inventory`, `view_version: 1`) mit
+  `entry_count`, `conflict_free`, `classification_counts`
+  (`unique`/`duplicate_message_id`/`shared_evid`), `issue_counts` je Issue-Typ, `conflicts`,
+  `thread_metadata`, dem `schema` und je Eintrag nur gekürzten SHA-256-Referenzen
+  (`item_ref`, `vorgang_ref`, `evid_ref`, `thread_ref`). `conflict_free` ist `false` bei
+  doppelten Message-IDs oder geteilten EVID-IDs; `next` verlangt dann zuerst deren Auflösung
+  (`classification`: `duplicate_message_id` vor `shared_evid`). Ein Schemaverstoß ist
+  fail-closed `promotion_inventory_invalid` (Exit 2); Duplikate und geteilte EVID-IDs werden als
+  Zähler gemeldet, weil sie eine spätere Recovery mehrdeutig machen. Der Report enthält keine
+  Roh-IDs und keine Thread-Werte.
 - **Abgrenzung:** Der Adapter liest keine Mailbox, keine Consumer-Mailinhalte und kein Netzwerk;
   das Evaluationsdokument von `consume` ist Eingabe (kein Ledger-Report). Er
   ersetzt weder die fachliche Promotion noch den Legacy-Import. Offene Consumer-Entscheidungen
@@ -969,4 +993,7 @@ Vertrag: [Sent-Ledger-Migration](../../skills/mail-desk/references/sent-ledger-m
 [Log-Schema](../../skills/mail-desk/references/log-schema.md#konsum-adapter-pending-sicht-append-batch-konsum-crash-check-issue-88),
 [CLI](../../skills/mail-desk/references/cli-operations.md#konsum-adapter-pendingrecordconsumecrash-check-issue-88).
 Tests: `skills/mail-desk/tests/test_sent_ledger_adapter.py`,
-`skills/mail-desk/tests/sent_ledger_adapter_fixtures.py`.
+`skills/mail-desk/tests/sent_ledger_adapter_fixtures.py`,
+`skills/mail-desk/tests/test_sent_ledger_consumer_harness.py`,
+`skills/mail-desk/tests/sent_ledger_consumer_harness.py`,
+`skills/mail-desk/tests/test_sent_ledger_inventory_tools.py`.

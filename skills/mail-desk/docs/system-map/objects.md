@@ -617,9 +617,24 @@ Anker-/Ordnungsschritt auf einem bereits geladenen Ledger, ohne zweiten Read), `
 `SentLedgerError` plus `build_legacy_import_plan` (rein lesend, Konfliktbericht inkl. `evid_shared_conflict`,
 `plan_id`), `apply_legacy_import` (exakter Token, verifizierte Lease **und** Bindung an
 `<workspace>/data/mail-desk`, idempotenter Teil-/No-op, keine Reportdatei), `read_legacy_inventory`
-(striktes JSONL mit `status`/`message_id`/`recorded_at` und optionalem `vorgang_ref`/`evid_id`/`reason_code`/
-`thread_key`) und `recover_promotion` (exaktes Tripel, Teil-/Mehrdeutigkeitskonflikte, `evid_shared_conflict`
-und `promotion_anchor_conflict` bei abweichendem Anker-Vorgang).
+(striktes JSONL mit exakt `INVENTORY_FIELDS`: Pflicht `schema_version`/`message_id`/`status`/
+`recorded_at`, optional `vorgang_ref`/`evid_id`/`reason_code`/`thread_key`) und `recover_promotion`
+(exaktes Tripel, Teil-/Mehrdeutigkeitskonflikte, `evid_shared_conflict`
+und `promotion_anchor_conflict` bei abweichendem Anker-Vorgang). `read_promotion_evidence` liest die
+durable Promotion-Evidence (JSON-Array oder `{"promotions": [...]}`) read-only für
+`crash-check`/`recover-promotion` und die Inventarwerkzeuge.
+
+**Inventarwerkzeuge (#88/F21):** `build_legacy_inventory_report` und
+`build_promotion_inventory_report` sind read-only (keine Lease, keine Writes) und liefern feste
+Reports: Legacy (`kind: mail-desk.sent-ledger.legacy-inventory-report`, `view_version: 1`) mit
+`record_count`, `status_counts`, `conflicts`, `schema` und je Datensatz nur
+`item_ref`/`thread_ref` (gekürzte SHA-256-Referenzen), `status` und `problem`; Promotion
+(`kind: mail-desk.sent-ledger.promotion-evidence-inventory`, `view_version: 1`) mit
+`entry_count`, `conflict_free`, `classification_counts` (`unique`/`duplicate_message_id`/
+`shared_evid`), `issue_counts` je Issue-Typ (`duplicate_message_id` vor `shared_evid`),
+`conflicts`, `thread_metadata`, `schema` und je Eintrag nur `item_ref`/`vorgang_ref`/`evid_ref`/
+`thread_ref`. Keine rohen Message-IDs, Vorgänge, EVID-IDs oder Thread-Werte; gekürzte Hash-Refs
+sind **keine** Anonymisierung; ein Promotion-Schemaverstoß ist `promotion_inventory_invalid`.
 
 **Konsum-Adapter (#88):** `build_pending_view` (read-only, stabile Pending-Envelope ohne Rohinhalte,
 mit gekürzten Hash-Refs — keine Anonymisierung —, `consumed_outcomes`/`consumed_sources`, optionalem
@@ -639,4 +654,4 @@ mit Handoff-/Evidence-Metadaten, strikt typgeprüfter Evidence-Thread-Metadaten
 `safe_to_append: true`), optionales Evidence-Inventar, nie schreibend). `read_sent_evaluations`
 liest das Consumer-Dokument (`kind: mail-desk.sent-evaluation`) strikt. CLI:
 `scripts/mail_desk_sent_ledger.py` (`plan`/`apply`/`recover-promotion` sowie
-`pending`/`record`/`consume`/`crash-check`).
+`pending`/`record`/`consume`/`crash-check`/`inventory-legacy`/`inventory-promotion`).

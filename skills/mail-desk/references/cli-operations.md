@@ -429,6 +429,62 @@ python3 scripts/mail_desk_sent_ledger.py crash-check \
   Ledger-Zeile und konsistentem Anker **ohne offenen Vorfahren** `true`. Evidence-
   Thread-Metadaten werden strikt typgeprüft, ohne `norm_id`-Coercion.
 
+### Inventarwerkzeuge (`inventory-legacy`/`inventory-promotion`, Issue #88/F21)
+
+Dieselbe CLI deklariert die beiden rein lesenden Inventarwerkzeuge des Abnahmepfads.
+Beide brauchen keine Lease, binden das Ziel an `<workspace>/data/mail-desk`, schreiben
+nichts und geben weder rohe Message-IDs noch Vorgänge, EVID-IDs, Begründungs- oder
+Thread-Werte aus.
+
+```bash
+# 1) Legacy-Inventar (striktes JSONL, exakt INVENTORY_FIELDS) zusammenfassen.
+python3 scripts/mail_desk_sent_ledger.py inventory-legacy \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --inventory <legacy-inventory.jsonl> --json
+
+# 2) Durable Promotion-Evidence (Triade + optionale Thread-Metadaten) zusammenfassen.
+python3 scripts/mail_desk_sent_ledger.py inventory-promotion \
+  --workspace <consumer> --data-dir data/mail-desk \
+  --evidence-file <durable-promotions.json> --json
+```
+
+- `inventory-legacy` validiert das Inventar über `read_legacy_inventory` (Pflicht
+  `schema_version`, `message_id`, `status ∈ {synthesized, no_evidence}`,
+  `recorded_at`; optional `vorgang_ref`, `evid_id`, `reason_code`, `thread_key`)
+  und liefert `kind: mail-desk.sent-ledger.legacy-inventory-report`,
+  `view_version: 1`, `read_only: true`, `record_count`, `status_counts`,
+  `conflicts` (`problem_records`/`problem_counts`, doppelte Message-IDs, geteilte
+  EVID-IDs), das deklarierte `schema` und `records[]` mit nur `item_ref`/
+  `thread_ref` (gekürzte SHA-256-Referenzen), `status` und `problem`. Ein
+  Schemaverstoß bleibt `legacy_inventory_invalid` (Exit `2`); der eigentliche
+  Konflikt-Gate ist der `plan`-Dry-run.
+- `inventory-promotion` liest dieselbe Evidence-Datei wie
+  `crash-check`/`recover-promotion` (JSON-Array oder `{"promotions": [...]}`),
+  verlangt je Eintrag `message_id`/`vorgang_ref`/`evid_id` und optional
+  `in_reply_to`/`references`/`thread_key` (strikt typgeprüft). Die
+  Thread-Metadaten-Typprüfung ist identisch; Pflichtfelder und Typen werden hier
+  jedoch für **jeden** Eintrag geprüft, während `crash-check`/`recover-promotion`
+  nur den passenden Datensatz typprüfen — für alle Einträge ist das Inventar damit
+  strenger. Der Report
+  (`kind: mail-desk.sent-ledger.promotion-evidence-inventory`, `view_version: 1`,
+  `read_only: true`) liefert `entry_count`, `conflict_free`,
+  `classification_counts` (`unique`/`duplicate_message_id`/`shared_evid`),
+  `issue_counts` je Issue-Typ, `conflicts`, `thread_metadata`, das deklarierte
+  `schema` und `records[]` mit gekürzten
+  `item_ref`/`vorgang_ref`/`evid_ref`/`thread_ref`, `classification`, `issues`,
+  `thread_metadata` und `follow_up`. Ein Schemaverstoß ist fail-closed
+  `promotion_inventory_invalid` (Exit `2`). `conflict_free` ist `false`, sobald eine
+  Message-ID doppelt vorkommt oder eine EVID-ID geteilt wird; `next` verlangt dann zuerst
+  das Auflösen dieser Konflikte.
+  `classification` ist `duplicate_message_id` **vor** `shared_evid`; `issues` nennt
+  beide Fakten. Duplikate und geteilte EVID-IDs werden als Zähler gemeldet, weil sie
+  erst die spätere Recovery mehrdeutig machen.
+- Beide Reports enthalten nur Zähler, Statusverteilung/Schemafelder und gekürzte
+  SHA-256-Referenzen; die vollständigen Dateihashes (`inventory_sha256`/
+  `evidence_sha256`) dienen der Integritätsbindung und enthalten keinen Pfad.
+  Gekürzte Hash-Referenzen sind **keine** Anonymisierung und keine
+  Unumkehrbarkeits-Zusage; sie sind personenbezogen zu behandeln.
+
 ## Begrenzte Ziel-Verifikationsdiagnose (Issue #12)
 
 `verify_in_target_folder(..., diagnostics=<dict>)` ergänzt `header_reads` für

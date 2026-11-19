@@ -19,17 +19,21 @@ Commands are deliberately offline-only and operate on a consumer's
   items stay open.  ``--dry-run`` validates and projects without a lease or write.
 * ``crash-check``: read-only exact triad classification (``unique``/``conflict``/
   ``absent``) without any write or lease.
+* ``inventory-legacy``: read-only summary of the strict legacy inventory
+  (counters, status distribution, fixed schema and truncated hash references).
+* ``inventory-promotion``: read-only summary of the durable promotion evidence
+  (triad plus optional thread metadata; counters and truncated hash references).
 
 No mailbox, network or consumer-document access happens here beyond the explicitly
-supplied evaluation document of ``consume``; that file is input, not a ledger
-report.  ``--json`` is accepted for the documented consumer calls; JSON is the
-only output mode.
+supplied evaluation document of ``consume`` and the explicitly supplied evidence
+documents of ``crash-check``/``recover-promotion``/``inventory-promotion``; those
+files are input, not a ledger report.  ``--json`` is accepted for the documented
+consumer calls; JSON is the only output mode.
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,12 +41,14 @@ from typing import Any
 from core.envelope import build_error, build_success, emit_json
 from core.sent_handoff import SentHandoffError
 from core.sent_ledger import (
-    SentLedgerError,
     apply_legacy_import,
     build_legacy_import_plan,
+    build_legacy_inventory_report,
     build_pending_view,
+    build_promotion_inventory_report,
     check_crash_triad,
     consume_evaluated_items,
+    read_promotion_evidence,
     read_sent_evaluations,
     record_pending_outcome,
     recover_promotion,
@@ -155,6 +161,25 @@ def _parser() -> argparse.ArgumentParser:
         help="optional complete durable promotion evidence (JSON array or "
              "{\"promotions\": [...]})",
     )
+
+    inventory_legacy = subparsers.add_parser(
+        "inventory-legacy",
+        help="read-only legacy-inventory summary (fixed schema, no raw identifiers)",
+    )
+    _add_common(inventory_legacy, mutating=False)
+    inventory_legacy.add_argument(
+        "--inventory", required=True, help="legacy inventory JSONL file",
+    )
+
+    inventory_promotion = subparsers.add_parser(
+        "inventory-promotion",
+        help="read-only promotion-evidence summary (fixed schema, no raw identifiers)",
+    )
+    _add_common(inventory_promotion, mutating=False)
+    inventory_promotion.add_argument(
+        "--evidence-file", required=True,
+        help="JSON array of durable promotion records (or {\"promotions\": [...]})",
+    )
     return parser
 
 
@@ -165,27 +190,6 @@ def _data_dir(args: argparse.Namespace) -> Path:
             raise ValueError("a relative --data-dir requires --workspace")
         raw = Path(args.workspace).expanduser() / raw
     return raw.resolve()
-
-
-def _read_promotion_evidence(path: Path) -> list[dict[str, Any]]:
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as error:
-        raise SentLedgerError(
-            "promotion_recovery_incomplete",
-            f"Promotion evidence '{path}' could not be read as JSON "
-            f"({type(error).__name__}); nothing was written.",
-            {"reason": "evidence_unreadable", "state": "incomplete"},
-        ) from error
-    if isinstance(document, dict) and set(document) == {"promotions"}:
-        document = document["promotions"]
-    if not isinstance(document, list) or not all(isinstance(item, dict) for item in document):
-        raise SentLedgerError(
-            "promotion_recovery_incomplete",
-            "Promotion evidence must be a JSON array of objects; nothing was written.",
-            {"reason": "evidence_not_a_list", "state": "incomplete"},
-        )
-    return document
 
 
 def _command(args: argparse.Namespace) -> dict[str, Any]:
@@ -238,7 +242,7 @@ def _command(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.command == "crash-check":
         evidence = (
-            _read_promotion_evidence(Path(args.evidence_file).expanduser())
+            read_promotion_evidence(Path(args.evidence_file).expanduser())
             if args.evidence_file
             else None
         )
@@ -250,7 +254,19 @@ def _command(args: argparse.Namespace) -> dict[str, Any]:
             promotion_evidence=evidence,
             workspace_root=workspace,
         )
-    evidence = _read_promotion_evidence(Path(args.evidence_file).expanduser())
+    if args.command == "inventory-legacy":
+        return build_legacy_inventory_report(
+            data_dir,
+            Path(args.inventory).expanduser(),
+            workspace_root=workspace,
+        )
+    if args.command == "inventory-promotion":
+        return build_promotion_inventory_report(
+            data_dir,
+            Path(args.evidence_file).expanduser(),
+            workspace_root=workspace,
+        )
+    evidence = read_promotion_evidence(Path(args.evidence_file).expanduser())
     return recover_promotion(
         data_dir,
         message_id=args.message_id,
