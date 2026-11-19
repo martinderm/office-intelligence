@@ -293,7 +293,6 @@ class F4TraversalReparseTest(G1RemainingCase):
         kind = make_directory_link(linked.data_dir, external.data_dir)
         if kind != "junction":
             self.skipTest(self.JUNCTION_SKIP)
-        self.assertEqual(kind, "junction", msg="a symlink must never stand in for a junction")
         return linked, external
 
     def test_f4_junction_data_zone_is_refused_before_a_read(self) -> None:
