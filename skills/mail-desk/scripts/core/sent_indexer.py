@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +53,9 @@ SENT_SYNC_PAGE_SIZE = 100
 #: Maximum pages fetched per date.  A still-full last page is fail-closed (no
 #: watermark advance); the error names a higher-limit Python-API recovery call.
 SENT_SYNC_MAX_PAGES = 50
+
+#: Maximum clock skew tolerated when checking temporal order of sent replies.
+SENT_REPLY_CLOCK_SKEW_TOLERANCE = timedelta(minutes=5)
 
 #: Strict adapter end signal for requesting a page beyond the last full page.
 #: Only the classified Himalaya command error with exactly this documented text is
@@ -1604,6 +1607,14 @@ def parse_date_to_datetime(s: str) -> datetime | None:
         return None
     s_str = str(s).strip()
     if len(s_str) >= 10 and s_str[4] == "-" and s_str[7] == "-":
+        iso_str = s_str.replace("Z", "+00:00")
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
+        except Exception:
+            pass
         try:
             return datetime.strptime(s_str[:10], "%Y-%m-%d")
         except Exception:
@@ -1612,7 +1623,9 @@ def parse_date_to_datetime(s: str) -> datetime | None:
         from email.utils import parsedate_to_datetime
         dt = parsedate_to_datetime(s_str)
         if dt:
-            return dt.replace(tzinfo=None)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            return dt
     except Exception:
         pass
     return None
@@ -1624,6 +1637,33 @@ def extract_email_address(s: str) -> str:
         return ""
     m = re.search(r"[\w\.-]+@[\w\.-]+", s)
     return m.group(0).lower() if m else s.strip().lower()
+
+
+def _extract_message_ids(raw: Any) -> list[str]:
+    """Extract individual message IDs from a header string or list."""
+    if not raw:
+        return []
+    values: list[str] = []
+    if isinstance(raw, str):
+        values.append(raw)
+    elif isinstance(raw, (list, tuple, set)):
+        for val in raw:
+            if val:
+                values.append(str(val))
+    else:
+        values.append(str(raw))
+    combined = " ".join(values).strip()
+    if not combined:
+        return []
+    mids: list[str] = []
+    for match in re.finditer(r"<([^>]+)>|([^\s<>,;]+)", combined):
+        candidate = match.group(1) if match.group(1) is not None else match.group(2)
+        candidate = candidate.strip()
+        if candidate:
+            bracketed = f"<{candidate}>"
+            if bracketed not in mids:
+                mids.append(bracketed)
+    return mids
 
 
 def check_if_replied(
@@ -1677,16 +1717,44 @@ def check_if_replied(
         cs = clean_subject(subj)
         subj_matches = sent_lookup.get("by_subject_clean", {}).get(cs, [])
         if subj_matches:
-            latest = subj_matches[-1]
-            return {
-                "replied": True,
-                "confidence": "high",
-                "match_type": "subject_clean",
-                "sent_message_id": latest.get("message_id", ""),
-                "sent_date": latest.get("at", ""),
-                "sent_envelope_id": latest.get("sent_envelope_id", ""),
-                "sent_subject": latest.get("subject", ""),
-            }
+            # Exclude ancestors/parents that the incoming email replies to
+            excluded_parent_mids: set[str] = set()
+            if norm_mid:
+                excluded_parent_mids.add(norm_mid)
+            for raw_val in (email.get("in_reply_to"), email.get("references")):
+                for mid_token in _extract_message_ids(raw_val):
+                    norm_id = normalize_message_id(mid_token)
+                    if norm_id:
+                        excluded_parent_mids.add(norm_id)
+
+            in_date_raw = str(email.get("date") or email.get("at") or "")
+            in_dt = parse_date_to_datetime(in_date_raw)
+
+            eligible_matches: list[dict[str, Any]] = []
+            for cand in subj_matches:
+                cand_mid = normalize_message_id(str(cand.get("message_id", "")))
+                if not cand_mid or cand_mid in excluded_parent_mids:
+                    continue
+
+                if in_dt is not None:
+                    s_date_raw = str(cand.get("at") or cand.get("date") or "")
+                    s_dt = parse_date_to_datetime(s_date_raw)
+                    if s_dt is not None and s_dt < in_dt - SENT_REPLY_CLOCK_SKEW_TOLERANCE:
+                        continue
+
+                eligible_matches.append(cand)
+
+            if eligible_matches:
+                latest = eligible_matches[-1]
+                return {
+                    "replied": True,
+                    "confidence": "high",
+                    "match_type": "subject_clean",
+                    "sent_message_id": latest.get("message_id", ""),
+                    "sent_date": latest.get("at", ""),
+                    "sent_envelope_id": latest.get("sent_envelope_id", ""),
+                    "sent_subject": latest.get("subject", ""),
+                }
 
     # 4. Context & Candidate Search:
     # When In-Reply-To is missing and subject changed, check for candidate sent emails
