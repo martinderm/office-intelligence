@@ -40,6 +40,7 @@ import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -109,8 +110,35 @@ DECLARED_TOOLS = (
     },
 )
 
-#: Cases this harness drives today; the full G1 matrix stays declared in the run.
+#: Cases the reviewed start driver covers; the full G1 matrix stays declared in the run.
+#: Deliberately unchanged: the remaining G1 cases are declared separately below so a
+#: follow-up dispatch can never silently widen the reviewed start set.
 HARNESS_CASE_IDS = ("F1", "F2", "F3", "F5", "F17", "F19", "F21", "F22")
+
+#: Follow-up G1 cases (F4, F6-F10, F15, F16, F18, F20) driven by the separate
+#: ``test_sent_ledger_g1_remaining.py`` module on the same declared harness.
+G1_REMAINING_CASE_IDS = ("F4", "F6", "F7", "F8", "F9", "F10", "F15", "F16", "F18", "F20")
+
+#: The twelve strictly separated crash-recovery variants of F18 (a)-(l).
+F18_VARIANTS = tuple("abcdefghijkl")
+
+#: The confirmed consumer recovery gate (contract decision A) plus its accepted
+#: F18(h) exception.  When an append is required, a mutating
+#: ``recover-promotion`` call needs a proven-complete evidence list, a ``unique``
+#: crash classification **and** ``safe_to_append: true``.  Without a required
+#: append, ``already_consumed`` is a consumer no-op only when the fresh
+#: classification proves ``ledger_state == "unique"`` and ``append_required`` is
+#: exactly ``False``: exit 0, no recovery call and no write.  ``safe_to_append:
+#: false`` is explicitly not a trigger.  Missing, mistyped or contradictory
+#: adapter fields fail closed and never become a no-op (REV-019).
+CONSUMER_RECOVERY_GATE = ("completeness_proven", "unique", "safe_to_append")
+
+#: Sentinel for an adapter field that was not supplied at all.  A missing field
+#: is a refusal; it is never coerced to ``False``.
+GATE_MISSING = object()
+
+GATE_STATUS_VALUES = frozenset({"unique", "conflict", "absent"})
+GATE_LEDGER_STATE_VALUES = frozenset({"unique", "conflict", "absent"})
 
 WORKSPACE_LOCK_SKILL = "workspace-lock"
 WORKSPACE_LOCK_GUARD = Path("scripts") / "workspace_lock_guard.py"
@@ -236,6 +264,83 @@ def _git_head(root: Path) -> str | None:
     if len(value) < 40 or any(char not in "0123456789abcdef" for char in value.lower()):
         return None
     return value
+
+
+# ---------------------------------------------------------------------------
+# Filesystem link fixtures (F4)
+# ---------------------------------------------------------------------------
+
+def _is_junction(path: Path, info: os.stat_result) -> bool:
+    """Detect an NTFS directory junction without requiring Python 3.12.
+
+    ``os.path.isjunction`` exists only from Python 3.12.  The fallback reads the
+    reparse tag that ``os.lstat`` exposes on Windows (3.8+); an unknown tag is
+    reported as *not* a junction so the F4 fixture skips instead of claiming the
+    wrong link kind.
+    """
+    probe = getattr(os.path, "isjunction", None)
+    if callable(probe):
+        try:
+            return bool(probe(path))
+        except OSError:  # pragma: no cover - unreadable component
+            return False
+    attributes = getattr(info, "st_file_attributes", 0)
+    if not attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+        return False
+    reparse_tag = getattr(info, "st_reparse_tag", None)
+    mount_point = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", 0xA0000003)
+    return isinstance(reparse_tag, int) and reparse_tag == mount_point
+
+
+def link_kind(path: Path) -> str | None:
+    """``symlink``/``junction``/``reparse``/``unverifiable`` for one path, else ``None``."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:  # pragma: no cover - unreadable component
+        return "unverifiable"
+    if stat.S_ISLNK(info.st_mode):
+        return "symlink"
+    if _is_junction(path, info):
+        return "junction"
+    attributes = getattr(info, "st_file_attributes", 0)
+    if attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+        return "reparse"
+    return None
+
+
+def make_directory_link(link: Path, target: Path) -> str | None:
+    """Create a real directory junction on Windows, a directory symlink elsewhere.
+
+    Windows uses ``cmd /c mklink /J`` exactly like the established batch-wrapper
+    and promotion fixtures: a junction is a genuine NTFS reparse point and needs no
+    ``SeCreateSymbolicLinkPrivilege``.  A *symlink* is deliberately not substituted
+    for a junction on Windows (different semantics); if the junction cannot be
+    created the fixture reports ``None`` and the test skips with its own reason
+    instead of silently testing a different object.
+
+    Returns the created link kind (``junction``/``symlink``) or ``None``.
+    """
+    link = Path(link)
+    target = Path(target)
+    if not target.exists():
+        raise HarnessError(f"a directory link needs an existing target: {target.name}")
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if os.name == "nt":
+            # Bytes only: ``mklink`` writes localized (non-UTF-8) console text.
+            completed = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                capture_output=True, check=False, timeout=60,
+            )
+            if completed.returncode != 0:
+                return None
+        else:  # pragma: no cover - POSIX runner
+            link.symlink_to(target, target_is_directory=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return link_kind(link)
 
 
 # ---------------------------------------------------------------------------
@@ -384,6 +489,117 @@ class CaseRunner:
             transport=transport,
             details=dict(self.details),
         )
+
+
+def consumer_gate_problems(
+    *,
+    completeness_proven: object = GATE_MISSING,
+    status: object = GATE_MISSING,
+    ledger_state: object = GATE_MISSING,
+    safe_to_append: object = GATE_MISSING,
+    append_required: object = GATE_MISSING,
+    exit_code: object = GATE_MISSING,
+) -> tuple[str, ...]:
+    """Return typed-field and contradiction problems for one gate input.
+
+    Missing fields are ``<field>:missing``, wrong runtime types ``<field>:type``
+    (``bool`` is accepted neither as ``int`` nor vice versa), out-of-domain
+    strings ``<field>:value`` and incoherent adapter combinations
+    ``<field>:contradiction``.  Only an empty tuple is accepted by the gate.
+    """
+    problems: list[str] = []
+
+    def check(name: str, value: object, expected: type) -> bool:
+        if value is GATE_MISSING:
+            problems.append(f"{name}:missing")
+            return False
+        if expected is bool:
+            valid = type(value) is bool
+        elif expected is int:
+            valid = type(value) is int
+        else:
+            valid = isinstance(value, str)
+        if not valid:
+            problems.append(f"{name}:type")
+        return valid
+
+    check("completeness_proven", completeness_proven, bool)
+    status_ok = check("status", status, str)
+    ledger_ok = check("ledger_state", ledger_state, str)
+    safe_ok = check("safe_to_append", safe_to_append, bool)
+    append_ok = check("append_required", append_required, bool)
+    exit_ok = check("exit_code", exit_code, int)
+
+    if status_ok and status not in GATE_STATUS_VALUES:
+        problems.append("status:value")
+        status_ok = False
+    if ledger_ok and ledger_state not in GATE_LEDGER_STATE_VALUES:
+        problems.append("ledger_state:value")
+        ledger_ok = False
+
+    if safe_ok and append_ok and safe_to_append is True and append_required is False:
+        problems.append("safe_to_append:contradiction")
+    if append_ok and append_required is True:
+        if status_ok and status != "unique":
+            problems.append("status:contradiction")
+        if ledger_ok and ledger_state != "absent":
+            problems.append("ledger_state:contradiction")
+        if exit_ok and exit_code != 0:
+            problems.append("exit_code:contradiction")
+    elif append_ok and append_required is False and status_ok and ledger_ok:
+        if status == "unique" and ledger_state == "absent":
+            problems.append("append_required:contradiction")
+    return tuple(problems)
+
+
+def consumer_recovery_gate(
+    *,
+    completeness_proven: object = GATE_MISSING,
+    status: object = GATE_MISSING,
+    ledger_state: object = GATE_MISSING,
+    safe_to_append: object = GATE_MISSING,
+    append_required: object = GATE_MISSING,
+    exit_code: object = GATE_MISSING,
+) -> tuple[str, tuple[str, ...]]:
+    """Decide the consumer action for one crash classification.
+
+    Returns ``(decision, unmet)``.  ``recovery`` authorizes the mutating
+    ``recover-promotion`` call; ``consumer_noop`` means the item is already
+    consumed and the consumer reports exit 0 without calling recovery and without
+    a write; ``refuse`` stops.  ``unmet`` names the unsatisfied entries of
+    :data:`CONSUMER_RECOVERY_GATE` for a refusal (F18(b), F18(c)).
+
+    Missing, mistyped or contradictory fields are refused with the full gate
+    tuple, never coerced with ``bool()``.  The F18(h) no-op additionally requires
+    a proven ``ledger_state == "unique"`` and ``append_required is False``; a
+    missing append is never a recovery trigger, so ``safe_to_append: false`` alone
+    does not make a no-op a refusal.
+    """
+    if consumer_gate_problems(
+        completeness_proven=completeness_proven,
+        status=status,
+        ledger_state=ledger_state,
+        safe_to_append=safe_to_append,
+        append_required=append_required,
+        exit_code=exit_code,
+    ):
+        return "refuse", CONSUMER_RECOVERY_GATE
+    satisfied = {
+        "completeness_proven": completeness_proven is True,
+        "unique": status == "unique",
+        "safe_to_append": safe_to_append is True,
+    }
+    unmet = tuple(name for name in CONSUMER_RECOVERY_GATE if not satisfied[name])
+    if exit_code != 0:
+        return "refuse", unmet
+    if append_required is True:
+        return ("recovery", ()) if not unmet else ("refuse", unmet)
+    if status == "unique" and ledger_state == "unique":
+        # Accepted F18(h) exception: already consumed and no append required.
+        # The consumer reports exit 0 without calling recovery and without a
+        # write; ``safe_to_append: false`` is not a trigger here.
+        return "consumer_noop", ()
+    return "refuse", unmet
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1158,74 @@ def consume(
     )
 
 
+def crash_check(
+    workspace: SyntheticWorkspace,
+    *,
+    message_id: str,
+    vorgang_ref: str,
+    evid_id: str,
+    evidence_file: Path | None = None,
+) -> CliResult:
+    """Read-only exact-triad classification (``unique``/``conflict``/``absent``)."""
+    evidence = ["--evidence-file", str(evidence_file)] if evidence_file is not None else []
+    return run_cli(
+        "crash-check", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--message-id", message_id,
+        "--vorgang-ref", vorgang_ref, "--evid-id", evid_id, *evidence,
+    )
+
+
+def recover_promotion(
+    workspace: SyntheticWorkspace,
+    *,
+    message_id: str,
+    vorgang_ref: str,
+    evid_id: str,
+    evidence_file: Path,
+    lease_id: str | None = None,
+) -> CliResult:
+    """Mutating recovery; the caller proves the crash-check gate before calling it."""
+    lease = ["--workspace-lease-id", lease_id] if lease_id is not None else []
+    return run_cli(
+        "recover-promotion", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--message-id", message_id,
+        "--vorgang-ref", vorgang_ref, "--evid-id", evid_id,
+        "--evidence-file", str(evidence_file), *lease,
+    )
+
+
+def legacy_plan(workspace: SyntheticWorkspace, inventory: Path) -> CliResult:
+    """Read-only legacy-import dry run (``plan``) without a lease."""
+    return run_cli(
+        "plan", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+    )
+
+
+def legacy_apply(
+    workspace: SyntheticWorkspace,
+    inventory: Path,
+    *,
+    approval: str,
+    lease_id: str | None = None,
+) -> CliResult:
+    """Approved legacy import (``apply``); needs a verified lease before any write."""
+    lease = ["--workspace-lease-id", lease_id] if lease_id is not None else []
+    return run_cli(
+        "apply", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+        "--approval", approval, *lease,
+    )
+
+
+def inventory_legacy(workspace: SyntheticWorkspace, inventory: Path) -> CliResult:
+    """Read-only legacy-inventory report (declared F21 tool)."""
+    return run_cli(
+        "inventory-legacy", "--workspace", str(workspace.root),
+        "--data-dir", "data/mail-desk", "--inventory", str(inventory),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Capability probe (P1)
 # ---------------------------------------------------------------------------
@@ -1098,6 +1382,12 @@ __all__ = [
     "CaseRunner",
     "CliResult",
     "DECLARED_TOOLS",
+    "CONSUMER_RECOVERY_GATE",
+    "F18_VARIANTS",
+    "G1_REMAINING_CASE_IDS",
+    "GATE_LEDGER_STATE_VALUES",
+    "GATE_MISSING",
+    "GATE_STATUS_VALUES",
     "HARNESS_CASE_IDS",
     "HARNESS_KIND",
     "HARNESS_VERSION",
@@ -1118,14 +1408,22 @@ __all__ = [
     "assert_no_host_paths",
     "capability_probe",
     "consume",
+    "consumer_gate_problems",
+    "crash_check",
     "declared_subcommands",
     "handoff_item",
+    "inventory_legacy",
     "item_ref",
+    "legacy_apply",
+    "legacy_plan",
     "ledger_cli_path",
     "ledger_line",
+    "link_kind",
+    "make_directory_link",
     "norm_id",
     "pending",
     "record",
+    "recover_promotion",
     "repository_root",
     "require_workspace_lock_root",
     "run_case",

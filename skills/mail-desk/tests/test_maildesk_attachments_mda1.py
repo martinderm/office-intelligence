@@ -60,7 +60,7 @@ assert result["message_id"] == "fresh@boku.ac.at"
 print(json.dumps({"filename": inventory[0]["filename"]}))
 """
         completed = subprocess.run(
-            [sys.executable, "-I", "-c", script, str(MAIL_DESK_ROOT / "scripts")],
+            [sys.executable, "-B", "-I", "-c", script, str(MAIL_DESK_ROOT / "scripts")],
             check=False,
             capture_output=True,
             text=True,
