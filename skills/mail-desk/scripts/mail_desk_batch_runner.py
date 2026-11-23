@@ -24,6 +24,7 @@ import contextlib
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -64,6 +65,7 @@ from core import (
 )
 from core.envelope import build_error, build_success, emit_json
 from core.himalaya import (
+    MAX_TRANSPORT_PACING_MS,
     TRANSPORT_BLOCKED_REASON,
     HimalayaInvocationError,
     TransportStats,
@@ -736,6 +738,57 @@ def _transport_start_budget(config: dict[str, Any]) -> int | None:
     return raw
 
 
+def _transport_pacing_ms(config: dict[str, Any]) -> int:
+    """Return the explicit pacing between real reading starts (default ``0``).
+
+    Issue #103 P5: a non-negative integer; validated before any mailbox access.
+    """
+    raw = config.get("transport_pacing_ms")
+    if raw is None:
+        return 0
+    if (
+        isinstance(raw, bool)
+        or not isinstance(raw, int)
+        or raw < 0
+        or raw > MAX_TRANSPORT_PACING_MS
+    ):
+        raise ValueError(
+            "transport_pacing_ms must be an integer between 0 and "
+            f"{MAX_TRANSPORT_PACING_MS}"
+        )
+    return raw
+
+
+def _transport_transient_backoff_s(config: dict[str, Any]) -> float:
+    """Return the first transient retry backoff (default ``2.0`` seconds).
+
+    Issue #103 P5: a positive number; validated before any mailbox access.
+    """
+    raw = config.get("transport_transient_backoff_s")
+    if raw is None:
+        return 2.0
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise ValueError("transport_transient_backoff_s must be a positive finite number")
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "transport_transient_backoff_s must be a positive finite number"
+        ) from None
+    if not math.isfinite(numeric) or numeric <= 0:
+        raise ValueError("transport_transient_backoff_s must be a positive finite number")
+    return numeric
+
+
+def _transport_session(config: dict[str, Any]):
+    """Open the one session with the configured budget, pacing and backoff."""
+    return transport_stats_session(
+        start_budget=_transport_start_budget(config),
+        pacing_ms=_transport_pacing_ms(config),
+        transient_backoff_s=_transport_transient_backoff_s(config),
+    )
+
+
 def _ensure_transport_not_blocked(stats: TransportStats) -> None:
     """Fail closed even when a swallowed error reached the F6 threshold.
 
@@ -757,7 +810,7 @@ def run_inspect_mode(
     effective during the incremental modularization.
     """
     dd = data_dir or resolve_data_dir()
-    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+    with _transport_session(config) as stats:
         dd, binding, failure = _bind_mailbox_mode("inspect", account, dd)
         if failure is not None:
             result = failure
@@ -795,7 +848,7 @@ def run_draft_mode(
 ) -> dict[str, Any]:
     """Compatibility facade for the extracted draft-mode handler."""
     dd = data_dir or resolve_data_dir()
-    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+    with _transport_session(config) as stats:
         dd, binding, failure = _bind_mailbox_mode("draft", account, dd)
         if failure is not None:
             result = failure
@@ -1053,7 +1106,7 @@ def run_pipeline_mode(
     """Workspace-bound facade for read-only pipeline preparation."""
     dd = data_dir or resolve_data_dir()
     folder = config.get("folder", "INBOX")
-    with transport_stats_session(start_budget=_transport_start_budget(config)) as stats:
+    with _transport_session(config) as stats:
         dd, binding, failure = _bind_mailbox_mode("pipeline", account, dd)
         if failure is not None:
             result = _readiness_stop("pipeline", failure["backend_binding"])
@@ -1422,6 +1475,18 @@ def _build_parser() -> EnvelopeArgumentParser:
         default=None,
         help="Explicit Himalaya process-start budget per run (default: 10000)",
     )
+    parser.add_argument(
+        "--transport-pacing-ms",
+        type=int,
+        default=None,
+        help="Minimum gap in milliseconds between real reading Himalaya starts (default: 0)",
+    )
+    parser.add_argument(
+        "--transport-transient-backoff-s",
+        type=float,
+        default=None,
+        help="First transient Himalaya retry backoff in seconds (default: 2.0)",
+    )
     filters = parser.add_mutually_exclusive_group()
     filters.add_argument("--query", "-q", help="Search query filter for envelopes (e.g. 'after 2026-05-01')")
     filters.add_argument("--date", help="Exact date filter for envelopes (YYYY-MM-DD)")
@@ -1458,10 +1523,25 @@ def _build_parser() -> EnvelopeArgumentParser:
     return parser
 
 
+def _with_transport_pacing(
+    cfg: dict[str, Any],
+    pacing_ms: int | None,
+    backoff_s: float | None,
+) -> dict[str, Any]:
+    """Copy the explicit CLI pacing/backoff values into a direct-mode config."""
+    if pacing_ms is not None:
+        cfg["transport_pacing_ms"] = pacing_ms
+    if backoff_s is not None:
+        cfg["transport_transient_backoff_s"] = backoff_s
+    return cfg
+
+
 def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, Any] | None:
     lease_id = getattr(args, "workspace_lease_id", None)
     conversation_id = getattr(args, "workspace_conversation_id", None)
     transport_start_budget = getattr(args, "transport_start_budget", None)
+    transport_pacing_ms = getattr(args, "transport_pacing_ms", None)
+    transport_transient_backoff_s = getattr(args, "transport_transient_backoff_s", None)
     if (lease_id is not None or conversation_id is not None) and args.draft is None and args.inspect is None:
         raise ArgumentParseError(
             "--workspace-lease-id/--workspace-conversation-id are valid only with --draft or --inspect"
@@ -1473,6 +1553,38 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
     ):
         raise ArgumentParseError(
             "--transport-start-budget is valid only with --inspect, --draft, or --pipeline"
+        )
+    if transport_pacing_ms is not None and (
+        transport_pacing_ms < 0 or transport_pacing_ms > MAX_TRANSPORT_PACING_MS
+    ):
+        raise ArgumentParseError(
+            "--transport-pacing-ms must be an integer between 0 and "
+            f"{MAX_TRANSPORT_PACING_MS}"
+        )
+    if transport_transient_backoff_s is not None:
+        if isinstance(transport_transient_backoff_s, bool) or not isinstance(
+            transport_transient_backoff_s, (int, float)
+        ):
+            raise ArgumentParseError(
+                "--transport-transient-backoff-s must be a positive finite number"
+            )
+        try:
+            numeric_backoff = float(transport_transient_backoff_s)
+        except (TypeError, ValueError, OverflowError):
+            raise ArgumentParseError(
+                "--transport-transient-backoff-s must be a positive finite number"
+            ) from None
+        if not math.isfinite(numeric_backoff) or numeric_backoff <= 0:
+            raise ArgumentParseError(
+                "--transport-transient-backoff-s must be a positive finite number"
+            )
+        transport_transient_backoff_s = numeric_backoff
+    if (transport_pacing_ms is not None or transport_transient_backoff_s is not None) and not (
+        args.draft is not None or args.inspect is not None or args.pipeline is not None
+    ):
+        raise ArgumentParseError(
+            "--transport-pacing-ms/--transport-transient-backoff-s are valid only with "
+            "--inspect, --draft, or --pipeline"
         )
     if (args.expected_count is not None or args.allow_fewer) and args.draft is None:
         raise ArgumentParseError("--expected-count/--allow-fewer require --draft")
@@ -1519,7 +1631,9 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["date"] = args.date
         if transport_start_budget is not None:
             cfg["transport_start_budget"] = transport_start_budget
-        return cfg
+        return _with_transport_pacing(
+            cfg, transport_pacing_ms, transport_transient_backoff_s
+        )
     if args.sync_sent is not None:
         return {"mode": "sync_sent", "count": args.sync_sent, "folder": "Sent Items"}
     if args.resolve:
@@ -1565,7 +1679,9 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["conversation_id"] = conversation_id
         if transport_start_budget is not None:
             cfg["transport_start_budget"] = transport_start_budget
-        return cfg
+        return _with_transport_pacing(
+            cfg, transport_pacing_ms, transport_transient_backoff_s
+        )
     if args.inspect is not None:
         cfg = {
             "mode": "inspect",
@@ -1586,7 +1702,9 @@ def _direct_mode_config(args: argparse.Namespace, data_dir: Path) -> dict[str, A
             cfg["conversation_id"] = conversation_id
         if transport_start_budget is not None:
             cfg["transport_start_budget"] = transport_start_budget
-        return cfg
+        return _with_transport_pacing(
+            cfg, transport_pacing_ms, transport_transient_backoff_s
+        )
     return None
 
 

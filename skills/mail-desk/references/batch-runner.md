@@ -241,6 +241,25 @@ Leere Preview-ID: bei `has_attachment is False` bleibt die Preview das Ergebnis
 (1 Start, ±0); sonst direkt regulärer Export + Read (3 Starts, keine
 Export-Probe). P1/P2 unverändert.
 
+**P5 — Pacing/Backoff (explizit, Defaults unverändert):** `transport_pacing_ms`
+(Default `0`) hält zwischen zwei **realen, nicht-Payload** Starts in der aktiven
+Batch-Session einen Mindestabstand **Start-zu-Start** (nicht Ende-zu-Start); im
+Draft/Inspect/Pipeline sind das `thread`, `list`, `read`, `export`.
+`transport_transient_backoff_s` (Default `2.0`) ist der erste transiente
+Retry-Backoff (`× (attempt + 1)`). Beide werden vor jedem Mailboxzugriff
+validiert (`nan`/`inf` werden abgelehnt) und über `--transport-pacing-ms`/
+`--transport-transient-backoff-s` (nur `--inspect`/`--draft`/`--pipeline`)
+gesetzt; Pilotwert `250` ms; `pacing_ms` ist auf **1 Stunde (3.600.000 ms,
+`MAX_TRANSPORT_PACING_MS`)** begrenzt — der Betreiber wählt den Wert unterhalb
+dieser Grenze und verantwortet die Wartezeit. Das Pacing
+liegt zentral in
+`TransportStats.start_process`, gilt auch vor dem Retry, prüft Block/Budget
+danach erneut und wartet nie bei Map-Skips, APPEND/Payload oder Diagnose
+(`pace=False`). Kein neuer Retry, kein Timeout-/Auth-Retry, #112 (2/5)
+unverändert, kein bewiesener Server-Grenzwert; der Standalone-Client bleibt
+ohne Session bei den Defaults. Snapshot additiv: `pacing_ms`,
+`transient_backoff_s`, `pacing_waits`, `pacing_wait_ms_total`.
+
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
 autorisieren dort keine Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht

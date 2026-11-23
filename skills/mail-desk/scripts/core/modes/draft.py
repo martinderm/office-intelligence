@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -16,6 +17,7 @@ from ..batch_contract import add_draft_contract
 from ..common import atomic_write_json, resolve_data_dir
 from ..context_consultation import add_context_consultation_metadata
 from ..himalaya import (
+    MAX_TRANSPORT_PACING_MS,
     eml_full_text_parity,
     fetch_raw_message_eml,
     get_single_email_details,
@@ -208,6 +210,34 @@ def run_draft_mode(
     scan_profile = config.get("scan_profile", "balanced")
     if scan_profile not in ("balanced", "known_heavy"):
         raise ValueError("scan_profile must be 'balanced' or 'known_heavy'")
+    # Issue #103 P5: pacing/backoff are validated before any mailbox access; the
+    # runner facade opens the session with the same values.  Defaults 0/2.0 keep
+    # the unchanged timing.
+    transport_pacing_ms = config.get("transport_pacing_ms", 0)
+    if (
+        isinstance(transport_pacing_ms, bool)
+        or not isinstance(transport_pacing_ms, int)
+        or transport_pacing_ms < 0
+        or transport_pacing_ms > MAX_TRANSPORT_PACING_MS
+    ):
+        raise ValueError(
+            "transport_pacing_ms must be an integer between 0 and "
+            f"{MAX_TRANSPORT_PACING_MS}"
+        )
+    transport_transient_backoff_s = config.get("transport_transient_backoff_s", 2.0)
+    if (
+        isinstance(transport_transient_backoff_s, bool)
+        or not isinstance(transport_transient_backoff_s, (int, float))
+    ):
+        raise ValueError("transport_transient_backoff_s must be a positive finite number")
+    try:
+        backoff_seconds = float(transport_transient_backoff_s)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(
+            "transport_transient_backoff_s must be a positive finite number"
+        ) from None
+    if not math.isfinite(backoff_seconds) or backoff_seconds <= 0:
+        raise ValueError("transport_transient_backoff_s must be a positive finite number")
     # All draft configuration is validated before any mailbox read, classification,
     # evaluation or write, so a malformed request can never perform side effects.
     expected_count = config.get("expected_count", count)

@@ -2743,6 +2743,29 @@ Anhang, sonst direkt regulärer Export + Read (3 Starts). P1 bleibt inaktiv,
 P2-Full-Text bleibt gegated, Evaluation-Reuse bleibt aktiv. Tests:
 `tests/test_issue103_p3_preview_first.py` (13 Fälle).
 
+**P5 — Pacing/Backoff (explizit, Defaults unverändert):**
+`TransportStats` erhält keyword-only `pacing_ms` (Default `0`),
+`transient_backoff_s` (Default `2.0`, nur endlich positive Werte; `nan`/`inf`
+abgelehnt) sowie optionale `clock`/`sleep` (bei `None` zur Aufrufzeit
+`time.monotonic`/`time.sleep`). `start_process(..., pace=True)` wartet unter dem
+Spawn-Lock die Restzeit bis zum Mindestabstand zwischen zwei realen,
+nicht-Payload Starts der aktiven Batch-Session (`thread`/`list`/`read`/`export`
+in Draft/Inspect/Pipeline), **Start-zu-Start**, prüft Block/Budget danach erneut
+und aktualisiert die Referenz erst nach erfolgreichem `factory()`. `pace=False`
+(Payload/APPEND, Diagnose) wartet nie und verschiebt die Referenz nicht;
+Map-Skips starten keinen Prozess. Der transiente Retry-Backoff in
+`run_himalaya` nutzt `transient_backoff_s × (attempt + 1)` über den
+Session-Sleep; ohne Session bleiben `time.sleep` und `2.0`. Kein neuer Retry,
+kein Timeout-/Auth-Retry, #112 (2/5) unverändert, APPEND genau einmal. Config
+und CLI-Flags nur für `inspect`/`draft`/`pipeline`, validiert vor jedem
+Mailboxzugriff; Pilot 250/5.0; `pacing_ms` ist auf 1 Stunde (3.600.000 ms,
+`MAX_TRANSPORT_PACING_MS`) begrenzt — der Betreiber wählt den Wert darunter und
+verantwortet die Wartezeit; `nan`/`inf` und
+Zahlen jenseits des Float-Bereichs werden abgelehnt. Snapshot additiv `pacing_ms`,
+`transient_backoff_s`, `pacing_waits`, `pacing_wait_ms_total`; der
+Standalone-Client bleibt ohne Session. Tests:
+`tests/test_issue103_p5_pacing.py` (22 Fälle).
+
 **Fortschritt nach Kill:** `runner-progress.json` trägt additiv `pid` und
 `heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
 liveness-geprüfte Sicht: Ein `status: "running"` ohne lebenden Owner erscheint

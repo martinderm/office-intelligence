@@ -84,6 +84,19 @@ twenty-five). The net-effect statement is now precise (—1 only for
 ``has_attachment is not False``, ±0 for the read-only case, drift worst case
 4 vs 2, no "+1" against ``balanced``) and the empty-preview-ID edge case is
 documented. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P5, lane
+2026-11-23-frontier-103-p5-pacing): MAX_WORDS 8725 → 8825 (measured 8804 words,
+rounded to the next twenty-five). The scan section now documents the P5 pacing
+and transient-backoff contract: config keys/flags, unchanged defaults 0/2.0,
+pilot 250/5.0, the central seam, ``pace=False`` for payload/diagnostic starts,
+the repeated block/budget check and the additive metrics. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P5 fix round 2,
+same lane): MAX_WORDS 8825 → 8850 (measured 8833 words, rounded to the next
+twenty-five). The P5 paragraph now states that ``pacing_ms`` has no additional
+upper bound (operator-owned) and that non-finite/out-of-float-range backoff
+values are rejected. Floors unchanged.
 """
 
 from __future__ import annotations
@@ -104,10 +117,11 @@ DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 #: contract at the callers, the issue-#103 P1 EML-preview opt-in, its
 #: default-`False`/activation-gate fix round, the issue-#103 P2 scan-source
 #: reuse contract, its full-text gate/modelled-class fix round, and the
-#: issue-#103 P3 scan-profile/preview-first contract and its precise net-effect/
-#: empty-ID fix round (see docstring history).
+#: issue-#103 P3 scan-profile/preview-first contract, its precise net-effect/
+#: empty-ID fix round, the issue-#103 P5 pacing/backoff contract and its
+#: operator-owned pacing bound (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8725
+MAX_WORDS = 8850
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (
