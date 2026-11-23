@@ -28,13 +28,12 @@ The context deliberately is not a mapping and refuses all further binds after
 
 from __future__ import annotations
 
-import email
-import email.policy
 import secrets
 from typing import Any, Iterable, Mapping
 
 from .common import normalize_message_id
 from .draft_raw_eml import MAX_RAW_EML_BYTES
+from .himalaya import eml_own_message_id
 
 
 def _normalize_account(account: str | None) -> str:
@@ -52,23 +51,6 @@ def _positive_int(value: Any, name: str, *, allow_zero: bool = False) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
         raise ValueError(f"{name} must be an integer >= {minimum}")
     return value
-
-
-def _eml_own_message_id(eml: bytes) -> str:
-    """Return the EML's own normalized Message-ID, or ``""`` when not provable.
-
-    A missing, duplicated, non-ASCII or unparsable Message-ID proves nothing and
-    therefore never binds a source.
-    """
-    try:
-        message = email.message_from_bytes(eml, policy=email.policy.default)
-        values = message.get_all("Message-ID") or []
-        if len(values) != 1:
-            return ""
-        normalized = normalize_message_id(str(values[0]))
-    except Exception:  # noqa: BLE001 - an unprovable identity never binds
-        return ""
-    return normalized
 
 
 class ScanSourceContext:
@@ -179,7 +161,7 @@ class ScanSourceContext:
             return False
         # The source must carry exactly the Message-ID it is bound under; a
         # foreign, missing, duplicated or unparsable ID never binds.
-        if _eml_own_message_id(payload) != normalized_id:
+        if eml_own_message_id(payload) != normalized_id:
             return False
         if locator in self._conflicted_locators or message_key in self._conflicted_messages:
             return False

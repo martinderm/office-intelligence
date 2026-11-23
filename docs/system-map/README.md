@@ -859,6 +859,23 @@ MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert aus. P1 bleibt
 inaktiv (`allow_eml_details=False`) und ungekoppelt; keine EML in Manifest,
 `batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
 
+**Preview-first für bekannte Lücken (`scan_profile`, P3, 2026-11-23):** Das
+Draft-Opt-in `scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`,
+validiert vor jedem Mailboxzugriff) wählt die Scan-Sequenz; keine automatische
+Profilwahl. Nur `known_heavy` **mit** `skip_known` liest nach einem Map-Miss
+genau eine Preview ohne Export; ein Index-Treffer überspringt ohne Export und
+ohne zweiten Read, sonst bleibt die Vorschau und nur bei Anhangbedarf folgt
+genau ein Inventar-Export, der in die Vorschau merged (`has_attachment is
+False` ohne Export). Identitätsdrift zwischen Preview und Export → keine
+Vermischung, regulärer Export+Read. `balanced` behält die heutige Sequenz
+(genau ein `get_single_email_details` pro Item, keine Probe). Beide
+Scan-Schleifen und die Zähler bleiben unverändert; P1 inaktiv, P2-Full-Text
+gegated, Evaluation-Reuse aktiv. Netto gegen `balanced`: bekannte Lücke mit
+`has_attachment is not False` −1 Start, `has_attachment is False` ±0,
+unbekannt mit Inventar ±0 ohne zweiten Read, Drift-Worst-Case 4 statt 2
+Starts, leere Preview-ID: 1 Start ohne Anhang, sonst regulärer Export + Read
+(3 Starts).
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).

@@ -8,6 +8,42 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-23 - Issue #103: Preview-first für bekannte Lücken (P3)
+
+#### Added
+
+- **Draft-Profil `scan_profile`:** `balanced` (Default) | `known_heavy`,
+  validiert vor jedem Mailboxzugriff (unbekannt → `ValueError`); nur
+  `known_heavy` **mit** `skip_known` nutzt Preview-first, eine automatische
+  Profilwahl gibt es nicht. `inspect`/`pipeline` bleiben `balanced`.
+- **Preview-first:** Nach einem Map-Miss genau **eine** Preview
+  (`message read --preview`, `preview_only=True`) ohne Export; Message-ID aus
+  dem abgeschlossenen Headerblock, bestehender ID-Fallback bleibt. Index-Treffer
+  → `known_count`/`skipped_known` inkrementieren und Skip ohne Export/Read.
+  Unbekannt: Vorschau behalten; `has_attachment is False` ohne Export, sonst
+  genau **ein** Inventar-Export (`complete_scan_inventory`), der die
+  kanonische Inventur in die Vorschau merged — kein zweiter Read; Export-Fehler
+  → `attachment_inventory_unavailable` wie heute.
+- **Identitätsdrift:** EML-eigene Message-ID ≠ Preview-ID → keine Vermischung,
+  kein Sink, regulärer Export+Read für dieses Item.
+- **P1/P2 unverändert:** P1 bleibt inaktiv (`allow_eml_details=False`), der
+  P2-Full-Text bleibt hinter `allow_scan_source_full_text=False`; die
+  Evaluation-Reuse bleibt aktiv und erhält den Export über den bestehenden Sink
+  (Bind mit der Preview-ID, P2-Budget-/Identitätsprüfung).
+- **Default `balanced`:** exakt die heutige Sequenz (genau ein
+  `get_single_email_details` pro Item, kein `preview_only`).
+- **Netto-Effekt gegen `balanced`:** bekannte Lücke mit
+  `has_attachment is not False` −1 Start; `has_attachment is False` ±0;
+  unbekannt mit Inventar ±0 ohne zweiten Read; Drift-Worst-Case 4 statt 2
+  Starts. Kein „+1“ gegen `balanced` (ein +1 gilt nur gegen einen
+  Export-only-/P1-Pfad, der inaktiv ist). Leere Preview-ID: bei
+  `has_attachment is False` bleibt die Preview das Ergebnis (1 Start, ±0);
+  sonst direkt regulärer Export + Read (3 Starts, keine Export-Probe).
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p3_preview_first.py`
+  (13 Fälle), `references/batch-runner.md` (Profil, Ablauf, Netto-Effekt,
+  `source_context`/`scan_profile`-Keyword), `references/backends/himalaya.md`,
+  L1/L2-System-Map, `objects.md` §6.
+
 ### 2026-11-23 - Issue #103: Quellen-Reuse im frischen Draft-Scan (P2)
 
 #### Added

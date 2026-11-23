@@ -203,6 +203,11 @@ def run_draft_mode(
     allow_scan_source_full_text = config.get("allow_scan_source_full_text", False)
     if not isinstance(allow_scan_source_full_text, bool):
         raise ValueError("allow_scan_source_full_text must be a boolean")
+    # Issue #103 P3: the explicit scan profile selects the scan sequence.  Only
+    # ``known_heavy`` reads a preview first; ``balanced`` is the unchanged path.
+    scan_profile = config.get("scan_profile", "balanced")
+    if scan_profile not in ("balanced", "known_heavy"):
+        raise ValueError("scan_profile must be 'balanced' or 'known_heavy'")
     # All draft configuration is validated before any mailbox read, classification,
     # evaluation or write, so a malformed request can never perform side effects.
     expected_count = config.get("expected_count", count)
@@ -253,6 +258,7 @@ def run_draft_mode(
                 tracker=tracker,
                 allow_eml_details=allow_eml_details,
                 source_context=source_context,
+                scan_profile=scan_profile,
             )
 
         tracker.step("classifying_and_checking_sent")

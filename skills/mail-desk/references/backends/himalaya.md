@@ -206,6 +206,25 @@ inactive until a real anonymized CLI reference or an explicit owner release, and
 P2's full text carries the same reservation while the evaluation reuse (existing
 checks on the same bytes) stays active.
 
+**Preview/inventory separation (`preview_only` + `complete_scan_inventory`,
+Issue #103 P3).** The draft's explicit `scan_profile="known_heavy"` profile reads
+one preview first: `get_single_email_details(..., preview_only=True)` performs
+only the CLI read and starts no export (`attachments: []`,
+`attachment_status: "none"`). When the message is unknown and an inventory is
+actually needed, `complete_scan_inventory(details, …)` performs **exactly one**
+`message export`, revalidates the canonical MIME inventory and merges it into
+the preview in place — never a second read. `fallback_envelope.has_attachment is
+False` needs no export at all. The exported EML's own Message-ID is compared with
+the preview's before anything is merged or captured: on drift (or an unprovable
+ID) nothing is mixed, the sink is not called and the caller takes the regular
+export+read path. A failed export leaves the preview valid and marks
+`attachment_inventory_unavailable`, exactly like the regular path. The export
+also feeds the P2 `ScanSourceContext` under the preview Message-ID; the
+`balanced` default never uses `preview_only`. A preview without a usable
+Message-ID returns directly when `has_attachment is False` (one start, the
+regular read would repeat the same empty-ID read) and otherwise takes the
+regular export+read path without an export probe. No P1/P2 activation.
+
 ```bash
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --preview-lines 400 --json

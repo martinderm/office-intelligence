@@ -220,7 +220,26 @@ ist **modelliert, nicht live-belegt**: eigenes Draft-Opt-in
 Paritätsklasse und Barrier-Bewertung, sonst regulärer Full-Read. Hit
 (nur `True`): `full_inventory`/`full_read`/`evaluation_raw` 0; sonst ggf.
 `full_*` > 0. `finally` löscht alles; P1 bleibt inaktiv. Injizierte
-`get_unprocessed_emails` akzeptieren `source_context`.
+`get_unprocessed_emails` akzeptieren `source_context` und `scan_profile`.
+
+**P3 — Preview-first für bekannte Lücken (`scan_profile`):** Das Draft-Opt-in
+`scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`, validiert vor
+jedem Mailboxzugriff) wählt die Scan-Sequenz; eine automatische Profilwahl gibt
+es nicht. Nur `known_heavy` **mit** `skip_known` liest nach einem Map-Miss genau
+eine Preview ohne Export; ein Index-Treffer überspringt ohne Export, sonst wird
+die Vorschau behalten und nur bei Anhangbedarf mit genau einem Inventar-Export
+ergänzt (kein zweiter Read; Identitätsdrift → regulärer Export + Read, keine
+Vermischung). `balanced` ruft weiterhin genau ein
+`get_single_email_details` pro Item auf (keine Probe, kein `preview_only`).
+Netto-Effekt gegen `balanced`: bekannte Lücke mit `has_attachment is not False`
+−1 Start (1 Preview statt Export + Read); bei `has_attachment is False` ±0
+(1 Preview statt 1 Read); unbekannt mit Inventar ±0 (Preview + Export statt
+Export + Read) ohne zweiten Read. Drift-Worst-Case 4 Starts (Preview +
+driftender Export + regulärer Export + Read) statt 2; kein „+1“ gegen
+`balanced` — ein +1 gilt nur gegen einen Export-only-/P1-Pfad, der inaktiv ist.
+Leere Preview-ID: bei `has_attachment is False` bleibt die Preview das Ergebnis
+(1 Start, ±0); sonst direkt regulärer Export + Read (3 Starts, keine
+Export-Probe). P1/P2 unverändert.
 
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
