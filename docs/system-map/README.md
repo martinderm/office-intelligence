@@ -823,7 +823,12 @@ Kommandoklasse; das Ergebnis trägt `transport_stats` (Zähler,
 `blocked`/`block_reason`, `start_budget`). Additiv liefert `command_telemetry`
 je Klasse begrenzte Dauern (letzte 20), `last_exit_code` und
 `last_reason_code`; `block_trigger`/`transport_trigger` nennen den auslösenden
-Aufruf mit Kommandoklasse, Envelope-ID, Dauer, Exit und Reason. Das
+Aufruf mit Kommandoklasse, Envelope-ID, Dauer, Exit und Reason. Additiv
+partitioniert `starts_by_purpose` jeden erfolgreichen Prozessstart auf die neun
+geschlossenen Zwecke (`thread_map`, `list`, `scan_preview`, `scan_inventory`,
+`full_read`, `full_inventory`, `evaluation_raw`, `id_fallback`, `other`); die
+Summe entspricht `process_starts`, `retries` bleibt Teilmenge, und der
+Review-Hash bleibt unverändert. Das
 Start-Budget ist über `transport_start_budget` im Manifest oder
 `--transport-start-budget` konfigurierbar. Default sind 10.000: das
 dokumentierte Fallbackfenster von 2.500 Envelopes kann pro Envelope bis zu zwei

@@ -2638,6 +2638,45 @@ Start-Budget-Block ist der Trigger synthetisch (Klasse/Reason, Dauer/Exit
 Wrapper reicht `transport_stats` (nur Zähler und begrenzte Metadaten) in seiner
 kompakten Summary durch.
 
+**#103 D1 erster Teilschritt: `starts_by_purpose` (Telemetrie, additiv):**
+`transport_stats` trägt zusätzlich `starts_by_purpose` mit allen neun
+geschlossenen Zwecken (`thread_map`, `list`, `scan_preview`, `scan_inventory`,
+`full_read`, `full_inventory`, `evaluation_raw`, `id_fallback`, `other`) und
+ganzzahligen Werten (auch 0, deterministisch sortiert). Jeder erfolgreiche
+Prozessstart zählt genau einen Zweck
+(`sum(starts_by_purpose.values()) == process_starts`); `retries` bleibt
+Teilmenge und ist kein zusätzlicher Summand. Ein Retry ist ein zweiter Start
+desselben Zwecks, eine fehlgeschlagene Kinderzeugung zählt weder Start noch
+Zweck, ein unbekannter Zweck stoppt mit `ValueError` vor jedem Prozess, und der
+diagnostische Spawn zählt als `other`. Der Block-Snapshot enthält denselben
+Stand. Nur Zwecknamen und Ganzzahlen, keine argv/Header/Message-IDs; der
+Review-Payload und der Review-Hash bleiben unverändert. Ausdrücklich **nicht**
+Teil dieses Teilschritts: `scan_counts`, 10054-Zähler und Spitzenrate.
+
+**#103 D1/P1 zweiter Teilschritt: EML-Preview statt Doppel-Read (Draft-Opt-in, inaktiv):**
+Im Draft (`allow_eml_details`, Config-Schlüssel, Default `False`, validiert vor
+jedem Mailboxzugriff) darf ein abgeschlossener `scan_inventory`-Export den
+Preview-Read ersetzen, wenn `_details_from_eml` Textgleichheit für die getestete
+Eingabeklasse belegt. Belegbasis ist ein **Modell**: die goldenen Paare leiten
+den CLI-Text aus derselben synthetischen EML ab; es gibt keine reale
+CLI-Referenzaufnahme. P1 bleibt inaktiv, bis eine reale anonymisierte
+CLI-Referenz (separates boku-user-Gate) oder eine ausdrückliche Owner-Freigabe
+vorliegt. Zulassung: ein non-multipart `text/plain`-Teil; `Content-Type` fehlt
+(nur ASCII-Body) oder genau `text/plain` mit genau einem `charset`-Parameter
+ohne Whitespace um `=` (kein `format=flowed`/`delsp`/`name`/Boundary/doppeltes
+charset); Nicht-ASCII nur mit `charset=utf-8`; 7bit/8bit; keine
+Faltung/RFC-2047; Message-ID mit genau einem balancierten `<...>`-Paar oder
+ohne Klammern; Body innerhalb `preview_lines`. Geprüft werden nur Struktur und
+Singleton-Header, **kein** unabhängiger email-Policy-Defect-Scan; die
+kanonische Inventarprüfung (`inspect_mime_tree`) ist Voraussetzung und wird
+unverändert übergeben. Qualifiziert: 1 Start (`scan_inventory`), `scan_preview`
+0. Nicht qualifiziert/MIME-defekt: 1 Export + 1 Read (`scan_inventory` 1,
+`scan_preview` 1), kein Re-Export. `has_attachment=False`: 1 Read, 0 Exporte.
+`full_body=True` und der `raw_eml`-Zweig bleiben unverändert;
+nicht-Draft-Aufrufer behalten Export + Read (Helper-Default `False`).
+Known-Skip-Entscheidung, Barrier-/Quarantäne-Ergebnis und Review-Hash sind
+opt-in-unabhängig gleich.
+
 **Fortschritt nach Kill:** `runner-progress.json` trägt additiv `pid` und
 `heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
 liveness-geprüfte Sicht: Ein `status: "running"` ohne lebenden Owner erscheint

@@ -131,6 +131,7 @@ def get_oldest_envelopes(folder: str, count: int, account: str | None = None) ->
             account=account,
             timeout=90,
             max_retries=2,
+            purpose="list",
         )
         if "[" in out:
             out = out[out.find("["):]
@@ -146,7 +147,7 @@ def get_oldest_envelopes(folder: str, count: int, account: str | None = None) ->
     # Fallback to window-based slicing if server-side sort is unavailable
     for test_size in [str(count), str(max(count, 150)), "200", "100"]:
         try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=180, max_retries=2)
+            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=180, max_retries=2, purpose="list")
             if "[" in out:
                 out = out[out.find("["):]
             envs = json.loads(out)
@@ -245,6 +246,7 @@ def get_unprocessed_emails(
     skip_known: bool = True,
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
+    allow_eml_details: bool = False,
 ) -> tuple[list[dict[str, Any]], int]:
     """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably.
 
@@ -252,6 +254,9 @@ def get_unprocessed_emails(
     scan phase (``skipped N known envelopes``) instead of one step per known
     envelope (OUT-P1, issue #5).  The returned ``known_count`` and every other
     progress-file write are unchanged.
+
+    ``allow_eml_details`` (Draft-only opt-in, default ``False``) is forwarded to
+    the scan reader and applies to both scan loops.
     """
     collected, known_count, skipped_known = _scan_unprocessed_emails(
         folder,
@@ -264,6 +269,7 @@ def get_unprocessed_emails(
         skip_known=skip_known,
         preview_lines=preview_lines,
         tracker=tracker,
+        allow_eml_details=allow_eml_details,
     )
     if tracker and skipped_known:
         tracker.step(f"skipped {skipped_known} known envelopes")
@@ -305,6 +311,7 @@ def _scan_unprocessed_emails(
     skip_known: bool = True,
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
+    allow_eml_details: bool = False,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Collect unprocessed envelopes and return ``(collected, known_count, skipped_known)``.
 
@@ -348,6 +355,15 @@ def _scan_unprocessed_emails(
     skipped_known = 0
     inspected_eids: set[str] = set()
 
+    # Issue #103 P1: bind one reader for both scan loops.  Only the draft opts
+    # in; every other caller keeps the unchanged export + read sequence.
+    if allow_eml_details:
+        def read_details(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            kwargs.setdefault("allow_eml_details", True)
+            return get_single_email_details(*args, **kwargs)
+    else:
+        read_details = get_single_email_details
+
     # Fast direct path if date or query filter is provided
     if date or query:
         if date and query:
@@ -364,6 +380,7 @@ def _scan_unprocessed_emails(
             account=account,
             timeout=45,
             max_retries=2,
+            purpose="list",
         )
         if "[" in out:
             out = out[out.find("["):]
@@ -403,7 +420,7 @@ def _scan_unprocessed_emails(
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
-            email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
+            email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
             mid = email_res.get("message_id")
             is_known = bool(mid and mid in known_items)
 
@@ -470,7 +487,7 @@ def _scan_unprocessed_emails(
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
-            email_res = get_single_email_details(eid, folder, account, preview_lines, fallback_envelope=env)
+            email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
             mid = email_res.get("message_id")
             is_known = bool(mid and mid in known_items)
 

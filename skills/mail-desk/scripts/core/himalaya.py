@@ -226,6 +226,44 @@ DEFAULT_TRANSPORT_START_BUDGET = 10_000
 #: The second consecutive transport failure aborts the run immediately.
 TRANSPORT_MAX_CONSECUTIVE_ERRORS = 2
 
+#: Closed purpose list for process-start telemetry (Issue #103, D1 first slice).
+#: Every successful child creation is counted under exactly one of these labels;
+#: ``other`` is the default for callers that do not bind a purpose.
+TRANSPORT_PURPOSES = (
+    "thread_map",
+    "list",
+    "scan_preview",
+    "scan_inventory",
+    "full_read",
+    "full_inventory",
+    "evaluation_raw",
+    "id_fallback",
+    "other",
+)
+_TRANSPORT_PURPOSES = frozenset(TRANSPORT_PURPOSES)
+
+#: Inventory export purpose derived from the read purpose of the same helper call.
+_INVENTORY_PURPOSES = {
+    "scan_preview": "scan_inventory",
+    "full_read": "full_inventory",
+}
+
+
+def _validate_purpose(purpose: str) -> str:
+    """Reject an unknown purpose before any child creation or accounting."""
+    if not isinstance(purpose, str) or purpose not in _TRANSPORT_PURPOSES:
+        raise ValueError(
+            "purpose must be one of the documented transport purposes: "
+            + ", ".join(sorted(_TRANSPORT_PURPOSES))
+        )
+    return purpose
+
+
+def _inventory_purpose(purpose: str) -> str:
+    """Return the inventory-export purpose for one read purpose."""
+    return _INVENTORY_PURPOSES.get(purpose, purpose)
+
+
 _ACTIVE_TRANSPORT_STATS: ContextVar["TransportStats | None"] = ContextVar(
     "mail_desk_active_transport_stats", default=None
 )
@@ -328,6 +366,7 @@ class TransportStats:
         # detailed per-class telemetry is additive under ``command_telemetry``.
         self.commands: dict[str, dict[str, int]] = {}
         self.command_telemetry: dict[str, dict[str, Any]] = {}
+        self._starts_by_purpose: dict[str, int] = {}
 
     def _bucket(self, command_class: str) -> dict[str, int]:
         return self.commands.setdefault(
@@ -388,6 +427,7 @@ class TransportStats:
         factory: Callable[[], Any],
         *,
         retry: bool = False,
+        purpose: str = "other",
     ) -> Any:
         """Create one child atomically against the budget and the F6 block.
 
@@ -397,7 +437,12 @@ class TransportStats:
         slip into the window between the check and child creation: both paths
         use the same lock.  The lock is released as soon as the child exists;
         waiting for its output is not serialized.
+
+        ``purpose`` is validated before the budget check and the child creation
+        and counted only after ``factory()`` returned successfully: a failed
+        launch produces neither a start nor a purpose count.
         """
+        _validate_purpose(purpose)
         with self._spawn_lock:
             with self._lock:
                 if self.blocked_reason:
@@ -413,6 +458,9 @@ class TransportStats:
             with self._lock:
                 self.process_starts += 1
                 self._bucket(command_class)["starts"] += 1
+                self._starts_by_purpose[purpose] = (
+                    self._starts_by_purpose.get(purpose, 0) + 1
+                )
                 if retry:
                     self.retries += 1
                     self._bucket(command_class)["retries"] += 1
@@ -540,6 +588,10 @@ class TransportStats:
                 "block_trigger": (
                     dict(self.block_trigger) if self.block_trigger else None
                 ),
+                "starts_by_purpose": {
+                    purpose: int(self._starts_by_purpose.get(purpose, 0))
+                    for purpose in sorted(TRANSPORT_PURPOSES)
+                },
                 "duration_samples_per_command": TRANSPORT_DURATION_SAMPLES,
                 "commands": {
                     command: dict(counts) for command, counts in sorted(self.commands.items())
@@ -884,6 +936,7 @@ def _run_process(
     stats: "TransportStats | None",
     command_class: str,
     retry: bool,
+    purpose: str = "other",
 ) -> Any:
     """Run one child either through the atomic stats gate or the legacy path.
 
@@ -926,6 +979,7 @@ def _run_process(
                 env=env_vars,
             ),
             retry=retry,
+            purpose=purpose,
         )
     else:
         process = stats.start_process(
@@ -938,6 +992,7 @@ def _run_process(
                 env=env_vars,
             ),
             retry=retry,
+            purpose=purpose,
         )
     try:
         if stdin_bytes is None:
@@ -966,6 +1021,7 @@ def run_himalaya(
     *,
     stdin_bytes: bytes | None = None,
     diagnostic_capture: Any | None = None,
+    purpose: str = "other",
 ) -> str:
     """Execute a non-interactive Himalaya command, retrying transient failures only.
 
@@ -985,11 +1041,17 @@ def run_himalaya(
     (see ``core.diagnostics``) that switches a payload command onto the bounded
     diagnostic branch: exactly one child, bounded concurrent pipe drain and no
     retry.  It defaults to ``None``, so the original path stays byte-identical.
+
+    ``purpose`` is the additive process-start label (Issue #103, D1 first
+    slice).  It is validated before any executable/config resolution or child
+    creation, is forwarded unchanged through every retry attempt and defaults
+    to ``other``.  The bounded diagnostic spawn is always counted as ``other``.
     """
     if not isinstance(timeout, int) or timeout <= 0:
         raise ValueError("timeout must be a positive integer.")
     if not isinstance(max_retries, int) or max_retries < 1:
         raise ValueError("max_retries must be at least one.")
+    _validate_purpose(purpose)
     if stdin_bytes is not None:
         if not isinstance(stdin_bytes, bytes) or not stdin_bytes:
             raise ValueError("stdin_bytes must be a non-empty bytes object.")
@@ -1023,7 +1085,7 @@ def run_himalaya(
         if stats is not None:
             def spawn(*args: Any, **kwargs: Any) -> Any:
                 return stats.start_process(
-                    command_class, lambda: _POPEN(*args, **kwargs)
+                    command_class, lambda: _POPEN(*args, **kwargs), purpose="other"
                 )
         started = time.monotonic()
         try:
@@ -1071,6 +1133,7 @@ def run_himalaya(
                 stats=stats,
                 command_class=command_class,
                 retry=attempt > 0,
+                purpose=purpose,
             )
             duration_ms = int((time.monotonic() - started) * 1000)
             if res.returncode != 0:
@@ -1190,6 +1253,8 @@ def fetch_raw_message_eml(
     account: str | None = None,
     timeout: int = 30,
     max_bytes: int | None = None,
+    *,
+    purpose: str = "other",
 ) -> bytes:
     """Fetch raw RFC 822 .eml bytes via himalaya message export -F.
 
@@ -1197,6 +1262,8 @@ def fetch_raw_message_eml(
     bounded: an exported file larger than the bound is rejected from its file size
     before any of it is loaded (``HimalayaInvocationError`` /
     ``himalaya_export_too_large``).
+
+    ``purpose`` is the additive start label of this export (Issue #103, D1).
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         dest_eml = Path(tmp_dir) / f"msg_{env_id}.eml"
@@ -1206,7 +1273,7 @@ def fetch_raw_message_eml(
             "-F",
             "-d", str(dest_eml),
         ]
-        run_himalaya(args, account=account, timeout=timeout, max_retries=2)
+        run_himalaya(args, account=account, timeout=timeout, max_retries=2, purpose=purpose)
         if max_bytes is not None:
             return _read_export_bounded(dest_eml, max_bytes)
         if not dest_eml.exists() or dest_eml.stat().st_size == 0:
@@ -1347,6 +1414,224 @@ def _read_failure_reason(error: object) -> str | None:
     return "read_failed"
 
 
+#: Content charsets accepted for a declared ``Content-Type`` parameter.
+_EML_ACCEPTED_CHARSETS = frozenset({"us-ascii", "ascii", "utf-8"})
+
+#: Transfer encodings whose decoded text equals the raw body bytes.
+_EML_ACCEPTED_TRANSFER_ENCODINGS = frozenset({"", "7bit", "8bit"})
+
+#: Headers that must occur at most once before the text parity can be claimed.
+_EML_SINGLETON_HEADERS = (
+    "message-id",
+    "subject",
+    "from",
+    "to",
+    "cc",
+    "date",
+    "in-reply-to",
+    "references",
+    "content-type",
+    "content-transfer-encoding",
+    "content-disposition",
+    "mime-version",
+)
+
+
+def _is_well_formed_message_id(raw: str) -> bool:
+    """Return whether ``raw`` has one legal raw bracket form and a sane msg-id body.
+
+    The raw value may carry exactly one surrounding ``<...>`` pair or no
+    brackets at all.  One final raw-form check covers both branches, so nested,
+    multiple or unbalanced brackets are rejected before normalization.
+    """
+    if not isinstance(raw, str):
+        return False
+    value = raw.strip()
+    if not value:
+        return False
+    if "<" in value or ">" in value:
+        if not (value.startswith("<") and value.endswith(">")):
+            return False
+        value = value[1:-1]
+    if "<" in value or ">" in value:
+        return False
+    normalized = normalize_message_id(value)
+    if not normalized or normalized.count("@") != 1:
+        return False
+    local, domain = normalized.split("@", 1)
+    if not local or not domain or domain == "generated":
+        return False
+    return not any(character.isspace() or ord(character) < 32 for character in normalized)
+
+
+def _fallback_display_fields(
+    fallback_envelope: dict[str, Any] | None,
+) -> tuple[str, str, str, str]:
+    """Return ``(subject, from, to, date)`` exactly as the CLI read path shows them."""
+    fb_from = ""
+    fb_subj = ""
+    fb_to = ""
+    fb_date = ""
+    if fallback_envelope:
+        fb_subj = fallback_envelope.get("subject", "")
+        f_info = fallback_envelope.get("from", {})
+        fb_from = f"{f_info.get('name', '')} <{f_info.get('addr', '')}>".strip() if isinstance(f_info, dict) else str(f_info)
+        t_info = fallback_envelope.get("to", {})
+        fb_to = f"{t_info.get('name', '')} <{t_info.get('addr', '')}>".strip() if isinstance(t_info, dict) else str(t_info)
+        fb_date = fallback_envelope.get("date", "")
+    return fb_subj, fb_from, fb_to, fb_date
+
+
+def _details_from_eml(
+    env_id: str | int,
+    folder: str,
+    raw_eml: bytes,
+    *,
+    preview_lines: int,
+    fallback_envelope: dict[str, Any] | None,
+    attachments: list[dict[str, Any]],
+    attachment_status: str,
+    attachment_error: str | None,
+) -> dict[str, Any] | None:
+    """Return the details dict only for a closed, model-verified EML input class.
+
+    The function is pure: no process, file, network or hidden state.  It checks
+    the raw EML structure itself: one plain ``text/plain`` body part, a closed
+    ``Content-Type`` parameter class (exactly one unquoted-or-quoted
+    ``charset`` with no whitespace around ``=``), 7bit/8bit transfer encoding, no
+    header folding, no RFC-2047 encoding, one Message-ID with a legal raw
+    bracket shape and a sane non-generated body, and a non-ASCII body only when
+    ``charset=utf-8`` is declared explicitly.  The body must fit inside
+    ``preview_lines`` without truncation.
+
+    It performs **no** independent email-policy defect scan.  It is only called
+    after the canonical inventory check (``inspect_mime_tree``) already
+    succeeded, and the inventory is passed through unchanged.  Every other
+    input returns ``None`` — the single meaning of "no text parity proven for
+    this input class" — so the caller keeps its existing CLI read.
+    """
+    try:
+        if not isinstance(raw_eml, bytes) or not raw_eml:
+            return None
+        if attachment_status == "attachment_inventory_unavailable":
+            return None
+        text = raw_eml.decode("utf-8")
+        if "\x00" in text or "\r" in text.replace("\r\n", ""):
+            return None
+        normalized = text.replace("\r\n", "\n")
+        header_block, separator, body_block = normalized.partition("\n\n")
+        if not separator or not header_block.strip():
+            return None
+
+        headers: dict[str, list[str]] = {}
+        for line in header_block.split("\n"):
+            if not line or line[0] in " \t":
+                # Empty header line or RFC-5322 folding: never claim parity.
+                return None
+            if ":" not in line:
+                return None
+            name, _, value = line.partition(":")
+            key = name.strip().lower()
+            value = value.strip()
+            if not key or "=?" in value:
+                return None
+            if any(ord(character) < 32 or ord(character) > 126 for character in value):
+                return None
+            headers.setdefault(key, []).append(value)
+
+        for key in _EML_SINGLETON_HEADERS:
+            if len(headers.get(key, ())) > 1:
+                return None
+
+        message_ids = headers.get("message-id", [])
+        if len(message_ids) != 1 or not _is_well_formed_message_id(message_ids[0]):
+            return None
+        raw_message_id = message_ids[0]
+        normalized_message_id = normalize_message_id(raw_message_id)
+
+        content_types = headers.get("content-type")
+        declared_charset: str | None = None
+        if content_types is not None:
+            content_type_header = content_types[0]
+            if not content_type_header:
+                return None
+            segments = content_type_header.split(";")
+            # Exactly "text/plain" plus one charset parameter, nothing else.
+            if len(segments) != 2 or segments[0] != "text/plain":
+                return None
+            parameter = segments[1].lstrip(" \t")
+            if not parameter.startswith("charset="):
+                return None
+            raw_charset = parameter[len("charset="):]
+            if raw_charset.startswith('"') or raw_charset.endswith('"'):
+                if not (
+                    raw_charset.startswith('"')
+                    and raw_charset.endswith('"')
+                    and len(raw_charset) >= 2
+                ):
+                    return None
+                raw_charset = raw_charset[1:-1]
+            if not raw_charset or '"' in raw_charset:
+                return None
+            if any(character.isspace() for character in raw_charset):
+                return None
+            charset = raw_charset.lower()
+            if charset not in _EML_ACCEPTED_CHARSETS:
+                return None
+            declared_charset = charset
+        transfer_encoding = headers.get("content-transfer-encoding", [""])[0]
+        if transfer_encoding.lower() not in _EML_ACCEPTED_TRANSFER_ENCODINGS:
+            return None
+        if "content-disposition" in headers:
+            return None
+        if headers.get("mime-version") and headers["mime-version"][0] != "1.0":
+            return None
+
+        if any(ord(character) > 126 for character in body_block):
+            # Non-ASCII bytes are only modelled with the IANA UTF-8 name.
+            if declared_charset != "utf-8":
+                return None
+
+        body_lines = body_block.splitlines()
+        if not any(line.strip() for line in body_lines):
+            return None
+        if len(body_lines) > preview_lines:
+            # The CLI preview may truncate before the client-side bound; an
+            # unproven line set is always ``None``.
+            return None
+        preview = "\n".join(body_lines[:preview_lines])
+
+        fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
+
+        def _first(key: str) -> str:
+            values = headers.get(key)
+            return values[0] if values else ""
+
+        return {
+            "envelope_id": str(env_id),
+            "folder": folder,
+            "message_id": normalized_message_id,
+            "raw_message_id": raw_message_id,
+            "subject": _first("subject") or fb_subj,
+            "from": _first("from") or fb_from,
+            "to": _first("to") or fb_to,
+            "cc": _first("cc"),
+            "headers_complete": True,
+            "date": _first("date") or fb_date,
+            "in_reply_to": _first("in-reply-to"),
+            "references": _first("references"),
+            "preview": preview,
+            "attachments": attachments,
+            "attachment_status": attachment_status,
+            "attachment_error": attachment_error,
+            "error": None,
+            "read_error_reason": None,
+            "read_level": "preview",
+        }
+    except Exception:  # noqa: BLE001 - unproven parity is always the safe answer
+        return None
+
+
 def get_single_email_details(
     env_id: str | int,
     folder: str = "INBOX",
@@ -1356,8 +1641,28 @@ def get_single_email_details(
     full_body: bool = False,
     inspect_attachments: bool = True,
     raw_eml: bytes | None = None,
+    *,
+    purpose: str = "other",
+    allow_eml_details: bool = False,
 ) -> dict[str, Any]:
-    """Fetch headers, preview/body, and structured MIME attachments for one envelope."""
+    """Fetch headers, preview/body, and structured MIME attachments for one envelope.
+
+    ``purpose`` binds the additive process-start label of this read (Issue #103,
+    D1).  A scan/full read also labels its inventory export: ``scan_preview``
+    exports as ``scan_inventory``, ``full_read`` as ``full_inventory``; every
+    other purpose forwards unchanged.  The ID-only fallback read is always
+    ``id_fallback``.
+
+    ``allow_eml_details`` (Draft-only opt-in, default ``False``) lets a
+    successful inventory export supply the preview details instead of a second
+    CLI read.  It applies only inside the ``inspect_attachments`` branch, only
+    for ``not full_body`` and only when :func:`_details_from_eml` proves full
+    text parity; otherwise the unchanged CLI read runs without a new export.
+    """
+    _validate_purpose(purpose)
+    if not isinstance(allow_eml_details, bool):
+        raise ValueError("allow_eml_details must be a boolean")
+    inventory_purpose = _inventory_purpose(purpose)
     attachments_list: list[dict[str, Any]] = []
     attachment_status: str = "none"
     attachment_error: str | None = None
@@ -1438,7 +1743,9 @@ def get_single_email_details(
         attachment_error = None
     elif inspect_attachments:
         try:
-            eml_data = fetch_raw_message_eml(env_id, folder=folder, account=account)
+            eml_data = fetch_raw_message_eml(
+                env_id, folder=folder, account=account, purpose=inventory_purpose
+            )
             attachments_list = inspect_mime_tree(eml_data)
             inv_reasons = []
             for a in attachments_list:
@@ -1452,6 +1759,21 @@ def get_single_email_details(
             else:
                 attachment_status = "available" if attachments_list else "none"
                 attachment_error = None
+                if allow_eml_details and not full_body:
+                    # Issue #103 P1: the completed export may replace the
+                    # following preview read, but only on proven text parity.
+                    derived = _details_from_eml(
+                        env_id,
+                        folder,
+                        eml_data,
+                        preview_lines=preview_lines,
+                        fallback_envelope=fallback_envelope,
+                        attachments=attachments_list,
+                        attachment_status=attachment_status,
+                        attachment_error=attachment_error,
+                    )
+                    if derived is not None:
+                        return derived
         except Exception as exc:
             raise_if_transport_blocked(exc)
             attachments_list = []
@@ -1475,22 +1797,12 @@ def get_single_email_details(
     last_err = None
     read_timeout = 30 if full_body else 12
     try:
-        stdout = run_himalaya(args, account=account, timeout=read_timeout, max_retries=2)
+        stdout = run_himalaya(args, account=account, timeout=read_timeout, max_retries=2, purpose=purpose)
     except Exception as e:
         raise_if_transport_blocked(e)
         last_err = e
 
-    fb_from = ""
-    fb_subj = ""
-    fb_to = ""
-    fb_date = ""
-    if fallback_envelope:
-        fb_subj = fallback_envelope.get("subject", "")
-        f_info = fallback_envelope.get("from", {})
-        fb_from = f"{f_info.get('name', '')} <{f_info.get('addr', '')}>".strip() if isinstance(f_info, dict) else str(f_info)
-        t_info = fallback_envelope.get("to", {})
-        fb_to = f"{t_info.get('name', '')} <{t_info.get('addr', '')}>".strip() if isinstance(t_info, dict) else str(t_info)
-        fb_date = fallback_envelope.get("date", "")
+    fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
 
     if stdout is None:
         if full_body:
@@ -1518,7 +1830,7 @@ def get_single_email_details(
         # Lightweight fallback: try reading just Message-ID
         raw_mid = ""
         try:
-            mid_out = run_himalaya(["message", "read", "-H", "Message-Id", "-f", folder, str(env_id)], account=account, timeout=10)
+            mid_out = run_himalaya(["message", "read", "-H", "Message-Id", "-f", folder, str(env_id)], account=account, timeout=10, purpose="id_fallback")
             for line in mid_out.splitlines():
                 if line.lower().startswith("message-id:"):
                     raw_mid = line.split(":", 1)[1].strip()
