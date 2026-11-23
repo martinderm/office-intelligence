@@ -175,6 +175,37 @@ unchanged. `allow_eml_details` defaults to `False` on the helper **and in
 `draft`**; it activates only after a real, anonymized CLI reference (separate
 boku-user live gate) or an explicit owner release. Until then P1 stays inactive.
 
+**Scan-time source capture (Issue #103 P2).** `get_single_email_details(...,
+raw_eml_sink=None)` hands the exact bytes of a successful inventory export to
+the optional sink once, immediately after `fetch_raw_message_eml` and before the
+inventory/extraction work. The sink is observability only: it never changes the
+result, a sink error is swallowed and never reaches the read, and the default
+`None` keeps the export and every result byte-identical. **The export stays
+unbounded**, exactly as before P2: bounding what is held is the consumer's
+budget, so an oversized message still gets its normal attachment inventory. The
+`raw_eml` input branch is unchanged and stays the only full-text derivation;
+`allow_eml_details` (P1) remains independent and inactive. No EML bytes ever
+appear in the returned result dict, the manifest, `batch-inspected.json`,
+progress, index, journal, evidence or logs.
+
+**Closed full-text parity class (`eml_full_text_parity`, Issue #103 P2).** A held
+scan source may supply the full text only under this **modelled, not
+live-proven** structural class and only when the draft gate
+`allow_scan_source_full_text=True` (default `False`). The predicate covers: one
+non-multipart `text/plain` body (no HTML-only, no multipart, no `message/*`);
+`Content-Type` absent (ASCII body only) or exactly `text/plain` with exactly one
+`charset` from `us-ascii`/`ascii`/`utf-8` and no whitespace around `=`; a
+non-ASCII body only with `charset=utf-8`; 7bit/8bit or no transfer encoding; no
+`Content-Disposition`; `MIME-Version` absent or `1.0`; no header folding, no
+RFC-2047 and printable-ASCII header values; exactly one well-formed Message-ID;
+header/body separator present; non-empty body. The predicate starts no process,
+reads no file and performs no email-policy defect scan; it is separate from the
+P1 preview path (`_details_from_eml`). Every other input returns `False` and the
+regular full read runs. The model basis is not a live reference: P1 stays
+inactive until a real anonymized CLI reference or an explicit owner release, and
+P2's full text carries the same reservation while the evaluation reuse (existing
+checks on the same bytes) stays active.
+
 ```bash
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --preview-lines 400 --json

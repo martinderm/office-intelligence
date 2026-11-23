@@ -1632,6 +1632,112 @@ def _details_from_eml(
         return None
 
 
+def eml_full_text_parity(raw_eml: bytes) -> bool:
+    """Return whether the EML belongs to the closed, modelled full-text class.
+
+    The class is modelled from the existing ``raw_eml`` derivation and the CLI
+    read shape; it is **not live-proven**.  It may only be used behind the
+    draft's explicit full-text gate (``allow_scan_source_full_text``, default
+    ``False``).
+
+    Issue #103 P2: a held scan source may supply the full text only when its
+    structure proves that the existing ``raw_eml`` derivation shows the same
+    fields as the regular CLI read for this input class.  The class is: one
+    non-multipart ``text/plain`` body (no HTML-only, no multipart, no
+    ``message/*``); ``Content-Type`` absent (ASCII body only) or exactly
+    ``text/plain`` with exactly one ``charset`` parameter without whitespace
+    around ``=`` from ``us-ascii``/``ascii``/``utf-8``; a non-ASCII body only
+    with ``charset=utf-8``; 7bit/8bit or no transfer encoding; no
+    ``Content-Disposition``; ``MIME-Version`` absent or ``1.0``; no header
+    folding, no RFC-2047 encoding and printable-ASCII header values; exactly one
+    well-formed Message-ID; a header/body separator; and a non-empty body.
+
+    This is a structural predicate only: it starts no process, reads no file and
+    performs no email-policy defect scan.  Every other input returns ``False``
+    and the caller keeps its regular full read.  It is intentionally separate
+    from :func:`_details_from_eml` (the P1 preview path).
+    """
+    try:
+        if not isinstance(raw_eml, bytes) or not raw_eml:
+            return False
+        text = raw_eml.decode("utf-8")
+        if "\x00" in text or "\r" in text.replace("\r\n", ""):
+            return False
+        normalized = text.replace("\r\n", "\n")
+        header_block, separator, body_block = normalized.partition("\n\n")
+        if not separator or not header_block.strip():
+            return False
+
+        headers: dict[str, list[str]] = {}
+        for line in header_block.split("\n"):
+            if not line or line[0] in " \t":
+                return False
+            if ":" not in line:
+                return False
+            name, _, value = line.partition(":")
+            key = name.strip().lower()
+            value = value.strip()
+            if not key or "=?" in value:
+                return False
+            if any(ord(character) < 32 or ord(character) > 126 for character in value):
+                return False
+            headers.setdefault(key, []).append(value)
+
+        for key in _EML_SINGLETON_HEADERS:
+            if len(headers.get(key, ())) > 1:
+                return False
+
+        message_ids = headers.get("message-id", [])
+        if len(message_ids) != 1 or not _is_well_formed_message_id(message_ids[0]):
+            return False
+
+        declared_charset: str | None = None
+        content_types = headers.get("content-type")
+        if content_types is not None:
+            content_type_header = content_types[0]
+            if not content_type_header:
+                return False
+            segments = content_type_header.split(";")
+            if len(segments) != 2 or segments[0] != "text/plain":
+                return False
+            parameter = segments[1].lstrip(" \t")
+            if not parameter.startswith("charset="):
+                return False
+            raw_charset = parameter[len("charset="):]
+            if raw_charset.startswith('"') or raw_charset.endswith('"'):
+                if not (
+                    raw_charset.startswith('"')
+                    and raw_charset.endswith('"')
+                    and len(raw_charset) >= 2
+                ):
+                    return False
+                raw_charset = raw_charset[1:-1]
+            if not raw_charset or '"' in raw_charset:
+                return False
+            if any(character.isspace() for character in raw_charset):
+                return False
+            charset = raw_charset.lower()
+            if charset not in _EML_ACCEPTED_CHARSETS:
+                return False
+            declared_charset = charset
+
+        transfer_encoding = headers.get("content-transfer-encoding", [""])[0]
+        if transfer_encoding.lower() not in _EML_ACCEPTED_TRANSFER_ENCODINGS:
+            return False
+        if "content-disposition" in headers:
+            return False
+        if headers.get("mime-version") and headers["mime-version"][0] != "1.0":
+            return False
+        if any(ord(character) > 126 for character in body_block):
+            if declared_charset != "utf-8":
+                return False
+        if not any(line.strip() for line in body_block.splitlines()):
+            return False
+        return True
+    except Exception:  # noqa: BLE001 - an unproven class is never reused
+        return False
+
+
 def get_single_email_details(
     env_id: str | int,
     folder: str = "INBOX",
@@ -1644,6 +1750,7 @@ def get_single_email_details(
     *,
     purpose: str = "other",
     allow_eml_details: bool = False,
+    raw_eml_sink: Callable[[bytes], None] | None = None,
 ) -> dict[str, Any]:
     """Fetch headers, preview/body, and structured MIME attachments for one envelope.
 
@@ -1658,10 +1765,19 @@ def get_single_email_details(
     CLI read.  It applies only inside the ``inspect_attachments`` branch, only
     for ``not full_body`` and only when :func:`_details_from_eml` proves full
     text parity; otherwise the unchanged CLI read runs without a new export.
+
+    ``raw_eml_sink`` (Issue #103 P2, default ``None``) receives the exact bytes
+    of a successful inventory export once, after the export and before the
+    inventory/extraction work.  The sink is observability only: it never changes
+    the result and a sink error is swallowed so no capture failure reaches the
+    read.  The export itself stays unbounded (unchanged behaviour); a consumer
+    that must bound what it holds enforces its own budget.
     """
     _validate_purpose(purpose)
     if not isinstance(allow_eml_details, bool):
         raise ValueError("allow_eml_details must be a boolean")
+    if raw_eml_sink is not None and not callable(raw_eml_sink):
+        raise ValueError("raw_eml_sink must be callable or None")
     inventory_purpose = _inventory_purpose(purpose)
     attachments_list: list[dict[str, Any]] = []
     attachment_status: str = "none"
@@ -1744,8 +1860,16 @@ def get_single_email_details(
     elif inspect_attachments:
         try:
             eml_data = fetch_raw_message_eml(
-                env_id, folder=folder, account=account, purpose=inventory_purpose
+                env_id,
+                folder=folder,
+                account=account,
+                purpose=inventory_purpose,
             )
+            if raw_eml_sink is not None:
+                try:
+                    raw_eml_sink(eml_data)
+                except Exception:  # noqa: BLE001 - a capture sink never changes the read
+                    pass
             attachments_list = inspect_mime_tree(eml_data)
             inv_reasons = []
             for a in attachments_list:

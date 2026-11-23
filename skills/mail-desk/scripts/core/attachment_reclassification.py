@@ -528,6 +528,7 @@ def _evaluate_item(
     run_id: str | None,
     lease_id: str | None,
     conversation_id: str | None,
+    source_lookup: Callable[..., bytes | None] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Resolve exactly one final ``attachment_evaluation`` and an optional reclassification."""
     if not evaluate_attachments:
@@ -570,14 +571,27 @@ def _evaluate_item(
         _force_review_inbox(item, REASON_HANDOFF_INVALID)
         return _terminal(STATUS_FAILED, REASON_HANDOFF_INVALID, AUTHORIZATION_NOT_APPLICABLE), None
 
-    try:
-        raw_eml = read_raw_mime(envelope_id, folder=folder, account=account)
-    # Only the canonical raw-MIME acquisition failures map to the bounded item-local
-    # `fetch_failed` outcome; unexpected programmer errors stay fail-loud.
-    except (HimalayaInvocationError, OSError, RuntimeError) as exc:
-        raise_if_transport_blocked(exc)
-        _force_review_inbox(item, REASON_FETCH_FAILED)
-        return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
+    # Issue #103 P2: an already-held scan source for this exact identity may
+    # replace the second canonical export.  A miss keeps the unchanged reader and
+    # every following MIME/policy/lease/hash/handoff check runs on the same bytes.
+    raw_eml: bytes | None = None
+    if source_lookup is not None:
+        try:
+            candidate = source_lookup(envelope_id, folder, account, message_id)
+        except Exception:  # noqa: BLE001 - a lookup miss is never a read failure
+            candidate = None
+        if isinstance(candidate, (bytes, bytearray)) and candidate:
+            raw_eml = bytes(candidate)
+
+    if raw_eml is None:
+        try:
+            raw_eml = read_raw_mime(envelope_id, folder=folder, account=account)
+        # Only the canonical raw-MIME acquisition failures map to the bounded item-local
+        # `fetch_failed` outcome; unexpected programmer errors stay fail-loud.
+        except (HimalayaInvocationError, OSError, RuntimeError) as exc:
+            raise_if_transport_blocked(exc)
+            _force_review_inbox(item, REASON_FETCH_FAILED)
+            return _terminal(STATUS_FAILED, REASON_FETCH_FAILED, AUTHORIZATION_NOT_APPLICABLE), None
 
     # A deterministic, PII-free per-message run-id lets a repeated invocation reuse the
     # canonical MD-E1 `already_fetched` path instead of fetching the same immutable
@@ -732,6 +746,7 @@ def install_draft_attachment_evaluations(
     run_id: str | None = None,
     lease_id: str | None = None,
     conversation_id: str | None = None,
+    source_lookup: Callable[..., bytes | None] | None = None,
 ) -> None:
     """Install exactly one final ``attachment_evaluation`` on every draft item in place.
 
@@ -739,6 +754,11 @@ def install_draft_attachment_evaluations(
     classifier reported for each item's final initial decision.  Only an approved (ambiguous)
     item may fetch raw MIME and call ``attachment_evaluate``; a clear item performs no raw
     fetch, evaluation or reclassification.
+
+    ``source_lookup`` (Issue #103 P2, default ``None``) optionally returns an already-held
+    scan source for the exact identity ``(envelope_id, folder, account, message_id)``.
+    A hit replaces the second canonical export; a miss keeps the unchanged reader, and
+    every existing MIME/policy/lease/hash/handoff check runs on the bytes either way.
 
     Every bounded MD-E1 outcome is installed item-locally and never aborts the batch.  A
     genuinely unexpected backend/programmer contract violation instead raises the bounded
@@ -768,6 +788,7 @@ def install_draft_attachment_evaluations(
             run_id=run_id,
             lease_id=lease_id,
             conversation_id=conversation_id,
+            source_lookup=source_lookup,
         )
         item["attachment_evaluation"] = evaluation
         if replacement is not None:

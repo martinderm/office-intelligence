@@ -2677,6 +2677,48 @@ nicht-Draft-Aufrufer behalten Export + Read (Helper-Default `False`).
 Known-Skip-Entscheidung, Barrier-/Quarantäne-Ergebnis und Review-Hash sind
 opt-in-unabhängig gleich.
 
+**#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
+`core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes
+in einem privaten, nicht serialisierbaren `ScanSourceContext` (kein `dict`,
+keine Persistenz, kein globaler Cache, keine Datei). Identität je Quelle:
+interner, nicht persistierter Scan-ID, effektiver Account inklusive Default-Fall,
+exakter Ordner, kanonischer Locator (Envelope-ID) und eigene normalisierte
+Message-ID; `bind` parst zusätzlich die **EML-eigene** Message-ID und bindet nur
+bei genau einer normalisierten, übereinstimmenden ID — fehlend, doppelt,
+unparsebar oder abweichend → kein Bind. Jede fehlende, doppelte, mehrdeutige
+oder abweichende Bindung liefert `None`, nie fremde Bytes. Grenzen (für Tests
+injizierbar): `MAX_RAW_EML_BYTES` (10 MiB) je EML,
+`target_count × MAX_RAW_EML_BYTES` gesamt und höchstens `target_count` gehaltene
+Quellen; Überschreitung verwirft die Quelle, keine Truncation.
+`get_single_email_details(..., raw_eml_sink=…)` ruft den Sink nach erfolgreichem
+Export im `inspect_attachments`-Zweig; ein Sink-Fehler erreicht den Read nie,
+der Default `None` bleibt byte-identisch. Der Scan-Export bleibt **unbeschränkt**
+wie vor P2: die Inventur eines übergroßen Items bleibt `available`/`none`, nur
+der Kontext verwirft die Quelle. Der Scan bindet nach dem Read, verwirft
+bekannte/geskippte Items sofort und behält nach `assess_and_quarantine` nur die
+sauberen, selektierten Items; `finally` löscht Bytes und Metadaten. Full-Text
+leitet die Details aus denselben Bytes über den injizierten Reader
+(`raw_eml`-Zweig, `read_level: "full_body"`) ab, aber nur bei aktivem Gate
+`allow_scan_source_full_text=True` (Default `False`, validiert vor jedem
+Mailboxzugriff), in der **modellierten, nicht live-belegten** Paritätsklasse
+(`eml_full_text_parity`: non-multipart `text/plain`,
+`us-ascii`/`ascii`/`utf-8`, 7bit/8bit, keine Faltung/RFC-2047, genau eine
+Message-ID, nichtleerer Body) und wenn `assess_email` den erstmals sichtbaren
+Volltext sauber und unverkürzt bewertet; Gate aus, Quarantäne, fehlende
+Abdeckung, Paritäts-Ablehnung oder Transport-Block → regulärer Full-Read
+(Transport-Block wird re-raised), kein neuer Quarantäne-/Review-Pfad,
+Review-Hash unverändert. Evaluation-Reuse bleibt unabhängig aktiv, konsultiert
+`source_lookup` erst nach feststehender Identität und führt alle bestehenden
+MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert auf denselben Bytes
+aus; andere `install_draft_attachment_evaluations`-Aufrufer bleiben ohne
+`source_lookup`. Hit-Zahlen (nur Gate `True`): ein Scan-Export als
+`scan_inventory`, `full_inventory`/`full_read`/`evaluation_raw` 0; sonst
+regulärer Full-Read, ggf. `full_*` > 0. `count < 1` erzeugt keinen Kontext. P1
+bleibt inaktiv (`allow_eml_details=False`) und ungekoppelt; P2 ruft
+`_details_from_eml` nicht auf. Keine EML in Manifest, `batch-inspected.json`,
+Progress, Index, Journal, Evidence oder Logs. Tests:
+`tests/test_issue103_p2_source_reuse.py` (43 Fälle).
+
 **Fortschritt nach Kill:** `runner-progress.json` trägt additiv `pid` und
 `heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
 liveness-geprüfte Sicht: Ein `status: "running"` ohne lebenden Owner erscheint
