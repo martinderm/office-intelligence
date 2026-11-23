@@ -67,6 +67,7 @@ from core.himalaya import (
     TRANSPORT_BLOCKED_REASON,
     HimalayaInvocationError,
     TransportStats,
+    complete_scan_inventory,
     last_transport_stats,
     reset_transport_stats,
     transport_stats_session,
@@ -236,6 +237,91 @@ def _known_mail_fetch_sizes(target_count: int) -> list[int]:
     return sorted({first_size, *inner_tiers, ceiling})
 
 
+#: Closed scan profiles (Issue #103 P3).  ``balanced`` is the unchanged default.
+_SCAN_PROFILES = ("balanced", "known_heavy")
+
+
+def _validate_scan_profile(scan_profile: str) -> str:
+    """Return a supported scan profile or fail before any mailbox access."""
+    if scan_profile not in _SCAN_PROFILES:
+        raise ValueError(
+            "scan_profile must be one of the documented profiles: "
+            + ", ".join(_SCAN_PROFILES)
+        )
+    return scan_profile
+
+
+def _preview_first_email(
+    envelope_id: str,
+    folder: str,
+    account: str | None,
+    preview_lines: int,
+    env: dict[str, Any],
+    known_items: Any,
+    source_context: ScanSourceContext | None,
+    preview_read: Callable[..., dict[str, Any]],
+    regular_read: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    """Read one preview first and pay for an inventory export only when needed.
+
+    A known preview returns without any export.  A preview without a usable
+    Message-ID returns directly when ``has_attachment is False`` (the regular
+    read would repeat the same empty-ID read); otherwise it takes the regular
+    export+read path without an export probe.  An unknown preview is completed
+    by exactly one export; on identity drift between preview and export nothing
+    is merged or bound and the untouched regular export+read path runs for this
+    item.  The function never performs a second read on the happy path.
+    """
+    preview = preview_read(
+        envelope_id,
+        folder,
+        account,
+        preview_lines,
+        fallback_envelope=env,
+        purpose="scan_preview",
+    )
+    message_id = str(preview.get("message_id") or "")
+    if not message_id:
+        if env.get("has_attachment") is False:
+            # No usable ID and no possible attachment: the regular read would
+            # repeat the same empty-ID read, so the preview is the result.
+            return preview
+        # No usable preview identity (missing header or a failed read without a
+        # fallback ID): skip the export probe entirely and take the regular path.
+        return regular_read(
+            envelope_id,
+            folder,
+            account,
+            preview_lines,
+            fallback_envelope=env,
+            purpose="scan_preview",
+        )
+    if message_id in known_items:
+        return preview
+    eml, drift = complete_scan_inventory(
+        preview,
+        envelope_id,
+        folder,
+        account,
+        fallback_envelope=env,
+        purpose="scan_preview",
+    )
+    if drift:
+        return regular_read(
+            envelope_id,
+            folder,
+            account,
+            preview_lines,
+            fallback_envelope=env,
+            purpose="scan_preview",
+        )
+    if eml is not None and source_context is not None:
+        # P2: the same export feeds the private store, bound to the preview ID;
+        # the bind re-checks the EML's own Message-ID and enforces the budget.
+        source_context.bind(envelope_id, folder, account, message_id, eml)
+    return preview
+
+
 def get_unprocessed_emails(
     folder: str,
     target_count: int,
@@ -249,6 +335,7 @@ def get_unprocessed_emails(
     tracker: BatchProgressTracker | None = None,
     allow_eml_details: bool = False,
     source_context: ScanSourceContext | None = None,
+    scan_profile: str = "balanced",
 ) -> tuple[list[dict[str, Any]], int]:
     """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably.
 
@@ -265,7 +352,12 @@ def get_unprocessed_emails(
     export stays unbounded and only the context drops an oversize source, so the
     attachment inventory is unchanged.  An injected ``get_unprocessed_emails``
     must accept this keyword.
+
+    ``scan_profile`` (Issue #103 P3, default ``"balanced"``) selects the scan
+    sequence.  Only ``"known_heavy"`` with ``skip_known`` reads a preview first;
+    every other caller keeps the unchanged path.
     """
+    _validate_scan_profile(scan_profile)
     collected, known_count, skipped_known = _scan_unprocessed_emails(
         folder,
         target_count,
@@ -279,6 +371,7 @@ def get_unprocessed_emails(
         tracker=tracker,
         allow_eml_details=allow_eml_details,
         source_context=source_context,
+        scan_profile=scan_profile,
     )
     if tracker and skipped_known:
         tracker.step(f"skipped {skipped_known} known envelopes")
@@ -322,6 +415,7 @@ def _scan_unprocessed_emails(
     tracker: BatchProgressTracker | None = None,
     allow_eml_details: bool = False,
     source_context: ScanSourceContext | None = None,
+    scan_profile: str = "balanced",
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Collect unprocessed envelopes and return ``(collected, known_count, skipped_known)``.
 
@@ -344,8 +438,15 @@ def _scan_unprocessed_emails(
     when the map binds the same ``id`` and the identical subject **and** that
     Message-ID is in ``final-location-index.json`` (F1-F5).  A map hit never
     produces ``collected`` data; every miss or mismatch is read individually.
+
+    Issue #103 P3 adds the explicit ``known_heavy`` profile: with ``skip_known``
+    on, a map miss reads one preview first.  An index hit skips without any
+    export; an unknown item completes the preview with exactly one inventory
+    export (no second read) or no export when ``has_attachment is False``.
+    ``balanced`` (default) keeps the unchanged sequence.
     """
     dd = data_dir or resolve_data_dir()
+    _validate_scan_profile(scan_profile)
     index_data = load_final_index(resolve_final_index_path(data_dir=dd))
     known_items = index_data.get("items", {})
     signature_index = build_signature_index(dd)
@@ -397,6 +498,14 @@ def _scan_unprocessed_emails(
                     captured[0],
                 )
             return email_res
+
+    # Issue #103 P3: the known-heavy profile reads one preview first (only with
+    # active skip_known); every other combination keeps the unchanged sequence.
+    preview_first = scan_profile == "known_heavy" and skip_known
+    if preview_first:
+        def preview_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            kwargs["preview_only"] = True
+            return base_read(*args, **kwargs)
 
     # Fast direct path if date or query filter is provided
     if date or query:
@@ -454,7 +563,20 @@ def _scan_unprocessed_emails(
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
-            email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
+            if preview_first:
+                email_res = _preview_first_email(
+                    eid,
+                    folder,
+                    account,
+                    preview_lines,
+                    env,
+                    known_items,
+                    source_context,
+                    preview_read,
+                    read_details,
+                )
+            else:
+                email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
             mid = email_res.get("message_id")
             is_known = bool(mid and mid in known_items)
 
@@ -525,7 +647,20 @@ def _scan_unprocessed_emails(
 
             if tracker:
                 tracker.step("inspecting_email", envelope_id=eid, subject=env.get("subject", ""))
-            email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
+            if preview_first:
+                email_res = _preview_first_email(
+                    eid,
+                    folder,
+                    account,
+                    preview_lines,
+                    env,
+                    known_items,
+                    source_context,
+                    preview_read,
+                    read_details,
+                )
+            else:
+                email_res = read_details(eid, folder, account, preview_lines, fallback_envelope=env, purpose="scan_preview")
             mid = email_res.get("message_id")
             is_known = bool(mid and mid in known_items)
 

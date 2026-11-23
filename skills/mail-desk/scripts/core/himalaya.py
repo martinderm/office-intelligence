@@ -1632,6 +1632,99 @@ def _details_from_eml(
         return None
 
 
+def eml_own_message_id(eml: bytes) -> str:
+    """Return the EML's own normalized Message-ID, or ``""`` when not provable.
+
+    A missing, duplicated or unparsable Message-ID proves nothing and therefore
+    never binds a source or an inventory merge.
+    """
+    try:
+        message = email.message_from_bytes(eml, policy=email.policy.default)
+        values = message.get_all("Message-ID") or []
+        if len(values) != 1:
+            return ""
+        return normalize_message_id(str(values[0]))
+    except Exception:  # noqa: BLE001 - an unprovable identity never binds
+        return ""
+
+
+def complete_scan_inventory(
+    details: dict[str, Any],
+    env_id: str | int,
+    folder: str = "INBOX",
+    account: str | None = None,
+    *,
+    fallback_envelope: dict[str, Any] | None = None,
+    purpose: str = "scan_preview",
+    raw_eml_sink: Callable[[bytes], None] | None = None,
+) -> tuple[bytes | None, bool]:
+    """Complete a preview-only result with exactly one inventory export.
+
+    Returns ``(exported_eml, drift)``.  ``drift`` is ``True`` when the exported
+    message's own Message-ID differs from the preview's (or is unprovable):
+    nothing is merged, the sink is not called and the caller must take the
+    regular export+read path for this item.  Without drift the canonical
+    inventory (same validation as the regular read) is merged into ``details``
+    in place and the export is returned for the caller's source binding.  This
+    function performs **one** export and **no** read; a failed export leaves the
+    preview valid and marks the inventory unavailable, exactly like the regular
+    path.  ``fallback_envelope.has_attachment is False`` needs no export at all.
+    """
+    _validate_purpose(purpose)
+    if raw_eml_sink is not None and not callable(raw_eml_sink):
+        raise ValueError("raw_eml_sink must be callable or None")
+    if fallback_envelope and fallback_envelope.get("has_attachment") is False:
+        details["attachments"] = []
+        details["attachment_status"] = "none"
+        details["attachment_error"] = None
+        return None, False
+    try:
+        eml_data = fetch_raw_message_eml(
+            env_id,
+            folder=folder,
+            account=account,
+            purpose=_inventory_purpose(purpose),
+        )
+    except Exception as exc:  # noqa: BLE001 - one bounded item-local export failure
+        raise_if_transport_blocked(exc)
+        details["attachments"] = []
+        details["attachment_status"] = "attachment_inventory_unavailable"
+        details["attachment_error"] = f"Failed to export or inspect message MIME: {exc}"
+        return None, False
+    expected = str(details.get("message_id") or "")
+    own = eml_own_message_id(eml_data)
+    if not own or own != expected:
+        return None, True
+    if raw_eml_sink is not None:
+        try:
+            raw_eml_sink(eml_data)
+        except Exception:  # noqa: BLE001 - a capture sink never changes the merge
+            pass
+    try:
+        attachments_list = inspect_mime_tree(eml_data)
+        inv_reasons = []
+        for candidate in attachments_list:
+            valid, reason = validate_attachment_candidate_metadata(candidate)
+            if not valid:
+                inv_reasons.append(reason)
+        if inv_reasons:
+            details["attachments"] = []
+            details["attachment_status"] = "attachment_inventory_unavailable"
+            details["attachment_error"] = (
+                f"Incomplete attachment inventory in MIME: {'; '.join(inv_reasons)}"
+            )
+        else:
+            details["attachments"] = attachments_list
+            details["attachment_status"] = "available" if attachments_list else "none"
+            details["attachment_error"] = None
+    except Exception as exc:  # noqa: BLE001 - one bounded item-local inventory failure
+        raise_if_transport_blocked(exc)
+        details["attachments"] = []
+        details["attachment_status"] = "attachment_inventory_unavailable"
+        details["attachment_error"] = f"Failed to export or inspect message MIME: {exc}"
+    return eml_data, False
+
+
 def eml_full_text_parity(raw_eml: bytes) -> bool:
     """Return whether the EML belongs to the closed, modelled full-text class.
 
@@ -1751,6 +1844,7 @@ def get_single_email_details(
     purpose: str = "other",
     allow_eml_details: bool = False,
     raw_eml_sink: Callable[[bytes], None] | None = None,
+    preview_only: bool = False,
 ) -> dict[str, Any]:
     """Fetch headers, preview/body, and structured MIME attachments for one envelope.
 
@@ -1772,10 +1866,18 @@ def get_single_email_details(
     the result and a sink error is swallowed so no capture failure reaches the
     read.  The export itself stays unbounded (unchanged behaviour); a consumer
     that must bound what it holds enforces its own budget.
+
+    ``preview_only`` (Issue #103 P3, default ``False``) performs the CLI read and
+    starts **no** export and no inventory work; the result carries an empty
+    attachment list and ``attachment_status: "none"``.  It is the first step of a
+    preview-first scan, where :func:`complete_scan_inventory` adds exactly one
+    export afterwards.
     """
     _validate_purpose(purpose)
     if not isinstance(allow_eml_details, bool):
         raise ValueError("allow_eml_details must be a boolean")
+    if not isinstance(preview_only, bool):
+        raise ValueError("preview_only must be a boolean")
     if raw_eml_sink is not None and not callable(raw_eml_sink):
         raise ValueError("raw_eml_sink must be callable or None")
     inventory_purpose = _inventory_purpose(purpose)
@@ -1853,6 +1955,12 @@ def get_single_email_details(
             attachments_list = []
             attachment_status = "attachment_inventory_unavailable"
             attachment_error = f"Failed to parse MIME tree: {exc}"
+    elif preview_only:
+        # Issue #103 P3 preview-first: the CLI read is the only start here; the
+        # inventory is completed later by ``complete_scan_inventory``.
+        attachments_list = []
+        attachment_status = "none"
+        attachment_error = None
     elif fallback_envelope and fallback_envelope.get("has_attachment") is False:
         attachments_list = []
         attachment_status = "none"

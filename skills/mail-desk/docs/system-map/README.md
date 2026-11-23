@@ -2719,6 +2719,30 @@ bleibt inaktiv (`allow_eml_details=False`) und ungekoppelt; P2 ruft
 Progress, Index, Journal, Evidence oder Logs. Tests:
 `tests/test_issue103_p2_source_reuse.py` (43 Fälle).
 
+**#103 P3: Preview-first für bekannte Lücken (`scan_profile`, Draft-Opt-in):**
+`scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`, validiert vor
+jedem Mailboxzugriff) wählt die Scan-Sequenz; eine automatische Profilwahl gibt
+es nicht. Nur `known_heavy` **mit** `skip_known` liest nach einem Map-Miss genau
+eine Preview ohne Export (`preview_only=True`). Ein Index-Treffer erhöht
+`known_count`/`skipped_known` und überspringt ohne Export und ohne zweiten Read;
+sonst bleibt die Vorschau, `has_attachment is False` braucht keinen Export, und
+nur bei Anhangbedarf folgt genau ein Inventar-Export
+(`complete_scan_inventory`), der die kanonische Inventur in die Vorschau merged.
+Die EML-eigene Message-ID wird vor Merge/Sink mit der Preview-ID verglichen;
+Drift oder unprovable ID → keine Vermischung, kein Sink, regulärer Export+Read
+für dieses Item. Ein Export-Fehler lässt die Vorschau gültig und setzt
+`attachment_inventory_unavailable` wie heute. Der Export geht über den
+bestehenden Sink an den `ScanSourceContext` (Bind mit der Preview-ID, P2-Budget-
+und Identitätsprüfung). Beide Scan-Schleifen, `inspected_eids`, Target/Abbruch
+und die aggregierten Zähler bleiben unverändert; `balanced` ruft genau ein
+`get_single_email_details` pro Item auf (keine Probe). Netto gegen `balanced`:
+bekannte Lücke mit `has_attachment is not False` −1 Start, `has_attachment is
+False` ±0 (1 Preview statt 1 Read), unbekannt mit Inventar ±0 ohne zweiten
+Read; Drift-Worst-Case 4 statt 2 Starts; leere Preview-ID: 1 Start ohne
+Anhang, sonst direkt regulärer Export + Read (3 Starts). P1 bleibt inaktiv,
+P2-Full-Text bleibt gegated, Evaluation-Reuse bleibt aktiv. Tests:
+`tests/test_issue103_p3_preview_first.py` (13 Fälle).
+
 **Fortschritt nach Kill:** `runner-progress.json` trägt additiv `pid` und
 `heartbeat_at`. `core.progress.read_runner_progress` liefert eine read-only,
 liveness-geprüfte Sicht: Ein `status: "running"` ohne lebenden Owner erscheint

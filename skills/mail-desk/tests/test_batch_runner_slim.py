@@ -70,6 +70,20 @@ twenty-five). The P2 section now names the separate full-text gate
 ``allow_scan_source_full_text`` (default ``False``), marks the parity class as
 modelled, not live-proven, and keeps the hit counts scoped to the active gate.
 Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P3, lane
+2026-11-23-frontier-103-p3-preview-first): MAX_WORDS 8550 → 8675 (measured 8650
+words, rounded to the next twenty-five). The scan section now documents the P3
+``scan_profile`` (default ``balanced``) with the preview-first flow, the one-
+export/no-second-read rule, the identity-drift fallback and the measured net
+start effect against the unchanged baseline. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P3 fix round 1,
+same lane): MAX_WORDS 8675 → 8725 (measured 8695 words, rounded to the next
+twenty-five). The net-effect statement is now precise (—1 only for
+``has_attachment is not False``, ±0 for the read-only case, drift worst case
+4 vs 2, no "+1" against ``balanced``) and the empty-preview-ID edge case is
+documented. Floors unchanged.
 """
 
 from __future__ import annotations
@@ -82,17 +96,18 @@ import unittest
 BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 
-#: Size gate: 20-40% reduction from the 8754-word baseline; raised eight times
-#: for the MD-P1 promotion-preflight module contract, the FR-28
+#: Size gate: 20-40% reduction from the 8754-word baseline; raised for the
+#: MD-P1 promotion-preflight module contract, the FR-28
 #: review-correction/verify/recovery docs, the issue-#103 scan accelerator
 #: contract, its atomic-spawn/default-budget follow-up, the issue-#107
 #: sync_sent outcome/recovery paragraph, the issue-#103 D1 purpose-telemetry
 #: contract at the callers, the issue-#103 P1 EML-preview opt-in, its
 #: default-`False`/activation-gate fix round, the issue-#103 P2 scan-source
-#: reuse contract and its full-text gate/modelled-class fix round (see docstring
-#: history).
+#: reuse contract, its full-text gate/modelled-class fix round, and the
+#: issue-#103 P3 scan-profile/preview-first contract and its precise net-effect/
+#: empty-ID fix round (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8550
+MAX_WORDS = 8725
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (
