@@ -199,7 +199,16 @@ Classifier-Full-Read/Attachment-Raw-MIME reichen F6 durch; F6: keine
 Manifest-/Inspect-Ausgabe. `transport_stats` meldet Starts/Retries/Fehler,
 `command_telemetry` (letzte 20 Dauern, `last_exit_code`,
 `last_reason_code`) und `block_trigger` (Klasse, Envelope-ID, Dauer, Exit,
-Reason; `transport_trigger`).
+Reason; `transport_trigger`). Additiv `starts_by_purpose` je Start:
+`thread_map`, `list`, `scan_preview`/`scan_inventory`,
+`full_read`/`full_inventory`, `evaluation_raw`, `id_fallback`, sonst `other`.
+Der Draft bindet `allow_eml_details` (Config-Schlüssel, Default `False`,
+validiert vor jedem Mailboxzugriff) an beide Scan-Schleifen. P1 bleibt inaktiv,
+bis eine reale anonymisierte CLI-Referenz (separates boku-user-Gate) oder eine
+Owner-Freigabe vorliegt; die goldenen Paare sind ein Modell aus derselben EML,
+keine Live-Referenz. Bei Opt-in: ein qualifizierter Kandidat nutzt den
+Inventar-Export als Preview (1 Start statt 2), ein nicht qualifizierter bleibt
+bei Export + Read ohne Re-Export, `has_attachment=False` bei genau einem Read.
 
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
@@ -1515,7 +1524,8 @@ steht in der Ausgangsmatrix des Policygebundenen Anhang-Evaluierungs-Orchestrato
 Der Orchestrierungs-Seam `install_draft_attachment_evaluations(...)` in
 `scripts/core/attachment_reclassification.py` läuft nach der Preview-/Body-/Full-Read-
 Klassifikation und vor `add_draft_contract`, damit der Review-Hash die installierte
-Auswertung bindet:
+Auswertung bindet. Injizierte Draft-Reader müssen das `purpose`-Keyword akzeptieren
+(reine Telemetrie, keine Ergebnisänderung):
 
 1. Ein klares Item führt **keinen** Rohabruf, keine Auswertung und keine Neuklassifikation
    aus und erhält `not_needed` / `classification_clear` / `not_applicable` mit

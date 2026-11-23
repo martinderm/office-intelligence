@@ -163,7 +163,9 @@ class InspectModeTests(unittest.TestCase):
 class DraftModeTests(unittest.TestCase):
     def test_draft_reuses_only_unknown_cached_inspections_and_writes_manifest(self) -> None:
         manifest = {"items": [{"envelope_id": "unseen-1"}]}
-        with tempfile.TemporaryDirectory() as temporary:
+        default_reader = Mock(return_value={})
+        with patch.object(draft_mode, "get_single_email_details", default_reader), \
+                tempfile.TemporaryDirectory() as temporary:
             data_dir = Path(temporary) / "data" / "mail-desk"
             data_dir.mkdir(parents=True)
             cached = data_dir / "batch-inspected.json"
@@ -191,7 +193,12 @@ class DraftModeTests(unittest.TestCase):
             self.assertEqual([{"envelope_id": "unseen-1"}], called.args[0])
             self.assertEqual(data_dir.parent.parent, called.kwargs["workspace_root"])
             self.assertEqual({"sent": []}, called.kwargs["sent_lookup"])
-            self.assertEqual(runner.get_single_email_details, called.kwargs["full_reader"])
+            # Issue #103: the draft path binds the purpose to the reader; the
+            # default reader stays the production one and receives the label.
+            bound_reader = called.kwargs["full_reader"]
+            self.assertTrue(callable(bound_reader))
+            bound_reader("7", "INBOX")
+            default_reader.assert_called_once_with("7", "INBOX", purpose="full_read")
             self.assertIsNone(called.kwargs["account"])
             # FR-15/MD-E2-T01: the transient effective-source sink is passed through.
             self.assertTrue(callable(called.kwargs["source_sink"]))

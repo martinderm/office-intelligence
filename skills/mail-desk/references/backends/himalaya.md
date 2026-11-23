@@ -115,6 +115,19 @@ beyond the scan.
   the triggering command class, envelope id, duration and exit code. Counters
   only, never mail content.
 
+  Additive since Issue #103 slice 0: `transport_stats.starts_by_purpose`
+  partitions every successful start across the closed nine-label set
+  `thread_map`, `list`, `scan_preview`, `scan_inventory`, `full_read`,
+  `full_inventory`, `evaluation_raw`, `id_fallback`, `other`. Each start counts
+  exactly one label (`sum(starts_by_purpose.values()) == process_starts`);
+  `retries` stays a subset and adds no extra start. A retry is a second start of
+  the same purpose, a failed child creation (`factory()` error) counts neither a
+  start nor a purpose, an unknown purpose stops with `ValueError` before any
+  process, and the bounded diagnostic spawn counts as `other`. The block path
+  reports the same `starts_by_purpose` snapshot. Purpose labels and integers
+  only — no argv, headers, message IDs or content; the review payload and its
+  hash are unaffected.
+
 ### Message reads and body preview
 
 The client's `read` operation (subcommand `read`, manifest action `read`) fetches
@@ -137,6 +150,30 @@ marks `read_escalation.fallback: "preview"`, `read_escalation.reason: "timeout"`
 with `review_required: true`; the persisted `read_escalation.error.type` stays
 `RuntimeError`. The transport guard no longer preempts that fail-safe for a
 single slow item.
+
+**EML-derived preview (Issue #103 P1, draft opt-in, inactive by default).** When
+the scan's inventory export already ran, `get_single_email_details(...,
+allow_eml_details=True)` may derive the preview details from those exact EML
+bytes instead of a second `message read`. The evidence basis is a **model**, not
+a captured real CLI reference: the golden pairs derive the CLI read text from
+the same synthetic EML, so text equality is proven only for the tested input
+class and is never asserted against a live CLI. The accepted class is closed:
+one non-multipart `text/plain` body; `Content-Type` either absent (ASCII body
+only) or exactly `text/plain` with exactly one `charset` parameter without
+whitespace around `=` (no `format=flowed`, `delsp`, `name`, boundary or
+duplicate charset); `charset` from `us-ascii`/`ascii`/`utf-8`; a
+non-ASCII body only with `charset=utf-8`; 7bit/8bit; no header folding or
+RFC-2047 encoding; one Message-ID whose raw value has one balanced `<...>` pair
+or none, with a non-generated body; and a body inside `preview_lines` without
+truncation. Only structure and singleton headers are checked; there is **no**
+independent email-policy defect scan, and the function runs only after
+`inspect_mime_tree` already accepted the canonical inventory (passed through
+unchanged). Every other input returns `None` and the existing CLI read runs
+without a new export. `full_body=True` is never replaced; `has_attachment is
+False` still starts no export and exactly one read; the `raw_eml` branch is
+unchanged. `allow_eml_details` defaults to `False` on the helper **and in
+`draft`**; it activates only after a real, anonymized CLI reference (separate
+boku-user live gate) or an explicit owner release. Until then P1 stays inactive.
 
 ```bash
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json

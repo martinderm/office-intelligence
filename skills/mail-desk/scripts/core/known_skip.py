@@ -200,6 +200,7 @@ def load_envelope_thread_map(
             account=account,
             timeout=timeout,
             max_retries=1,
+            purpose="thread_map",
         )
     except HimalayaInvocationError as exc:
         if exc.reason_code == TRANSPORT_BLOCKED_REASON:

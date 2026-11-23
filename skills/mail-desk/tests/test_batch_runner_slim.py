@@ -40,6 +40,22 @@ Orchestrator test-correction (documented, 2026-11-11, issue #107, lane
 rounded to the next fifty). The sync_sent consumer paragraph now names the
 reasoned `no_evidence` outcome and the exact promotion-recovery triad. All
 floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 D1, lane
+2026-11-23-frontier-103-login-reduction): MAX_WORDS 8350 → 8375 (measured 8369
+words, rounded to the next twenty-five). The caller documentation now names the
+full `starts_by_purpose` purpose list and the injected draft-reader `purpose`
+keyword. All floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P1, same lane):
+MAX_WORDS 8375 → 8425 (measured 8410 words, rounded to the next twenty-five).
+The scan section now documents the draft-only `allow_eml_details` opt-in, its
+config key and the 1-start/2-start/read-only call counts. All floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P1 fix round,
+same lane): MAX_WORDS 8425 → 8450 (measured 8436 words, rounded to the next
+twenty-five). The opt-in default is now documented as `False`, with the
+model-based evidence limit and the activation gate. All floors unchanged.
 """
 
 from __future__ import annotations
@@ -52,13 +68,15 @@ import unittest
 BUNDLE_ROOT = Path(__file__).resolve().parents[3]
 DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 
-#: Size gate: 20-40% reduction from the 8754-word baseline; raised five times
+#: Size gate: 20-40% reduction from the 8754-word baseline; raised eight times
 #: for the MD-P1 promotion-preflight module contract, the FR-28
 #: review-correction/verify/recovery docs, the issue-#103 scan accelerator
-#: contract, its atomic-spawn/default-budget follow-up, and the issue-#107
-#: sync_sent outcome/recovery paragraph (see docstring history).
+#: contract, its atomic-spawn/default-budget follow-up, the issue-#107
+#: sync_sent outcome/recovery paragraph, the issue-#103 D1 purpose-telemetry
+#: contract at the callers, the issue-#103 P1 EML-preview opt-in, and its
+#: default-`False`/activation-gate fix round (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8350
+MAX_WORDS = 8450
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (

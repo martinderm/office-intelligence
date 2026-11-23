@@ -40,6 +40,21 @@ def _required_dependency(
     raise RuntimeError(f"{name} must be supplied by the batch-runner compatibility adapter")
 
 
+def _purpose_bound(reader: Callable[..., Any], purpose: str) -> Callable[..., Any]:
+    """Bind one process-start purpose to a reader without changing its contract.
+
+    The purpose is telemetry only and never changes the reader's result.  An
+    injected draft reader must accept the ``purpose`` keyword; the binding uses
+    ``setdefault`` and deliberately does not swallow a ``TypeError``.
+    """
+
+    def bound(*args: Any, **kwargs: Any) -> Any:
+        kwargs.setdefault("purpose", purpose)
+        return reader(*args, **kwargs)
+
+    return bound
+
+
 def run_draft_mode(
     config: dict[str, Any],
     account: str | None = None,
@@ -64,6 +79,11 @@ def run_draft_mode(
         dependencies, "add_context_consultation_metadata", add_context_consultation_metadata
     )
 
+    # Issue #103 (D1 first slice): tag the two draft-path readers with their
+    # purpose.  This is telemetry only; it changes no result, target or gate.
+    full_reader = _purpose_bound(full_reader, "full_read")
+    raw_mime_reader = _purpose_bound(raw_mime_reader, "evaluation_raw")
+
     dd = data_dir or resolve_data()
     workspace_root = dd.parent.parent
     folder = config.get("folder", "INBOX")
@@ -76,6 +96,11 @@ def run_draft_mode(
     evaluate_attachments = config.get("evaluate_attachments", True)
     if not isinstance(evaluate_attachments, bool):
         raise ValueError("evaluate_attachments must be a boolean")
+    # Issue #103 P1: draft-only opt-in, inactive by default until a real,
+    # anonymized CLI reference or an explicit owner release exists.
+    allow_eml_details = config.get("allow_eml_details", False)
+    if not isinstance(allow_eml_details, bool):
+        raise ValueError("allow_eml_details must be a boolean")
     # All draft configuration is validated before any mailbox read, classification,
     # evaluation or write, so a malformed request can never perform side effects.
     expected_count = config.get("expected_count", count)
@@ -116,6 +141,7 @@ def run_draft_mode(
             skip_known=skip_known,
             preview_lines=preview_lines,
             tracker=tracker,
+            allow_eml_details=allow_eml_details,
         )
 
     tracker.step("classifying_and_checking_sent")
