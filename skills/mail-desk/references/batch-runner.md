@@ -210,6 +210,18 @@ keine Live-Referenz. Bei Opt-in: ein qualifizierter Kandidat nutzt den
 Inventar-Export als Preview (1 Start statt 2), ein nicht qualifizierter bleibt
 bei Export + Read ohne Re-Export, `has_attachment=False` bei genau einem Read.
 
+**P2 — Quellen-Reuse im frischen Draft-Scan:** Der Draft hält die Scan-EML-Bytes
+eines frischen Scans privat im Speicher und nutzt sie nur bei exakter
+Identität inkl. EML-eigener Message-ID. Der Scan-Export bleibt unbeschränkt
+(Inventur unverändert); der Kontext verwirft >10 MiB/Budget ohne Truncation.
+Die Evaluation bleibt aktiv (alle Bestandsprüfungen). Der Full-Text
+ist **modelliert, nicht live-belegt**: eigenes Draft-Opt-in
+`allow_scan_source_full_text` (Default `False`), nur bei `True` mit modellierter
+Paritätsklasse und Barrier-Bewertung, sonst regulärer Full-Read. Hit
+(nur `True`): `full_inventory`/`full_read`/`evaluation_raw` 0; sonst ggf.
+`full_*` > 0. `finally` löscht alles; P1 bleibt inaktiv. Injizierte
+`get_unprocessed_emails` akzeptieren `source_context`.
+
 `pipeline` liest nur den vorhandenen
 Sent-Index; `sync_sent`, `verify`, `min_confidence` oder eine mitgelieferte Review
 autorisieren dort keine Mutation. Teilweise fehlgeschlagene Execute-Läufe enden `failed`, nicht

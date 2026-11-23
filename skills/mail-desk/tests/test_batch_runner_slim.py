@@ -56,6 +56,20 @@ Orchestrator test-correction (documented, 2026-11-23, issue #103 P1 fix round,
 same lane): MAX_WORDS 8425 → 8450 (measured 8436 words, rounded to the next
 twenty-five). The opt-in default is now documented as `False`, with the
 model-based evidence limit and the activation gate. All floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P2, lane
+2026-11-23-frontier-103-login-reduction): MAX_WORDS 8450 → 8525 (measured 8517
+words, rounded to the next twenty-five). The scan section now documents the P2
+scan-source reuse: one-scan lifetime, identity binding, the per-EML/per-scan/
+source-count bounds, the first-time-full-text barrier rule, evaluation reuse
+under the existing checks and P1 inactivity. All floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-23, issue #103 P2 fix round 2,
+same lane): MAX_WORDS 8525 → 8550 (measured 8525 words, rounded to the next
+twenty-five). The P2 section now names the separate full-text gate
+``allow_scan_source_full_text`` (default ``False``), marks the parity class as
+modelled, not live-proven, and keeps the hit counts scoped to the active gate.
+Floors unchanged.
 """
 
 from __future__ import annotations
@@ -73,10 +87,12 @@ DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 #: review-correction/verify/recovery docs, the issue-#103 scan accelerator
 #: contract, its atomic-spawn/default-budget follow-up, the issue-#107
 #: sync_sent outcome/recovery paragraph, the issue-#103 D1 purpose-telemetry
-#: contract at the callers, the issue-#103 P1 EML-preview opt-in, and its
-#: default-`False`/activation-gate fix round (see docstring history).
+#: contract at the callers, the issue-#103 P1 EML-preview opt-in, its
+#: default-`False`/activation-gate fix round, the issue-#103 P2 scan-source
+#: reuse contract and its full-text gate/modelled-class fix round (see docstring
+#: history).
 MIN_WORDS = 5300
-MAX_WORDS = 8450
+MAX_WORDS = 8550
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (

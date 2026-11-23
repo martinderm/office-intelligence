@@ -8,6 +8,53 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-23 - Issue #103: Quellen-Reuse im frischen Draft-Scan (P2)
+
+#### Added
+
+- **Privater Scan-Kontext (`core/scan_source_reuse.py`):** `ScanSourceContext`
+  hält die im Scan ohnehin exportierten EML-Bytes für genau einen frischen
+  Draft-Scan und seine unmittelbare Verarbeitung — in-memory, nicht
+  serialisierbar, ohne Persistenz, Datei oder globalen Zustand. Identität:
+  interner Scan-ID, effektiver Account inkl. Default-Fall, exakter Ordner,
+  Envelope-ID und eigene normalisierte Message-ID; `bind` prüft zusätzlich die
+  **EML-eigene** Message-ID (fehlend, doppelt, unparsebar oder abweichend →
+  kein Bind). Grenzen: `MAX_RAW_EML_BYTES` (10 MiB) je EML,
+  `target_count × MAX_RAW_EML_BYTES` gesamt, höchstens `target_count` Quellen;
+  Überschreitung verwirft die Quelle (keine Truncation). `finally` löscht Bytes
+  und Metadaten; bekannt/geskippt/quarantänisiert wird sofort verworfen;
+  `count < 1` erzeugt keinen Kontext.
+- **Capture-Seam:** `get_single_email_details(..., raw_eml_sink=None)` ruft den
+  Sink nach erfolgreichem Export im `inspect_attachments`-Zweig; Sink-Fehler
+  erreichen den Read nie, der Default `None` bleibt byte-identisch. Der
+  Scan-Export bleibt unbeschränkt — die Inventur eines übergroßen Items bleibt
+  `available`/`none`, nur der Kontext verwirft die Quelle.
+- **Full-Text-Paritätsklasse (`himalaya.eml_full_text_parity`, modelliert, nicht
+  live-belegt):** geschlossene Strukturprüfung (non-multipart `text/plain`,
+  `us-ascii`/`ascii`/`utf-8`, 7bit/8bit, keine Faltung/RFC-2047, genau eine
+  Message-ID, nichtleerer Body). **Full-Text-Reuse** ist ein eigenes
+  Draft-Opt-in `allow_scan_source_full_text` (Default `False`, validiert vor
+  jedem Mailboxzugriff, P1-analog) und leitet Details nur bei `True` über den
+  injizierten Reader (`raw_eml`-Zweig, `read_level: "full_body"`) ab — nur in
+  dieser modellierten Klasse und bei sauberer, unverkürzter
+  Injection-Barrier-Bewertung; sonst regulärer Full-Read, Transport-Blocks
+  werden re-raised, kein neuer Quarantäne-/Review-Pfad, kein P1-Aufruf.
+  Aktivierung erst nach realer anonymisierter CLI-Referenz oder ausdrücklicher
+  Owner-Freigabe.
+- **Evaluation-Reuse:** `install_draft_attachment_evaluations(...,
+  source_lookup=...)` bleibt unabhängig aktiv und konsultiert den Kontext erst
+  nach feststehender Identität; alle bestehenden
+  MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen laufen unverändert auf denselben
+  Bytes. `inspect` und andere Aufrufer bleiben ohne Lookup.
+- **P1 bleibt inaktiv:** `allow_eml_details=False`; P2 setzt das Flag nicht und
+  ruft `_details_from_eml` nicht auf. Keine EML in Manifest,
+  `batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p2_source_reuse.py`
+  (43 Fälle, u. a. Produktions-Seam mit echter MIME-Validierung und
+  Gate-Default-off) sowie `references/batch-runner.md` (inkl.
+  `source_context`-Keyword für injizierte `get_unprocessed_emails`),
+  `references/backends/himalaya.md`, L1/L2-System-Map und `objects.md` §6.
+
 ### 2026-11-14 - Issue #88: Deklarierte Inventarwerkzeuge (F21)
 
 #### Added

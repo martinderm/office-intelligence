@@ -73,6 +73,7 @@ from core.himalaya import (
 )
 from core.known_skip import load_envelope_thread_map, thread_map_hit
 from core.progress import abort_active_trackers
+from core.scan_source_reuse import ScanSourceContext
 from core.sent_handoff import SentHandoffError
 from core.batch_contract import validate_execute_contract
 from core.telemetry import empty_telemetry
@@ -247,6 +248,7 @@ def get_unprocessed_emails(
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
     allow_eml_details: bool = False,
+    source_context: ScanSourceContext | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Fetch target_count unprocessed (or all) emails in oldest/newest order or by date/query reliably.
 
@@ -257,6 +259,12 @@ def get_unprocessed_emails(
 
     ``allow_eml_details`` (Draft-only opt-in, default ``False``) is forwarded to
     the scan reader and applies to both scan loops.
+
+    ``source_context`` (Issue #103 P2, default ``None``) is the private,
+    scan-scoped source store.  It captures one export per collected item; the
+    export stays unbounded and only the context drops an oversize source, so the
+    attachment inventory is unchanged.  An injected ``get_unprocessed_emails``
+    must accept this keyword.
     """
     collected, known_count, skipped_known = _scan_unprocessed_emails(
         folder,
@@ -270,6 +278,7 @@ def get_unprocessed_emails(
         preview_lines=preview_lines,
         tracker=tracker,
         allow_eml_details=allow_eml_details,
+        source_context=source_context,
     )
     if tracker and skipped_known:
         tracker.step(f"skipped {skipped_known} known envelopes")
@@ -312,6 +321,7 @@ def _scan_unprocessed_emails(
     preview_lines: int = 30,
     tracker: BatchProgressTracker | None = None,
     allow_eml_details: bool = False,
+    source_context: ScanSourceContext | None = None,
 ) -> tuple[list[dict[str, Any]], int, int]:
     """Collect unprocessed envelopes and return ``(collected, known_count, skipped_known)``.
 
@@ -358,11 +368,35 @@ def _scan_unprocessed_emails(
     # Issue #103 P1: bind one reader for both scan loops.  Only the draft opts
     # in; every other caller keeps the unchanged export + read sequence.
     if allow_eml_details:
-        def read_details(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        def base_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
             kwargs.setdefault("allow_eml_details", True)
             return get_single_email_details(*args, **kwargs)
     else:
-        read_details = get_single_email_details
+        base_read = get_single_email_details
+
+    # Issue #103 P2: one capture wrapper for both scan loops.  The sink only
+    # observes the already-required inventory export; it never adds a start and
+    # never changes the read result.  Without a context the reader is unchanged.
+    if source_context is None:
+        read_details = base_read
+    else:
+        def read_details(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            captured: list[bytes] = []
+            kwargs["raw_eml_sink"] = captured.append
+            email_res = base_read(*args, **kwargs)
+            if (
+                captured
+                and isinstance(email_res, dict)
+                and str(email_res.get("message_id") or "")
+            ):
+                source_context.bind(
+                    email_res.get("envelope_id"),
+                    email_res.get("folder") or folder,
+                    account,
+                    email_res.get("message_id"),
+                    captured[0],
+                )
+            return email_res
 
     # Fast direct path if date or query filter is provided
     if date or query:
@@ -431,6 +465,10 @@ def _scan_unprocessed_emails(
                 email_res["known_location"] = (
                     known_entry.get("final_folder") if isinstance(known_entry, dict) else None
                 )
+                # Issue #103 P2: a known item is never reused, not even when the
+                # caller keeps it in the result for auditability.
+                if source_context is not None:
+                    source_context.discard(eid, folder, account)
                 if skip_known:
                     skipped_known += 1
                     continue
@@ -498,6 +536,10 @@ def _scan_unprocessed_emails(
                 email_res["known_location"] = (
                     known_entry.get("final_folder") if isinstance(known_entry, dict) else None
                 )
+                # Issue #103 P2: a known item is never reused, not even when the
+                # caller keeps it in the result for auditability.
+                if source_context is not None:
+                    source_context.discard(eid, folder, account)
                 if skip_known:
                     skipped_known += 1
                     continue

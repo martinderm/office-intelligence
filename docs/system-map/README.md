@@ -842,6 +842,23 @@ die CLI nicht sichtbar. Ohne serverseitiges `UID THREAD` (GroupWise) sinkt die
 Abdeckung; F5 hält das Verhalten korrekt. A6 (absenderkontrollierte
 Message-ID) ist als Baseline akzeptiert.
 
+**Quellen-Reuse im frischen Draft-Scan (P2, 2026-11-23):** Der Draft hält die
+ohnehin für den Scan exportierten EML-Bytes privat im Speicher (genau ein
+frischer Scan, keine Persistenz, `finally`-Freigabe) und nutzt sie nur bei
+exakter Identität inklusive der **EML-eigenen** Message-ID; sonst `None`.
+Grenzen: 10 MiB je EML (`MAX_RAW_EML_BYTES`), `target_count × 10 MiB` gesamt und
+`target_count` Quellen — Überschreitung verwirft die Quelle, der Scan-Export
+bleibt unbeschränkt (Inventur unverändert), keine Truncation. Der erstmals
+sichtbare Volltext wird nur bei aktivem Gate
+`allow_scan_source_full_text=True` (Default `False`, validiert), in der
+**modellierten, nicht live-belegten** Paritätsklasse (`eml_full_text_parity`)
+und nach sauberer Injection-Barrier-Bewertung genutzt; sonst bleibt der
+reguläre Full-Read (kein neuer Quarantäne-/Review-Pfad, Review-Hash
+unverändert). Die Evaluation bleibt unabhängig aktiv und führt alle bestehenden
+MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert aus. P1 bleibt
+inaktiv (`allow_eml_details=False`) und ungekoppelt; keine EML in Manifest,
+`batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
