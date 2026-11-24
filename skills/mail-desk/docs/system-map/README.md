@@ -2657,25 +2657,37 @@ Teil dieses Teilschritts: `scan_counts`, 10054-Zähler und Spitzenrate.
 Im Draft (`allow_eml_details`, Config-Schlüssel, Default `False`, validiert vor
 jedem Mailboxzugriff) darf ein abgeschlossener `scan_inventory`-Export den
 Preview-Read ersetzen, wenn `_details_from_eml` Textgleichheit für die getestete
-Eingabeklasse belegt. Belegbasis ist ein **Modell**: die goldenen Paare leiten
-den CLI-Text aus derselben synthetischen EML ab; es gibt keine reale
-CLI-Referenzaufnahme. P1 bleibt inaktiv, bis eine reale anonymisierte
-CLI-Referenz (separates boku-user-Gate) oder eine ausdrückliche Owner-Freigabe
-vorliegt. Zulassung: ein non-multipart `text/plain`-Teil; `Content-Type` fehlt
-(nur ASCII-Body) oder genau `text/plain` mit genau einem `charset`-Parameter
-ohne Whitespace um `=` (kein `format=flowed`/`delsp`/`name`/Boundary/doppeltes
-charset); Nicht-ASCII nur mit `charset=utf-8`; 7bit/8bit; keine
-Faltung/RFC-2047; Message-ID mit genau einem balancierten `<...>`-Paar oder
-ohne Klammern; Body innerhalb `preview_lines`. Geprüft werden nur Struktur und
-Singleton-Header, **kein** unabhängiger email-Policy-Defect-Scan; die
-kanonische Inventarprüfung (`inspect_mime_tree`) ist Voraussetzung und wird
-unverändert übergeben. Qualifiziert: 1 Start (`scan_inventory`), `scan_preview`
-0. Nicht qualifiziert/MIME-defekt: 1 Export + 1 Read (`scan_inventory` 1,
-`scan_preview` 1), kein Re-Export. `has_attachment=False`: 1 Read, 0 Exporte.
-`full_body=True` und der `raw_eml`-Zweig bleiben unverändert;
-nicht-Draft-Aufrufer behalten Export + Read (Helper-Default `False`).
-Known-Skip-Entscheidung, Barrier-/Quarantäne-Ergebnis und Review-Hash sind
-opt-in-unabhängig gleich.
+Eingabeklasse belegt. Belegbasis ist ein **Modell**: die goldenen Paare stellen
+den erwarteten CLI-Text dar; es gibt keine reale CLI-Referenzaufnahme für die
+erweiterte Klasse. P1 bleibt inaktiv, bis eine reale anonymisierte CLI-Referenz
+(separates boku-user-Gate) oder eine ausdrückliche Owner-Freigabe vorliegt.
+
+**P1ext (2026-11-24): erweiterte reale Mailklasse.** Die boku-user-Referenz fand
+auf der strikten Klasse **0/7** Treffer (7/7 gefaltet, 7/7 RFC 2047, 7/7
+`multipart/*`, 7/7 Body > 30 Zeilen; 5/7 `has_attachment=false` → Branch
+strukturell unerreichbar). Die Klasse ist daher bewusst erweitert (keine
+Aktivierung): RFC-5322-Unfolding mit genau einem Leerzeichen; rohe 8-bit-Header
+→ `None`; RFC 2047 nur für Subject/From/To/Cc/References (Date/In-Reply-To nur
+Unfold+Strip; fehlerhafte Wörter → `None`); Adressnormalisierung auf die
+CLI-Darstellung (Quotes entfernt, Whitespace kollabiert, ungültige Adressen →
+`None`); genau ein eindeutiger `text/plain`-Teil (single-part,
+`multipart/alternative` mit genau einem direkten `text/plain`,
+`multipart/mixed`/`related` mit genau einem Textteil; ein Teil mit `name=`/
+`filename=` oder Disposition außer absent/`inline` ist nie Body; HTML-only,
+mehrere Kandidaten, Anhang-only → `None`); Charset pro Teil aus der
+geschlossenen Liste `us-ascii`/`ascii`/`utf-8`/`iso-8859-1`/`latin-1`/
+`windows-1252`/`cp1252`/`iso-8859-15` strikt dekodiert (unbekannt/kaputt,
+doppeltes `charset`, `format=flowed`/`delsp` → `None`); früherer
+Header-Separator, gemischte Zeilenenden → `None`; Preview via `splitlines()` auf
+`preview_lines` truncaten; Message-ID roh und normalisiert paritätsgeprüft.
+Unverändert: Inventar-Passthrough, kein email-Policy-Defect-Scan,
+`full_body`/`raw_eml`-Zweig, `has_attachment=False` (1 Read, 0 Exporte),
+nicht-Draft-Aufrufer und Helper-Default `False`. Bei Opt-in: Qualifiziert 1
+Start (`scan_inventory`), `scan_preview` 0; nicht qualifiziert 1 Export + 1 Read
+ohne Re-Export. Known-Skip, Barrier-/Quarantäne-Ergebnis und Review-Hash bleiben
+opt-in-unabhängig gleich. Offen: die reale Referenz zeigte in 2/7 Fällen eine
+`References`-Abweichung (`+6` Zeichen), die diese Klasse noch nicht vollständig
+erklärt — dokumentiert, keine Live-Behauptung.
 
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
 `core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes

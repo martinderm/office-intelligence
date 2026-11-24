@@ -205,10 +205,16 @@ Reason; `transport_trigger`). Additiv `starts_by_purpose` je Start:
 Der Draft bindet `allow_eml_details` (Config-Schlüssel, Default `False`,
 validiert vor jedem Mailboxzugriff) an beide Scan-Schleifen. P1 bleibt inaktiv,
 bis eine reale anonymisierte CLI-Referenz (separates boku-user-Gate) oder eine
-Owner-Freigabe vorliegt; die goldenen Paare sind ein Modell aus derselben EML,
-keine Live-Referenz. Bei Opt-in: ein qualifizierter Kandidat nutzt den
+Owner-Freigabe vorliegt; die goldenen Paare sind ein Modell, keine Live-Referenz.
+Die P1-Eingabeklasse ist **erweitert** (Issue #103 P1ext): Header-Folding,
+RFC 2047, Adressnormalisierung auf die CLI-Darstellung, ein eindeutiger
+`text/plain`-Teil in `multipart/alternative`/`mixed`/`related`, Charset pro Teil
+und Preview-Truncation auf `preview_lines`; die ursprüngliche Referenz fand
+0/7 Treffer, die Erweiterung ist eine bewusste Vertragserweiterung und noch
+nicht live-belegt. Bei Opt-in: ein qualifizierter Kandidat nutzt den
 Inventar-Export als Preview (1 Start statt 2), ein nicht qualifizierter bleibt
-bei Export + Read ohne Re-Export, `has_attachment=False` bei genau einem Read.
+bei Export + Read ohne Re-Export, `has_attachment=False` bei genau einem Read
+(dort ist der P1-Zweig strukturell unerreichbar).
 
 **P2 — Quellen-Reuse im frischen Draft-Scan:** Der Draft hält die Scan-EML-Bytes
 eines frischen Scans privat im Speicher und nutzt sie nur bei exakter

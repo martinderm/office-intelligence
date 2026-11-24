@@ -175,29 +175,53 @@ with `review_required: true`; the persisted `read_escalation.error.type` stays
 `RuntimeError`. The transport guard no longer preempts that fail-safe for a
 single slow item.
 
-**EML-derived preview (Issue #103 P1, draft opt-in, inactive by default).** When
-the scan's inventory export already ran, `get_single_email_details(...,
+**EML-derived preview (Issue #103 P1 extension, draft opt-in, inactive by default).**
+When the scan's inventory export already ran, `get_single_email_details(...,
 allow_eml_details=True)` may derive the preview details from those exact EML
-bytes instead of a second `message read`. The evidence basis is a **model**, not
-a captured real CLI reference: the golden pairs derive the CLI read text from
-the same synthetic EML, so text equality is proven only for the tested input
-class and is never asserted against a live CLI. The accepted class is closed:
-one non-multipart `text/plain` body; `Content-Type` either absent (ASCII body
-only) or exactly `text/plain` with exactly one `charset` parameter without
-whitespace around `=` (no `format=flowed`, `delsp`, `name`, boundary or
-duplicate charset); `charset` from `us-ascii`/`ascii`/`utf-8`; a
-non-ASCII body only with `charset=utf-8`; 7bit/8bit; no header folding or
-RFC-2047 encoding; one Message-ID whose raw value has one balanced `<...>` pair
-or none, with a non-generated body; and a body inside `preview_lines` without
-truncation. Only structure and singleton headers are checked; there is **no**
-independent email-policy defect scan, and the function runs only after
-`inspect_mime_tree` already accepted the canonical inventory (passed through
-unchanged). Every other input returns `None` and the existing CLI read runs
-without a new export. `full_body=True` is never replaced; `has_attachment is
-False` still starts no export and exactly one read; the `raw_eml` branch is
-unchanged. `allow_eml_details` defaults to `False` on the helper **and in
-`draft`**; it activates only after a real, anonymized CLI reference (separate
-boku-user live gate) or an explicit owner release. Until then P1 stays inactive.
+bytes instead of a second `message read`. The comparison anchor is the CLI
+display form: RFC-5322 unfolded with exactly one space, values stripped, header
+keys lowercase, RFC 2047 decoded. Address fields are additionally canonicalized
+(display-name double quotes removed, whitespace collapsed); Subject/References
+keep their internal whitespace (only the unfolding space is added and the value
+stripped). The accepted class covers real mail shapes:
+
+- headers: unfolding before field evaluation (exactly one space); raw 8-bit
+  header bytes outside an encoded word → `None`; mixed CRLF/bare-LF line
+  endings in the header block → `None`; the earlier header/body separator ends
+  the header block;
+- RFC 2047: Subject/From/To/Cc/References decoded; malformed words (invalid
+  base64/Q payload — Q `=XX`, not `%` — unknown charset, leftover `=?`) →
+  `None`; Date/In-Reply-To are unfolded and stripped only, never decoded;
+- addresses: display names canonicalized to the CLI form (quotes removed,
+  whitespace collapsed); an unparsable or non-unique address → `None`;
+- body: one unambiguous non-attachment `text/plain` part — single-part,
+  `multipart/alternative` with exactly one direct `text/plain`, or
+  `multipart/mixed`/`related` with exactly one non-attachment `text/plain`;
+  a part with `get_filename()` (Content-Type `name=` or Disposition
+  `filename=`) or a disposition other than absent/`inline` is never the body;
+  HTML-only, several candidates and attachment-only bodies → `None`;
+- charset: the part's declared charset from the closed list `us-ascii`/
+  `ascii`/`utf-8`/`iso-8859-1`/`latin-1`/`windows-1252`/`cp1252`/`iso-8859-15`,
+  decoded strictly; unknown/`unicode_escape`/`utf-7`, duplicated `charset` and
+  `format=flowed`/`delsp` → `None`;
+- preview: `splitlines()` truncated to `preview_lines` (default 30), never a
+  rejection;
+- Message-ID: one raw value with a legal bracket shape, non-generated; the raw
+  and normalized forms are returned.
+
+The evidence basis is a **model** (synthetic golden pairs), not a live reference:
+the original boku-user reference found 0/7 hits on the strict class, and this
+extension is a deliberate contract change whose parity still has to be proven by
+a repeated real reference. The reference also showed a **References** deviation
+in 2/7 messages (`+6` characters) that this class does not yet fully explain; it
+is documented as open, not as parity. Every other input returns `None` and the
+existing CLI read runs **without a new export**. `full_body=True` is never
+replaced; `has_attachment is False` still starts no export, so P1 is
+structurally unreachable for those items (documented limit; the branch is only
+attempted after an export that already ran). `allow_eml_details` defaults to
+`False` on the helper **and in `draft`**; it activates only after a real,
+anonymized CLI reference (separate boku-user live gate) or an explicit owner
+release. Until then P1 stays inactive.
 
 **Scan-time source capture (Issue #103 P2).** `get_single_email_details(...,
 raw_eml_sink=None)` hands the exact bytes of a successful inventory export to

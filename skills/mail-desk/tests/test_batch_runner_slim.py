@@ -97,6 +97,13 @@ same lane): MAX_WORDS 8825 → 8850 (measured 8833 words, rounded to the next
 twenty-five). The P5 paragraph now states that ``pacing_ms`` has no additional
 upper bound (operator-owned) and that non-finite/out-of-float-range backoff
 values are rejected. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-24, issue #103 P1 extension,
+lane 2026-11-23-frontier-103-login-reduction): MAX_WORDS 8850 → 8900 (measured
+8886 words, rounded to the next twenty-five). The scan section now documents the
+extended P1 input class (unfolding, RFC 2047, address canonicalisation, one
+unambiguous text/plain part, per-part charset, preview truncation), the 0/7
+reference finding and the unchanged inactive default. Floors unchanged.
 """
 
 from __future__ import annotations
@@ -118,10 +125,10 @@ DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 #: default-`False`/activation-gate fix round, the issue-#103 P2 scan-source
 #: reuse contract, its full-text gate/modelled-class fix round, and the
 #: issue-#103 P3 scan-profile/preview-first contract, its precise net-effect/
-#: empty-ID fix round, the issue-#103 P5 pacing/backoff contract and its
-#: operator-owned pacing bound (see docstring history).
+#: empty-ID fix round, the P5 pacing/backoff contract, its operator-owned bound,
+#: and the P1ext real-mail input class (see docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8850
+MAX_WORDS = 8900
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (
