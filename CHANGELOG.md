@@ -8,6 +8,40 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-24 - Issue #103: P1-Vertragserweiterung für reale Mailklassen
+
+#### Changed
+
+- **`_details_from_eml` (P1) deckt reale Mail ab:** RFC-5322-Unfolding mit genau
+  einem Leerzeichen (rohe 8-bit-Header → `None`; gemischte Zeilenenden → `None`;
+  früherer Header-Separator), RFC 2047 nur für Subject/From/To/Cc/References
+  (Date/In-Reply-To nur Unfold+Strip), kanonische Adressdarstellung wie die CLI
+  (Quotes entfernt, Whitespace kollabiert), genau ein eindeutiger
+  `text/plain`-Teil in single-part/`multipart/alternative`/`mixed`/`related`
+  (ein Teil mit `name=`/`filename=` oder Disposition außer absent/`inline` ist
+  nie Body), strikte Charset-Dekodierung aus der geschlossenen Liste
+  `us-ascii`/`ascii`/`utf-8`/`iso-8859-1`/`latin-1`/`windows-1252`/`cp1252`/
+  `iso-8859-15` und eine auf `preview_lines` (Default 30) truncatete Vorschau.
+  Alles Mehrdeutige (Duplikate, kaputte Encoded-Words, unbekannte Charsets,
+  HTML-only, mehrere Textkandidaten, Anhang-only, defekte Message-ID,
+  Bare-CR/NUL) bleibt `None` mit dem bestehenden CLI-Read ohne Re-Export.
+- **Unverändert:** `allow_eml_details` bleibt Default `False` und inaktiv; der
+  P1-Hook (nur `inspect_attachments`-Zweig, nach erfolgreichem Export, nur
+  `not full_body`) und das Inventar-Passthrough bleiben; `has_attachment=false`
+  bleibt strukturell unerreichbar; P2-Volltext, P3 `balanced`, P5 0/2.0 und die
+  Evaluation-Reuse sind unberührt. Keine EML in Rückgabe-Dicts/Artefakten.
+- **Referenzstatus:** die reale boku-user-Referenz fand auf der alten strikten
+  Klasse 0/7 Treffer (7/7 gefaltet, 7/7 RFC 2047, 7/7 `multipart/*`, 7/7 Body
+  > 30 Zeilen; 5/7 `has_attachment=false`). Die Erweiterung ist eine bewusste
+  Vertragserweiterung, modelliert und **nicht** live-belegt; offen bleibt die
+  beobachtete `References`-Abweichung (`+6`, 2/7), die diese Klasse noch nicht
+  vollständig erklärt. Die Aktivierung bleibt an eine erneute reale Referenz
+  oder eine Owner-Freigabe gebunden.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p1_eml_parity.py`
+  (86 Fälle; Folding/RFC 2047/multipart/Preview > 30 sind jetzt goldene Paare),
+  `references/backends/himalaya.md`, `references/batch-runner.md`,
+  L1/L2-System-Map, `objects.md` §6.
+
 ### 2026-11-23 - Issue #103: Pacing und transienter Backoff (P5)
 
 #### Added

@@ -6,7 +6,9 @@ import concurrent.futures
 from contextlib import contextmanager
 from contextvars import ContextVar
 import email
+import email.header
 import email.policy
+import email.utils
 import json
 import math
 import os
@@ -1611,6 +1613,227 @@ def _fallback_display_fields(
     return fb_subj, fb_from, fb_to, fb_date
 
 
+def _collapse_header_whitespace(value: str) -> str:
+    """Collapse every whitespace run to one space and strip (CLI display form)."""
+    return " ".join(value.split())
+
+
+#: One RFC 2047 encoded word: charset, encoding (B/Q) and payload.
+_ENCODED_WORD_PATTERN = re.compile(r"=\?([^?\s]+)\?([bBqQ])\?([^?]*)\?=")
+
+#: The base64 alphabet with optional padding.
+_BASE64_PAYLOAD = re.compile(r"[A-Za-z0-9+/]*={0,2}")
+
+
+def _encoded_words_are_well_formed(value: str) -> bool:
+    """Return whether every ``=?`` in a header value is a well-formed encoded word.
+
+    The stdlib decoder tolerates broken payloads (it may decode them to an empty
+    string), so the strict shape is checked here before decoding: a base64
+    payload must use the base64 alphabet with a valid length, a Q payload must
+    not carry a broken ``=XX`` escape, and no literal ``=?`` may remain outside
+    a matched word.
+    """
+    if "=?" not in value:
+        return True
+    matches = list(_ENCODED_WORD_PATTERN.finditer(value))
+    if not matches:
+        return False
+    for match in matches:
+        _charset, encoding, payload = match.groups()
+        if encoding.lower() == "b":
+            if not payload or len(payload) % 4 or not _BASE64_PAYLOAD.fullmatch(payload):
+                return False
+        else:
+            if re.search(r"=(?![0-9A-Fa-f]{2})", payload):
+                return False
+    starts = {match.start() for match in matches}
+    index = value.find("=?")
+    while index != -1:
+        if index not in starts:
+            return False
+        index = value.find("=?", index + 1)
+    return True
+
+
+def _decode_mime_header(value: str) -> str | None:
+    """Decode RFC 2047 encoded words strictly; ``None`` when not provable.
+
+    Every encoded word's charset must be known and the bytes must decode
+    strictly.  A malformed word or a leftover ``=?`` is ambiguous and also
+    yields ``None``.
+    """
+    if not isinstance(value, str):
+        return None
+    if not _encoded_words_are_well_formed(value):
+        return None
+    try:
+        chunks = email.header.decode_header(value)
+    except Exception:  # noqa: BLE001 - a malformed encoding never proves parity
+        return None
+    decoded: list[str] = []
+    for chunk, charset in chunks:
+        if isinstance(chunk, bytes):
+            try:
+                decoded.append(chunk.decode(charset or "ascii", errors="strict"))
+            except (LookupError, UnicodeDecodeError):
+                return None
+        else:
+            decoded.append(chunk)
+    result = "".join(decoded)
+    if "=?" in result:
+        # A malformed encoded word stayed literal; never claim parity for it.
+        return None
+    return result
+
+
+def _canonical_address_header(value: str) -> str | None:
+    """Return the CLI display form of one address header, or ``None``.
+
+    The canonical form is documented as: RFC 2047 decoded, whitespace runs
+    collapsed, double quotes removed, ``<``/``>``/list commas in canonical
+    spacing.  Every parsed address must carry exactly one ``@`` and no
+    whitespace; unparsable or ambiguous input returns ``None``.
+    """
+    decoded = _decode_mime_header(value)
+    if decoded is None:
+        return None
+    collapsed = _collapse_header_whitespace(decoded)
+    if not collapsed:
+        return ""
+    if collapsed.count("<") != collapsed.count(">"):
+        return None
+    try:
+        parsed = email.utils.getaddresses([collapsed])
+    except Exception:  # noqa: BLE001 - an unparsable list is never canonical
+        return None
+    if not parsed:
+        return None
+    for _name, address in parsed:
+        if not address:
+            return None
+        if address.count("@") != 1 or any(character.isspace() for character in address):
+            return None
+    canonical = collapsed.replace('"', "")
+    canonical = re.sub(r"\s*<\s*", " <", canonical)
+    canonical = re.sub(r"\s*>\s*", ">", canonical)
+    canonical = re.sub(r"\s*,\s*", ", ", canonical)
+    return _collapse_header_whitespace(canonical)
+
+
+def _part_is_attachment(part: "email.message.Message") -> bool:
+    """Return whether a MIME part is an attachment for the canonical inventory.
+
+    The inventory classifies a named part (``Content-Type name=`` or
+    ``Content-Disposition filename=``) as an attachment, as well as any
+    disposition other than absent/``inline``.  Such a part is never the body.
+    """
+    if part.get_filename():
+        return True
+    return part.get_content_disposition() not in (None, "inline")
+
+
+def _select_plain_text_part(
+    message: "email.message.Message",
+) -> "email.message.Message | None":
+    """Return the one unambiguous non-attachment ``text/plain`` body part.
+
+    A non-multipart message must itself be ``text/plain``.  ``multipart/
+    alternative`` needs exactly one direct ``text/plain`` child;
+    ``multipart/mixed`` and ``multipart/related`` need exactly one
+    non-attachment ``text/plain`` part across the tree.  Everything else
+    (HTML-only, no candidate, several candidates, attachment-only) returns
+    ``None``.
+    """
+    if not message.is_multipart():
+        if message.get_content_type() != "text/plain":
+            return None
+        if _part_is_attachment(message):
+            return None
+        return message
+    subtype = message.get_content_subtype()
+    payload = message.get_payload()
+    if not isinstance(payload, list):
+        return None
+    if subtype == "alternative":
+        direct = [
+            part
+            for part in payload
+            if isinstance(part, email.message.Message)
+            and not part.is_multipart()
+            and part.get_content_type() == "text/plain"
+            and not _part_is_attachment(part)
+        ]
+        return direct[0] if len(direct) == 1 else None
+    if subtype in ("mixed", "related"):
+        candidates: list[email.message.Message] = []
+
+        def _walk(container: "email.message.Message") -> None:
+            children = container.get_payload()
+            if not isinstance(children, list):
+                return
+            for child in children:
+                if not isinstance(child, email.message.Message):
+                    continue
+                if child.is_multipart():
+                    _walk(child)
+                    continue
+                if child.get_content_type() == "text/plain" and not _part_is_attachment(child):
+                    candidates.append(child)
+
+        _walk(message)
+        return candidates[0] if len(candidates) == 1 else None
+    return None
+
+
+#: Charsets accepted for a P1 text part (closed list).  P2 keeps its own,
+#: narrower ``_EML_ACCEPTED_CHARSETS``; this list never widens it.
+_P1_TEXT_CHARSETS = frozenset(
+    {
+        "us-ascii",
+        "ascii",
+        "utf-8",
+        "iso-8859-1",
+        "latin-1",
+        "windows-1252",
+        "cp1252",
+        "iso-8859-15",
+    }
+)
+
+
+def _decode_part_text(part: "email.message.Message") -> str | None:
+    """Decode one text part strictly with its declared charset, or ``None``.
+
+    Without a declared charset only pure US-ASCII is provable.  The charset must
+    be on the closed P1 list; a duplicated ``charset`` parameter or a
+    ``format=flowed``/``delsp`` body is ambiguous (the raw text is not the
+    rendered CLI text) and returns ``None``.
+    """
+    try:
+        params = part.get_params(header="content-type", failobj=[]) or []
+        names = [str(name).strip().lower() for name, _value in params]
+        if names.count("charset") > 1:
+            return None
+        if "format" in names or "delsp" in names:
+            return None
+        payload = part.get_payload(decode=True)
+    except Exception:  # noqa: BLE001 - a broken transfer encoding is not provable
+        return None
+    if not isinstance(payload, bytes):
+        return None
+    charset = part.get_content_charset()
+    try:
+        if charset is None:
+            return payload.decode("ascii", errors="strict")
+        normalized = str(charset).strip().lower()
+        if normalized not in _P1_TEXT_CHARSETS:
+            return None
+        return payload.decode(normalized, errors="strict")
+    except (LookupError, UnicodeDecodeError):
+        return None
+
+
 def _details_from_eml(
     env_id: str | int,
     folder: str,
@@ -1622,55 +1845,98 @@ def _details_from_eml(
     attachment_status: str,
     attachment_error: str | None,
 ) -> dict[str, Any] | None:
-    """Return the details dict only for a closed, model-verified EML input class.
+    """Return the details dict only for the extended, closed EML input class.
 
-    The function is pure: no process, file, network or hidden state.  It checks
-    the raw EML structure itself: one plain ``text/plain`` body part, a closed
-    ``Content-Type`` parameter class (exactly one unquoted-or-quoted
-    ``charset`` with no whitespace around ``=``), 7bit/8bit transfer encoding, no
-    header folding, no RFC-2047 encoding, one Message-ID with a legal raw
-    bracket shape and a sane non-generated body, and a non-ASCII body only when
-    ``charset=utf-8`` is declared explicitly.  The body must fit inside
-    ``preview_lines`` without truncation.
+    The function is pure: no process, file, network or hidden state.  The class
+    covers real mail shapes (Issue #103 P1 extension): RFC-5322 unfolding,
+    RFC 2047 decoding for Subject/From/To/Cc/References (Date/In-Reply-To are
+    unfolded and stripped only, never decoded), canonical address display
+    values, one unambiguous non-attachment ``text/plain`` body part
+    (single-part, ``multipart/alternative``, ``multipart/mixed``/
+    ``multipart/related``), the part's declared charset from the closed P1 list
+    (``us-ascii``/``ascii``/``utf-8``/``iso-8859-1``/``latin-1``/
+    ``windows-1252``/``cp1252``/``iso-8859-15``) and a preview truncated to
+    ``preview_lines``.  Ambiguous input — duplicate relevant headers, raw 8-bit
+    header bytes, malformed encoded words, undecodable charsets, HTML-only,
+    several text candidates, a named/attachment body part, defective
+    Message-ID, mixed line endings, bare CR/NUL — returns ``None`` and the
+    caller keeps its existing CLI read without a new export.
 
-    It performs **no** independent email-policy defect scan.  It is only called
-    after the canonical inventory check (``inspect_mime_tree``) already
-    succeeded, and the inventory is passed through unchanged.  Every other
-    input returns ``None`` — the single meaning of "no text parity proven for
-    this input class" — so the caller keeps its existing CLI read.
+    The comparison anchor is the CLI display form: unfolded with exactly one
+    space, values stripped, header keys lowercase, RFC 2047 decoded and address
+    double quotes removed.  It performs **no** independent email-policy defect
+    scan and is only called after the canonical inventory check
+    (``inspect_mime_tree``) already succeeded; the inventory passes through
+    unchanged.  ``has_attachment is False`` items never export and therefore
+    never reach this function (documented structural limit).
     """
     try:
         if not isinstance(raw_eml, bytes) or not raw_eml:
             return None
         if attachment_status == "attachment_inventory_unavailable":
             return None
-        text = raw_eml.decode("utf-8")
-        if "\x00" in text or "\r" in text.replace("\r\n", ""):
+        if b"\x00" in raw_eml:
             return None
-        normalized = text.replace("\r\n", "\n")
-        header_block, separator, body_block = normalized.partition("\n\n")
-        if not separator or not header_block.strip():
+        if raw_eml.replace(b"\r\n", b"").find(b"\r") >= 0:
+            return None
+        crlf_index = raw_eml.find(b"\r\n\r\n")
+        lf_index = raw_eml.find(b"\n\n")
+        if crlf_index == -1 and lf_index == -1:
+            return None
+        if crlf_index == -1:
+            separator_index = lf_index
+        elif lf_index == -1:
+            separator_index = crlf_index
+        else:
+            # The earlier separator ends the header block; the later one is body.
+            separator_index = min(crlf_index, lf_index)
+        head_bytes = raw_eml[:separator_index]
+        if not head_bytes:
+            return None
+        # Raw 8-bit header bytes outside an encoded word are ambiguous (Mojibake).
+        if any(byte > 126 for byte in head_bytes):
+            return None
+        has_crlf = b"\r\n" in head_bytes
+        has_bare_lf = b"\n" in head_bytes.replace(b"\r\n", b"")
+        if has_crlf and has_bare_lf:
+            return None
+        header_block = head_bytes.decode("ascii").replace("\r\n", "\n")
+        if not header_block.strip():
             return None
 
         headers: dict[str, list[str]] = {}
+        current_key: str | None = None
         for line in header_block.split("\n"):
-            if not line or line[0] in " \t":
-                # Empty header line or RFC-5322 folding: never claim parity.
-                return None
+            if not line:
+                continue
+            if line[0] in " \t":
+                if current_key is None:
+                    return None
+                headers[current_key][-1] = (
+                    headers[current_key][-1] + " " + line.strip()
+                ).strip()
+                continue
             if ":" not in line:
                 return None
             name, _, value = line.partition(":")
             key = name.strip().lower()
-            value = value.strip()
-            if not key or "=?" in value:
+            if not key:
                 return None
-            if any(ord(character) < 32 or ord(character) > 126 for character in value):
+            if any(ord(character) < 32 and character != "\t" for character in value):
                 return None
-            headers.setdefault(key, []).append(value)
+            headers.setdefault(key, []).append(value.strip())
+            current_key = key
 
         for key in _EML_SINGLETON_HEADERS:
             if len(headers.get(key, ())) > 1:
                 return None
+
+        content_type_values = headers.get("content-type")
+        if content_type_values is not None and not content_type_values[0]:
+            return None
+        mime_versions = headers.get("mime-version")
+        if mime_versions is not None and mime_versions[0] != "1.0":
+            return None
 
         message_ids = headers.get("message-id", [])
         if len(message_ids) != 1 or not _is_well_formed_message_id(message_ids[0]):
@@ -1678,77 +1944,65 @@ def _details_from_eml(
         raw_message_id = message_ids[0]
         normalized_message_id = normalize_message_id(raw_message_id)
 
-        content_types = headers.get("content-type")
-        declared_charset: str | None = None
-        if content_types is not None:
-            content_type_header = content_types[0]
-            if not content_type_header:
-                return None
-            segments = content_type_header.split(";")
-            # Exactly "text/plain" plus one charset parameter, nothing else.
-            if len(segments) != 2 or segments[0] != "text/plain":
-                return None
-            parameter = segments[1].lstrip(" \t")
-            if not parameter.startswith("charset="):
-                return None
-            raw_charset = parameter[len("charset="):]
-            if raw_charset.startswith('"') or raw_charset.endswith('"'):
-                if not (
-                    raw_charset.startswith('"')
-                    and raw_charset.endswith('"')
-                    and len(raw_charset) >= 2
-                ):
-                    return None
-                raw_charset = raw_charset[1:-1]
-            if not raw_charset or '"' in raw_charset:
-                return None
-            if any(character.isspace() for character in raw_charset):
-                return None
-            charset = raw_charset.lower()
-            if charset not in _EML_ACCEPTED_CHARSETS:
-                return None
-            declared_charset = charset
-        transfer_encoding = headers.get("content-transfer-encoding", [""])[0]
-        if transfer_encoding.lower() not in _EML_ACCEPTED_TRANSFER_ENCODINGS:
+        parsed = email.message_from_bytes(raw_eml, policy=email.policy.default)
+        body_part = _select_plain_text_part(parsed)
+        if body_part is None:
             return None
-        if "content-disposition" in headers:
+        body_text = _decode_part_text(body_part)
+        if body_text is None:
             return None
-        if headers.get("mime-version") and headers["mime-version"][0] != "1.0":
-            return None
-
-        if any(ord(character) > 126 for character in body_block):
-            # Non-ASCII bytes are only modelled with the IANA UTF-8 name.
-            if declared_charset != "utf-8":
-                return None
-
-        body_lines = body_block.splitlines()
+        body_lines = body_text.splitlines()
         if not any(line.strip() for line in body_lines):
-            return None
-        if len(body_lines) > preview_lines:
-            # The CLI preview may truncate before the client-side bound; an
-            # unproven line set is always ``None``.
             return None
         preview = "\n".join(body_lines[:preview_lines])
 
         fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
 
-        def _first(key: str) -> str:
+        def _display(key: str, *, addresses: bool = False) -> str | None:
             values = headers.get(key)
-            return values[0] if values else ""
+            if not values:
+                return ""
+            if addresses:
+                return _canonical_address_header(values[0])
+            decoded = _decode_mime_header(values[0])
+            if decoded is None:
+                return None
+            # Subject/References keep their internal whitespace; only the
+            # unfolding space is added and the value is stripped (CLI anchor).
+            return decoded.strip()
+
+        def _plain(key: str) -> str:
+            """Unfold and strip only; Date/In-Reply-To are not RFC 2047 decoded."""
+            values = headers.get(key)
+            return values[0].strip() if values else ""
+
+        subject = _display("subject")
+        from_value = _display("from", addresses=True)
+        to_value = _display("to", addresses=True)
+        cc_value = _display("cc", addresses=True)
+        date_value = _plain("date")
+        references = _display("references")
+        in_reply_to = _plain("in-reply-to")
+        if None in (subject, from_value, to_value, cc_value, references):
+            return None
+        # Date/In-Reply-To are not RFC 2047 decoded; an encoded word there would
+        # be shown raw, which the CLI anchor does not prove.
+        if "=?" in date_value or "=?" in in_reply_to:
+            return None
 
         return {
             "envelope_id": str(env_id),
             "folder": folder,
             "message_id": normalized_message_id,
             "raw_message_id": raw_message_id,
-            "subject": _first("subject") or fb_subj,
-            "from": _first("from") or fb_from,
-            "to": _first("to") or fb_to,
-            "cc": _first("cc"),
+            "subject": subject or fb_subj,
+            "from": from_value or fb_from,
+            "to": to_value or fb_to,
+            "cc": cc_value,
             "headers_complete": True,
-            "date": _first("date") or fb_date,
-            "in_reply_to": _first("in-reply-to"),
-            "references": _first("references"),
+            "date": date_value or fb_date,
+            "in_reply_to": in_reply_to,
+            "references": references,
             "preview": preview,
             "attachments": attachments,
             "attachment_status": attachment_status,

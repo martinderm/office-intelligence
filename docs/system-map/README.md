@@ -895,6 +895,21 @@ APPEND und der
 Standalone-Client bleiben unverändert; Snapshot additiv `pacing_waits`,
 `pacing_wait_ms_total`, `pacing_ms`, `transient_backoff_s`.
 
+**P1-Erweiterung der EML-Preview-Klasse (P1ext, 2026-11-24):** Die reale
+boku-user-Referenz fand auf der strikten P1-Klasse 0/7 Treffer (7/7 gefaltet,
+7/7 RFC 2047, 7/7 `multipart/*`, 7/7 Body > 30 Zeilen; 5/7
+`has_attachment=false`). Die Draft-Option `allow_eml_details` bleibt deshalb
+Default `False` und inaktiv; erweitert wurde nur der Vertrag, nicht die
+Aktivierung. `_details_from_eml` akzeptiert jetzt Unfolding, RFC 2047
+(Subject/From/To/Cc/References), Adressnormalisierung auf die CLI-Darstellung,
+genau einen eindeutigen Nicht-Anhang-`text/plain`-Teil in single-part/
+`alternative`/`mixed`/`related`, den Charset des Teils und eine auf
+`preview_lines` truncatete Vorschau; alles Mehrdeutige (Duplikate, kaputte
+Encoded-Words, unbekannte Charsets, HTML-only, mehrere Textkandidaten,
+Anhang-only, defekte Message-ID) bleibt `None` mit dem bestehenden Export+Read
+ohne Re-Export. `has_attachment=false` bleibt strukturell unerreichbar; P2/P3/P5
+unverändert. Die erweiterte Parität ist modelliert und noch nicht live-belegt.
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
