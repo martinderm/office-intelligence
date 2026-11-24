@@ -16,3 +16,5 @@ __pycache__/
 /.opencode/
 /.agents/
 .pytest_cache/
+# macOS metadata
+.DS_Store
