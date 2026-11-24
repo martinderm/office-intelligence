@@ -226,6 +226,13 @@ DEFAULT_TRANSPORT_START_BUDGET = 10_000
 #: The second consecutive transport failure aborts the run immediately.
 TRANSPORT_MAX_CONSECUTIVE_ERRORS = 2
 
+#: Hard, documented upper bound for the optional inter-start pacing (1 hour).
+#: Pacing holds the spawn lock while waiting, so an unchecked operator value could
+#: stall every start for an unbounded time; 3,600,000 ms still covers any
+#: deliberate throttle while keeping ``pacing_ms / 1000.0`` finite.  The pilot
+#: value is 250 ms; the operator owns the wait below this ceiling.
+MAX_TRANSPORT_PACING_MS = 3_600_000
+
 #: Closed purpose list for process-start telemetry (Issue #103, D1 first slice).
 #: Every successful child creation is counted under exactly one of these labels;
 #: ``other`` is the default for callers that do not bind a purpose.
@@ -341,6 +348,10 @@ class TransportStats:
         start_budget: int | None = DEFAULT_TRANSPORT_START_BUDGET,
         max_consecutive_errors: int = TRANSPORT_MAX_CONSECUTIVE_ERRORS,
         max_consecutive_item_failures: int = ITEM_FAILURE_MAX_CONSECUTIVE,
+        pacing_ms: int = 0,
+        transient_backoff_s: float = 2.0,
+        clock: Callable[[], float] | None = None,
+        sleep: Callable[[float], None] | None = None,
     ) -> None:
         if start_budget is not None and (
             isinstance(start_budget, bool)
@@ -348,9 +359,50 @@ class TransportStats:
             or start_budget < 1
         ):
             raise ValueError("start_budget must be a positive integer or None")
+        # Issue #103 P5: pacing and transient backoff are explicit, validated
+        # bounds.  The documented defaults (0 ms / 2.0 s) keep the unchanged
+        # timing; activation is config-only.
+        if (
+            isinstance(pacing_ms, bool)
+            or not isinstance(pacing_ms, int)
+            or pacing_ms < 0
+            or pacing_ms > MAX_TRANSPORT_PACING_MS
+        ):
+            raise ValueError(
+                "pacing_ms must be an integer between 0 and "
+                f"{MAX_TRANSPORT_PACING_MS}"
+            )
+        if (
+            isinstance(transient_backoff_s, bool)
+            or not isinstance(transient_backoff_s, (int, float))
+        ):
+            raise ValueError("transient_backoff_s must be a positive finite number")
+        try:
+            backoff_seconds = float(transient_backoff_s)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError(
+                "transient_backoff_s must be a positive finite number"
+            ) from None
+        if not math.isfinite(backoff_seconds) or backoff_seconds <= 0:
+            raise ValueError("transient_backoff_s must be a positive finite number")
+        if clock is not None and not callable(clock):
+            raise ValueError("clock must be callable or None")
+        if sleep is not None and not callable(sleep):
+            raise ValueError("sleep must be callable or None")
         self.start_budget = start_budget
         self.max_consecutive_errors = max(1, int(max_consecutive_errors))
         self.max_consecutive_item_failures = max(1, int(max_consecutive_item_failures))
+        self.pacing_ms = pacing_ms
+        self.transient_backoff_s = backoff_seconds
+        # ``None`` keeps the module functions resolved at call time, so patching
+        # ``himalaya.time.sleep`` (or a test clock) stays effective.
+        self._clock = clock
+        self._sleep = sleep
+        self.pacing_waits = 0
+        self.pacing_wait_ms_total = 0
+        # Reference of the last real (paced) start; payload/diagnostic and failed
+        # starts never update it.
+        self._last_started_at: float | None = None
         self._lock = threading.Lock()
         # Serializes budget/block checks with the actual child creation.  The
         # lock is never held while the child runs; only until Popen returns.
@@ -428,34 +480,52 @@ class TransportStats:
         *,
         retry: bool = False,
         purpose: str = "other",
+        pace: bool = True,
     ) -> Any:
-        """Create one child atomically against the budget and the F6 block.
+        """Create one child atomically against the budget, the F6 block and pacing.
 
-        Budget check, actual ``Popen`` and successful-start accounting happen
-        under one spawn lock.  Two workers can therefore never reserve the same
-        last budget slot, and a block published by :meth:`record_error` cannot
-        slip into the window between the check and child creation: both paths
-        use the same lock.  The lock is released as soon as the child exists;
-        waiting for its output is not serialized.
+        Budget check, pacing wait, the repeated budget/block check and the actual
+        ``Popen`` happen under one spawn lock.  Two workers can therefore never
+        reserve the same last budget slot, a block published by
+        :meth:`record_error` cannot slip into the window between the check and
+        child creation, and two real starts honour the configured minimum gap.
+        The lock is released as soon as the child exists; waiting for its output
+        is not serialized.
 
         ``purpose`` is validated before the budget check and the child creation
         and counted only after ``factory()`` returned successfully: a failed
-        launch produces neither a start nor a purpose count.
+        launch produces neither a start nor a purpose count and never updates the
+        pacing reference.  ``pace=False`` (payload/APPEND and the bounded
+        diagnostic spawn) never waits and never updates that reference.
         """
         _validate_purpose(purpose)
         with self._spawn_lock:
             with self._lock:
-                if self.blocked_reason:
-                    reason = self.blocked_reason
-                elif self.start_budget is not None and self.process_starts >= self.start_budget:
-                    reason = "start_budget_exhausted"
-                    self.blocked_reason = reason
-                else:
-                    reason = None
+                reason = self._admission_reason_locked()
             if reason is not None:
                 raise self.blocked_error(command_class, reason=reason)
+            if pace and self.pacing_ms > 0:
+                with self._lock:
+                    last_started_at = self._last_started_at
+                if last_started_at is not None:
+                    wait_s = (self.pacing_ms / 1000.0) - (
+                        self._now() - last_started_at
+                    )
+                    if wait_s > 0:
+                        self._wait(wait_s)
+                        with self._lock:
+                            self.pacing_waits += 1
+                            self.pacing_wait_ms_total += int(round(wait_s * 1000))
+                        # The wait may have published a block or consumed the
+                        # last budget slot elsewhere; re-check before the start.
+                        with self._lock:
+                            reason = self._admission_reason_locked()
+                        if reason is not None:
+                            raise self.blocked_error(command_class, reason=reason)
             process = factory()
             with self._lock:
+                if pace:
+                    self._last_started_at = self._now()
                 self.process_starts += 1
                 self._bucket(command_class)["starts"] += 1
                 self._starts_by_purpose[purpose] = (
@@ -465,6 +535,34 @@ class TransportStats:
                     self.retries += 1
                     self._bucket(command_class)["retries"] += 1
             return process
+
+    def _admission_reason_locked(self) -> str | None:
+        """Return the blocking reason for the next start, latching a budget stop."""
+        if self.blocked_reason:
+            return self.blocked_reason
+        if self.start_budget is not None and self.process_starts >= self.start_budget:
+            self.blocked_reason = "start_budget_exhausted"
+            return self.blocked_reason
+        return None
+
+    def _now(self) -> float:
+        """Return the current monotone time (resolved at call time by default)."""
+        return self._clock() if self._clock is not None else time.monotonic()
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep ``seconds`` through the injected sleep or ``time.sleep``."""
+        if self._sleep is not None:
+            self._sleep(seconds)
+        else:
+            time.sleep(seconds)
+
+    def retry_backoff_seconds(self, attempt: int) -> float:
+        """Return the configured transient backoff for one zero-based attempt."""
+        return self.transient_backoff_s * (attempt + 1)
+
+    def sleep_retry_backoff(self, attempt: int) -> None:
+        """Wait the configured transient backoff through the resolved sleep."""
+        self._wait(self.retry_backoff_seconds(attempt))
 
     def blocked_error(
         self, command_class: str, *, reason: str | None = None
@@ -583,6 +681,10 @@ class TransportStats:
                 "consecutive_transport_errors": self.consecutive_transport_errors,
                 "consecutive_item_failures": self.consecutive_item_failures,
                 "start_budget": self.start_budget,
+                "pacing_ms": self.pacing_ms,
+                "transient_backoff_s": self.transient_backoff_s,
+                "pacing_waits": self.pacing_waits,
+                "pacing_wait_ms_total": self.pacing_wait_ms_total,
                 "blocked": self.blocked_reason is not None,
                 "block_reason": self.blocked_reason,
                 "block_trigger": (
@@ -603,15 +705,34 @@ class TransportStats:
 @contextmanager
 def transport_stats_session(
     start_budget: int | None = DEFAULT_TRANSPORT_START_BUDGET,
+    *,
+    pacing_ms: int = 0,
+    transient_backoff_s: float = 2.0,
+    clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ):
-    """Activate one counter/guard session; nested sessions reuse the active one."""
+    """Activate one counter/guard session; nested sessions reuse the active one.
+
+    ``pacing_ms`` and ``transient_backoff_s`` default to the documented values
+    (0 ms / 2.0 s) and are validated by :class:`TransportStats` before any
+    process.  ``clock``/``sleep`` exist for deterministic tests; ``None`` keeps
+    ``time.monotonic``/``time.sleep``.
+    """
     active = _ACTIVE_TRANSPORT_STATS.get()
     if active is not None:
         yield active
         return
     if start_budget is None:
         start_budget = DEFAULT_TRANSPORT_START_BUDGET
-    stats = TransportStats(start_budget=start_budget)
+    stats_kwargs: dict[str, Any] = {
+        "pacing_ms": pacing_ms,
+        "transient_backoff_s": transient_backoff_s,
+    }
+    if clock is not None:
+        stats_kwargs["clock"] = clock
+    if sleep is not None:
+        stats_kwargs["sleep"] = sleep
+    stats = TransportStats(start_budget=start_budget, **stats_kwargs)
     token = _ACTIVE_TRANSPORT_STATS.set(stats)
     global _LAST_TRANSPORT_STATS
     try:
@@ -980,6 +1101,7 @@ def _run_process(
             ),
             retry=retry,
             purpose=purpose,
+            pace=True,
         )
     else:
         process = stats.start_process(
@@ -993,6 +1115,7 @@ def _run_process(
             ),
             retry=retry,
             purpose=purpose,
+            pace=False,
         )
     try:
         if stdin_bytes is None:
@@ -1085,7 +1208,7 @@ def run_himalaya(
         if stats is not None:
             def spawn(*args: Any, **kwargs: Any) -> Any:
                 return stats.start_process(
-                    command_class, lambda: _POPEN(*args, **kwargs), purpose="other"
+                    command_class, lambda: _POPEN(*args, **kwargs), purpose="other", pace=False
                 )
         started = time.monotonic()
         try:
@@ -1153,7 +1276,13 @@ def run_himalaya(
                         raise stats.blocked_error(command_class)
                     last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
                     if attempt < attempts - 1:
-                        time.sleep(2.0 * (attempt + 1))
+                        # Issue #103 P5: the configured first transient backoff;
+                        # the default 2.0 keeps the unchanged timing, and the
+                        # session sleep lets tests inject a fake clock.
+                        if stats is not None:
+                            stats.sleep_retry_backoff(attempt)
+                        else:
+                            time.sleep(2.0 * (attempt + 1))
                         continue
                     break
                 if stats is not None:

@@ -128,6 +128,30 @@ beyond the scan.
   only — no argv, headers, message IDs or content; the review payload and its
   hash are unaffected.
 
+  **Pacing and transient backoff (Issue #103 P5).** The central seam is
+  `TransportStats.start_process`: with `pacing_ms > 0` and a previous real
+  start, it waits the remaining minimum gap (start-to-start) under the spawn
+  lock before the next `factory()`, re-checks block/budget immediately
+  afterwards and only then starts. Every non-payload start in an active batch
+  session is paced (`thread`/`list`/`read`/`export` in draft/inspect/pipeline);
+  map skips start no process and wait not. The reference time is updated after a
+  successful `factory()` only; a failed start counts nothing, and `pace=False`
+  (payload/APPEND and the bounded diagnostic spawn) neither waits nor updates
+  the reference. `pacing_ms` (int, default `0`, bounded by
+  `MAX_TRANSPORT_PACING_MS = 3_600_000`, i.e. one hour; the operator chooses the
+  pilot value, e.g. 250 ms, and owns the resulting wait) and
+  `transient_backoff_s` (positive **finite** number,
+  default `2.0`; `nan`/`inf` and out-of-float-range integers are rejected) are
+  constructor/session parameters; `transport_stats_session`
+  takes them together with an optional injectable monotone `clock` and `sleep`
+  (resolved to `time.monotonic`/`time.sleep` at call time when not injected, so
+  patching the module functions stays effective). `run_himalaya` waits
+  `transient_backoff_s * (attempt + 1)` before a transient retry through that
+  sleep; without a session it keeps `time.sleep` and `2.0`. No extra retries, no
+  timeout/auth retry, APPEND stays exactly once. The snapshot adds `pacing_ms`,
+  `transient_backoff_s`, `pacing_waits` and `pacing_wait_ms_total` (integers
+  only, no content).
+
 ### Message reads and body preview
 
 The client's `read` operation (subcommand `read`, manifest action `read`) fetches

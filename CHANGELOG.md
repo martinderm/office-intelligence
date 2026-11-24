@@ -8,6 +8,44 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-23 - Issue #103: Pacing und transienter Backoff (P5)
+
+#### Added
+
+- **`transport_pacing_ms` (Default `0`) und
+  `transport_transient_backoff_s` (Default `2.0`)** in `inspect`/`draft`/
+  `pipeline`, validiert vor jedem Mailboxzugriff; CLI-Flags
+  `--transport-pacing-ms`/`--transport-transient-backoff-s` (nur mit
+  `--inspect`/`--draft`/`--pipeline`). Pilotwerte 250/5.0; keine automatische
+  Aktivierung. `pacing_ms` ist auf 1 Stunde
+  (`MAX_TRANSPORT_PACING_MS = 3_600_000` ms) begrenzt; der Betreiber wählt den
+  Wert darunter und verantwortet die Wartezeit. `transient_backoff_s` muss
+  endlich positiv sein (`nan`/`inf`/`-inf` und Integers jenseits des
+  Float-Bereichs werden abgelehnt).
+- **Zentrale Pacing-Naht:** `TransportStats.start_process(..., pace=True)`
+  wartet die Restzeit bis zum Mindestabstand zwischen zwei realen,
+  nicht-Payload Starts der aktiven Batch-Session (`thread`/`list`/`read`/
+  `export` in `inspect`/`draft`/`pipeline`), **Start-zu-Start**, unter dem
+  Spawn-Lock, prüft Block/Budget danach erneut und aktualisiert die Referenz
+  erst nach erfolgreichem Start. `pace=False` für APPEND/Payload und den
+  Diagnose-Spawn (kein Warten, keine Referenz); Map-Skips starten keinen
+  Prozess und warten nicht. `clock`/`sleep` sind optional injizierbar; ohne
+  Injektion werden `time.monotonic`/`time.sleep` zur Aufrufzeit aufgelöst
+  (Patches bleiben wirksam).
+- **Retry-Backoff:** der erste transiente Retry wartet
+  `transient_backoff_s × (attempt + 1)` über den Session-Sleep (Default 2.0
+  byte-/zeitgleich); ohne Session bleibt `time.sleep`/2.0. Keine neuen Retries,
+  kein Timeout-/Auth-Retry, APPEND genau einmal, #112 (2/5) unverändert.
+  `transient_backoff_s` muss endlich positiv sein (`nan`/`inf`/`-inf` und
+  Integers jenseits des Float-Bereichs werden an allen Validierungsstellen
+  abgelehnt).
+- **Metriken:** Snapshot additiv `pacing_ms`, `transient_backoff_s`,
+  `pacing_waits`, `pacing_wait_ms_total` (nur Zahlen). Der Standalone-Client
+  bleibt ohne Session bei den Defaults.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p5_pacing.py`
+  (22 Fälle), `references/batch-runner.md`, `references/backends/himalaya.md`,
+  L1/L2-System-Map, `objects.md` §6.
+
 ### 2026-11-23 - Issue #103: Preview-first für bekannte Lücken (P3)
 
 #### Added

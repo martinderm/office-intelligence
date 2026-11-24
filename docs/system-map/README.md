@@ -876,6 +876,25 @@ unbekannt mit Inventar ±0 ohne zweiten Read, Drift-Worst-Case 4 statt 2
 Starts, leere Preview-ID: 1 Start ohne Anhang, sonst regulärer Export + Read
 (3 Starts).
 
+**Pacing und transienter Backoff (P5, 2026-11-23):** `transport_pacing_ms`
+(Default 0) hält zwischen zwei realen, nicht-Payload Starts der aktiven
+Batch-Session (`thread`/`list`/`read`/`export` in `inspect`/`draft`/`pipeline`)
+einen Mindestabstand **Start-zu-Start**; `transport_transient_backoff_s`
+(Default 2.0, nur endlich positive Werte; `nan`/`inf` abgelehnt) ist der erste
+transiente Retry-Backoff (`× (attempt + 1)`). Die Naht ist
+`TransportStats.start_process` mit optionaler injizierbarer Uhr/Sleep (sonst zur
+Aufrufzeit `time.monotonic`/`time.sleep`): Warten unter dem Spawn-Lock, erneute
+Block-/Budget-Prüfung danach, Referenz erst nach erfolgreichem Start;
+`pace=False` für APPEND/Payload und Diagnose, Map-Skips starten keinen Prozess.
+Config und CLI-Flags nur für `inspect`/`draft`/`pipeline`, validiert vor jedem
+Mailboxzugriff; Pilot 250/5.0; `pacing_ms` ist auf 1 Stunde (3.600.000 ms)
+begrenzt (der Betreiber wählt den Wert darunter und verantwortet die
+Wartezeit), `nan`/`inf` und
+Zahlen jenseits des Float-Bereichs werden abgelehnt. Defaults, #112 (2/5),
+APPEND und der
+Standalone-Client bleiben unverändert; Snapshot additiv `pacing_waits`,
+`pacing_wait_ms_total`, `pacing_ms`, `transient_backoff_s`.
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).
