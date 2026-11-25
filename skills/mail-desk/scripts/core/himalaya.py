@@ -2655,7 +2655,8 @@ def get_single_email_details(
     other purpose forwards unchanged.  The ID-only fallback read is always
     ``id_fallback``.
 
-    ``allow_eml_details`` (Draft-only opt-in, default ``False``) lets a
+    ``allow_eml_details`` (helper default ``False``; the draft passes ``True``
+    since the 2026-11-25 owner release) lets a
     successful inventory export supply the preview details instead of a second
     CLI read.  It applies only inside the ``inspect_attachments`` branch, only
     for ``not full_body`` and only when :func:`_details_from_eml` proves full

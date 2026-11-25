@@ -855,8 +855,8 @@ sichtbare Volltext wird nur bei aktivem Gate
 und nach sauberer Injection-Barrier-Bewertung genutzt; sonst bleibt der
 reguläre Full-Read (kein neuer Quarantäne-/Review-Pfad, Review-Hash
 unverändert). Die Evaluation bleibt unabhängig aktiv und führt alle bestehenden
-MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert aus. P1 bleibt
-inaktiv (`allow_eml_details=False`) und ungekoppelt; keine EML in Manifest,
+MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert aus. P1 ist im Draft
+aktiv (Default `True`) und bleibt ungekoppelt; keine EML in Manifest,
 `batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
 
 **Preview-first für bekannte Lücken (`scan_profile`, P3, 2026-11-23):** Das
@@ -869,12 +869,17 @@ genau ein Inventar-Export, der in die Vorschau merged (`has_attachment is
 False` ohne Export). Identitätsdrift zwischen Preview und Export → keine
 Vermischung, regulärer Export+Read. `balanced` behält die heutige Sequenz
 (genau ein `get_single_email_details` pro Item, keine Probe). Beide
-Scan-Schleifen und die Zähler bleiben unverändert; P1 inaktiv, P2-Full-Text
-gegated, Evaluation-Reuse aktiv. Netto gegen `balanced`: bekannte Lücke mit
-`has_attachment is not False` −1 Start, `has_attachment is False` ±0,
-unbekannt mit Inventar ±0 ohne zweiten Read, Drift-Worst-Case 4 statt 2
-Starts, leere Preview-ID: 1 Start ohne Anhang, sonst regulärer Export + Read
-(3 Starts).
+Scan-Schleifen und die Zähler bleiben unverändert; P1 aktiv (Draft-Default
+`True`), P2-Full-Text
+gegated, Evaluation-Reuse aktiv. Netto gegen `balanced`: die historischen
+−1/±0-Zahlen galten vor der Aktivierung mit P1 aus bzw. auf einem P1-Miss. Mit
+aktivem P1 ist `balanced` bei einem Klassentreffer export-only (1 Start):
+bekannte Lücke `has_attachment is not False` ±0 gegen den Treffer/−1 gegen den
+Miss, `has_attachment is False` ±0, unbekannt mit Inventar +1 gegen den
+Treffer/±0 gegen den Miss (Preview + genau ein Export). Drift: 3 Starts gegen
+den Treffer, 4 gegen den Miss (mit P1 aus 4 statt 2). Leere Preview-ID ohne
+Anhang: 1 Start, ±0; sonst Preview + regulärer Pfad = 2 gegen den Treffer,
+3 gegen den Miss.
 
 **Pacing und transienter Backoff (P5, 2026-11-23):** `transport_pacing_ms`
 (Default 0) hält zwischen zwei realen, nicht-Payload Starts der aktiven
@@ -898,8 +903,9 @@ Standalone-Client bleiben unverändert; Snapshot additiv `pacing_waits`,
 **P1-Erweiterung der EML-Preview-Klasse (P1ext, 2026-11-24):** Die reale
 boku-user-Referenz fand auf der strikten P1-Klasse 0/7 Treffer (7/7 gefaltet,
 7/7 RFC 2047, 7/7 `multipart/*`, 7/7 Body > 30 Zeilen; 5/7
-`has_attachment=false`). Die Draft-Option `allow_eml_details` bleibt deshalb
-Default `False` und inaktiv; erweitert wurde nur der Vertrag, nicht die
+`has_attachment=false`). Die Draft-Option `allow_eml_details` blieb in dieser
+Runde Default `False`; seit der Owner-Freigabe 2026-11-25 ist P1 im Draft aktiv
+(Default `True`). Erweitert wurde damals nur der Vertrag, nicht die
 Aktivierung. `_details_from_eml` akzeptiert jetzt Unfolding, RFC 2047
 (Subject/From/To/Cc/References), Adressnormalisierung auf die CLI-Darstellung,
 genau einen eindeutigen Nicht-Anhang-`text/plain`-Teil in single-part/
@@ -926,9 +932,10 @@ konsistentem Wochentag (sonst `None`). Die geschlossene Einzelanhang-Klasse
 ohne Pfadanteil, belegbares `downloads-dir`) erhält die CLI-Zeile nach den
 Body-Zeilen und vor der Terminator-Zeile, vor der `preview_lines`-Kürzung.
 Mehrfachanhang, Inline-Bilder, octet-stream und unbelegbare Konfiguration
-bleiben `None`. `allow_eml_details` bleibt Default `False`; P1 bleibt inaktiv
-und produktionswirksam 0 bis zur Owner-Aktivierung. Die Referenz nach dieser
-Runde ist noch zu wiederholen, keine Live-Behauptung.
+bleiben `None`. `allow_eml_details` ist seit der Owner-Freigabe 2026-11-25 im
+Draft Default `True` (P1 aktiv, produktionswirksam ein vermeidbarer Read je
+Einzelanhang-Treffer); explizites `false` bleibt der Opt-out. Die Referenz nach
+dieser Runde ist noch zu wiederholen, keine Live-Behauptung.
 
 **P1-Referenz-Klammerregel (P1refs, 2026-11-25):** Bei genau einer ID in
 `References` behält die CLI die spitzen Klammern (belegte 43-Zeichen-Form,
@@ -936,9 +943,21 @@ Runde ist noch zu wiederholen, keine Live-Behauptung.
 einzelne ID ohne Klammern bleibt unverändert. `In-Reply-To` ist unberührt; die
 Guards (Komma, angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe,
 nicht dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte
-Paritätssuite umfasst 166 Tests. Keine Live-Behauptung; P1 bleibt inaktiv
-(`allow_eml_details` Default `False`) und produktionswirksam 0 bis zur
-Owner-Aktivierung.
+Paritätssuite umfasst 166 Tests. Keine Live-Behauptung; seit der Owner-Freigabe
+2026-11-25 ist P1 im Draft aktiv (Default `True`, ein vermeidbarer Read je
+Einzelanhang-Treffer); die Live-A/B-Messung läuft separat in boku-user.
+
+**P1-Aktivierung (2026-11-25): P1 aktiv (Draft-Default `True`).** Die
+ausdrückliche Owner-Freigabe setzt den Draft-Default auf `True`; ein
+Klassentreffer ersetzt den Preview-Read (1 `scan_inventory`, `scan_preview` 0,
+ein vermeidbarer Read weniger). Ein explizites `allow_eml_details=false` bleibt
+der vollständige Opt-out (Export + Read) und ist feldgleich zum bisherigen
+Ergebnis. Unverändert: geschlossene Einzelanhang-Klasse, Ausschlüsse/
+Fallbacks, `has_attachment=false` (1 Read, 0 Exporte), Helper-/API-Defaults
+`False` und keine EML-Bytes in Manifest, `batch-inspected.json`, Progress,
+Index, Journal, Evidence oder Logs. Die Live-A/B-Messung läuft separat in
+boku-user; die hermetische Basis sind die 166 Paritätstests plus die neuen
+Default-Tests, eine live beobachtete Einzel-ID-`References` liegt nicht vor.
 
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),

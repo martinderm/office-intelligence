@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -167,7 +168,7 @@ def _dispatch(eml: bytes, *, read_text: str | None, calls: list[str]):
 def _details(
     eml: bytes,
     *,
-    allow: bool,
+    allow: bool | None = None,
     cli_text: str | None = None,
     preview_lines: int = 30,
     full_body: bool = False,
@@ -180,6 +181,11 @@ def _details(
     calls: list[str] = []
     read_text = cli_text if cli_text is not None else _cli_read_text(eml)
     downloads_resolver = resolver if resolver is not None else Mock(return_value=downloads_dir)
+    # ``allow=None`` omits the keyword entirely, so the call exercises the
+    # helper's own default instead of an explicitly passed value.
+    helper_flags: dict[str, bool] = {}
+    if allow is not None:
+        helper_flags["allow_eml_details"] = allow
     with patch.object(
         himalaya,
         "resolve_himalaya_downloads_dir",
@@ -204,7 +210,7 @@ def _details(
             fallback_envelope=fallback,
             full_body=full_body,
             purpose=purpose,
-            allow_eml_details=allow,
+            **helper_flags,
         )
     return details, calls, stats.snapshot()
 
@@ -1308,9 +1314,21 @@ class EmlControlPathTests(HermeticProcessTestCase):
 
     def test_helper_default_keeps_export_and_read(self) -> None:
         eml = _eml(_base_headers(), ["Body."])
-        details, calls, _ = _details(eml, allow=False)
+        # No ``allow_eml_details`` keyword: the Himalaya helper's own default
+        # stays False (generic API), independent of the draft config default.
+        details, calls, _ = _details(eml, allow=None)
         self.assertEqual(["export", "read"], calls)
         self.assertEqual("Body.\n", details["preview"])
+
+    def test_generic_api_signature_defaults_stay_false(self) -> None:
+        for label, callable_ in (
+            ("himalaya.get_single_email_details", himalaya.get_single_email_details),
+            ("runner.get_unprocessed_emails", runner.get_unprocessed_emails),
+            ("runner._scan_unprocessed_emails", runner._scan_unprocessed_emails),
+        ):
+            with self.subTest(label=label):
+                parameter = inspect.signature(callable_).parameters["allow_eml_details"]
+                self.assertIs(False, parameter.default)
 
     def test_has_attachment_false_reads_once_without_export(self) -> None:
         eml = _eml(_base_headers(), ["Body."])
@@ -1441,7 +1459,7 @@ class DraftEmlOptInTests(HermeticProcessTestCase):
             )
         return result, calls, stats.snapshot(), collected_items["items"]
 
-    def test_qualified_candidate_skips_the_preview_read_only_with_opt_in(self) -> None:
+    def test_qualified_candidate_skips_the_preview_read_only_for_explicit_true(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             on_result, on_calls, on_stats, on_items = self._run_draft(temporary, allow=True)
         with tempfile.TemporaryDirectory() as temporary:
@@ -1462,14 +1480,65 @@ class DraftEmlOptInTests(HermeticProcessTestCase):
         self.assertEqual(1, off_stats["starts_by_purpose"]["scan_preview"])
         self.assertEqual(1, len(on_items))
 
-    def test_draft_default_is_off_and_keeps_export_and_read(self) -> None:
+    def test_draft_default_is_on_and_skips_the_preview_read_for_a_class_hit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             _result, calls, stats, items = self._run_draft(temporary, allow=None)
 
-        self.assertEqual(["thread", "list", "export", "read"], calls)
+        # No ``allow_eml_details`` key in the config: the draft default is True.
+        self.assertEqual(["thread", "list", "export"], calls)
         self.assertEqual(1, len(items))
         self.assertEqual(1, stats["starts_by_purpose"]["scan_inventory"])
-        self.assertEqual(1, stats["starts_by_purpose"]["scan_preview"])
+        self.assertEqual(0, stats["starts_by_purpose"]["scan_preview"])
+
+    def test_draft_default_matches_explicit_true_and_false_stays_the_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            default_result, default_calls, default_stats, default_items = self._run_draft(
+                temporary, allow=None
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            true_result, true_calls, true_stats, true_items = self._run_draft(
+                temporary, allow=True
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            false_result, false_calls, false_stats, false_items = self._run_draft(
+                temporary, allow=False
+            )
+
+        # Explicit False is the unchanged pre-activation reference.
+        self.assertEqual(["thread", "list", "export", "read"], false_calls)
+        self.assertEqual(1, false_stats["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, false_stats["starts_by_purpose"]["scan_preview"])
+        self.assertEqual(1, len(false_items))
+
+        # The default run is identical to explicit True (no config key needed).
+        self.assertEqual(["thread", "list", "export"], default_calls)
+        self.assertEqual(["thread", "list", "export"], true_calls)
+        self.assertEqual(true_items, default_items)
+        self.assertEqual(
+            true_result["draft"]["review"]["execute_request_sha256"],
+            default_result["draft"]["review"]["execute_request_sha256"],
+        )
+        self.assertEqual(
+            default_result["injection_barrier"], true_result["injection_barrier"]
+        )
+        self.assertEqual(1, default_stats["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(0, default_stats["starts_by_purpose"]["scan_preview"])
+
+        # The activation only removes the preview read: items, review hash and
+        # injection barrier are identical to the explicit-False reference.
+        self.assertEqual(false_items, default_items)
+        self.assertEqual(false_result["draft"]["items"], default_result["draft"]["items"])
+        self.assertEqual(
+            false_result["draft"]["review"]["execute_request_sha256"],
+            default_result["draft"]["review"]["execute_request_sha256"],
+        )
+        self.assertEqual(
+            default_result["injection_barrier"], false_result["injection_barrier"]
+        )
+        self.assertEqual(
+            true_result["draft"]["review"]["execute_request_sha256"],
+            false_result["draft"]["review"]["execute_request_sha256"],
+        )
 
     def test_known_skip_decision_is_identical_with_and_without_opt_in(self) -> None:
         results = []

@@ -6,6 +6,14 @@ inventory.  P2 may hold those exact bytes for the immediate draft processing
 one scan lifetime.  Everything else keeps the regular reader.
 
 All tests are hermetic: only the process boundary (``_POPEN``) is faked.
+
+Test correction 2026-11-25: after the draft default ``allow_eml_details``
+became ``True`` (P1 activation), the full-text harness pins
+``allow_eml_details=False`` explicitly so it isolates the P2 gate.  Observation:
+the expected call lists omitted the previously implicit P1-off preview read.
+Cause class: the tests pinned the pre-activation P1 default; this is not a
+product defect (the production diff is correct and P1 is intentionally active).
+Recheck: focused P2 suite plus the full mail-desk suite.
 """
 
 from __future__ import annotations
@@ -554,7 +562,15 @@ class DraftFullTextReuseTests(HermeticProcessTestCase):
         }
         if single_reader is not None:
             dependencies["get_single_email_details"] = single_reader
-        config = {"count": 1, "skip_known": True, "preview_lines": preview_lines}
+        # Test correction 2026-11-25: pin P1 off explicitly so this harness
+        # isolates the P2 gate (the call lists pinned the pre-activation P1
+        # default; see the module docstring).
+        config = {
+            "count": 1,
+            "skip_known": True,
+            "preview_lines": preview_lines,
+            "allow_eml_details": False,
+        }
         if allow_scan_source_full_text is not None:
             config["allow_scan_source_full_text"] = allow_scan_source_full_text
         with patch.object(

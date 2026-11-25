@@ -175,7 +175,7 @@ with `review_required: true`; the persisted `read_escalation.error.type` stays
 `RuntimeError`. The transport guard no longer preempts that fail-safe for a
 single slow item.
 
-**EML-derived preview (Issue #103 P1 extension, draft opt-in, inactive by default).**
+**EML-derived preview (Issue #103 P1 extension, active in the draft path since 2026-11-25).**
 When the scan's inventory export already ran, `get_single_email_details(...,
 allow_eml_details=True)` may derive the preview details from those exact EML
 bytes instead of a second `message read`. The comparison anchor is the CLI
@@ -263,16 +263,19 @@ proven `downloads-dir`), inserts the modelled CLI line before the
 terminator/`preview_lines` cut, and keeps multiple attachments, inline images,
 octet-stream and unprovable config as `None`. Only PDF and DOCX are evidenced
 end-to-end; other non-excluded file types use the same structural template as a
-model, and no live claim is made. P1 remains **inactive** with production effect
-0 until the owner activates it; the parity of the fixed class still has to be
-proven by a repeated real reference. Every other input returns `None` and
+model, and no live claim is made. P1 is **active in the draft path** since the
+2026-11-25 owner release: the draft config default is `True`, so each
+single-attachment class hit saves exactly one avoidable read (`scan_inventory`
+1, `scan_preview` 0). An explicit `allow_eml_details=false` remains the full
+opt-out (export + read). The live A/B measurement runs separately in boku-user;
+the fixed class still has to be proven by a repeated real reference. Every
+other input returns `None` and
 the existing CLI read runs **without a new export**. `full_body=True`
 is never replaced; `has_attachment is False` still starts no export, so P1 is
 structurally unreachable for those items (documented limit; the branch is only
 attempted after an export that already ran). `allow_eml_details` defaults to
-`False` on the helper **and in `draft`**; it activates only after a real,
-anonymized CLI reference (separate boku-user live gate) or an explicit owner
-release. Until then P1 stays inactive.
+`False` on the helper and the batch-runner APIs; only `draft` passes `True`
+by default.
 
 **Scan-time source capture (Issue #103 P2).** `get_single_email_details(...,
 raw_eml_sink=None)` hands the exact bytes of a successful inventory export to
@@ -283,7 +286,7 @@ result, a sink error is swallowed and never reaches the read, and the default
 unbounded**, exactly as before P2: bounding what is held is the consumer's
 budget, so an oversized message still gets its normal attachment inventory. The
 `raw_eml` input branch is unchanged and stays the only full-text derivation;
-`allow_eml_details` (P1) remains independent and inactive. No EML bytes ever
+`allow_eml_details` (P1) remains independent and is active in the draft path. No EML bytes ever
 appear in the returned result dict, the manifest, `batch-inspected.json`,
 progress, index, journal, evidence or logs.
 
@@ -300,10 +303,10 @@ RFC-2047 and printable-ASCII header values; exactly one well-formed Message-ID;
 header/body separator present; non-empty body. The predicate starts no process,
 reads no file and performs no email-policy defect scan; it is separate from the
 P1 preview path (`_details_from_eml`). Every other input returns `False` and the
-regular full read runs. The model basis is not a live reference: P1 stays
-inactive until a real anonymized CLI reference or an explicit owner release, and
-P2's full text carries the same reservation while the evaluation reuse (existing
-checks on the same bytes) stays active.
+regular full read runs. The model basis is not a live reference: P1 is active in
+the draft path since the 2026-11-25 owner release (superseding the earlier
+inactive state), and P2's full text carries its own reservation while the
+evaluation reuse (existing checks on the same bytes) stays active.
 
 **Preview/inventory separation (`preview_only` + `complete_scan_inventory`,
 Issue #103 P3).** The draft's explicit `scan_profile="known_heavy"` profile reads
@@ -322,7 +325,8 @@ also feeds the P2 `ScanSourceContext` under the preview Message-ID; the
 `balanced` default never uses `preview_only`. A preview without a usable
 Message-ID returns directly when `has_attachment is False` (one start, the
 regular read would repeat the same empty-ID read) and otherwise takes the
-regular export+read path without an export probe. No P1/P2 activation.
+regular export+read path without an export probe. No P1 derivation and no P2
+full-text reuse are activated here.
 
 ```bash
 python3 scripts/mail_desk_himalaya_client.py read -f INBOX 7195 --json

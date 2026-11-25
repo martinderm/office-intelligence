@@ -346,8 +346,8 @@ def get_unprocessed_emails(
     envelope (OUT-P1, issue #5).  The returned ``known_count`` and every other
     progress-file write are unchanged.
 
-    ``allow_eml_details`` (Draft-only opt-in, default ``False``) is forwarded to
-    the scan reader and applies to both scan loops.
+    ``allow_eml_details`` (API default ``False``; the draft passes ``True``) is
+    forwarded to the scan reader and applies to both scan loops.
 
     ``source_context`` (Issue #103 P2, default ``None``) is the private,
     scan-scoped source store.  It captures one export per collected item; the
@@ -468,8 +468,9 @@ def _scan_unprocessed_emails(
     skipped_known = 0
     inspected_eids: set[str] = set()
 
-    # Issue #103 P1: bind one reader for both scan loops.  Only the draft opts
-    # in; every other caller keeps the unchanged export + read sequence.
+    # Issue #103 P1: bind one reader for both scan loops.  The draft passes
+    # ``True`` by default; every other caller keeps the unchanged export + read
+    # sequence and this API default stays ``False``.
     if allow_eml_details:
         def base_read(*args: Any, **kwargs: Any) -> dict[str, Any]:
             kwargs.setdefault("allow_eml_details", True)
