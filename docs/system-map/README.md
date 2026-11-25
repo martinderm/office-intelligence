@@ -930,6 +930,16 @@ bleiben `None`. `allow_eml_details` bleibt Default `False`; P1 bleibt inaktiv
 und produktionswirksam 0 bis zur Owner-Aktivierung. Die Referenz nach dieser
 Runde ist noch zu wiederholen, keine Live-Behauptung.
 
+**P1-Referenz-Klammerregel (P1refs, 2026-11-25):** Bei genau einer ID in
+`References` behält die CLI die spitzen Klammern (belegte 43-Zeichen-Form,
+43 = 43); mehrere Whitespace-getrennte IDs bleiben ohne alle `<`/`>`, eine
+einzelne ID ohne Klammern bleibt unverändert. `In-Reply-To` ist unberührt; die
+Guards (Komma, angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe,
+nicht dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte
+Paritätssuite umfasst 166 Tests. Keine Live-Behauptung; P1 bleibt inaktiv
+(`allow_eml_details` Default `False`) und produktionswirksam 0 bis zur
+Owner-Aktivierung.
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).

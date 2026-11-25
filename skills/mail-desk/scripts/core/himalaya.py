@@ -1971,12 +1971,15 @@ def _canonical_address_header(value: str) -> str | None:
 
 
 def _canonical_references_header(value: str) -> str | None:
-    """Return the CLI display form of a ``References`` list, or ``None``.
+    """Return the CLI display form of a ``References`` header, or ``None``.
 
-    The CLI renders the whitespace-separated IDs without any angle brackets.
-    Adjacent ``><`` (IDs glued together), unbalanced brackets and comma lists are
-    not proven and return ``None``; ``In-Reply-To`` is deliberately not handled
-    here and keeps its single-ID brackets.
+    The CLI keeps exactly one bracketed ID unchanged (the recorded 43-character
+    form) and renders several whitespace-separated IDs without any angle
+    brackets; a single unbracketed ID is already in CLI form and stays as is.
+    Adjacent ``><`` (IDs glued together), unbalanced or nested brackets, comma
+    lists and undecodable encoded words are not proven and return ``None``;
+    ``In-Reply-To`` is deliberately not handled here and keeps its single-ID
+    brackets.
     """
     decoded = _decode_mime_header(value)
     if decoded is None:
@@ -2002,7 +2005,16 @@ def _canonical_references_header(value: str) -> str | None:
         previous = character
     if depth:
         return None
-    return stripped.replace("<", "").replace(">", "").strip()
+    bare = stripped.replace("<", "").replace(">", "").strip()
+    single_bracketed_id = (
+        len(stripped) > 2
+        and stripped.startswith("<")
+        and stripped.endswith(">")
+        and stripped.count("<") == 1
+        and stripped.count(">") == 1
+        and not any(character.isspace() for character in stripped[1:-1])
+    )
+    return stripped if single_bracketed_id else bare
 
 
 def _part_is_attachment(part: "email.message.Message") -> bool:
@@ -2208,7 +2220,8 @@ def _details_from_eml(
     RFC 2047 decoding for Subject/From/To/Cc/References (Date/In-Reply-To are
     unfolded and stripped only, never decoded), canonical address display
     values (a display-name-less address is rendered without ``<>``),
-    ``References`` without any ``<>`` (``In-Reply-To`` keeps its brackets), one
+    ``References`` keeping exactly one bracketed ID unchanged and rendering
+    several IDs without ``<>`` (``In-Reply-To`` keeps its brackets), one
     unambiguous non-attachment ``text/plain`` body part (single-part,
     ``multipart/alternative``, ``multipart/mixed``/``multipart/related``), the
     part's declared charset from the closed P1 list
@@ -2218,9 +2231,10 @@ def _details_from_eml(
     empty line) and a preview truncated to ``preview_lines``.  A ``Date`` is
     only accepted in the anchored reference form ``Thu, 01 Jan 2026 00:00:00
     +0000`` with a weekday consistent with the date; every other form is
-    excluded.  ``References`` is a whitespace-separated ID list without angle
-    brackets (adjacent brackets, unbalanced brackets and commas are excluded);
-    ``In-Reply-To`` keeps its single-ID brackets.
+    excluded.  ``References`` keeps a single bracketed ID in its recorded
+    43-character CLI form and renders several whitespace-separated IDs without
+    angle brackets (adjacent brackets, unbalanced brackets and commas are
+    excluded); ``In-Reply-To`` keeps its single-ID brackets.
 
     Items with a canonical inventory attachment are accepted only for the
     closed single-file class when ``downloads_dir`` is proven: exactly one

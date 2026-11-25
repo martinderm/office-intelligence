@@ -406,10 +406,32 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         details = self._assert_parity(
             _eml(headers, ["Body."]),
             cli_text=_cli_text(
-                _base_headers() + [("References", "parent@example.test")], "Body."
+                _base_headers() + [("References", "<parent@example.test>")], "Body."
             ),
         )
-        self.assertEqual("parent@example.test", details["references"])
+        self.assertEqual("<parent@example.test>", details["references"])
+
+    def test_single_references_id_keeps_its_brackets_like_the_cli(self) -> None:
+        """The recorded single-ID reference stays a 43-character bracketed value."""
+        reference_headers = _base_headers() + [
+            ("References", "<parent.20260101.000000000000@example.test>"),
+            ("In-Reply-To", "<parent@example.test>"),
+        ]
+        cli_text = _cli_text(reference_headers, "Body.")
+        self.assertIn(
+            "References: <parent.20260101.000000000000@example.test>\n", cli_text
+        )
+        details = self._assert_parity(
+            _eml(reference_headers, ["Body."]), cli_text=cli_text
+        )
+        cli_value = dict(reference_headers)["References"]
+        self.assertEqual(43, len(cli_value))
+        self.assertEqual(43, len(details["references"]))
+        self.assertEqual(cli_value, details["references"])
+        self.assertEqual(
+            2, details["references"].count("<") + details["references"].count(">")
+        )
+        self.assertEqual("<parent@example.test>", details["in_reply_to"])
 
     def test_references_list_has_no_brackets_in_reply_to_keeps_them(self) -> None:
         ids = [f"<id{index}@example.test>" for index in range(5)]
@@ -432,6 +454,8 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
             " ".join(f"id{index}@example.test" for index in range(5)),
             details["references"],
         )
+        self.assertNotIn("<", details["references"])
+        self.assertNotIn(">", details["references"])
         self.assertEqual("<parent@example.test>", details["in_reply_to"])
 
     def test_multipart_alternative_uses_the_unique_text_plain_part(self) -> None:
@@ -1624,6 +1648,17 @@ class EmlPredicateTests(HermeticProcessTestCase):
                 "<a@example.test> <b@example.test>"
             ),
         )
+
+    def test_references_single_id_shapes_follow_the_proven_contract(self) -> None:
+        self.assertEqual(
+            "parent@example.test",
+            himalaya._canonical_references_header("parent@example.test"),
+        )
+        self.assertEqual("", himalaya._canonical_references_header(""))
+        self.assertIsNone(
+            himalaya._canonical_references_header("<<a@example.test>>")
+        )
+        self.assertIsNone(himalaya._canonical_references_header("<a@example.test"))
 
     def test_date_guard_requires_the_anchored_reference_form(self) -> None:
         self.assertTrue(
