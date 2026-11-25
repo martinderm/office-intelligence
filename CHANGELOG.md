@@ -8,6 +8,44 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-25 - Issue #103: P1-Paritätsrunde (reale Feldparität)
+
+#### Changed
+
+- **CLI-stdout-Preview (Modell):** `_details_from_eml` bildet die
+  Terminator-Schlusszeile nach — ein Body, der mit `"\n"` endet, erhält vor
+  `splitlines()`/Preview-Auswahl die leere Schlusszeile; ohne Umbruch nicht.
+  Die Terminatorzeile ist aus M09 (+1 Zeichen) modelliert; ohne/mehrfache
+  Schlussumbrüche sind modelliert, nicht live-belegt (Restgrenze dokumentiert).
+- **Adressform:** `_canonical_address_header` rendert jede Adresse einzeln —
+  `Name <addr>` mit Anzeigename, sonst das nackte `addr` ohne `<>`.
+  Gruppe (`:`/`;`) und Kommentar (`(`/`)`) außerhalb von Quotes, leere
+  Listenelemente, still verworfene Einträge, `casefold`-Duplikate, ein zitierter
+  Local Part (`"a,b"@x.test`) und ein Komma im Angle-Block (`Name <a@x,b@y>`)
+  → `None`; `"Doe, John" <…>` und quoted Sonderzeichen bleiben zulässig.
+- **References:** Guard gegen angrenzende `><`-Klammern, unbalancierte Klammern
+  und Kommas → `None`; fünf Whitespace-getrennte IDs ohne Klammern; 
+  `In-Reply-To` behält seine Klammern.
+- **Date-Guard:** nur die verankerte Referenzform
+  `Thu, 01 Jan 2026 00:00:00 +0000` (geschlossene Wochentags-/Monatsliste,
+  zweistelliger Tag, `HH:MM:SS`, numerische `[+-]HHMM`-Zone, Wochentag
+  konsistent zum Datum); `Foo,`, einstelliger Tag, `GMT`, falscher Wochentag
+  oder ungültiges Datum → `None`.
+- **Anhangsausschluss:** Items mit kanonischem Inventar-Anhang (nicht-leere
+  `attachments` oder `attachment_status != "none"`) liefern `None`. Das exakte
+  Format der CLI-Anhangszeile ist nicht belegt und wird nicht geraten; P1 hat
+  damit in der realen Referenz Produktionswirkung 0 (offener Future-Gate).
+- **Unverändert:** `allow_eml_details` bleibt Default `False` und inaktiv; der
+  P1-Hook, das Inventar-Passthrough, `has_attachment=false`, P2-Volltext, P3
+  `balanced`, P5 0/2.0 und die Evaluation-Reuse sind unberührt; keine EML in
+  Rückgabe-Dicts/Artefakten.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p1_eml_parity.py`
+  (119 Fälle: Truncation 29/30/31 + Terminator hartkodiert, `preview_lines`
+  0/3, mehrfache Schlussumbrüche, Adress-/References-/Date-Negatives inkl.
+  `casefold`-Duplikat, zitiertem Local Part und Komma im Angle-Block,
+  hartkodiertes CLI-Literal), `references/backends/himalaya.md`,
+  `references/batch-runner.md`, L1/L2-System-Map, `objects.md`.
+
 ### 2026-11-24 - Issue #103: P1-Vertragserweiterung für reale Mailklassen
 
 #### Changed

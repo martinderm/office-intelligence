@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 from contextlib import contextmanager
 from contextvars import ContextVar
+import datetime
 import email
 import email.header
 import email.policy
@@ -1624,6 +1625,55 @@ _ENCODED_WORD_PATTERN = re.compile(r"=\?([^?\s]+)\?([bBqQ])\?([^?]*)\?=")
 #: The base64 alphabet with optional padding.
 _BASE64_PAYLOAD = re.compile(r"[A-Za-z0-9+/]*={0,2}")
 
+#: Closed reference form for a P1 ``Date`` header.
+_P1_DATE_PATTERN = re.compile(
+    r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), "
+    r"(0[1-9]|[12][0-9]|3[01]) "
+    r"(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+    r"([0-9]{4}) "
+    r"([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9]) "
+    r"([+-])([01][0-9]|2[0-3])([0-5][0-9])$"
+)
+
+_P1_WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+_P1_MONTHS = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
+
+
+def _is_p1_reference_date(value: str) -> bool:
+    """Return whether ``value`` is exactly the closed P1 ``Date`` reference form.
+
+    The anchored form is ``Thu, 01 Jan 2026 00:00:00 +0000``: weekday from the
+    closed list, two-digit day, closed month, four-digit year, ``HH:MM:SS`` and
+    a numeric ``[+-]HHMM`` zone.  The weekday must match the date (deterministic
+    arithmetic, locale-independent); every other form — including an invalid
+    calendar date, ``Foo,``, a one-digit day or ``GMT`` — is not proven.
+    """
+    match = _P1_DATE_PATTERN.fullmatch(value)
+    if match is None:
+        return False
+    weekday, day, month, year = match.group(1, 2, 3, 4)
+    try:
+        expected = _P1_WEEKDAYS[
+            datetime.date(int(year), _P1_MONTHS[month], int(day)).weekday()
+        ]
+    except ValueError:
+        return False
+    return weekday == expected
+
 
 def _encoded_words_are_well_formed(value: str) -> bool:
     """Return whether every ``=?`` in a header value is a well-formed encoded word.
@@ -1687,13 +1737,73 @@ def _decode_mime_header(value: str) -> str | None:
     return result
 
 
+def _split_address_elements(value: str) -> list[str] | None:
+    """Split a comma list on top-level commas, quote- and bracket-aware.
+
+    Returns ``None`` for group/comment syntax (``:``/``;``/``(``/``)`` outside
+    quotes), unbalanced quotes or angle brackets, a comma inside an angle block
+    (``Name <a@x,b@y>`` is not a separator), and an empty element (leading,
+    trailing or doubled comma).  Quoted display names and quoted special
+    characters stay inside one element.
+    """
+    elements: list[str] = []
+    current: list[str] = []
+    in_quotes = False
+    in_angle = False
+    index = 0
+    while index < len(value):
+        character = value[index]
+        if in_quotes:
+            current.append(character)
+            if character == "\\" and index + 1 < len(value):
+                current.append(value[index + 1])
+                index += 2
+                continue
+            if character == '"':
+                in_quotes = False
+        elif character == '"':
+            in_quotes = True
+            current.append(character)
+        elif character == "<":
+            if in_angle:
+                return None
+            in_angle = True
+            current.append(character)
+        elif character == ">":
+            if not in_angle:
+                return None
+            in_angle = False
+            current.append(character)
+        elif character == ",":
+            if in_angle:
+                # Only a top-level comma separates addresses.
+                return None
+            elements.append("".join(current))
+            current = []
+        elif character in ":;()":
+            # Group and comment syntax is not proven for the CLI anchor.
+            return None
+        else:
+            current.append(character)
+        index += 1
+    if in_quotes or in_angle:
+        return None
+    elements.append("".join(current))
+    if any(not element.strip() for element in elements):
+        return None
+    return elements
+
+
 def _canonical_address_header(value: str) -> str | None:
     """Return the CLI display form of one address header, or ``None``.
 
     The canonical form is documented as: RFC 2047 decoded, whitespace runs
-    collapsed, double quotes removed, ``<``/``>``/list commas in canonical
-    spacing.  Every parsed address must carry exactly one ``@`` and no
-    whitespace; unparsable or ambiguous input returns ``None``.
+    collapsed, rendered per parsed address — ``Name <addr>`` when a display name
+    exists, and the bare ``addr`` (no angle brackets) when it does not.  Group
+    or comment syntax, an empty list element, a silently dropped entry, a
+    case-insensitive duplicate address, a quoted local part (``"a,b"@x.test``)
+    and any unparsable or ambiguous input return ``None``.  Every parsed address
+    must carry exactly one ``@`` and no whitespace.
     """
     decoded = _decode_mime_header(value)
     if decoded is None:
@@ -1701,24 +1811,69 @@ def _canonical_address_header(value: str) -> str | None:
     collapsed = _collapse_header_whitespace(decoded)
     if not collapsed:
         return ""
-    if collapsed.count("<") != collapsed.count(">"):
+    elements = _split_address_elements(collapsed)
+    if elements is None:
         return None
     try:
         parsed = email.utils.getaddresses([collapsed])
     except Exception:  # noqa: BLE001 - an unparsable list is never canonical
         return None
-    if not parsed:
+    if len(parsed) != len(elements):
         return None
-    for _name, address in parsed:
+    rendered: list[str] = []
+    seen_addresses: set[str] = set()
+    for name, address in parsed:
         if not address:
             return None
         if address.count("@") != 1 or any(character.isspace() for character in address):
             return None
-    canonical = collapsed.replace('"', "")
-    canonical = re.sub(r"\s*<\s*", " <", canonical)
-    canonical = re.sub(r"\s*>\s*", ">", canonical)
-    canonical = re.sub(r"\s*,\s*", ", ", canonical)
-    return _collapse_header_whitespace(canonical)
+        if '"' in address:
+            # A quoted local part keeps its quotes in the parsed address; the
+            # CLI rendering for it is unproven; never render an ambiguous list.
+            return None
+        folded = address.casefold()
+        if folded in seen_addresses:
+            # Unproven dedupe semantics; never render an ambiguous list.
+            return None
+        seen_addresses.add(folded)
+        display_name = _collapse_header_whitespace(name).replace('"', "")
+        rendered.append(f"{display_name} <{address}>" if display_name else address)
+    return ", ".join(rendered)
+
+
+def _canonical_references_header(value: str) -> str | None:
+    """Return the CLI display form of a ``References`` list, or ``None``.
+
+    The CLI renders the whitespace-separated IDs without any angle brackets.
+    Adjacent ``><`` (IDs glued together), unbalanced brackets and comma lists are
+    not proven and return ``None``; ``In-Reply-To`` is deliberately not handled
+    here and keeps its single-ID brackets.
+    """
+    decoded = _decode_mime_header(value)
+    if decoded is None:
+        return None
+    stripped = decoded.strip()
+    if not stripped:
+        return ""
+    if "," in stripped:
+        return None
+    depth = 0
+    previous = ""
+    for character in stripped:
+        if character == "<":
+            if depth:
+                return None
+            if previous == ">":
+                return None
+            depth = 1
+        elif character == ">":
+            if not depth:
+                return None
+            depth = 0
+        previous = character
+    if depth:
+        return None
+    return stripped.replace("<", "").replace(">", "").strip()
 
 
 def _part_is_attachment(part: "email.message.Message") -> bool:
@@ -1851,16 +2006,30 @@ def _details_from_eml(
     covers real mail shapes (Issue #103 P1 extension): RFC-5322 unfolding,
     RFC 2047 decoding for Subject/From/To/Cc/References (Date/In-Reply-To are
     unfolded and stripped only, never decoded), canonical address display
-    values, one unambiguous non-attachment ``text/plain`` body part
-    (single-part, ``multipart/alternative``, ``multipart/mixed``/
-    ``multipart/related``), the part's declared charset from the closed P1 list
+    values (a display-name-less address is rendered without ``<>``),
+    ``References`` without any ``<>`` (``In-Reply-To`` keeps its brackets), one
+    unambiguous non-attachment ``text/plain`` body part (single-part,
+    ``multipart/alternative``, ``multipart/mixed``/``multipart/related``), the
+    part's declared charset from the closed P1 list
     (``us-ascii``/``ascii``/``utf-8``/``iso-8859-1``/``latin-1``/
-    ``windows-1252``/``cp1252``/``iso-8859-15``) and a preview truncated to
-    ``preview_lines``.  Ambiguous input — duplicate relevant headers, raw 8-bit
-    header bytes, malformed encoded words, undecodable charsets, HTML-only,
-    several text candidates, a named/attachment body part, defective
-    Message-ID, mixed line endings, bare CR/NUL — returns ``None`` and the
-    caller keeps its existing CLI read without a new export.
+    ``windows-1252``/``cp1252``/``iso-8859-15``), the CLI stdout preview
+    semantics (a body that ends with a line break gains the process-terminator
+    empty line) and a preview truncated to ``preview_lines``.  A ``Date`` is
+    only accepted in the anchored reference form ``Thu, 01 Jan 2026 00:00:00
+    +0000`` with a weekday consistent with the date; every other form is
+    excluded.  ``References`` is a whitespace-separated ID list without angle
+    brackets (adjacent brackets, unbalanced brackets and commas are excluded);
+    ``In-Reply-To`` keeps its single-ID brackets.
+
+    Items with a canonical inventory attachment (non-empty ``attachments`` or
+    ``attachment_status != "none"``) are excluded: the exact CLI attachment
+    preview line is not proven, so such an item never becomes a P1 hit (the
+    documented fallback; P1's production effect in the reference is 0).
+    Ambiguous input — duplicate relevant headers, raw 8-bit header bytes,
+    malformed encoded words, undecodable charsets, HTML-only, several text
+    candidates, a named/attachment body part, defective Message-ID, mixed line
+    endings, bare CR/NUL — returns ``None`` and the caller keeps its existing
+    CLI read without a new export.
 
     The comparison anchor is the CLI display form: unfolded with exactly one
     space, values stripped, header keys lowercase, RFC 2047 decoded and address
@@ -1873,7 +2042,7 @@ def _details_from_eml(
     try:
         if not isinstance(raw_eml, bytes) or not raw_eml:
             return None
-        if attachment_status == "attachment_inventory_unavailable":
+        if attachments or attachment_status != "none":
             return None
         if b"\x00" in raw_eml:
             return None
@@ -1951,6 +2120,12 @@ def _details_from_eml(
         body_text = _decode_part_text(body_part)
         if body_text is None:
             return None
+        if body_text.endswith("\n"):
+            # The CLI preview is the stdout body plus the process terminator
+            # line: a body that ends with a line break therefore gains one empty
+            # final line before the preview selection.  A trailing bare CR alone
+            # is not a line break here.
+            body_text = body_text + "\n"
         body_lines = body_text.splitlines()
         if not any(line.strip() for line in body_lines):
             return None
@@ -1981,13 +2156,18 @@ def _details_from_eml(
         to_value = _display("to", addresses=True)
         cc_value = _display("cc", addresses=True)
         date_value = _plain("date")
-        references = _display("references")
+        raw_references = headers.get("references", [""])[0]
+        references = _canonical_references_header(raw_references)
         in_reply_to = _plain("in-reply-to")
         if None in (subject, from_value, to_value, cc_value, references):
             return None
         # Date/In-Reply-To are not RFC 2047 decoded; an encoded word there would
         # be shown raw, which the CLI anchor does not prove.
         if "=?" in date_value or "=?" in in_reply_to:
+            return None
+        # Only the closed reference form is proven as the CLI passthrough; any
+        # other Date value falls back and is never rendered.
+        if date_value and not _is_p1_reference_date(date_value):
             return None
 
         return {

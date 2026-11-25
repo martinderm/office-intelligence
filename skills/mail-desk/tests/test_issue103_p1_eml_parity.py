@@ -98,16 +98,38 @@ def _part(body: list[str], content_type: str = "text/plain; charset=utf-8", *, e
 
 
 def _cli_text(header_pairs: list[tuple[str, str]], body_text: str) -> str:
-    """The CLI read output a reference would print for this message."""
+    """Model of the CLI read text for a body with exactly one trailing newline.
+
+    This is a **model, not captured CLI output**: the M09 reference observed the
+    CLI preview as the EML preview plus one byte (the process-terminator empty
+    line).  Bodies without or with several trailing newlines are modelled here,
+    not proven.
+    """
     lines = "".join(f"{name}: {value}\n" for name, value in header_pairs)
-    return lines + "\n" + body_text.rstrip("\n")
+    return lines + "\n" + body_text.rstrip("\n") + "\n\n"
+
+
+def _cli_text_raw(header_pairs: list[tuple[str, str]], body_text: str) -> str:
+    """Model of the CLI read text for a body without a trailing line break.
+
+    Same model caveat as :func:`_cli_text`: the absent terminator line is a
+    modelling choice, not a captured CLI observation.
+    """
+    lines = "".join(f"{name}: {value}\n" for name, value in header_pairs)
+    return lines + "\n" + body_text + "\n"
 
 
 def _cli_read_text(eml: bytes) -> str:
-    """Naive CLI text for simple unencoded single-part fixtures."""
+    """Model of the CLI read text for simple unencoded single-part fixtures.
+
+    Appends the modelled process-terminator newline when the body already ends
+    with one (see :func:`_cli_text`).
+    """
     text = eml.decode("utf-8").replace("\r\n", "\n")
     header_block, separator, body = text.partition("\n\n")
-    return header_block + (separator + body if separator else "")
+    if not separator:
+        return header_block
+    return header_block + "\n\n" + body + ("\n" if body.endswith("\n") else "")
 
 
 def _base_headers(message_id: str = GOLDEN_MESSAGE_ID) -> list[tuple[str, str]]:
@@ -219,7 +241,7 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         self.assertEqual("golden-61@example.test", details["message_id"])
         self.assertEqual(GOLDEN_MESSAGE_ID, details["raw_message_id"])
         self.assertEqual("Kurzfrage zum Vorgang", details["subject"])
-        self.assertEqual("Erste Zeile.\nZweite Zeile.", details["preview"])
+        self.assertEqual("Erste Zeile.\nZweite Zeile.\n", details["preview"])
         self.assertEqual("preview", details["read_level"])
         self.assertTrue(details["headers_complete"])
         self.assertIsNone(details["error"])
@@ -231,15 +253,20 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
             ("In-Reply-To", "<parent@example.test>"),
             ("References", "<parent@example.test> <root@example.test>"),
         ]
-        details = self._assert_parity(_eml(headers, ["Antwort."]))
+        cli_headers = _base_headers() + [
+            ("Cc", "cc@example.test"),
+            ("In-Reply-To", "<parent@example.test>"),
+            ("References", "parent@example.test root@example.test"),
+        ]
+        details = self._assert_parity(_eml(headers, ["Antwort."]), cli_text=_cli_text(cli_headers, "Antwort."))
         self.assertEqual("cc@example.test", details["cc"])
         self.assertEqual("<parent@example.test>", details["in_reply_to"])
-        self.assertEqual("<parent@example.test> <root@example.test>", details["references"])
+        self.assertEqual("parent@example.test root@example.test", details["references"])
 
     def test_utf8_body_matches_the_cli_text_unchanged(self) -> None:
         body = ["Grüße aus Wien – Preis: 10 €."]
         details = self._assert_parity(_eml(_base_headers(), body))
-        self.assertEqual(body[0], details["preview"])
+        self.assertEqual(body[0] + "\n", details["preview"])
 
     def test_folded_headers_are_unfolded_with_one_space(self) -> None:
         eml = _eml(
@@ -313,6 +340,52 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         self.assertEqual("Doe, John <john@example.test>", details["from"])
         self.assertEqual("Desk, Team <desk@example.test>", details["to"])
 
+    def test_address_without_display_name_loses_the_brackets(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "<desk@example.test>"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        details = self._assert_parity(
+            _eml(headers, ["Body."]),
+            cli_text=_cli_text(
+                [
+                    ("Message-ID", GOLDEN_MESSAGE_ID),
+                    ("Subject", "Kurzfrage zum Vorgang"),
+                    ("From", "Sender <sender@example.test>"),
+                    ("To", "desk@example.test"),
+                    ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+                ],
+                "Body.",
+            ),
+        )
+        self.assertEqual("desk@example.test", details["to"])
+
+    def test_multiple_addresses_are_rendered_per_address(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", '"Desk" <desk@example.test>, <second@example.test>'),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        details = self._assert_parity(
+            _eml(headers, ["Body."]),
+            cli_text=_cli_text(
+                [
+                    ("Message-ID", GOLDEN_MESSAGE_ID),
+                    ("Subject", "Kurzfrage zum Vorgang"),
+                    ("From", "Sender <sender@example.test>"),
+                    ("To", "Desk <desk@example.test>, second@example.test"),
+                    ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+                ],
+                "Body.",
+            ),
+        )
+        self.assertEqual("Desk <desk@example.test>, second@example.test", details["to"])
+
     def test_references_rfc2047_is_decoded(self) -> None:
         headers = _base_headers() + [
             ("References", "=?utf-8?q?=3Cparent=40example.test=3E?="),
@@ -320,10 +393,33 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         details = self._assert_parity(
             _eml(headers, ["Body."]),
             cli_text=_cli_text(
-                _base_headers() + [("References", "<parent@example.test>")], "Body."
+                _base_headers() + [("References", "parent@example.test")], "Body."
             ),
         )
-        self.assertEqual("<parent@example.test>", details["references"])
+        self.assertEqual("parent@example.test", details["references"])
+
+    def test_references_list_has_no_brackets_in_reply_to_keeps_them(self) -> None:
+        ids = [f"<id{index}@example.test>" for index in range(5)]
+        headers = _base_headers() + [
+            ("References", " ".join(ids)),
+            ("In-Reply-To", "<parent@example.test>"),
+        ]
+        details = self._assert_parity(
+            _eml(headers, ["Body."]),
+            cli_text=_cli_text(
+                _base_headers()
+                + [
+                    ("References", " ".join(f"id{index}@example.test" for index in range(5))),
+                    ("In-Reply-To", "<parent@example.test>"),
+                ],
+                "Body.",
+            ),
+        )
+        self.assertEqual(
+            " ".join(f"id{index}@example.test" for index in range(5)),
+            details["references"],
+        )
+        self.assertEqual("<parent@example.test>", details["in_reply_to"])
 
     def test_multipart_alternative_uses_the_unique_text_plain_part(self) -> None:
         eml = _multipart_eml(
@@ -335,48 +431,22 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         )
         details = self._assert_parity(
             eml,
-            cli_text=_cli_text(_base_headers(), "Erste Zeile.\nZweite Zeile."),
+            cli_text=_cli_text_raw(_base_headers(), "Erste Zeile.\nZweite Zeile."),
         )
         self.assertEqual("Erste Zeile.\nZweite Zeile.", details["preview"])
         self.assertEqual("preview", details["read_level"])
 
-    def test_multipart_mixed_uses_the_text_body_and_never_the_attachment(self) -> None:
-        eml = _multipart_eml(
-            "mixed",
-            [
-                _part(["Body."]),
-                [
-                    "Content-Type: application/pdf",
-                    "Content-Transfer-Encoding: base64",
-                    'Content-Disposition: attachment; filename="a.pdf"',
-                    "",
-                    base64.b64encode(b"%PDF-1.4").decode("ascii"),
-                ],
-            ],
-        )
+    def test_multipart_mixed_without_attachment_uses_the_text_body(self) -> None:
+        eml = _multipart_eml("mixed", [_part(["Body."])])
         details = self._assert_parity(
-            eml, cli_text=_cli_text(_base_headers(), "Body.")
+            eml, cli_text=_cli_text_raw(_base_headers(), "Body.")
         )
         self.assertEqual("Body.", details["preview"])
-        self.assertEqual("available", details["attachment_status"])
-        self.assertEqual(1, len(details["attachments"]))
 
-    def test_multipart_related_uses_the_text_body(self) -> None:
-        eml = _multipart_eml(
-            "related",
-            [
-                _part(["Body."]),
-                [
-                    "Content-Type: image/png",
-                    "Content-Transfer-Encoding: base64",
-                    'Content-Disposition: inline; filename="p.png"',
-                    "",
-                    base64.b64encode(b"\x89PNG").decode("ascii"),
-                ],
-            ],
-        )
+    def test_multipart_related_without_attachment_uses_the_text_body(self) -> None:
+        eml = _multipart_eml("related", [_part(["Body."])])
         details = self._assert_parity(
-            eml, cli_text=_cli_text(_base_headers(), "Body.")
+            eml, cli_text=_cli_text_raw(_base_headers(), "Body.")
         )
         self.assertEqual("Body.", details["preview"])
 
@@ -389,6 +459,115 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         )
         self.assertEqual(30, len(details["preview"].splitlines()))
         self.assertEqual("Zeile 29", details["preview"].splitlines()[-1])
+
+    def test_body_with_a_trailing_newline_gains_the_cli_terminator_line(self) -> None:
+        details = self._assert_parity(
+            _eml(_base_headers(), ["Body."]),
+            cli_text=_cli_text(_base_headers(), "Body."),
+        )
+        self.assertEqual("Body.\n", details["preview"])
+
+    def test_body_without_a_trailing_newline_has_no_terminator_line(self) -> None:
+        headers = [
+            f"Message-ID: {GOLDEN_MESSAGE_ID}",
+            "Subject: Kurzfrage zum Vorgang",
+            "From: Sender <sender@example.test>",
+            "To: desk@example.test",
+            "Date: Thu, 01 Jan 2026 00:00:00 +0000",
+        ]
+        eml = ("\r\n".join(headers) + "\r\n\r\nBody.").encode("utf-8")
+        cli = _cli_text_raw(_base_headers(), "Body.")
+        details = self._assert_parity(eml, cli_text=cli)
+        self.assertEqual("Body.", details["preview"])
+
+    def test_preview_truncation_with_terminator_is_hard_coded(self) -> None:
+        expectations = {29: (29, 116), 30: (30, 119), 31: (30, 119)}
+        for count, (line_count, length) in expectations.items():
+            body = [f"L{index:02d}" for index in range(1, count + 1)]
+            with self.subTest(count=count):
+                details = self._assert_parity(
+                    _eml(_base_headers(), body),
+                    cli_text=_cli_text(_base_headers(), "\n".join(body)),
+                    preview_lines=30,
+                )
+                self.assertEqual(line_count, len(details["preview"].splitlines()))
+                self.assertEqual(length, len(details["preview"]))
+
+    def test_preview_lines_zero_and_small(self) -> None:
+        body = ["A", "B", "C", "D", "E"]
+        zero = self._assert_parity(
+            _eml(_base_headers(), body),
+            cli_text=_cli_text(_base_headers(), "\n".join(body)),
+            preview_lines=0,
+        )
+        self.assertEqual("", zero["preview"])
+        three = self._assert_parity(
+            _eml(_base_headers(), body),
+            cli_text=_cli_text(_base_headers(), "\n".join(body)),
+            preview_lines=3,
+        )
+        self.assertEqual("A\nB\nC", three["preview"])
+
+    def test_two_trailing_newlines_keep_both_terminator_lines(self) -> None:
+        eml = _eml(_base_headers(), ["Body.", ""])
+        cli = (
+            "Message-ID: <golden-61@example.test>\n"
+            "Subject: Kurzfrage zum Vorgang\n"
+            "From: Sender <sender@example.test>\n"
+            "To: desk@example.test\n"
+            "Date: Thu, 01 Jan 2026 00:00:00 +0000\n"
+            "\n"
+            "Body.\n"
+            "\n"
+            "\n"
+        )
+        details = self._assert_parity(eml, cli_text=cli)
+        self.assertEqual("Body.\n\n", details["preview"])
+
+    def test_hard_coded_cli_literal_matches_a_plain_body(self) -> None:
+        cli = (
+            "Message-ID: <golden-61@example.test>\n"
+            "Subject: Kurzfrage zum Vorgang\n"
+            "From: Sender <sender@example.test>\n"
+            "To: desk@example.test\n"
+            "Date: Thu, 01 Jan 2026 00:00:00 +0000\n"
+            "\n"
+            "Body.\n"
+            "\n"
+        )
+        details = self._assert_parity(_eml(_base_headers(), ["Body."]), cli_text=cli)
+        self.assertEqual("Body.\n", details["preview"])
+
+    def test_base64_body_with_a_trailing_cr_has_no_terminator_line(self) -> None:
+        payload = base64.b64encode(b"Body.\r").decode("ascii")
+        details = self._assert_parity(
+            _eml(_base_headers(), [payload], cte="base64"),
+            cli_text=_cli_text_raw(_base_headers(), "Body."),
+        )
+        self.assertEqual("Body.", details["preview"])
+
+    def test_quoted_special_characters_stay_in_one_element(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", '"Doe: John; Jr." <john@example.test>'),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        details = self._assert_parity(
+            _eml(headers, ["Body."]),
+            cli_text=_cli_text(
+                [
+                    ("Message-ID", GOLDEN_MESSAGE_ID),
+                    ("Subject", "Kurzfrage zum Vorgang"),
+                    ("From", "Sender <sender@example.test>"),
+                    ("To", "Doe: John; Jr. <john@example.test>"),
+                    ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+                ],
+                "Body.",
+            ),
+        )
+        self.assertEqual("Doe: John; Jr. <john@example.test>", details["to"])
 
     def test_iso_8859_1_part_is_decoded_with_its_charset(self) -> None:
         headers = [
@@ -408,13 +587,13 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         details = self._assert_parity(
             eml, cli_text=_cli_text(_base_headers(), "Grüße aus Wien.")
         )
-        self.assertEqual("Grüße aus Wien.", details["preview"])
+        self.assertEqual("Grüße aus Wien.\n", details["preview"])
 
     def test_base64_body_is_decoded_like_the_cli(self) -> None:
         payload = base64.b64encode("Grüße.".encode("utf-8")).decode("ascii")
         details = self._assert_parity(
             _eml(_base_headers(), [payload], cte="base64"),
-            cli_text=_cli_text(_base_headers(), "Grüße."),
+            cli_text=_cli_text_raw(_base_headers(), "Grüße."),
         )
         self.assertEqual("Grüße.", details["preview"])
 
@@ -423,7 +602,7 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
             _eml(_base_headers(), ["Body."], cte="quoted-printable"),
             cli_text=_cli_text(_base_headers(), "Body."),
         )
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
 
     def test_message_id_with_single_brackets_is_accepted(self) -> None:
         details = self._assert_parity(_eml(_base_headers("<single@example.test>"), ["Body."]))
@@ -497,14 +676,14 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         details = self._assert_parity(
             eml, cli_text=_cli_text(_base_headers(), "Grüße – Wien.")
         )
-        self.assertEqual("Grüße – Wien.", details["preview"])
+        self.assertEqual("Grüße – Wien.\n", details["preview"])
 
     def test_8bit_transfer_encoding_is_accepted(self) -> None:
         details = self._assert_parity(
             _eml(_base_headers(), ["Body."], cte="8bit"),
             cli_text=_cli_text(_base_headers(), "Body."),
         )
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
 
     def test_q_encoding_with_a_literal_percent_is_accepted(self) -> None:
         headers = [
@@ -529,22 +708,6 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         )
         self.assertEqual("100% Zuschlag", details["subject"])
 
-    def test_inline_named_text_is_not_the_body(self) -> None:
-        eml = _multipart_eml(
-            "mixed",
-            [
-                _part(["Body."]),
-                _part(
-                    ["Named."],
-                    extra=['Content-Disposition: inline; filename="a.txt"'],
-                ),
-            ],
-        )
-        details = self._assert_parity(
-            eml, cli_text=_cli_text(_base_headers(), "Body.")
-        )
-        self.assertEqual("Body.", details["preview"])
-
     def test_bare_lf_line_endings_are_accepted(self) -> None:
         headers = [
             f"Message-ID: {GOLDEN_MESSAGE_ID}",
@@ -557,7 +720,7 @@ class EmlParityGoldenTests(HermeticProcessTestCase):
         details = self._assert_parity(
             eml, cli_text=_cli_text(_base_headers(), "Body.")
         )
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
 
     def test_missing_optional_headers_use_the_envelope_fallback(self) -> None:
         headers = [
@@ -905,6 +1068,199 @@ class EmlParityRejectionTests(HermeticProcessTestCase):
         raw = (header_block + "\r\n\r\nBody.\r\n").encode("utf-8")
         self._assert_rejected(raw, cli_text=_cli_text(_base_headers(), "Body."))
 
+    def test_mixed_with_an_inventory_attachment_is_rejected(self) -> None:
+        eml = _multipart_eml(
+            "mixed",
+            [
+                _part(["Body."]),
+                [
+                    "Content-Type: application/pdf",
+                    "Content-Transfer-Encoding: base64",
+                    'Content-Disposition: attachment; filename="a.pdf"',
+                    "",
+                    base64.b64encode(b"%PDF-1.4").decode("ascii"),
+                ],
+            ],
+        )
+        self._assert_rejected(eml, cli_text=_cli_text(_base_headers(), "Body."))
+
+    def test_related_with_an_inventory_attachment_is_rejected(self) -> None:
+        eml = _multipart_eml(
+            "related",
+            [
+                _part(["Body."]),
+                [
+                    "Content-Type: image/png",
+                    "Content-Transfer-Encoding: base64",
+                    'Content-Disposition: inline; filename="p.png"',
+                    "",
+                    base64.b64encode(b"\x89PNG").decode("ascii"),
+                ],
+            ],
+        )
+        self._assert_rejected(eml, cli_text=_cli_text(_base_headers(), "Body."))
+
+    def test_inline_named_text_with_an_attachment_inventory_is_rejected(self) -> None:
+        eml = _multipart_eml(
+            "mixed",
+            [
+                _part(["Body."]),
+                _part(
+                    ["Named."],
+                    extra=['Content-Disposition: inline; filename="a.txt"'],
+                ),
+            ],
+        )
+        self._assert_rejected(eml, cli_text=_cli_text(_base_headers(), "Body."))
+
+    def test_date_without_a_weekday_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "desk@example.test"),
+            ("Date", "01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]),
+            cli_text=_cli_text(_base_headers(), "Body."),
+        )
+
+    def test_address_group_syntax_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "Team: a@example.test;"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_address_comment_syntax_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "a@example.test (comment)"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_empty_address_element_is_rejected(self) -> None:
+        for value in (",a@example.test", "a@example.test,,b@example.test", "a@example.test,"):
+            with self.subTest(value=value):
+                headers = [
+                    ("Message-ID", GOLDEN_MESSAGE_ID),
+                    ("Subject", "Kurzfrage zum Vorgang"),
+                    ("From", "Sender <sender@example.test>"),
+                    ("To", value),
+                    ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+                ]
+                self._assert_rejected(
+                    _eml(headers, ["Body."]),
+                    cli_text=_cli_text(_base_headers(), "Body."),
+                )
+
+    def test_duplicate_address_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "a@example.test, a@example.test"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_case_insensitive_duplicate_address_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "A@example.test, a@example.test"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_quoted_local_part_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", '"a,b"@example.test'),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_comma_inside_the_angle_block_is_rejected(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "Name <a@example.test,b@example.test>"),
+            ("Date", "Thu, 01 Jan 2026 00:00:00 +0000"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_date_forms_outside_the_reference_are_rejected(self) -> None:
+        for value in (
+            "Foo, 01 Jan 2026 00:00:00 +0000",
+            "Thu, 1 Jan 2026 00:00:00 +0000",
+            "Thu, 01 Jan 2026 00:00:00 GMT",
+            "Fri, 01 Jan 2026 00:00:00 +0000",
+            "Thu, 31 Feb 2026 00:00:00 +0000",
+            "Thu, 01 Jan 2026 24:00:00 +0000",
+            "Thu, 01 Jan 2026 00:00:00 +2400",
+        ):
+            with self.subTest(value=value):
+                headers = [
+                    ("Message-ID", GOLDEN_MESSAGE_ID),
+                    ("Subject", "Kurzfrage zum Vorgang"),
+                    ("From", "Sender <sender@example.test>"),
+                    ("To", "desk@example.test"),
+                    ("Date", value),
+                ]
+                self._assert_rejected(
+                    _eml(headers, ["Body."]),
+                    cli_text=_cli_text(_base_headers(), "Body."),
+                )
+
+    def test_adjacent_references_brackets_are_rejected(self) -> None:
+        headers = _base_headers() + [
+            ("References", "<a@example.test><b@example.test>"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
+    def test_unbalanced_references_brackets_are_rejected(self) -> None:
+        for value in ("<a@example.test", "a@example.test>"):
+            with self.subTest(value=value):
+                headers = _base_headers() + [("References", value)]
+                self._assert_rejected(
+                    _eml(headers, ["Body."]),
+                    cli_text=_cli_text(_base_headers(), "Body."),
+                )
+
+    def test_comma_separated_references_are_rejected(self) -> None:
+        headers = _base_headers() + [
+            ("References", "<a@example.test>, <b@example.test>"),
+        ]
+        self._assert_rejected(
+            _eml(headers, ["Body."]), cli_text=_cli_text(_base_headers(), "Body.")
+        )
+
 
 class EmlControlPathTests(HermeticProcessTestCase):
     """Points 3-5: helper default, has_attachment=False and the full path."""
@@ -917,7 +1273,7 @@ class EmlControlPathTests(HermeticProcessTestCase):
         eml = _eml(_base_headers(), ["Body."])
         details, calls, _ = _details(eml, allow=False)
         self.assertEqual(["export", "read"], calls)
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
 
     def test_has_attachment_false_reads_once_without_export(self) -> None:
         eml = _eml(_base_headers(), ["Body."])
@@ -929,7 +1285,7 @@ class EmlControlPathTests(HermeticProcessTestCase):
         self.assertEqual(["read"], calls)
         self.assertEqual(1, snapshot["starts_by_purpose"]["scan_preview"])
         self.assertEqual(0, snapshot["starts_by_purpose"]["scan_inventory"])
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
 
     def test_full_body_with_the_flag_still_exports_and_reads(self) -> None:
         eml = _eml(_base_headers(), ["Body."])
@@ -937,7 +1293,7 @@ class EmlControlPathTests(HermeticProcessTestCase):
             eml, allow=True, full_body=True, purpose="full_read"
         )
         self.assertEqual(["export", "read"], calls)
-        self.assertEqual("Body.", details["preview"])
+        self.assertEqual("Body.\n", details["preview"])
         self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
         self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
 
@@ -1179,6 +1535,96 @@ class EmlPredicateTests(HermeticProcessTestCase):
         self.assertIsNone(
             self._predicate(_eml(_base_headers(), ["Body."], content_type=""))
         )
+
+    def test_attachment_inventory_is_excluded_without_the_seam(self) -> None:
+        self.assertIsNone(
+            himalaya._details_from_eml(
+                "61",
+                "INBOX",
+                _eml(_base_headers(), ["Body."]),
+                preview_lines=30,
+                fallback_envelope=None,
+                attachments=[{"filename": "a.pdf", "size_bytes": 8}],
+                attachment_status="available",
+                attachment_error=None,
+            )
+        )
+
+    def test_date_without_weekday_is_none_without_the_seam(self) -> None:
+        headers = [
+            ("Message-ID", GOLDEN_MESSAGE_ID),
+            ("Subject", "Kurzfrage zum Vorgang"),
+            ("From", "Sender <sender@example.test>"),
+            ("To", "desk@example.test"),
+            ("Date", "01 Jan 2026 00:00:00 +0000"),
+        ]
+        self.assertIsNone(self._predicate(_eml(headers, ["Body."])))
+
+    def test_address_guard_rejects_group_comment_empty_and_duplicate(self) -> None:
+        for value in (
+            "Team: a@example.test;",
+            "a@example.test (comment)",
+            ",a@example.test",
+            "a@example.test,,b@example.test",
+            "a@example.test,",
+            "a@example.test, a@example.test",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(himalaya._canonical_address_header(value))
+        self.assertEqual(
+            "Doe, John <john@example.test>",
+            himalaya._canonical_address_header('"Doe, John" <john@example.test>'),
+        )
+
+    def test_address_guard_rejects_a_case_insensitive_duplicate(self) -> None:
+        for value in (
+            "A@example.test, a@example.test",
+            "a@example.test, A@EXAMPLE.TEST",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(himalaya._canonical_address_header(value))
+
+    def test_address_guard_rejects_a_quoted_local_part(self) -> None:
+        for value in ('"a,b"@example.test', '"a"@example.test'):
+            with self.subTest(value=value):
+                self.assertIsNone(himalaya._canonical_address_header(value))
+
+    def test_address_guard_rejects_a_comma_inside_the_angle_block(self) -> None:
+        self.assertIsNone(
+            himalaya._canonical_address_header(
+                "Name <a@example.test,b@example.test>"
+            )
+        )
+
+    def test_references_guard_rejects_adjacent_unbalanced_and_commas(self) -> None:
+        for value in (
+            "<a@example.test><b@example.test>",
+            "<a@example.test",
+            "a@example.test>",
+            "<a@example.test>, <b@example.test>",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(himalaya._canonical_references_header(value))
+        self.assertEqual(
+            "a@example.test b@example.test",
+            himalaya._canonical_references_header(
+                "<a@example.test> <b@example.test>"
+            ),
+        )
+
+    def test_date_guard_requires_the_anchored_reference_form(self) -> None:
+        self.assertTrue(
+            himalaya._is_p1_reference_date("Thu, 01 Jan 2026 00:00:00 +0000")
+        )
+        for value in (
+            "Foo, 01 Jan 2026 00:00:00 +0000",
+            "Thu, 1 Jan 2026 00:00:00 +0000",
+            "Thu, 01 Jan 2026 00:00:00 GMT",
+            "Fri, 01 Jan 2026 00:00:00 +0000",
+            "Thu, 31 Feb 2026 00:00:00 +0000",
+        ):
+            with self.subTest(value=value):
+                self.assertFalse(himalaya._is_p1_reference_date(value))
 
     def test_inventory_unavailable_is_none(self) -> None:
         self.assertIsNone(

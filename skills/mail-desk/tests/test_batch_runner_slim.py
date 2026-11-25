@@ -104,6 +104,19 @@ lane 2026-11-23-frontier-103-login-reduction): MAX_WORDS 8850 → 8900 (measured
 extended P1 input class (unfolding, RFC 2047, address canonicalisation, one
 unambiguous text/plain part, per-part charset, preview truncation), the 0/7
 reference finding and the unchanged inactive default. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-25, issue #103 P1 parity round,
+lane 2026-11-25-frontier-103-p1-parity): MAX_WORDS 8900 → 8950 (measured 8937
+words, rounded to the next twenty-five). The P1 paragraph now documents the
+CLI-stdout preview terminator line, the display-name-less address form, the
+bracket-free References list, the Date weekday guard and the attachment-inventory
+exclusion with production effect 0. Floors unchanged.
+
+Orchestrator test-correction (documented, 2026-11-25, issue #103 P1 parity fix
+round 1, same lane): MAX_WORDS 8950 → 8975 (measured 8959 words, rounded to the
+next twenty-five). The P1 paragraph now names the closed Date reference form, the
+address group/comment/empty/duplicate exclusions, the References bracket/comma
+guard and the M09-modelled terminator limit. Floors unchanged.
 """
 
 from __future__ import annotations
@@ -126,9 +139,10 @@ DOC = BUNDLE_ROOT / "skills" / "mail-desk" / "references" / "batch-runner.md"
 #: reuse contract, its full-text gate/modelled-class fix round, and the
 #: issue-#103 P3 scan-profile/preview-first contract, its precise net-effect/
 #: empty-ID fix round, the P5 pacing/backoff contract, its operator-owned bound,
-#: and the P1ext real-mail input class (see docstring history).
+#: the P1ext real-mail input class and the P1parity field-parity gates (see
+#: docstring history).
 MIN_WORDS = 5300
-MAX_WORDS = 8900
+MAX_WORDS = 8975
 
 #: All mode/section headings must survive (no section removal).
 REQUIRED_SECTIONS = (
