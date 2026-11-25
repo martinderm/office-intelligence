@@ -63,6 +63,26 @@ def _purpose_bound(reader: Callable[..., Any], purpose: str) -> Callable[..., An
     return bound
 
 
+def _lookup_full_text_source(
+    context: ScanSourceContext,
+    envelope_id: str,
+    folder: str,
+    account: str | None,
+    fallback_envelope: Mapping[str, Any] | None,
+) -> bytes | None:
+    """Return the exactly bound source for this item, or ``None``.
+
+    The identity is the caller's locator plus the expected Message-ID from the
+    fallback envelope; a missing expectation never resolves a source.
+    """
+    if not isinstance(fallback_envelope, Mapping):
+        return None
+    expected = str(fallback_envelope.get("message_id") or "").strip()
+    if not expected:
+        return None
+    return context.lookup(envelope_id, folder, account, expected)
+
+
 def _full_text_from_source(
     context: ScanSourceContext,
     reader: Callable[..., Any],
@@ -89,10 +109,7 @@ def _full_text_from_source(
     """
     if not isinstance(fallback_envelope, Mapping):
         return None
-    expected = str(fallback_envelope.get("message_id") or "").strip()
-    if not expected:
-        return None
-    eml = context.lookup(envelope_id, folder, account, expected)
+    eml = _lookup_full_text_source(context, envelope_id, folder, account, fallback_envelope)
     if eml is None:
         return None
     if not eml_full_text_parity(eml):
@@ -122,32 +139,109 @@ def _full_text_from_source(
     return details
 
 
+def _bind_full_read_export(
+    reader: Callable[..., Any],
+    context: ScanSourceContext,
+    default_account: str | None,
+) -> Callable[..., Any]:
+    """Hold the item's own full-read export as its scan source; never change a result.
+
+    Installed for every fresh scan, independent of the full-text gate.  Only a
+    ``full_body`` call is touched: the existing ``raw_eml_sink`` is appended and
+    the captured bytes are bound after the call under the same closed identity,
+    but only when the result carries a Message-ID and that exact identity holds
+    no source yet (no double bind, no poisoning).  A preview call is forwarded
+    unchanged, a sink or bind failure never changes the read result, and
+    nothing is bound for a read that produced no export.
+    """
+
+    def bound(*args: Any, **kwargs: Any) -> Any:
+        if not kwargs.get("full_body"):
+            return reader(*args, **kwargs)
+        envelope_id = str(args[0]) if args else str(kwargs.get("env_id") or "")
+        folder_value = args[1] if len(args) > 1 else kwargs.get("folder", "INBOX")
+        folder = str(folder_value or "INBOX")
+        account = args[2] if len(args) > 2 else kwargs.get("account", default_account)
+        captured: list[bytes] = []
+
+        def capture(payload: bytes) -> None:
+            try:
+                captured.append(bytes(payload))
+            except Exception:  # noqa: BLE001 - a capture sink never changes the read
+                pass
+
+        existing_sink = kwargs.get("raw_eml_sink")
+        if existing_sink is None:
+            kwargs["raw_eml_sink"] = capture
+        else:
+
+            def chained(payload: bytes) -> None:
+                for sink in (existing_sink, capture):
+                    try:
+                        sink(payload)
+                    except Exception:  # noqa: BLE001 - a capture sink never changes the read
+                        pass
+
+            kwargs["raw_eml_sink"] = chained
+
+        details = reader(*args, **kwargs)
+        if captured and isinstance(details, dict):
+            message_id = str(details.get("message_id") or "").strip()
+            if message_id and context.lookup(envelope_id, folder, account, message_id) is None:
+                try:
+                    context.bind(envelope_id, folder, account, message_id, captured[0])
+                except Exception:  # noqa: BLE001 - a bind never changes the read result
+                    pass
+        return details
+
+    return bound
+
+
 def _source_reuse_full_reader(
     reader: Callable[..., Any],
     context: ScanSourceContext,
     policy: Any,
     default_account: str | None,
 ) -> Callable[..., Any]:
-    """Consult the scan source before the regular full read; never bypass it."""
+    """Consult the scan source before the regular full read; never bypass it.
+
+    Only installed behind the draft's explicit full-text gate.  A missed held
+    source falls through to the inner reader with
+    ``allow_full_body_from_export=True`` for a ``full_body`` call, so the item's
+    own export may still supply the body.  A held source that was refused
+    (parity, injection barrier, derivation) keeps the export reuse off: its
+    bytes are exactly what the own export would yield, so the same verdict must
+    hold.  A preview call stays unchanged.
+    """
 
     def bound(*args: Any, **kwargs: Any) -> Any:
         envelope_id = str(args[0]) if args else str(kwargs.get("env_id") or "")
-        folder = args[1] if len(args) > 1 else kwargs.get("folder", "INBOX")
+        folder = str(args[1] if len(args) > 1 else kwargs.get("folder", "INBOX") or "INBOX")
         account = args[2] if len(args) > 2 else kwargs.get("account", default_account)
         preview_lines = int(args[3]) if len(args) > 3 else int(kwargs.get("preview_lines", 30))
         if kwargs.get("full_body"):
-            reused = _full_text_from_source(
+            held = _lookup_full_text_source(
                 context,
-                reader,
                 envelope_id,
-                str(folder or "INBOX"),
+                folder,
                 account,
                 kwargs.get("fallback_envelope"),
-                preview_lines,
-                policy,
             )
-            if reused is not None:
-                return reused
+            if held is not None:
+                reused = _full_text_from_source(
+                    context,
+                    reader,
+                    envelope_id,
+                    folder,
+                    account,
+                    kwargs.get("fallback_envelope"),
+                    preview_lines,
+                    policy,
+                )
+                if reused is not None:
+                    return reused
+            else:
+                kwargs.setdefault("allow_full_body_from_export", True)
         return reader(*args, **kwargs)
 
     return bound
@@ -317,6 +411,10 @@ def run_draft_mode(
             # Only the final, clean selection of this one scan may keep a source;
             # known, skipped and quarantined items are dropped here.
             source_context.retain_selected(clean_emails, account=account)
+            # Issue #103 P2 (E1, default): the full read's own inventory export is
+            # bound for the evaluation reuse.  The inner wrapper captures and binds;
+            # the outer one may reuse a held source and the gated own export.
+            full_reader = _bind_full_read_export(full_reader, source_context, account)
             # The evaluation reuse stays active; the full-text reuse is the
             # separately gated, modelled class and binds only on explicit opt-in.
             if allow_scan_source_full_text:

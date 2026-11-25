@@ -17,9 +17,21 @@
   Point-Date-Sync wird `covered_through` gesetzt statt `None`; der zweite Teil
   des Tests erwartet danach `new_count == 1`. Reproduziert unverändert auf
   Basis `eaa2bcf` ohne den Diff dieser Lane (temporärer Detached Worktree,
-  einzelner Test, Exit 1). Vermutlich datumsfenster-abhängig; `core/sent_indexer.py` und
-  der Test sind von dieser Lane unberührt.
+  einzelner Test, Exit 1). Erneut reproduziert auf `f29983f` (P2-Lane-HEAD
+  desselben Worktrees; `core/sent_indexer.py` und der Test sind diff-fremd,
+  `test_sent_handoff.py` einzeln, 165 Tests / 1 Failure, Exit 1, gleiche
+  Assertion an `:1207`).
+  Datumsfenster-abhängig: der erste Block läuft ohne `datetime`-Freeze gegen
+  das reale Tagesdatum, während der zweite `2026-09-24` friert. Bei leerem Index
+  und fehlendem State bildet der Lauf `default_start = run_date -
+  (MAX_SYNC_WINDOW_DAYS - 1)` mit `MAX_SYNC_WINDOW_DAYS = 60` und
+  `initial = min(earliest, default_start)`; sobald `run_date - 59 >= 2026-09-22`
+  (ab Lauftag **2026-11-20**), ist `initial` der Tag selbst, `_advance_days`
+  setzt `covered_through = 2026-09-22` statt `None`, und `assertIsNone` schlägt
+  fehl. Am Lauftag 2026-11-25 gilt das.
 - **Run:** `runs/office-intelligence/2026-11-25-oi103-p1-attachment-line`
+  (Erstbefund), `runs/office-intelligence/2026-11-25-oi103-p2-fulltext`
+  (Reproduktion auf `f29983f`)
 
 ## 2026-10-18 — Issue #14: Writer-Implementierung zur User-Abnahme
 

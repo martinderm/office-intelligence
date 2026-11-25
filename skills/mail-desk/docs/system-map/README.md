@@ -2769,13 +2769,47 @@ Review-Hash unverändert. Evaluation-Reuse bleibt unabhängig aktiv, konsultiert
 `source_lookup` erst nach feststehender Identität und führt alle bestehenden
 MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert auf denselben Bytes
 aus; andere `install_draft_attachment_evaluations`-Aufrufer bleiben ohne
-`source_lookup`. Hit-Zahlen (nur Gate `True`): ein Scan-Export als
-`scan_inventory`, `full_inventory`/`full_read`/`evaluation_raw` 0; sonst
-regulärer Full-Read, ggf. `full_*` > 0. `count < 1` erzeugt keinen Kontext. P1
+`source_lookup`.
+
+**#103 P2 E1: eigener Full-Read-Export als Quelle (Default).** Für jeden
+frischen Scan installiert `run_draft_mode` einen **inneren** Bind-Wrapper um den
+Full-Reader. Bei `full_body=True` hängt er den bestehenden `raw_eml_sink` an,
+sammelt die Exportbytes und bindet sie nach dem Aufruf über
+`context.bind(envelope_id, folder, account, details["message_id"], bytes)` —
+nur bei nichtleerer Message-ID und nur, wenn `lookup(...)` für dieselbe Identität
+noch nichts hält (kein Doppel-Bind, keine Poisoning-Kaskade). Sink- und
+Bind-Fehler ändern das Leseergebnis nie; Preview-Aufrufe bleiben unberührt.
+Damit findet der bereits aktive `source_lookup` der Evaluation die Bytes des
+eigenen Exports: bei `full_read`/`full_inventory` unverändert entfällt
+`evaluation_raw` (projiziert aus der A-Diagnose: −3 Starts im A-Lauf; keine
+erneute Live-Messung).
+
+**#103 P2 E2: Full-Body aus dem eigenen Export (nur Gate `True`).** Der
+**äußere** Full-Text-Wrapper setzt `allow_full_body_from_export=True` nur bei
+aktivem Gate und nur für `full_body=True`, und nur wenn für dieses Item keine
+gehaltene Scan-Quelle vorliegt. Eine gehaltene, aber abgelehnte Quelle
+(Parität, Injection-Barrier, Ableitung) hält den Export-Reuse aus: ihre Bytes
+wären identisch und trügen dasselbe Urteil. `get_single_email_details` liefert
+dann nach erfolgreichem Inventar-Export und vor dem CLI-Read den Full-Body aus
+der gemeinsamen `raw_eml`-Ableitung (`_details_from_raw_eml`,
+`read_level: "full_body"`), wenn `eml_full_text_parity` gilt **und**
+`eml_own_message_id` exakt der normalisierten `fallback_envelope["message_id"]`
+entspricht. Paritäts-Ablehnung, fehlende/abweichende ID, unvollständige
+Inventur oder Ausnahme → unveränderter Read (Transport-Block re-raised).
+Reihenfolge: Bind-Wrapper innen, Full-Text-Wrapper außen. Hit-Zahlen (nur Gate
+`True`): Scan-Quellen-Hit (gehaltene Quelle akzeptiert) `scan_inventory` 1,
+`full_inventory`/`full_read`/`evaluation_raw` 0 — der Full-Read startet nicht;
+Eigener-Export-Hit (keine gehaltene Quelle, Parität **und** ID passen)
+`full_inventory` 1, `full_read`/`evaluation_raw` 0 (`scan_preview` 1,
+`scan_inventory` 0 in der Kohorte `has_attachment=false`); sonst regulärer
+Full-Read, ggf. `full_*` > 0.
+Default-Hit-Zahl (Gate `False`, Kohorte `has_attachment=false`): `scan_preview` 1,
+`scan_inventory` 0, `full_inventory` 1, `full_read` 1, `evaluation_raw` 0.
+`count < 1` erzeugt keinen Kontext. P1
 ist im Draft aktiv (Default `True`) und ungekoppelt; P2 ruft
 `_details_from_eml` nicht auf. Keine EML in Manifest, `batch-inspected.json`,
 Progress, Index, Journal, Evidence oder Logs. Tests:
-`tests/test_issue103_p2_source_reuse.py` (43 Fälle).
+`tests/test_issue103_p2_source_reuse.py` (49 Fälle).
 
 **#103 P3: Preview-first für bekannte Lücken (`scan_profile`, Draft-Opt-in):**
 `scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`, validiert vor

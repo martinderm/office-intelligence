@@ -2433,6 +2433,121 @@ def _details_from_eml(
         return None
 
 
+def _details_from_raw_eml(
+    env_id: str | int,
+    folder: str,
+    eml_b: bytes,
+    *,
+    preview_lines: int,
+    full_body: bool,
+    fallback_envelope: dict[str, Any] | None,
+    attachments_list: list[dict[str, Any]],
+    attachment_status: str,
+    attachment_error: str | None,
+) -> dict[str, Any]:
+    """Derive one result record from already validated RFC-822 bytes.
+
+    This is the single ``raw_eml`` derivation: the caller supplies bytes whose
+    inventory it already validated, and the display fields are read from the
+    parsed message.  It starts no process and reads no file.  Exceptions stay
+    with the caller so its existing containment (fall through to the CLI read)
+    is unchanged.
+    """
+    msg_obj = email.message_from_bytes(eml_b, policy=email.policy.default)
+    raw_mid = str(msg_obj.get("Message-ID", "") or "")
+    norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+    subj = str(msg_obj.get("Subject", "") or "")
+    from_hdr = str(msg_obj.get("From", "") or "")
+    to_hdr = str(msg_obj.get("To", "") or "")
+    cc_hdr = str(msg_obj.get("Cc", "") or "")
+    date_hdr = str(msg_obj.get("Date", "") or "")
+    in_reply_to = str(msg_obj.get("In-Reply-To", "") or "")
+    references = str(msg_obj.get("References", "") or "")
+
+    body_text = ""
+    try:
+        body_part = msg_obj.get_body(preferencelist=("plain", "html"))
+        if body_part:
+            content = body_part.get_content()
+            body_text = content if isinstance(content, str) else str(content or "")
+    except Exception:
+        pass
+    if not body_text:
+        for part in msg_obj.walk():
+            if not part.is_multipart() and part.get_content_type().lower() in ("text/plain", "text/html"):
+                payload = part.get_payload(decode=True)
+                if isinstance(payload, bytes):
+                    body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
+                    break
+
+    body_lines = body_text.splitlines()
+    preview = "\n".join(body_lines if full_body else body_lines[:preview_lines])
+
+    return {
+        "envelope_id": str(env_id),
+        "folder": folder,
+        "message_id": norm_mid,
+        "raw_message_id": raw_mid,
+        "subject": subj or (fallback_envelope.get("subject", "") if fallback_envelope else ""),
+        "from": from_hdr,
+        "to": to_hdr,
+        "cc": cc_hdr,
+        "headers_complete": True,
+        "date": date_hdr,
+        "in_reply_to": in_reply_to,
+        "references": references,
+        "preview": preview,
+        "attachments": attachments_list,
+        "attachment_status": attachment_status,
+        "attachment_error": attachment_error,
+        "error": None,
+        "read_error_reason": None,
+        "read_level": "full_body" if full_body else "preview",
+    }
+
+
+def _full_body_from_own_export(
+    env_id: str | int,
+    folder: str,
+    eml_data: bytes,
+    *,
+    preview_lines: int,
+    fallback_envelope: dict[str, Any] | None,
+    attachments_list: list[dict[str, Any]],
+    attachment_status: str,
+    attachment_error: str | None,
+) -> dict[str, Any] | None:
+    """Return the full-body record from the item's own export, or ``None``.
+
+    Issue #103 P2 (gated): the completed inventory export may replace the CLI
+    read only when its structure belongs to the modelled full-text class and its
+    own Message-ID proves the expected item.  Every doubt — missing/deviating
+    identity, parity rejection, derivation error — returns ``None`` so the
+    caller keeps the unchanged CLI read and the successful inventory.
+    """
+    try:
+        expected = normalize_message_id(
+            str((fallback_envelope or {}).get("message_id") or "")
+        )
+        if not expected or not eml_full_text_parity(eml_data):
+            return None
+        if eml_own_message_id(eml_data) != expected:
+            return None
+        return _details_from_raw_eml(
+            env_id,
+            folder,
+            eml_data,
+            preview_lines=preview_lines,
+            full_body=True,
+            fallback_envelope=fallback_envelope,
+            attachments_list=attachments_list,
+            attachment_status=attachment_status,
+            attachment_error=attachment_error,
+        )
+    except Exception:  # noqa: BLE001 - an unproven reuse keeps the CLI read
+        return None
+
+
 def eml_own_message_id(eml: bytes) -> str:
     """Return the EML's own normalized Message-ID, or ``""`` when not provable.
 
@@ -2646,6 +2761,7 @@ def get_single_email_details(
     allow_eml_details: bool = False,
     raw_eml_sink: Callable[[bytes], None] | None = None,
     preview_only: bool = False,
+    allow_full_body_from_export: bool = False,
 ) -> dict[str, Any]:
     """Fetch headers, preview/body, and structured MIME attachments for one envelope.
 
@@ -2676,10 +2792,23 @@ def get_single_email_details(
     attachment list and ``attachment_status: "none"``.  It is the first step of a
     preview-first scan, where :func:`complete_scan_inventory` adds exactly one
     export afterwards.
+
+    ``allow_full_body_from_export`` (Issue #103 P2, default ``False``) lets the
+    already completed inventory export supply a ``full_body`` result instead of
+    the following CLI read.  It applies only when ``full_body is True``, the
+    inventory is complete, :func:`eml_full_text_parity` proves the modelled
+    full-text class and the export's own Message-ID equals the normalized
+    ``fallback_envelope["message_id"]``.  The result comes from the same
+    :func:`_details_from_raw_eml` derivation as the ``raw_eml`` branch with
+    ``read_level: "full_body"``.  A missing or deviating identity, a parity
+    rejection, an unavailable inventory or any exception keeps the unchanged CLI
+    read; a transport block is re-raised, never swallowed.
     """
     _validate_purpose(purpose)
     if not isinstance(allow_eml_details, bool):
         raise ValueError("allow_eml_details must be a boolean")
+    if not isinstance(allow_full_body_from_export, bool):
+        raise ValueError("allow_full_body_from_export must be a boolean")
     if not isinstance(preview_only, bool):
         raise ValueError("preview_only must be a boolean")
     if raw_eml_sink is not None and not callable(raw_eml_sink):
@@ -2704,57 +2833,17 @@ def get_single_email_details(
             else:
                 attachment_status = "available" if attachments_list else "none"
             eml_b = raw_eml if isinstance(raw_eml, bytes) else raw_eml.encode("utf-8", errors="replace")
-            msg_obj = email.message_from_bytes(eml_b, policy=email.policy.default)
-            raw_mid = str(msg_obj.get("Message-ID", "") or "")
-            norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
-            subj = str(msg_obj.get("Subject", "") or "")
-            from_hdr = str(msg_obj.get("From", "") or "")
-            to_hdr = str(msg_obj.get("To", "") or "")
-            cc_hdr = str(msg_obj.get("Cc", "") or "")
-            date_hdr = str(msg_obj.get("Date", "") or "")
-            in_reply_to = str(msg_obj.get("In-Reply-To", "") or "")
-            references = str(msg_obj.get("References", "") or "")
-
-            body_text = ""
-            try:
-                body_part = msg_obj.get_body(preferencelist=("plain", "html"))
-                if body_part:
-                    content = body_part.get_content()
-                    body_text = content if isinstance(content, str) else str(content or "")
-            except Exception:
-                pass
-            if not body_text:
-                for part in msg_obj.walk():
-                    if not part.is_multipart() and part.get_content_type().lower() in ("text/plain", "text/html"):
-                        payload = part.get_payload(decode=True)
-                        if isinstance(payload, bytes):
-                            body_text = payload.decode(part.get_content_charset() or "utf-8", errors="replace")
-                            break
-
-            body_lines = body_text.splitlines()
-            preview = "\n".join(body_lines if full_body else body_lines[:preview_lines])
-
-            return {
-                "envelope_id": str(env_id),
-                "folder": folder,
-                "message_id": norm_mid,
-                "raw_message_id": raw_mid,
-                "subject": subj or (fallback_envelope.get("subject", "") if fallback_envelope else ""),
-                "from": from_hdr,
-                "to": to_hdr,
-                "cc": cc_hdr,
-                "headers_complete": True,
-                "date": date_hdr,
-                "in_reply_to": in_reply_to,
-                "references": references,
-                "preview": preview,
-                "attachments": attachments_list,
-                "attachment_status": attachment_status,
-                "attachment_error": attachment_error,
-                "error": None,
-                "read_error_reason": None,
-                "read_level": "full_body" if full_body else "preview",
-            }
+            return _details_from_raw_eml(
+                env_id,
+                folder,
+                eml_b,
+                preview_lines=preview_lines,
+                full_body=full_body,
+                fallback_envelope=fallback_envelope,
+                attachments_list=attachments_list,
+                attachment_status=attachment_status,
+                attachment_error=attachment_error,
+            )
         except Exception as exc:
             attachments_list = []
             attachment_status = "attachment_inventory_unavailable"
@@ -2821,6 +2910,25 @@ def get_single_email_details(
                     )
                     if derived is not None:
                         return derived
+                elif allow_full_body_from_export and full_body:
+                    # Issue #103 P2: the same export may supply the full body
+                    # when its structure proves the modelled full-text class and
+                    # its own Message-ID proves this exact item.  Any doubt
+                    # (missing/deviating id, parity rejection, derivation error)
+                    # keeps the unchanged CLI read and the successful inventory;
+                    # no new export starts here.
+                    reused_full_body = _full_body_from_own_export(
+                        env_id,
+                        folder,
+                        eml_data,
+                        preview_lines=preview_lines,
+                        fallback_envelope=fallback_envelope,
+                        attachments_list=attachments_list,
+                        attachment_status=attachment_status,
+                        attachment_error=attachment_error,
+                    )
+                    if reused_full_body is not None:
+                        return reused_full_body
         except Exception as exc:
             raise_if_transport_blocked(exc)
             attachments_list = []
