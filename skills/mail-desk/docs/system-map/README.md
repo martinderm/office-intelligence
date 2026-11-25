@@ -2711,6 +2711,15 @@ produktionswirksam 0 bis zur Owner-Aktivierung. Die `References`-Abweichung
 Keine Live-Behauptung; die reale Referenz nach dieser Runde ist noch zu
 wiederholen.
 
+**P1refs (2026-11-25): Einzel-ID-`References` mit Klammern.** Genau eine ID in
+spitzen Klammern liefert exakt dieselbe 43-Zeichen-Form (43 = 43); mehrere
+Whitespace-getrennte IDs bleiben ohne alle `<`/`>`; eine einzelne ID ohne
+Klammern bleibt unverändert. `In-Reply-To` bleibt unberührt, die Guards (Komma,
+angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe, nicht
+dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte Paritätssuite
+umfasst 165 Tests. Keine Live-Behauptung; P1 bleibt inaktiv und
+produktionswirksam 0 bis zur Owner-Aktivierung.
+
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
 `core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes
 in einem privaten, nicht serialisierbaren `ScanSourceContext` (kein `dict`,

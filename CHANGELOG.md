@@ -8,6 +8,29 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-25 - Issue #103: P1 Single-ID-References
+
+#### Changed
+
+- **`_canonical_references_header`:** genau eine ID in spitzen Klammern bleibt
+  unverändert (belegte 43-Zeichen-CLI-Form, 43 = 43); mehrere
+  Whitespace-getrennte IDs liefern weiterhin die Liste ohne alle `<`/`>`, eine
+  einzelne ID ohne Klammern bleibt unverändert. Guards unverändert: Komma,
+  angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe (`""`) und
+  nicht dekodierbare RFC-2047-Wörter liefern weiterhin `None` bzw. `""`;
+  `In-Reply-To` bleibt unberührt und behält seine Klammern.
+- **Unverändert:** `allow_eml_details` bleibt Default `False`; P1 bleibt
+  inaktiv und produktionswirksam 0 bis zur Owner-Aktivierung. Keine
+  Live-Mailbox aus der Code-Lane, keine Aktivierung, kein Merge.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p1_eml_parity.py`
+  (165 Fälle: Einzel-ID 43 = 43, RFC-2047-Einzel-ID mit Klammern, Mehr-ID ohne
+  Klammern, `In-Reply-To` unverändert, Guards unverändert); volle
+  Mail-Desk-Suite 2856 Tests / 9 übersprungen mit dem einen vorbestehenden,
+  diff-fremden
+  `test_sent_handoff.MultiDateAndOverflowTests.test_empty_explicit_day_rewinds_the_barrier_so_later_mail_is_seen`-Fehlschlag;
+  `references/backends/himalaya.md`, `references/batch-runner.md`,
+  L1/L2-System-Map.
+
 ### 2026-11-25 - Issue #103: P1-Paritätsrunde (reale Feldparität)
 
 #### Changed

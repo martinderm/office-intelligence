@@ -221,8 +221,10 @@ stripped). The accepted class covers real mail shapes:
   **modelled from M09** (CLI preview = EML preview + 1 char); bodies without a
   trailing newline or with several trailing newlines are modelled, not
   live-proven;
-- `References`: every `<`/`>` removed (list of IDs without brackets); adjacent
-  `><` (IDs glued together), unbalanced brackets and comma lists → `None`;
+- `References`: exactly one bracketed ID stays unchanged with its `<`/`>`
+  (recorded 43-character CLI form); several whitespace-separated IDs lose every
+  `<`/`>`; an unbracketed single ID stays as is; adjacent `><` (IDs glued
+  together), unbalanced/nested brackets and comma lists → `None`;
   `In-Reply-To` keeps its single-ID brackets;
 - attachment inventory: the closed single-file class is accepted only when
   exactly one inventory entry has `attachment_status == "available"`,

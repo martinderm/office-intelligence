@@ -210,25 +210,23 @@ Die P1-Eingabeklasse ist **erweitert** (Issue #103 P1ext): Header-Folding,
 RFC 2047, Adressnormalisierung auf die CLI-Darstellung, ein eindeutiger
 `text/plain`-Teil in `multipart/alternative`/`mixed`/`related`, Charset pro Teil
 und Preview-Truncation auf `preview_lines`; die ursprüngliche Referenz fand
-0/7 Treffer, die Erweiterung ist eine bewusste Vertragserweiterung und noch
-nicht live-belegt. Die Paritätsrunde (P1parity) gleicht die reale Feldparität
-an: CLI-stdout-Semantik inkl. Terminator-Schlusszeile (M09-gestütztes Modell),
-Adressform ohne Anzeigenamen (`<>` entfernt; Gruppe/Kommentar/leeres Element/
-`casefold`-Duplikat, zitierter Local Part (`"a,b"@x.test`) und Komma im
-Angle-Block (`Name <a@x,b@y>`) ausgeschlossen), `References` ohne Klammern mit
-Guard gegen angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To`
-unverändert), `Date` nur in der
-verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000` (Wochentag
-konsistent). **Einzelanhang:** `Content-Disposition: attachment`,
+0/7 Treffer, die Erweiterung ist beabsichtigt, aber nicht live-belegt. P1parity
+gleicht die reale Feldparität an: CLI-stdout-Semantik inkl.
+Terminator-Schlusszeile (M09-gestütztes Modell), Adressform ohne Anzeigenamen
+(`<>` entfernt; Gruppe/Kommentar/leeres Element/`casefold`-Duplikat, zitierter
+Local Part (`"a,b"@x.test`), Komma im Angle-Block (`Name <a@x,b@y>`)
+ausgeschlossen), `References` mit Klammern nur bei einer ID, sonst ohne, Guard
+(Komma, angrenzende/unbalancierte Klammern) (`In-Reply-To` unverändert), `Date`
+nur in der verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000`
+(Wochentag konsistent). **Einzelanhang:** `Content-Disposition: attachment`,
 Nicht-Bild-/Octet-`Content-Type`, `filename == original_filename`
 ohne Pfadanteil, belegbarem `downloads-dir`; nach den Body-Zeilen und vor der
 Terminator-Zeile, dann `preview_lines`. Mehrfachanhang, Inline-Bilder,
 octet-stream, unbelegte Konfiguration `None`; P1 inaktiv, Wirkung 0
-(Owner-Gate). Bei Opt-in: ein
-qualifizierter Kandidat nutzt den Inventar-Export als Preview (1 Start statt 2),
-ein nicht qualifizierter bleibt bei Export + Read ohne Re-Export,
-`has_attachment=False` bei genau einem Read (dort ist der P1-Zweig strukturell
-unerreichbar).
+(Owner-Gate). Bei Opt-in: ein qualifizierter Kandidat nutzt den
+Inventar-Export als Preview (1 Start statt 2), sonst Export + Read ohne
+Re-Export, `has_attachment=False` bei genau einem Read (dort ist der P1-Zweig
+strukturell unerreichbar).
 
 **P2 — Quellen-Reuse im frischen Draft-Scan:** Der Draft hält die Scan-EML-Bytes
 eines frischen Scans privat im Speicher und nutzt sie nur bei exakter
