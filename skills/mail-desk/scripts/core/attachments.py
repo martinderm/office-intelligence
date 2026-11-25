@@ -172,6 +172,24 @@ def _traverse_part_locators(current_part: Any, current_locator: str) -> list[tup
     return locators
 
 
+def find_mime_part_by_locator(message: Any, locator: str) -> Any | None:
+    """Return the leaf MIME part at an inventory ``part_locator`` or ``None``.
+
+    ``locator`` is the value :func:`inspect_mime_tree` records for a leaf part
+    (``1``, ``2``, ``1.1``, ...).  A missing or malformed locator, a
+    non-message input or a traversal error proves nothing and returns ``None``.
+    """
+    if not isinstance(locator, str) or not locator:
+        return None
+    try:
+        for candidate_locator, part in _traverse_part_locators(message, ""):
+            if candidate_locator == locator:
+                return part
+    except Exception:  # noqa: BLE001 - unprovable traversal always fails closed
+        return None
+    return None
+
+
 def _part_defect_names(part: Any) -> set[str]:
     """Return parser defect class names without exposing message contents."""
     names = {type(defect).__name__ for defect in (getattr(part, "defects", ()) or ())}

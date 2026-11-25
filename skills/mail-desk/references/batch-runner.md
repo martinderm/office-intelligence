@@ -219,9 +219,12 @@ Angle-Block (`Name <a@x,b@y>`) ausgeschlossen), `References` ohne Klammern mit
 Guard gegen angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To`
 unverändert), `Date` nur in der
 verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000` (Wochentag
-konsistent). **Items mit kanonischem Inventar-Anhang werden ausgeschlossen**
-(`None`): das exakte CLI-Anhangszeilenformat ist nicht belegt; P1 hat damit in
-der realen Referenz Produktionswirkung 0 (offener Future-Gate). Bei Opt-in: ein
+konsistent). **Einzelanhang:** `Content-Disposition: attachment`,
+Nicht-Bild-/Octet-`Content-Type`, `filename == original_filename`
+ohne Pfadanteil, belegbarem `downloads-dir`; nach den Body-Zeilen und vor der
+Terminator-Zeile, dann `preview_lines`. Mehrfachanhang, Inline-Bilder,
+octet-stream, unbelegte Konfiguration `None`; P1 inaktiv, Wirkung 0
+(Owner-Gate). Bei Opt-in: ein
 qualifizierter Kandidat nutzt den Inventar-Export als Preview (1 Start statt 2),
 ein nicht qualifizierter bleibt bei Export + Read ohne Re-Export,
 `has_attachment=False` bei genau einem Read (dort ist der P1-Zweig strukturell

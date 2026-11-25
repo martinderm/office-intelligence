@@ -8,6 +8,19 @@
 > [Archiv-Snapshot](docs/archive/feature-ledgers/README.md) erreichbar, aktuelle
 > im Issue/PR/Run.
 
+## 2026-11-25 — Präexistenter, diff-fremder Testfehlschlag in `test_sent_handoff`
+
+- **rule_id:** preexisting-test-failure (date window)
+- **Pfad:** `skills/mail-desk/tests/test_sent_handoff.py:1207`
+  (`MultiDateAndOverflowTests.test_empty_explicit_day_rewinds_the_barrier_so_later_mail_is_seen`)
+- **Meldung:** `AssertionError: '2026-09-22' is not None` — nach einem leeren
+  Point-Date-Sync wird `covered_through` gesetzt statt `None`; der zweite Teil
+  des Tests erwartet danach `new_count == 1`. Reproduziert unverändert auf
+  Basis `eaa2bcf` ohne den Diff dieser Lane (temporärer Detached Worktree,
+  einzelner Test, Exit 1). Vermutlich datumsfenster-abhängig; `core/sent_indexer.py` und
+  der Test sind von dieser Lane unberührt.
+- **Run:** `runs/office-intelligence/2026-11-25-oi103-p1-attachment-line`
+
 ## 2026-10-18 — Issue #14: Writer-Implementierung zur User-Abnahme
 
 Die historische Writer-Lücke unten wird durch den source-bound Writer für

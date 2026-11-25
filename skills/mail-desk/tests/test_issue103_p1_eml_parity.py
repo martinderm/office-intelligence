@@ -14,12 +14,15 @@ All tests are hermetic: only the process boundary (``_POPEN``) is faked.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest.mock import Mock, patch
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
@@ -170,10 +173,19 @@ def _details(
     full_body: bool = False,
     purpose: str = "scan_preview",
     fallback: dict | None = None,
+    downloads_dir: str | Path | None = None,
+    resolver: Mock | None = None,
+    account: str | None = None,
 ) -> tuple[dict, list[str], dict]:
     calls: list[str] = []
     read_text = cli_text if cli_text is not None else _cli_read_text(eml)
+    downloads_resolver = resolver if resolver is not None else Mock(return_value=downloads_dir)
     with patch.object(
+        himalaya,
+        "resolve_himalaya_downloads_dir",
+        downloads_resolver,
+        create=True,
+    ), patch.object(
         himalaya,
         "build_himalaya_command",
         side_effect=lambda command, account=None: ["himalaya", *command],
@@ -187,6 +199,7 @@ def _details(
         details = himalaya.get_single_email_details(
             "61",
             "INBOX",
+            account=account,
             preview_lines=preview_lines,
             fallback_envelope=fallback,
             full_body=full_body,
@@ -1720,6 +1733,855 @@ class HermeticGuardSelfTest(HermeticProcessTestCase):
                 AssertionError, "real subprocess.run is forbidden"
             ):
                 himalaya.run_himalaya(["envelope", "list"], max_retries=1)
+
+
+# ---------------------------------------------------------------------------
+# Issue #103 P1 attachment line (closed hit class)
+# ---------------------------------------------------------------------------
+
+PDF_MIME = "application/pdf"
+DOCX_MIME = (
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+)
+PDF_PAYLOAD = b"%PDF-1.4\n"
+DOCX_PAYLOAD = b"PK\x03\x04docx"
+
+HIT_DOWNLOAD_DIRS = (
+    r"\\?\C:\fake\downloads\ACCOUNT",
+    r"\\?\D:\mail\ACCOUNT",
+)
+
+
+def _attachment_line(mime_type: str, filename: str, downloads_dir: str) -> str:
+    return f'<#part type={mime_type} filename="{downloads_dir}\\{filename}"><#/part>'
+
+
+def _attachment_part(
+    payload: bytes,
+    *,
+    content_type: str = PDF_MIME,
+    filename: str = "a.pdf",
+) -> list[str]:
+    return [
+        f"Content-Type: {content_type}",
+        f'Content-Disposition: attachment; filename="{filename}"',
+        "Content-Transfer-Encoding: base64",
+        "",
+        base64.b64encode(payload).decode("ascii"),
+    ]
+
+
+def _body_part(lines: list[str] | None = None) -> list[str]:
+    """A text body part whose payload ends with one line break.
+
+    The empty trailing line is significant: the MIME delimiter consumes the
+    CRLF before the boundary, so the payload keeps exactly one trailing CRLF
+    (the modelled CLI body after its final content line).
+    """
+    return _part([*(lines if lines is not None else ["Body."]), ""])
+
+
+def _base64_text_part(text: str) -> list[str]:
+    """A base64 text part whose decoded payload has no trailing line break."""
+    return [
+        "Content-Type: text/plain; charset=utf-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        base64.b64encode(text.encode("utf-8")).decode("ascii"),
+    ]
+
+
+def _single_attachment_eml(
+    *,
+    content_type: str = PDF_MIME,
+    filename: str = "a.pdf",
+    payload: bytes = PDF_PAYLOAD,
+) -> bytes:
+    return _multipart_eml(
+        "mixed",
+        [
+            _body_part(),
+            _attachment_part(payload, content_type=content_type, filename=filename),
+        ],
+    )
+
+
+def _preview_bytes(text: str) -> tuple[int, str]:
+    encoded = text.encode("utf-8")
+    return len(encoded), hashlib.sha256(encoded).hexdigest()
+
+
+class EmlAttachmentHitTests(HermeticProcessTestCase):
+    """P1: one provable named file attachment yields the CLI attachment line."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        himalaya.reset_transport_stats()
+
+    def _assert_hit(
+        self,
+        eml: bytes,
+        *,
+        downloads_dir: str,
+        body_text: str,
+        attachment_mime: str,
+        attachment_filename: str,
+        preview_lines: int = 30,
+        body_ends_with_newline: bool = True,
+    ) -> dict:
+        attachment_line = _attachment_line(
+            attachment_mime, attachment_filename, downloads_dir
+        )
+        # The reference is built from the source body + attachment line, with
+        # the process terminator added only when the source body ends with a
+        # line break; the existing CLI parser applies ``[:preview_lines]``.
+        # The expected string is derived from the same source so the
+        # terminator/truncation is not hand-coded.
+        body_text_with_line = f"{body_text}\n{attachment_line}"
+        if body_ends_with_newline:
+            reference_cli_text = _cli_text(_base_headers(), body_text_with_line)
+            expected_source = body_text_with_line + "\n\n"
+            fallback_cli_text = _cli_text(_base_headers(), body_text)
+        else:
+            reference_cli_text = _cli_text_raw(_base_headers(), body_text_with_line)
+            expected_source = body_text_with_line + "\n"
+            fallback_cli_text = _cli_text_raw(_base_headers(), body_text)
+        reference, reference_calls, _ = _details(
+            eml,
+            allow=False,
+            cli_text=reference_cli_text,
+            preview_lines=preview_lines,
+        )
+        expected_preview = "\n".join(
+            expected_source.splitlines()[:preview_lines]
+        )
+        line_present = attachment_line in expected_preview
+        resolver = Mock(return_value=downloads_dir)
+        candidate, candidate_calls, snapshot = _details(
+            eml,
+            allow=True,
+            cli_text=fallback_cli_text,
+            preview_lines=preview_lines,
+            downloads_dir=downloads_dir,
+            resolver=resolver,
+        )
+        self.assertIsInstance(candidate, dict)
+        self.assertEqual(expected_preview, candidate["preview"])
+        self.assertEqual(expected_preview, reference["preview"])
+        self.assertEqual(
+            1 if line_present else 0, candidate["preview"].count("<#part ")
+        )
+        self.assertEqual(
+            1 if line_present else 0, candidate["preview"].count("<#/part>")
+        )
+        length, digest = _preview_bytes(expected_preview)
+        self.assertEqual(length, len(candidate["preview"].encode("utf-8")))
+        self.assertEqual(
+            digest,
+            hashlib.sha256(candidate["preview"].encode("utf-8")).hexdigest(),
+        )
+        self.assertEqual(["export"], candidate_calls)
+        self.assertEqual(["export", "read"], reference_calls)
+        self.assertEqual(reference, candidate)
+        self.assertEqual(1, resolver.call_count)
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["scan_preview"])
+        return candidate
+
+    def test_pdf_hit_is_byte_exact_for_each_downloads_dir(self) -> None:
+        for downloads_dir in HIT_DOWNLOAD_DIRS:
+            with self.subTest(downloads_dir=downloads_dir):
+                line = _attachment_line(PDF_MIME, "a.pdf", downloads_dir)
+                candidate = self._assert_hit(
+                    _single_attachment_eml(),
+                    downloads_dir=downloads_dir,
+                    body_text="Body.",
+                    attachment_mime=PDF_MIME,
+                    attachment_filename="a.pdf",
+                )
+                self.assertEqual(f"Body.\n{line}\n", candidate["preview"])
+
+    def test_docx_hit_is_byte_exact_for_each_downloads_dir(self) -> None:
+        for downloads_dir in HIT_DOWNLOAD_DIRS:
+            with self.subTest(downloads_dir=downloads_dir):
+                line = _attachment_line(DOCX_MIME, "a.docx", downloads_dir)
+                candidate = self._assert_hit(
+                    _single_attachment_eml(
+                        content_type=DOCX_MIME,
+                        filename="a.docx",
+                        payload=DOCX_PAYLOAD,
+                    ),
+                    downloads_dir=downloads_dir,
+                    body_text="Body.",
+                    attachment_mime=DOCX_MIME,
+                    attachment_filename="a.docx",
+                )
+                self.assertEqual(f"Body.\n{line}\n", candidate["preview"])
+
+    def test_hit_emits_exactly_one_last_attachment_line(self) -> None:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        line = _attachment_line(PDF_MIME, "a.pdf", downloads_dir)
+        candidate = self._assert_hit(
+            _single_attachment_eml(),
+            downloads_dir=downloads_dir,
+            body_text="Body.",
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+        )
+        self.assertEqual(f"Body.\n{line}\n", candidate["preview"])
+
+    def test_body_terminator_line_stays_after_the_attachment_line(self) -> None:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        line = _attachment_line(PDF_MIME, "a.pdf", downloads_dir)
+        candidate = self._assert_hit(
+            _single_attachment_eml(),
+            downloads_dir=downloads_dir,
+            body_text="Body.",
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+        )
+        self.assertEqual(f"Body.\n{line}\n", candidate["preview"])
+        self.assertEqual("", candidate["preview"].split("\n")[-1])
+
+    def test_body_without_a_trailing_newline_appends_the_line_as_the_last_content(self) -> None:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        line = _attachment_line(PDF_MIME, "a.pdf", downloads_dir)
+        candidate = self._assert_hit(
+            _multipart_eml(
+                "mixed",
+                [_base64_text_part("Body."), _attachment_part(PDF_PAYLOAD)],
+            ),
+            downloads_dir=downloads_dir,
+            body_text="Body.",
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+            body_ends_with_newline=False,
+        )
+        expected = f"Body.\n{line}"
+        self.assertEqual(expected, candidate["preview"])
+        self.assertFalse(candidate["preview"].endswith("\n"))
+        self.assertEqual(line, candidate["preview"].split("\n")[-1])
+
+    def test_truncation_29_body_lines_keeps_the_line_at_position_30(self) -> None:
+        body = [f"Zeile {index:02d}" for index in range(1, 30)]
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        line = _attachment_line(PDF_MIME, "a.pdf", downloads_dir)
+        candidate = self._assert_hit(
+            _multipart_eml(
+                "mixed",
+                [_body_part(body), _attachment_part(PDF_PAYLOAD)],
+            ),
+            downloads_dir=downloads_dir,
+            body_text="\n".join(body),
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+            preview_lines=30,
+        )
+        lines = candidate["preview"].split("\n")
+        self.assertEqual(30, len(lines))
+        self.assertEqual(line, lines[29])
+        self.assertEqual(line, lines[-1])
+
+    def test_truncation_30_body_lines_drops_the_line(self) -> None:
+        body = [f"Zeile {index:02d}" for index in range(1, 31)]
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        candidate = self._assert_hit(
+            _multipart_eml(
+                "mixed",
+                [_body_part(body), _attachment_part(PDF_PAYLOAD)],
+            ),
+            downloads_dir=downloads_dir,
+            body_text="\n".join(body),
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+            preview_lines=30,
+        )
+        self.assertEqual(30, len(candidate["preview"].split("\n")))
+        self.assertNotIn("<#part ", candidate["preview"])
+
+    def test_truncation_31_body_lines_drops_the_line(self) -> None:
+        body = [f"Zeile {index:02d}" for index in range(1, 32)]
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        candidate = self._assert_hit(
+            _multipart_eml(
+                "mixed",
+                [_body_part(body), _attachment_part(PDF_PAYLOAD)],
+            ),
+            downloads_dir=downloads_dir,
+            body_text="\n".join(body),
+            attachment_mime=PDF_MIME,
+            attachment_filename="a.pdf",
+            preview_lines=30,
+        )
+        self.assertEqual(30, len(candidate["preview"].split("\n")))
+        self.assertNotIn("<#part ", candidate["preview"])
+
+    def test_default_false_never_resolves_and_keeps_the_export_read_sequence(self) -> None:
+        resolver = Mock(return_value=HIT_DOWNLOAD_DIRS[0])
+        details, calls, snapshot = _details(
+            _single_attachment_eml(),
+            allow=False,
+            cli_text=_cli_text(_base_headers(), "Body."),
+            resolver=resolver,
+        )
+        self.assertEqual(["export", "read"], calls)
+        self.assertEqual("Body.\n", details["preview"])
+        self.assertEqual(1, len(details["attachments"]))
+        resolver.assert_not_called()
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_preview"])
+
+    def test_default_false_without_an_attachment_is_byte_identical(self) -> None:
+        resolver = Mock(return_value=HIT_DOWNLOAD_DIRS[0])
+        details, calls, _ = _details(
+            _eml(_base_headers(), ["Body."]),
+            allow=False,
+            resolver=resolver,
+        )
+        self.assertEqual(["export", "read"], calls)
+        self.assertEqual("Body.\n", details["preview"])
+        self.assertEqual([], details["attachments"])
+        resolver.assert_not_called()
+
+    def test_no_attachment_with_a_downloads_dir_stays_unchanged(self) -> None:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        eml = _multipart_eml("mixed", [_body_part()])
+        reference_resolver = Mock(return_value=downloads_dir)
+        reference, reference_calls, _ = _details(
+            eml,
+            allow=False,
+            cli_text=_cli_text(_base_headers(), "Body."),
+            resolver=reference_resolver,
+        )
+        candidate_resolver = Mock(return_value=downloads_dir)
+        candidate, candidate_calls, _ = _details(
+            eml,
+            allow=True,
+            cli_text=_cli_text(_base_headers(), "Body."),
+            downloads_dir=downloads_dir,
+            resolver=candidate_resolver,
+        )
+        self.assertEqual("Body.\n", candidate["preview"])
+        self.assertNotIn("<#part ", candidate["preview"])
+        self.assertEqual(["export"], candidate_calls)
+        self.assertEqual(["export", "read"], reference_calls)
+        self.assertEqual(reference, candidate)
+        reference_resolver.assert_not_called()
+        candidate_resolver.assert_not_called()
+
+    def test_account_argument_reaches_the_resolver(self) -> None:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        resolver = Mock(return_value=downloads_dir)
+        candidate, calls, _ = _details(
+            _single_attachment_eml(),
+            allow=True,
+            cli_text=_cli_text(_base_headers(), "Body."),
+            downloads_dir=downloads_dir,
+            resolver=resolver,
+            account="work",
+        )
+        resolver.assert_called_once_with("work")
+        self.assertEqual(["export"], calls)
+        self.assertIn("<#part ", candidate["preview"])
+
+
+class EmlAttachmentExclusionTests(HermeticProcessTestCase):
+    """P1: every unproven attachment class keeps the CLI fallback."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        himalaya.reset_transport_stats()
+
+    def _assert_fallback(self, eml: bytes, *, body_text: str = "Body.") -> dict:
+        downloads_dir = HIT_DOWNLOAD_DIRS[0]
+        cli_text = _cli_text(_base_headers(), body_text)
+        reference, reference_calls, _ = _details(
+            eml,
+            allow=False,
+            cli_text=cli_text,
+        )
+        candidate, candidate_calls, snapshot = _details(
+            eml,
+            allow=True,
+            cli_text=cli_text,
+            downloads_dir=downloads_dir,
+            resolver=Mock(return_value=downloads_dir),
+        )
+        self.assertEqual(["export", "read"], reference_calls)
+        self.assertEqual(["export", "read"], candidate_calls)
+        self.assertEqual(reference, candidate)
+        self.assertNotIn("<#part ", candidate["preview"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_preview"])
+        return candidate
+
+    def test_two_attachments_fall_back(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    _attachment_part(PDF_PAYLOAD, filename="a.pdf"),
+                    _attachment_part(PDF_PAYLOAD, filename="b.pdf"),
+                ],
+            )
+        )
+
+    def test_inline_image_falls_back(self) -> None:
+        body = 'Body. <img src="cid:img1">'
+        self._assert_fallback(
+            _multipart_eml(
+                "related",
+                [
+                    _body_part([body]),
+                    [
+                        "Content-Type: image/png",
+                        "Content-Transfer-Encoding: base64",
+                        "Content-ID: <img1>",
+                        'Content-Disposition: inline; filename="p.png"',
+                        "",
+                        base64.b64encode(b"\x89PNG").decode("ascii"),
+                    ],
+                ],
+            ),
+            body_text=body,
+        )
+
+    def test_image_attachment_falls_back_without_an_inline_flag(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    [
+                        "Content-Type: image/png",
+                        "Content-Transfer-Encoding: base64",
+                        'Content-Disposition: attachment; filename="p.png"',
+                        "",
+                        base64.b64encode(b"\x89PNG").decode("ascii"),
+                    ],
+                ],
+            )
+        )
+
+    def test_octet_stream_falls_back(self) -> None:
+        self._assert_fallback(
+            _single_attachment_eml(
+                content_type="application/octet-stream",
+                filename="a.bin",
+                payload=b"\x00\x01binary",
+            )
+        )
+
+    def test_missing_explicit_content_type_falls_back(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    [
+                        'Content-Disposition: attachment; filename="a.pdf"',
+                        "Content-Transfer-Encoding: base64",
+                        "",
+                        base64.b64encode(PDF_PAYLOAD).decode("ascii"),
+                    ],
+                ],
+            )
+        )
+
+    def test_missing_real_disposition_falls_back(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    [
+                        'Content-Type: application/pdf; name="a.pdf"',
+                        "Content-Transfer-Encoding: base64",
+                        "",
+                        base64.b64encode(PDF_PAYLOAD).decode("ascii"),
+                    ],
+                ],
+            )
+        )
+
+    def test_missing_filename_falls_back(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    [
+                        "Content-Type: application/pdf",
+                        "Content-Disposition: attachment",
+                        "Content-Transfer-Encoding: base64",
+                        "",
+                        base64.b64encode(PDF_PAYLOAD).decode("ascii"),
+                    ],
+                ],
+            )
+        )
+
+    def test_sanitized_filename_mismatch_falls_back(self) -> None:
+        self._assert_fallback(
+            _multipart_eml(
+                "mixed",
+                [
+                    _body_part(),
+                    _attachment_part(PDF_PAYLOAD, filename="a:b.pdf"),
+                ],
+            )
+        )
+
+    def test_line_break_in_filename_falls_back(self) -> None:
+        eml = _multipart_eml(
+            "mixed",
+            [
+                _body_part(),
+                [
+                    "Content-Type: application/pdf",
+                    "Content-Transfer-Encoding: base64",
+                    "Content-Disposition: attachment; filename*=UTF-8''a%0Ab.pdf",
+                    "",
+                    base64.b64encode(PDF_PAYLOAD).decode("ascii"),
+                ],
+            ],
+        )
+        inventory = himalaya.inspect_mime_tree(eml)
+        self.assertEqual(1, len(inventory))
+        self.assertIn("\n", inventory[0]["filename"])
+        details = self._assert_fallback(eml)
+        self.assertEqual("available", details["attachment_status"])
+
+    def test_mismatched_raw_part_falls_back(self) -> None:
+        eml = _single_attachment_eml()
+
+        def part_stub(*, content_type: str, filename: str) -> Mock:
+            part = Mock()
+            part.get.return_value = content_type
+            part.get_content_disposition.return_value = "attachment"
+            part.get_content_type.return_value = content_type
+            part.get_filename.return_value = filename
+            return part
+
+        for label, part in (
+            ("mime", part_stub(content_type="text/plain", filename="a.pdf")),
+            ("filename", part_stub(content_type=PDF_MIME, filename="other.pdf")),
+        ):
+            with self.subTest(label=label):
+                with patch.object(
+                    himalaya, "find_mime_part_by_locator", return_value=part
+                ):
+                    details = self._assert_fallback(eml)
+                    self.assertEqual("available", details["attachment_status"])
+
+    def test_defective_inventory_falls_back_even_with_a_downloads_dir(self) -> None:
+        eml = _eml(
+            _base_headers(),
+            ["Body."],
+            content_type='multipart/mixed; boundary="b1"',
+        )
+        details = self._assert_fallback(eml)
+        self.assertEqual("attachment_inventory_unavailable", details["attachment_status"])
+        self.assertNotEqual("none", details["attachment_status"])
+
+    def test_resolver_failure_keeps_the_successful_inventory_and_falls_back(self) -> None:
+        eml = _single_attachment_eml()
+        cli_text = _cli_text(_base_headers(), "Body.")
+        reference, reference_calls, _ = _details(
+            eml,
+            allow=False,
+            cli_text=cli_text,
+        )
+        resolver = Mock(side_effect=RuntimeError("resolver boom"))
+        candidate, candidate_calls, _ = _details(
+            eml,
+            allow=True,
+            cli_text=cli_text,
+            downloads_dir=HIT_DOWNLOAD_DIRS[0],
+            resolver=resolver,
+        )
+        self.assertEqual(["export", "read"], reference_calls)
+        self.assertEqual(["export", "read"], candidate_calls)
+        self.assertEqual("available", candidate["attachment_status"])
+        self.assertIsNone(candidate["attachment_error"])
+        self.assertEqual(1, len(candidate["attachments"]))
+        self.assertEqual(reference, candidate)
+        resolver.assert_called_once()
+
+
+class DownloadDirResolverTests(HermeticProcessTestCase):
+    """P1: the download dir is only taken from a proven Himalaya config value."""
+
+    def _resolver(self):
+        resolver = getattr(himalaya, "resolve_himalaya_downloads_dir", None)
+        if resolver is None:
+            self.fail("himalaya.resolve_himalaya_downloads_dir is missing")
+        return resolver
+
+    def _resolve(
+        self,
+        temporary: str,
+        config_text: str,
+        *,
+        account: str | None = None,
+    ):
+        config_path = Path(temporary) / "config.toml"
+        config_path.write_text(config_text, encoding="utf-8")
+        return self._resolver()(account, config_path=config_path)
+
+    def _expected_existing(self, path: Path) -> str:
+        resolved = str(Path(path).resolve())
+        return f"\\\\?\\{resolved}" if os.name == "nt" else resolved
+
+    def _expected_missing(self, path: Path) -> str:
+        return str(Path(path).resolve())
+
+    def test_account_specific_value_beats_the_global_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            global_dir = Path(temporary) / "global"
+            global_dir.mkdir()
+            account_dir = Path(temporary) / "account"
+            account_dir.mkdir()
+            config = "\n".join(
+                [
+                    f"downloads-dir = {json.dumps(str(global_dir))}",
+                    "[accounts.work]",
+                    f"downloads-dir = {json.dumps(str(account_dir))}",
+                ]
+            )
+            self.assertEqual(
+                self._expected_existing(account_dir),
+                self._resolve(temporary, config, account="work"),
+            )
+
+    def test_single_default_account_is_selected_without_an_account_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            global_dir = Path(temporary) / "global"
+            global_dir.mkdir()
+            account_dir = Path(temporary) / "work"
+            account_dir.mkdir()
+            config = "\n".join(
+                [
+                    f"downloads-dir = {json.dumps(str(global_dir))}",
+                    "[accounts.work]",
+                    "default = true",
+                    f"downloads-dir = {json.dumps(str(account_dir))}",
+                ]
+            )
+            self.assertEqual(
+                self._expected_existing(account_dir),
+                self._resolve(temporary, config),
+            )
+
+    def test_ambiguous_or_missing_default_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "base"
+            base.mkdir()
+            value = f"downloads-dir = {json.dumps(str(base))}"
+            ambiguous = "\n".join(
+                [
+                    value,
+                    "[accounts.one]",
+                    "default = true",
+                    "[accounts.two]",
+                    "default = true",
+                ]
+            )
+            no_default = "\n".join([value, "[accounts.one]", "[accounts.two]"])
+            for label, config in (("ambiguous", ambiguous), ("no_default", no_default)):
+                with self.subTest(label=label):
+                    self.assertIsNone(self._resolve(temporary, config))
+
+    def test_unknown_account_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "base"
+            base.mkdir()
+            config = f"downloads-dir = {json.dumps(str(base))}"
+            self.assertIsNone(self._resolve(temporary, config, account="missing"))
+
+    def test_account_selection_is_case_sensitive(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            work = Path(temporary) / "work"
+            work.mkdir()
+            config = "\n".join(
+                [
+                    "[accounts.work]",
+                    "default = true",
+                    f"downloads-dir = {json.dumps(str(work))}",
+                ]
+            )
+            self.assertIsNone(self._resolve(temporary, config, account="Work"))
+            self.assertEqual(
+                self._expected_existing(work),
+                self._resolve(temporary, config, account="work"),
+            )
+
+    def test_missing_config_file_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing.toml"
+            self.assertIsNone(self._resolver()(None, config_path=missing))
+
+    def test_toml_error_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(self._resolve(temporary, "downloads-dir = [\n"))
+
+    def test_relative_value_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(
+                self._resolve(temporary, 'downloads-dir = "relative/downloads"')
+            )
+
+    def test_empty_value_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertIsNone(self._resolve(temporary, 'downloads-dir = "   "'))
+
+    def test_missing_value_is_none_without_an_os_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = "\n".join(["[accounts.work]", "default = true"])
+            self.assertIsNone(self._resolve(temporary, config))
+
+    def test_environment_variables_are_expanded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            with patch.dict(os.environ, {"OI103_P1_DL": str(target)}, clear=False):
+                result = self._resolve(temporary, 'downloads-dir = "$OI103_P1_DL"')
+            self.assertEqual(self._expected_existing(target), result)
+
+    def test_tilde_is_expanded(self) -> None:
+        name = f"oi103-p1-downloads-{uuid.uuid4().hex}"
+        expected_path = Path.home() / name
+        self.assertFalse(expected_path.exists())
+        with tempfile.TemporaryDirectory() as temporary:
+            result = self._resolve(
+                temporary, f"downloads-dir = {json.dumps('~/' + name)}"
+            )
+        self.assertEqual(self._expected_missing(expected_path), result)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            # If ~user were passed to expanduser it would become this absolute
+            # path; shellexpand leaves it literal, so it is unprovable.
+            with patch.object(os.path, "expanduser", return_value=str(target)):
+                for value in ("~definitely-not-a-user", "~nobody/"):
+                    with self.subTest(value=value):
+                        self.assertIsNone(
+                            self._resolve(
+                                temporary,
+                                f"downloads-dir = {json.dumps(value)}",
+                            )
+                        )
+
+    def test_non_existent_path_has_no_verbatim_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing"
+            result = self._resolve(
+                temporary, f"downloads-dir = {json.dumps(str(missing))}"
+            )
+            self.assertEqual(str(missing.resolve()), result)
+
+    @unittest.skipUnless(os.name == "nt", "Windows verbatim prefix is Windows-only")
+    def test_windows_verbatim_prefix_only_for_an_existing_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            existing = Path(temporary) / "downloads"
+            existing.mkdir()
+            missing = Path(temporary) / "missing"
+            existing_result = self._resolve(
+                temporary, f"downloads-dir = {json.dumps(str(existing))}"
+            )
+            missing_result = self._resolve(
+                temporary, f"downloads-dir = {json.dumps(str(missing))}"
+            )
+            self.assertEqual(f"\\\\?\\{existing.resolve()}", existing_result)
+            self.assertEqual(str(missing.resolve()), missing_result)
+
+    def test_no_account_segment_is_synthesized(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "base"
+            base.mkdir()
+            config = "\n".join(
+                [
+                    f"downloads-dir = {json.dumps(str(base))}",
+                    "[accounts.work]",
+                    "default = true",
+                ]
+            )
+            result = self._resolve(temporary, config)
+            self.assertEqual(self._expected_existing(base), result)
+            self.assertFalse(
+                result.replace("\\\\?\\", "").rstrip("\\/").endswith("work")
+            )
+
+    def test_himalaya_config_environment_variable_is_used(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            config_path = Path(temporary) / "config.toml"
+            config_path.write_text(
+                f"downloads-dir = {json.dumps(str(target))}", encoding="utf-8"
+            )
+            with patch.dict(
+                os.environ, {"HIMALAYA_CONFIG": str(config_path)}, clear=False
+            ):
+                result = self._resolver()(None)
+            self.assertEqual(self._expected_existing(target), result)
+
+    def test_unresolved_dollar_variable_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertIsNone(
+                    self._resolve(
+                        temporary,
+                        'downloads-dir = "$OI103_P1_UNSET/downloads"',
+                    )
+                )
+
+    def test_percent_style_variable_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            with patch.dict(
+                os.environ, {"OI103_P1_PERCENT": str(target)}, clear=False
+            ):
+                self.assertIsNone(
+                    self._resolve(
+                        temporary,
+                        'downloads-dir = "%OI103_P1_PERCENT%"',
+                    )
+                )
+
+    def test_unc_value_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            value = r"\\server\share\downloads"
+            self.assertIsNone(
+                self._resolve(temporary, f"downloads-dir = {json.dumps(value)}")
+            )
+
+    def test_canonical_unc_is_none(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            unc = Path(r"\\server\share\downloads")
+            with patch.object(Path, "resolve", return_value=unc):
+                result = self._resolve(
+                    temporary, f"downloads-dir = {json.dumps(str(target))}"
+                )
+            self.assertIsNone(result)
+
+    def test_resolver_is_total_when_an_internal_helper_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "downloads"
+            target.mkdir()
+            config_path = Path(temporary) / "config.toml"
+            config_path.write_text(
+                f"downloads-dir = {json.dumps(str(target))}", encoding="utf-8"
+            )
+            with patch.object(
+                os.path, "expanduser", side_effect=RuntimeError("boom")
+            ):
+                self.assertIsNone(self._resolver()(None, config_path=config_path))
 
 
 if __name__ == "__main__":

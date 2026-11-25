@@ -2698,13 +2698,18 @@ Angle-Block → `None`), `References` ohne alle Klammern mit
 Guard gegen angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To`
 unverändert), `Date` nur in der verankerten Referenzform
 `Thu, 01 Jan 2026 00:00:00 +0000` mit konsistentem Wochentag (sonst `None`).
-Items mit kanonischem Inventar-Anhang (nicht-leere `attachments` oder
-`attachment_status != "none"`) liefern `None`: das exakte Format der
-CLI-Anhangszeile ist nicht belegt und wird nicht geraten — P1 bleibt damit in
-der Referenz produktionswirksam bei **0** (offener Future-Gate). Die
-`References`-Abweichung (`+6`, 2/7) ist mit der Klammerregel adressiert, aber
-nicht live nachgewiesen. Keine Live-Behauptung; die reale Referenz nach dieser
-Runde ist noch zu wiederholen.
+Die geschlossene Einzelanhang-Klasse (genau ein über
+`find_mime_part_by_locator` aufgelöster Datei-Anhang, echte
+`Content-Disposition: attachment`, expliziter nicht-
+`image/*`/`application/octet-stream` `Content-Type`, `filename ==
+original_filename` ohne Pfadanteil, belegbares `downloads-dir`) erhält die
+CLI-Zeile nach den Body-Zeilen und vor der Terminator-Zeile, vor der
+`preview_lines`-Kürzung. Mehrfachanhang, Inline-Bilder, octet-stream und
+unbelegbare Konfiguration bleiben `None`. P1 bleibt inaktiv und
+produktionswirksam 0 bis zur Owner-Aktivierung. Die `References`-Abweichung
+(`+6`, 2/7) ist mit der Klammerregel adressiert, aber nicht live nachgewiesen.
+Keine Live-Behauptung; die reale Referenz nach dieser Runde ist noch zu
+wiederholen.
 
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
 `core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes
