@@ -2685,9 +2685,26 @@ Unverändert: Inventar-Passthrough, kein email-Policy-Defect-Scan,
 nicht-Draft-Aufrufer und Helper-Default `False`. Bei Opt-in: Qualifiziert 1
 Start (`scan_inventory`), `scan_preview` 0; nicht qualifiziert 1 Export + 1 Read
 ohne Re-Export. Known-Skip, Barrier-/Quarantäne-Ergebnis und Review-Hash bleiben
-opt-in-unabhängig gleich. Offen: die reale Referenz zeigte in 2/7 Fällen eine
-`References`-Abweichung (`+6` Zeichen), die diese Klasse noch nicht vollständig
-erklärt — dokumentiert, keine Live-Behauptung.
+opt-in-unabhängig gleich.
+
+**P1parity (2026-11-25): reale Feldparität.** Die erweiterte Referenz maß
+Klassenzulassung 6/7, volle Feldparität 1/6 und produktionswirksam 2/7 (0/2 voll
+paritätisch). Diese Runde gleicht die belegten Abweichungen an: Preview mit
+CLI-stdout-Semantik (Body + Prozess-Terminator-Zeile vor `splitlines`;
+M09-gestütztes Modell, ohne/mehrfache Schlussumbrüche modelliert, nicht
+live-belegt), Adressform ohne Anzeigenamen ohne `<>` (Namen bleiben; Gruppe/
+Kommentar/leeres Element/`casefold`-Duplikat, zitierter Local Part und Komma im
+Angle-Block → `None`), `References` ohne alle Klammern mit
+Guard gegen angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To`
+unverändert), `Date` nur in der verankerten Referenzform
+`Thu, 01 Jan 2026 00:00:00 +0000` mit konsistentem Wochentag (sonst `None`).
+Items mit kanonischem Inventar-Anhang (nicht-leere `attachments` oder
+`attachment_status != "none"`) liefern `None`: das exakte Format der
+CLI-Anhangszeile ist nicht belegt und wird nicht geraten — P1 bleibt damit in
+der Referenz produktionswirksam bei **0** (offener Future-Gate). Die
+`References`-Abweichung (`+6`, 2/7) ist mit der Klammerregel adressiert, aber
+nicht live nachgewiesen. Keine Live-Behauptung; die reale Referenz nach dieser
+Runde ist noch zu wiederholen.
 
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
 `core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes

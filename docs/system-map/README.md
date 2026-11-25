@@ -910,6 +910,21 @@ Anhang-only, defekte Message-ID) bleibt `None` mit dem bestehenden Export+Read
 ohne Re-Export. `has_attachment=false` bleibt strukturell unerreichbar; P2/P3/P5
 unverändert. Die erweiterte Parität ist modelliert und noch nicht live-belegt.
 
+**P1-Paritätsrunde (P1parity, 2026-11-25):** Die erweiterte Referenz maß
+Zulassung 6/7, volle Feldparität 1/6, produktionswirksam 2/7 (0/2). Angeglichen
+wurden die belegten Abweichungen: CLI-stdout-Preview (Terminator-Schlusszeile,
+M09-gestützt; ohne/mehrfache Schlussumbrüche modelliert, nicht live-belegt),
+Adressform ohne Anzeigenamen (ohne `<>`, Namen bleiben; Gruppe/Kommentar/leeres
+Element/`casefold`-Duplikat, zitierter Local Part (`"a,b"@x.test`) und Komma im
+Angle-Block (`Name <a@x,b@y>`) → `None`), `References` ohne Klammern mit Guard gegen
+angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To` unverändert) und
+`Date` nur in der verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000` mit
+konsistentem Wochentag (sonst `None`). Items mit kanonischem Inventar-Anhang
+liefern `None`, weil das exakte CLI-Anhangszeilenformat nicht belegt ist; P1
+bleibt damit produktionswirksam bei 0 (offener Future-Gate). `allow_eml_details`
+bleibt Default `False`; die Referenz nach dieser Runde ist noch zu wiederholen,
+keine Live-Behauptung.
+
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),
 [Himalaya-Backend](../../skills/mail-desk/references/backends/himalaya.md#batch-known-envelope-skip-over-envelope-thread).

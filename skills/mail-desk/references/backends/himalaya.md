@@ -191,9 +191,20 @@ stripped). The accepted class covers real mail shapes:
   the header block;
 - RFC 2047: Subject/From/To/Cc/References decoded; malformed words (invalid
   base64/Q payload — Q `=XX`, not `%` — unknown charset, leftover `=?`) →
-  `None`; Date/In-Reply-To are unfolded and stripped only, never decoded;
-- addresses: display names canonicalized to the CLI form (quotes removed,
-  whitespace collapsed); an unparsable or non-unique address → `None`;
+  `None`; Date/In-Reply-To are unfolded and stripped only, never decoded (a
+  literal `=?` there → `None`); a `Date` is only accepted in the anchored
+  reference form `Thu, 01 Jan 2026 00:00:00 +0000` (closed weekday/month list,
+  two-digit day, `HH:MM:SS`, numeric `[+-]HHMM`, weekday consistent with the
+  date); every other form — `Foo,`, one-digit day, `GMT`, a wrong weekday or an
+  invalid calendar date — → `None`;
+- addresses: rendered per parsed address to the CLI form — display-name quotes
+  removed, whitespace collapsed, `Name <addr>` when a display name exists and
+  the bare `addr` (no `<>`) when it does not; group (`:`/`;`) and comment
+  (`(`/`)`) syntax outside quotes, an empty list element, a silently dropped
+  entry, a case-insensitive duplicate address, a quoted local part
+  (`"a,b"@x.test`) and a comma inside the angle block (`Name <a@x,b@y>`) →
+  `None`; quoted display names with commas or special characters stay in one
+  element;
 - body: one unambiguous non-attachment `text/plain` part — single-part,
   `multipart/alternative` with exactly one direct `text/plain`, or
   `multipart/mixed`/`related` with exactly one non-attachment `text/plain`;
@@ -204,19 +215,33 @@ stripped). The accepted class covers real mail shapes:
   `ascii`/`utf-8`/`iso-8859-1`/`latin-1`/`windows-1252`/`cp1252`/`iso-8859-15`,
   decoded strictly; unknown/`unicode_escape`/`utf-7`, duplicated `charset` and
   `format=flowed`/`delsp` → `None`;
-- preview: `splitlines()` truncated to `preview_lines` (default 30), never a
-  rejection;
+- preview: the CLI stdout semantics — a body that ends with `"\n"` gains the
+  process-terminator empty line before `splitlines()`, then truncation to
+  `preview_lines` (default 30); never a rejection. The terminator line is
+  **modelled from M09** (CLI preview = EML preview + 1 char); bodies without a
+  trailing newline or with several trailing newlines are modelled, not
+  live-proven;
+- `References`: every `<`/`>` removed (list of IDs without brackets); adjacent
+  `><` (IDs glued together), unbalanced brackets and comma lists → `None`;
+  `In-Reply-To` keeps its single-ID brackets;
+- attachment inventory: an item with a canonical inventory attachment
+  (non-empty `attachments` or `attachment_status != "none"`) → `None`. The
+  exact CLI attachment preview line is **not** proven, so such an item never
+  becomes a P1 hit — the documented fallback that keeps P1's production effect
+  at 0 in the reference (the attachment-line format is an open future gate);
 - Message-ID: one raw value with a legal bracket shape, non-generated; the raw
   and normalized forms are returned.
 
 The evidence basis is a **model** (synthetic golden pairs), not a live reference:
-the original boku-user reference found 0/7 hits on the strict class, and this
-extension is a deliberate contract change whose parity still has to be proven by
-a repeated real reference. The reference also showed a **References** deviation
-in 2/7 messages (`+6` characters) that this class does not yet fully explain; it
-is documented as open, not as parity. Every other input returns `None` and the
-existing CLI read runs **without a new export**. `full_body=True` is never
-replaced; `has_attachment is False` still starts no export, so P1 is
+the original boku-user reference found 0/7 hits on the strict class and 1/6 full
+field parity on the extended class. The extended reference left the attachment
+preview line unproven (M02/M13 +180/+186 chars), a trailing-newline difference
+(M09 +1), the display-name-less address form, the `References` bracket list and
+a latent `Date` reformat; this round addresses 2–5 and excludes attachments for
+1 (production effect 0). The parity of the fixed class still has to be proven by
+a repeated real reference; no live claim is made. Every other input returns
+`None` and the existing CLI read runs **without a new export**. `full_body=True`
+is never replaced; `has_attachment is False` still starts no export, so P1 is
 structurally unreachable for those items (documented limit; the branch is only
 attempted after an export that already ran). `allow_eml_details` defaults to
 `False` on the helper **and in `draft`**; it activates only after a real,
