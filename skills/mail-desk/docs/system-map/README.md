@@ -2653,14 +2653,16 @@ Stand. Nur Zwecknamen und Ganzzahlen, keine argv/Header/Message-IDs; der
 Review-Payload und der Review-Hash bleiben unverändert. Ausdrücklich **nicht**
 Teil dieses Teilschritts: `scan_counts`, 10054-Zähler und Spitzenrate.
 
-**#103 D1/P1 zweiter Teilschritt: EML-Preview statt Doppel-Read (Draft-Opt-in, inaktiv):**
-Im Draft (`allow_eml_details`, Config-Schlüssel, Default `False`, validiert vor
-jedem Mailboxzugriff) darf ein abgeschlossener `scan_inventory`-Export den
-Preview-Read ersetzen, wenn `_details_from_eml` Textgleichheit für die getestete
-Eingabeklasse belegt. Belegbasis ist ein **Modell**: die goldenen Paare stellen
-den erwarteten CLI-Text dar; es gibt keine reale CLI-Referenzaufnahme für die
-erweiterte Klasse. P1 bleibt inaktiv, bis eine reale anonymisierte CLI-Referenz
-(separates boku-user-Gate) oder eine ausdrückliche Owner-Freigabe vorliegt.
+**#103 D1/P1 zweiter Teilschritt: EML-Preview statt Doppel-Read (Draft-Opt-in, aktiv seit 2026-11-25):**
+Im Draft (`allow_eml_details`, Config-Schlüssel, Default `True` seit der
+Owner-Freigabe 2026-11-25, validiert vor jedem Mailboxzugriff) darf ein
+abgeschlossener `scan_inventory`-Export den Preview-Read ersetzen, wenn
+`_details_from_eml` Textgleichheit für die getestete Eingabeklasse belegt.
+Belegbasis ist ein **Modell**: die goldenen Paare stellen den erwarteten
+CLI-Text dar; es gibt keine reale CLI-Referenzaufnahme für die erweiterte
+Klasse. P1 ist damit im Draft aktiv; ein explizites
+`allow_eml_details=false` bleibt der vollständige Opt-out, und das separate
+boku-user-Gate misst das Live-A/B.
 
 **P1ext (2026-11-24): erweiterte reale Mailklasse.** Die boku-user-Referenz fand
 auf der strikten Klasse **0/7** Treffer (7/7 gefaltet, 7/7 RFC 2047, 7/7
@@ -2705,8 +2707,9 @@ Die geschlossene Einzelanhang-Klasse (genau ein über
 original_filename` ohne Pfadanteil, belegbares `downloads-dir`) erhält die
 CLI-Zeile nach den Body-Zeilen und vor der Terminator-Zeile, vor der
 `preview_lines`-Kürzung. Mehrfachanhang, Inline-Bilder, octet-stream und
-unbelegbare Konfiguration bleiben `None`. P1 bleibt inaktiv und
-produktionswirksam 0 bis zur Owner-Aktivierung. Die `References`-Abweichung
+unbelegbare Konfiguration bleiben `None`. Seit der Owner-Freigabe 2026-11-25
+ist P1 aktiv (Draft-Default `True`, ein vermeidbarer Read je
+Einzelanhang-Treffer); explizites `false` bleibt der Opt-out. Die `References`-Abweichung
 (`+6`, 2/7) ist mit der Klammerregel adressiert, aber nicht live nachgewiesen.
 Keine Live-Behauptung; die reale Referenz nach dieser Runde ist noch zu
 wiederholen.
@@ -2717,8 +2720,20 @@ Whitespace-getrennte IDs bleiben ohne alle `<`/`>`; eine einzelne ID ohne
 Klammern bleibt unverändert. `In-Reply-To` bleibt unberührt, die Guards (Komma,
 angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe, nicht
 dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte Paritätssuite
-umfasst 166 Tests. Keine Live-Behauptung; P1 bleibt inaktiv und
-produktionswirksam 0 bis zur Owner-Aktivierung.
+umfasst 166 Tests. Keine Live-Behauptung; seit 2026-11-25 ist P1 aktiv
+(Draft-Default `True`), die Live-A/B-Messung läuft separat in boku-user.
+
+**P1 aktiv (Draft-Default `True`, 2026-11-25):** Die ausdrückliche
+Owner-Freigabe aktiviert P1 im Draft. Ein Klassentreffer ersetzt den
+Preview-Read (1 `scan_inventory`, `scan_preview` 0, ein vermeidbarer Read
+weniger); ein explizites `allow_eml_details=false` bleibt der vollständige
+Opt-out (Export + Read) und ist feldgleich zum bisherigen Ergebnis. Unverändert:
+geschlossene Einzelanhang-Klasse, Ausschlüsse/Fallbacks, `has_attachment=false`
+(1 Read, 0 Exporte), Helper-/API-Defaults `False` und keine EML-Bytes in
+Manifest, `batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
+Die Live-A/B-Messung läuft separat in boku-user; hermetische Basis sind 166
+Paritätstests plus die neuen Default-Tests, eine live beobachtete Einzel-ID-
+`References` liegt nicht vor.
 
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
 `core/scan_source_reuse.py` hält die bereits für den Scan exportierten EML-Bytes
@@ -2757,7 +2772,7 @@ aus; andere `install_draft_attachment_evaluations`-Aufrufer bleiben ohne
 `source_lookup`. Hit-Zahlen (nur Gate `True`): ein Scan-Export als
 `scan_inventory`, `full_inventory`/`full_read`/`evaluation_raw` 0; sonst
 regulärer Full-Read, ggf. `full_*` > 0. `count < 1` erzeugt keinen Kontext. P1
-bleibt inaktiv (`allow_eml_details=False`) und ungekoppelt; P2 ruft
+ist im Draft aktiv (Default `True`) und ungekoppelt; P2 ruft
 `_details_from_eml` nicht auf. Keine EML in Manifest, `batch-inspected.json`,
 Progress, Index, Journal, Evidence oder Logs. Tests:
 `tests/test_issue103_p2_source_reuse.py` (43 Fälle).
@@ -2782,8 +2797,8 @@ und die aggregierten Zähler bleiben unverändert; `balanced` ruft genau ein
 bekannte Lücke mit `has_attachment is not False` −1 Start, `has_attachment is
 False` ±0 (1 Preview statt 1 Read), unbekannt mit Inventar ±0 ohne zweiten
 Read; Drift-Worst-Case 4 statt 2 Starts; leere Preview-ID: 1 Start ohne
-Anhang, sonst direkt regulärer Export + Read (3 Starts). P1 bleibt inaktiv,
-P2-Full-Text bleibt gegated, Evaluation-Reuse bleibt aktiv. Tests:
+Anhang, sonst direkt regulärer Export + Read (3 Starts). P1 ist aktiv
+(Draft-Default `True`), P2-Full-Text bleibt gegated, Evaluation-Reuse bleibt aktiv. Tests:
 `tests/test_issue103_p3_preview_first.py` (13 Fälle).
 
 **P5 — Pacing/Backoff (explizit, Defaults unverändert):**

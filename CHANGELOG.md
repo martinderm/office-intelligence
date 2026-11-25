@@ -8,6 +8,35 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-25 - Issue #103: P1 aktiv (Draft-Default `True`)
+
+#### Changed
+
+- **Draft-Default aktiviert:** `core/modes/draft.py` liest
+  `allow_eml_details` mit Default `True` (Owner-Freigabe 2026-11-25); die
+  Boolean-Validierung bleibt unverändert. Ein qualifizierter
+  Einzelanhang-Klassentreffer ersetzt den Preview-Read (1 `scan_inventory`,
+  `scan_preview` 0) und spart damit genau einen vermeidbaren Read je Treffer.
+  Ein explizites `allow_eml_details=false` bleibt der vollständige Opt-out
+  (Export + Read) und ist feldgleich zum bisherigen Ergebnis. Diese Aktivierung
+  ersetzt die früheren „P1 inaktiv“-Aussagen der Vorrunden.
+- **Unverändert:** Klassengrenze (geschlossene Einzelanhang-Klasse),
+  Ausschlüsse/Fallbacks (Mehrfachanhang, Inline-Bild,
+  `application/octet-stream`, MIME-defekt, unbelegbare Konfiguration),
+  `has_attachment=false` (1 Read, 0 Exporte), P2/P3/P5 und die
+  Helper-/Batch-Runner-Defaults `False` (`get_single_email_details`,
+  `get_unprocessed_emails`, `_scan_unprocessed_emails`). Keine EML-Bytes in
+  Manifest, `batch-inspected.json`, Progress, Index, Journal, Evidence oder
+  Logs.
+- **A/B-Gate:** Die Live-A/B-Messung läuft separat in boku-user (Owner-Freigabe
+  2026-11-25); sie ist nicht Teil dieser Code-Lane.
+- **Tests/Doku:** Hermetische Basis 166 Paritätstests plus die neuen
+  Default-Tests (168 in der fokussierten Datei: Default `True`, Parität zu
+  explizitem `True`, Opt-out `False`, API-Defaults `False`); eine live
+  beobachtete Einzel-ID-`References` liegt nicht vor.
+  `references/backends/himalaya.md`, `references/batch-runner.md`,
+  L1/L2-System-Map, `objects.md`.
+
 ### 2026-11-25 - Issue #103: P1 Single-ID-References
 
 #### Changed

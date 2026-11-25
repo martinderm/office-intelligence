@@ -194,9 +194,12 @@ def run_draft_mode(
     evaluate_attachments = config.get("evaluate_attachments", True)
     if not isinstance(evaluate_attachments, bool):
         raise ValueError("evaluate_attachments must be a boolean")
-    # Issue #103 P1: draft-only opt-in, inactive by default until a real,
-    # anonymized CLI reference or an explicit owner release exists.
-    allow_eml_details = config.get("allow_eml_details", False)
+    # Issue #103 P1: active in the draft path by default (owner release
+    # 2026-11-25).  The Himalaya helper and the batch-runner APIs keep their
+    # own default False; an explicit ``allow_eml_details=false`` in the config
+    # remains the full opt-out.  The live A/B measurement runs separately in
+    # boku-user, never from this code lane.
+    allow_eml_details = config.get("allow_eml_details", True)
     if not isinstance(allow_eml_details, bool):
         raise ValueError("allow_eml_details must be a boolean")
     # Issue #103 P2: the full-text reuse class is modelled, not live-proven, so

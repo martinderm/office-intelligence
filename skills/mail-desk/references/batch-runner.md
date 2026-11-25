@@ -202,10 +202,11 @@ Manifest-/Inspect-Ausgabe. `transport_stats` meldet Starts/Retries/Fehler,
 Reason; `transport_trigger`). Additiv `starts_by_purpose` je Start:
 `thread_map`, `list`, `scan_preview`/`scan_inventory`,
 `full_read`/`full_inventory`, `evaluation_raw`, `id_fallback`, sonst `other`.
-Der Draft bindet `allow_eml_details` (Config-Schlüssel, Default `False`,
-validiert vor jedem Mailboxzugriff) an beide Scan-Schleifen. P1 bleibt inaktiv,
-bis eine reale anonymisierte CLI-Referenz (separates boku-user-Gate) oder eine
-Owner-Freigabe vorliegt; die goldenen Paare sind ein Modell, keine Live-Referenz.
+Der Draft bindet `allow_eml_details` (Config-Schlüssel, Default `True`,
+Owner-Freigabe 2026-11-25, validiert vor jedem Mailboxzugriff) an beide
+Scan-Schleifen; Helper-/API-Default bleibt `False`, explizites `false` ist der
+Opt-out. Die Live-A/B-Messung läuft separat in boku-user; die goldenen Paare
+bleiben ein Modell, keine Live-Referenz.
 Die P1-Eingabeklasse ist **erweitert** (Issue #103 P1ext): Header-Folding,
 RFC 2047, Adressnormalisierung auf die CLI-Darstellung, ein eindeutiger
 `text/plain`-Teil in `multipart/alternative`/`mixed`/`related`, Charset pro Teil
@@ -222,8 +223,8 @@ nur in der verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000`
 Nicht-Bild-/Octet-`Content-Type`, `filename == original_filename`
 ohne Pfadanteil, belegbarem `downloads-dir`; nach den Body-Zeilen und vor der
 Terminator-Zeile, dann `preview_lines`. Mehrfachanhang, Inline-Bilder,
-octet-stream, unbelegte Konfiguration `None`; P1 inaktiv, Wirkung 0
-(Owner-Gate). Bei Opt-in: ein qualifizierter Kandidat nutzt den
+octet-stream, unbelegte Konfiguration `None`; P1 aktiv, je Einzelanhang-Treffer
+ein vermeidbarer Read weniger. Ein qualifizierter Kandidat nutzt den
 Inventar-Export als Preview (1 Start statt 2), sonst Export + Read ohne
 Re-Export, `has_attachment=False` bei genau einem Read (dort ist der P1-Zweig
 strukturell unerreichbar).
@@ -237,7 +238,7 @@ ist **modelliert, nicht live-belegt**: eigenes Draft-Opt-in
 `allow_scan_source_full_text` (Default `False`), nur bei `True` mit modellierter
 Paritätsklasse und Barrier-Bewertung, sonst regulärer Full-Read. Hit
 (nur `True`): `full_inventory`/`full_read`/`evaluation_raw` 0; sonst ggf.
-`full_*` > 0. `finally` löscht alles; P1 bleibt inaktiv. Injizierte
+`full_*` > 0. `finally` löscht alles; P1 aktiv. Injizierte
 `get_unprocessed_emails` akzeptieren `source_context` und `scan_profile`.
 
 **P3 — Preview-first für bekannte Lücken (`scan_profile`):** Das Draft-Opt-in
@@ -254,10 +255,10 @@ Netto-Effekt gegen `balanced`: bekannte Lücke mit `has_attachment is not False`
 (1 Preview statt 1 Read); unbekannt mit Inventar ±0 (Preview + Export statt
 Export + Read) ohne zweiten Read. Drift-Worst-Case 4 Starts (Preview +
 driftender Export + regulärer Export + Read) statt 2; kein „+1“ gegen
-`balanced` — ein +1 gilt nur gegen einen Export-only-/P1-Pfad, der inaktiv ist.
+`balanced` — ein +1 gilt nur gegen den früheren Export-only-/P1-Pfad.
 Leere Preview-ID: bei `has_attachment is False` bleibt die Preview das Ergebnis
 (1 Start, ±0); sonst direkt regulärer Export + Read (3 Starts, keine
-Export-Probe). P1/P2 unverändert.
+Export-Probe). P1 aktiv (Draft-Default `True`), P2 unverändert.
 
 **P5 — Pacing/Backoff (explizit, Defaults unverändert):** `transport_pacing_ms`
 (Default `0`) hält zwischen zwei **realen, nicht-Payload** Starts in der aktiven
