@@ -1649,6 +1649,17 @@ class EmlPredicateTests(HermeticProcessTestCase):
             ),
         )
 
+    def test_references_single_id_shapes_follow_the_proven_contract(self) -> None:
+        self.assertEqual(
+            "parent@example.test",
+            himalaya._canonical_references_header("parent@example.test"),
+        )
+        self.assertEqual("", himalaya._canonical_references_header(""))
+        self.assertIsNone(
+            himalaya._canonical_references_header("<<a@example.test>>")
+        )
+        self.assertIsNone(himalaya._canonical_references_header("<a@example.test"))
+
     def test_date_guard_requires_the_anchored_reference_form(self) -> None:
         self.assertTrue(
             himalaya._is_p1_reference_date("Thu, 01 Jan 2026 00:00:00 +0000")

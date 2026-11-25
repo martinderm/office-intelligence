@@ -936,7 +936,7 @@ Runde ist noch zu wiederholen, keine Live-Behauptung.
 einzelne ID ohne Klammern bleibt unverändert. `In-Reply-To` ist unberührt; die
 Guards (Komma, angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe,
 nicht dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte
-Paritätssuite umfasst 165 Tests. Keine Live-Behauptung; P1 bleibt inaktiv
+Paritätssuite umfasst 166 Tests. Keine Live-Behauptung; P1 bleibt inaktiv
 (`allow_eml_details` Default `False`) und produktionswirksam 0 bis zur
 Owner-Aktivierung.
 

@@ -2717,7 +2717,7 @@ Whitespace-getrennte IDs bleiben ohne alle `<`/`>`; eine einzelne ID ohne
 Klammern bleibt unverändert. `In-Reply-To` bleibt unberührt, die Guards (Komma,
 angrenzende `><`, unbalancierte/nested Klammern, leere Eingabe, nicht
 dekodierbare RFC-2047-Wörter) sind unverändert. Die fokussierte Paritätssuite
-umfasst 165 Tests. Keine Live-Behauptung; P1 bleibt inaktiv und
+umfasst 166 Tests. Keine Live-Behauptung; P1 bleibt inaktiv und
 produktionswirksam 0 bis zur Owner-Aktivierung.
 
 **#103 P2: Quellen-Reuse im frischen Draft-Scan (privat, eine Scan-Lebensdauer):**
