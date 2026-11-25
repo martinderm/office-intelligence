@@ -919,11 +919,16 @@ Element/`casefold`-Duplikat, zitierter Local Part (`"a,b"@x.test`) und Komma im
 Angle-Block (`Name <a@x,b@y>`) → `None`), `References` ohne Klammern mit Guard gegen
 angrenzende/unbalancierte Klammern und Kommas (`In-Reply-To` unverändert) und
 `Date` nur in der verankerten Referenzform `Thu, 01 Jan 2026 00:00:00 +0000` mit
-konsistentem Wochentag (sonst `None`). Items mit kanonischem Inventar-Anhang
-liefern `None`, weil das exakte CLI-Anhangszeilenformat nicht belegt ist; P1
-bleibt damit produktionswirksam bei 0 (offener Future-Gate). `allow_eml_details`
-bleibt Default `False`; die Referenz nach dieser Runde ist noch zu wiederholen,
-keine Live-Behauptung.
+konsistentem Wochentag (sonst `None`). Die geschlossene Einzelanhang-Klasse
+(genau ein über `part_locator` auflösbarer Datei-Anhang, echte
+`Content-Disposition: attachment`, expliziter nicht-`image/*`/
+`application/octet-stream` `Content-Type`, `filename == original_filename`
+ohne Pfadanteil, belegbares `downloads-dir`) erhält die CLI-Zeile nach den
+Body-Zeilen und vor der Terminator-Zeile, vor der `preview_lines`-Kürzung.
+Mehrfachanhang, Inline-Bilder, octet-stream und unbelegbare Konfiguration
+bleiben `None`. `allow_eml_details` bleibt Default `False`; P1 bleibt inaktiv
+und produktionswirksam 0 bis zur Owner-Aktivierung. Die Referenz nach dieser
+Runde ist noch zu wiederholen, keine Live-Behauptung.
 
 L2: [Mail-Desk §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler).
 Vertrag: [Batch-Runner](../../skills/mail-desk/references/batch-runner.md#cli-batch-skip-über-envelope-thread-und-transportzähler),

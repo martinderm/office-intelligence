@@ -23,7 +23,11 @@ import threading
 import time
 from typing import Any, Callable
 
-from .attachments import inspect_mime_tree, validate_attachment_candidate_metadata
+from .attachments import (
+    find_mime_part_by_locator,
+    inspect_mime_tree,
+    validate_attachment_candidate_metadata,
+)
 from .common import normalize_message_id
 
 
@@ -105,6 +109,131 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
             "himalaya_unavailable", "Himalaya executable is unavailable; no mailbox command was started."
         )
     return executable, config_path
+
+
+def resolve_himalaya_downloads_dir(
+    account: str | None = None,
+    *,
+    config_path: str | Path | None = None,
+) -> str | None:
+    """Return the proven Himalaya download directory, or ``None``.
+
+    Reads only the ``downloads-dir`` key from the effective Himalaya config.
+    The value comes from the selected account when that account carries one,
+    otherwise from the top level.  An explicit ``account`` must match an
+    ``[accounts.<name>]`` key exactly (case-sensitive); without one, exactly
+    one account with ``default = true`` is required.  Every other selection,
+    a missing/unreadable/invalid config, a non-string or blank value, or a
+    relative result returns ``None``.
+
+    Expansion mirrors the CLI: ``~`` and ``$VAR``/``${VAR}`` expand, the result
+    must be absolute and is canonicalized.  ``%VAR%`` is rejected because
+    ``shellexpand`` does not expand it; a remaining ``$``/``%``, a
+    ``\\\\``-prefixed/UNC value (raw or canonical) and an unprovable path all
+    return ``None``.  On Windows the ``\\\\?\\`` verbatim prefix is added only
+    for an existing path.  No account segment is synthesized and there is no
+    ``dirs::download_dir()`` fallback.
+
+    The function is total: any unexpected exception returns ``None`` and no
+    path or configuration value is logged.  The function never returns any
+    other configuration value.
+    """
+    try:
+        return _resolve_himalaya_downloads_dir(account, config_path=config_path)
+    except Exception:  # noqa: BLE001 - an unprovable config never changes a read
+        return None
+
+
+def _resolve_himalaya_downloads_dir(
+    account: str | None,
+    *,
+    config_path: str | Path | None,
+) -> str | None:
+    try:
+        import tomllib
+    except ImportError:
+        return None
+
+    if config_path is not None:
+        candidate = Path(config_path)
+    else:
+        configured = os.environ.get("HIMALAYA_CONFIG")
+        if configured:
+            candidate = Path(configured).expanduser()
+        else:
+            candidate = _default_himalaya_config_path()
+
+    try:
+        if not candidate.is_file():
+            return None
+        with candidate.open("rb") as handle:
+            document = tomllib.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(document, dict):
+        return None
+
+    accounts = document.get("accounts")
+    account_map = accounts if isinstance(accounts, dict) else {}
+    if account is not None:
+        if account not in account_map:
+            return None
+        selected_account: str | None = account
+    elif account_map:
+        defaults = [
+            name
+            for name, settings in account_map.items()
+            if isinstance(settings, dict) and settings.get("default") is True
+        ]
+        if len(defaults) != 1:
+            return None
+        selected_account = defaults[0]
+    else:
+        # No account dimension is configured: the global key is the only value.
+        selected_account = None
+
+    account_settings = (
+        account_map.get(selected_account) if selected_account is not None else None
+    )
+    if isinstance(account_settings, dict) and "downloads-dir" in account_settings:
+        value = account_settings["downloads-dir"]
+    else:
+        value = document.get("downloads-dir")
+    if not isinstance(value, str):
+        return None
+
+    raw_value = value.strip()
+    # ``shellexpand`` leaves ``~user`` literal (only ``~`` and ``~/...``
+    # expand); expanding it here would not match the CLI.
+    if (
+        raw_value.startswith("~")
+        and raw_value != "~"
+        and raw_value[1:2] not in ("/", "\\")
+    ):
+        return None
+    # ``shellexpand`` does not expand %VAR%; doing so would not match the CLI.
+    if "%" in raw_value:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(raw_value))
+    if not expanded:
+        return None
+    if "$" in expanded or "%" in expanded:
+        return None
+    if expanded.replace("/", "\\").startswith("\\\\"):
+        return None
+    path = Path(expanded)
+    if not path.is_absolute():
+        return None
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    resolved_text = str(resolved)
+    if resolved_text.replace("/", "\\").startswith("\\\\"):
+        return None
+    if os.name == "nt" and path.exists() and not resolved_text.startswith("\\\\?\\"):
+        resolved_text = "\\\\?\\" + resolved_text
+    return resolved_text
 
 
 def build_himalaya_command(args: list[str], account: str | None = None) -> list[str]:
@@ -1989,6 +2118,77 @@ def _decode_part_text(part: "email.message.Message") -> str | None:
         return None
 
 
+def _p1_attachment_line(
+    parsed: "email.message.Message",
+    attachments: list[dict[str, Any]],
+    attachment_status: str,
+    attachment_error: str | None,
+    downloads_dir: str | None,
+) -> str | None:
+    """Return the proven CLI attachment preview line, or ``None``.
+
+    Only the closed single-file class qualifies.  Every missing proof returns
+    ``None`` so the caller keeps the unchanged CLI read.
+    """
+    if attachment_status != "available" or attachment_error is not None:
+        return None
+    if len(attachments) != 1:
+        return None
+    if not downloads_dir:
+        return None
+    entry = attachments[0]
+    if not isinstance(entry, dict):
+        return None
+    if entry.get("is_inline") is not False:
+        return None
+    mime_type = entry.get("mime_type")
+    if not isinstance(mime_type, str) or not mime_type:
+        return None
+    normalized_mime = mime_type.lower()
+    if (
+        normalized_mime.startswith("image/")
+        or normalized_mime == "application/octet-stream"
+    ):
+        return None
+    filename = entry.get("filename")
+    original_filename = entry.get("original_filename")
+    if not isinstance(filename, str) or not filename:
+        return None
+    if filename != original_filename:
+        return None
+    if "/" in filename or "\\" in filename or filename in {".", ".."}:
+        return None
+    if any(
+        ord(character) < 32
+        or ord(character) == 0x7F
+        or character in {"\x85", "\u2028", "\u2029"}
+        for character in filename
+    ):
+        return None
+    locator = entry.get("part_locator")
+    if not isinstance(locator, str) or not locator:
+        return None
+    part = find_mime_part_by_locator(parsed, locator)
+    if part is None:
+        return None
+    # The inventory normalizes a missing disposition to "attachment"; only the
+    # raw header is proof that the CLI renders an attachment line.
+    content_type_header = part.get("Content-Type")
+    if content_type_header is None or not str(content_type_header).strip():
+        return None
+    if part.get_content_disposition() != "attachment":
+        return None
+    if part.get_content_type().lower() != normalized_mime:
+        return None
+    if part.get_filename() != filename:
+        return None
+    separator = "" if downloads_dir.endswith(("\\", "/")) else "\\"
+    return (
+        f'<#part type={mime_type} filename="{downloads_dir}{separator}{filename}">'
+        "<#/part>"
+    )
+
+
 def _details_from_eml(
     env_id: str | int,
     folder: str,
@@ -1999,6 +2199,7 @@ def _details_from_eml(
     attachments: list[dict[str, Any]],
     attachment_status: str,
     attachment_error: str | None,
+    downloads_dir: str | None = None,
 ) -> dict[str, Any] | None:
     """Return the details dict only for the extended, closed EML input class.
 
@@ -2021,10 +2222,18 @@ def _details_from_eml(
     brackets (adjacent brackets, unbalanced brackets and commas are excluded);
     ``In-Reply-To`` keeps its single-ID brackets.
 
-    Items with a canonical inventory attachment (non-empty ``attachments`` or
-    ``attachment_status != "none"``) are excluded: the exact CLI attachment
-    preview line is not proven, so such an item never becomes a P1 hit (the
-    documented fallback; P1's production effect in the reference is 0).
+    Items with a canonical inventory attachment are accepted only for the
+    closed single-file class when ``downloads_dir`` is proven: exactly one
+    entry, ``attachment_status == "available"`` and ``attachment_error is
+    None``; its ``part_locator`` resolves to a leaf part whose raw headers carry
+    an explicit ``Content-Type`` and an actual ``Content-Disposition:
+    attachment``; ``is_inline is False``; the MIME type is neither ``image/*``
+    nor ``application/octet-stream``; ``filename`` is non-empty, has no path
+    component and equals ``original_filename``.  The CLI attachment line is
+    then appended after the body content lines and before the
+    process-terminator empty line, prior to the ``preview_lines`` cut.  Every
+    other attachment shape returns ``None`` and keeps the unchanged CLI read.
+    Items without attachments keep the previous behaviour.
     Ambiguous input — duplicate relevant headers, raw 8-bit header bytes,
     malformed encoded words, undecodable charsets, HTML-only, several text
     candidates, a named/attachment body part, defective Message-ID, mixed line
@@ -2041,8 +2250,6 @@ def _details_from_eml(
     """
     try:
         if not isinstance(raw_eml, bytes) or not raw_eml:
-            return None
-        if attachments or attachment_status != "none":
             return None
         if b"\x00" in raw_eml:
             return None
@@ -2114,6 +2321,17 @@ def _details_from_eml(
         normalized_message_id = normalize_message_id(raw_message_id)
 
         parsed = email.message_from_bytes(raw_eml, policy=email.policy.default)
+        attachment_line: str | None = None
+        if attachments or attachment_status != "none":
+            attachment_line = _p1_attachment_line(
+                parsed,
+                attachments,
+                attachment_status,
+                attachment_error,
+                downloads_dir,
+            )
+            if attachment_line is None:
+                return None
         body_part = _select_plain_text_part(parsed)
         if body_part is None:
             return None
@@ -2129,6 +2347,12 @@ def _details_from_eml(
         body_lines = body_text.splitlines()
         if not any(line.strip() for line in body_lines):
             return None
+        if attachment_line is not None:
+            insertion_index = len(body_lines)
+            if body_lines and body_lines[-1] == "":
+                # Keep the process-terminator empty line after the attachment.
+                insertion_index -= 1
+            body_lines.insert(insertion_index, attachment_line)
         preview = "\n".join(body_lines[:preview_lines])
 
         fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
@@ -2422,6 +2646,8 @@ def get_single_email_details(
     CLI read.  It applies only inside the ``inspect_attachments`` branch, only
     for ``not full_body`` and only when :func:`_details_from_eml` proves full
     text parity; otherwise the unchanged CLI read runs without a new export.
+    The download directory is resolved only for a non-empty inventory; a
+    resolver failure is contained and never changes the successful inventory.
 
     ``raw_eml_sink`` (Issue #103 P2, default ``None``) receives the exact bytes
     of a successful inventory export once, after the export and before the
@@ -2557,6 +2783,16 @@ def get_single_email_details(
                 if allow_eml_details and not full_body:
                     # Issue #103 P1: the completed export may replace the
                     # following preview read, but only on proven text parity.
+                    # The download directory is resolved lazily, only for a
+                    # non-empty inventory, outside the pure derivation.  A
+                    # resolver failure is contained here so the successful
+                    # inventory stays intact and the unchanged CLI read runs.
+                    downloads_dir: str | None = None
+                    if attachments_list:
+                        try:
+                            downloads_dir = resolve_himalaya_downloads_dir(account)
+                        except Exception:  # noqa: BLE001 - never changes the inventory
+                            downloads_dir = None
                     derived = _details_from_eml(
                         env_id,
                         folder,
@@ -2566,6 +2802,7 @@ def get_single_email_details(
                         attachments=attachments_list,
                         attachment_status=attachment_status,
                         attachment_error=attachment_error,
+                        downloads_dir=downloads_dir,
                     )
                     if derived is not None:
                         return derived

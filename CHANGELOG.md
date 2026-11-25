@@ -31,20 +31,32 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   zweistelliger Tag, `HH:MM:SS`, numerische `[+-]HHMM`-Zone, Wochentag
   konsistent zum Datum); `Foo,`, einstelliger Tag, `GMT`, falscher Wochentag
   oder ungültiges Datum → `None`.
-- **Anhangsausschluss:** Items mit kanonischem Inventar-Anhang (nicht-leere
-  `attachments` oder `attachment_status != "none"`) liefern `None`. Das exakte
-  Format der CLI-Anhangszeile ist nicht belegt und wird nicht geraten; P1 hat
-  damit in der realen Referenz Produktionswirkung 0 (offener Future-Gate).
+- **Geschlossene Einzelanhang-Klasse:** Genau ein Inventar-Anhang wird nur
+  übernommen, wenn der rohe MIME-Teil über `part_locator` auflösbar ist, eine
+  echte `Content-Disposition: attachment` und einen expliziten, nicht
+  `image/*`/`application/octet-stream` `Content-Type` trägt, `is_inline` false
+  ist, `filename == original_filename` ohne Pfadanteil gilt und das
+  CLI-Download-Verzeichnis aus `downloads-dir` belegbar ist. Die Zeile
+  `<#part type={mime} filename="{dir}\{name}"><#/part>` wird nach den
+  Body-Zeilen und vor der Prozess-Terminator-Zeile eingefügt und erst danach
+  auf `preview_lines` gekürzt. Ausgeschlossen bleiben Mehrfachanhänge,
+  Inline-Bilder, `application/octet-stream`, fehlende/abweichende Namen und
+  unbelegbare Konfiguration (`None`, unveränderter CLI-Read). P1 bleibt
+  Default `False` und inaktiv; Produktionswirkung bleibt 0 bis zur separaten
+  Owner-Aktivierung.
 - **Unverändert:** `allow_eml_details` bleibt Default `False` und inaktiv; der
   P1-Hook, das Inventar-Passthrough, `has_attachment=false`, P2-Volltext, P3
   `balanced`, P5 0/2.0 und die Evaluation-Reuse sind unberührt; keine EML in
   Rückgabe-Dicts/Artefakten.
 - **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p1_eml_parity.py`
-  (119 Fälle: Truncation 29/30/31 + Terminator hartkodiert, `preview_lines`
-  0/3, mehrfache Schlussumbrüche, Adress-/References-/Date-Negatives inkl.
-  `casefold`-Duplikat, zitiertem Local Part und Komma im Angle-Block,
-  hartkodiertes CLI-Literal), `references/backends/himalaya.md`,
-  `references/batch-runner.md`, L1/L2-System-Map, `objects.md`.
+  (164 Fälle: zusätzlich PDF/DOCX-Anhangszeile mit parametrisiertem
+  Download-Verzeichnis, Terminator-/`preview_lines`-29/30/31-Ordnung,
+  Ausschlüsse, `resolve_himalaya_downloads_dir` und Default-False-Parität;
+  weiterhin Truncation, `preview_lines` 0/3, mehrfache Schlussumbrüche,
+  Adress-/References-/Date-Negatives inkl. `casefold`-Duplikat, zitiertem
+  Local Part und Komma im Angle-Block, hartkodiertes CLI-Literal),
+  `references/backends/himalaya.md`, `references/batch-runner.md`,
+  L1/L2-System-Map, `objects.md`.
 
 ### 2026-11-24 - Issue #103: P1-Vertragserweiterung für reale Mailklassen
 

@@ -224,23 +224,47 @@ stripped). The accepted class covers real mail shapes:
 - `References`: every `<`/`>` removed (list of IDs without brackets); adjacent
   `><` (IDs glued together), unbalanced brackets and comma lists → `None`;
   `In-Reply-To` keeps its single-ID brackets;
-- attachment inventory: an item with a canonical inventory attachment
-  (non-empty `attachments` or `attachment_status != "none"`) → `None`. The
-  exact CLI attachment preview line is **not** proven, so such an item never
-  becomes a P1 hit — the documented fallback that keeps P1's production effect
-  at 0 in the reference (the attachment-line format is an open future gate);
+- attachment inventory: the closed single-file class is accepted only when
+  exactly one inventory entry has `attachment_status == "available"`,
+  `attachment_error is None`, a `part_locator` that resolves to the same leaf
+  part in the parsed message, and that raw part carries an explicit
+  `Content-Type` plus an actual `Content-Disposition: attachment`; the entry
+  must have `is_inline is False`, a MIME type other than `image/*` and
+  `application/octet-stream`, a non-empty `filename` without a path component
+  equal to `original_filename`, and a proven `downloads_dir`. The line
+  `<#part type={mime} filename="{dir}\{name}"><#/part>` is inserted after the
+  body content lines and before the process-terminator empty line, then the
+  `preview_lines` cut applies. Multiple attachments, inline images,
+  octet-stream, missing/renamed filenames and an unprovable config stay
+  `None` (the unchanged CLI read). Only PDF and DOCX are evidenced
+  end-to-end; other non-excluded file types use the same structural template
+  as a model, with no live claim;
+- download directory: `resolve_himalaya_downloads_dir(account, *,
+  config_path=None)` reads only `downloads-dir` from the effective config.
+  The account value wins over the global one; an explicit account must match
+  an `[accounts.<name>]` key case-sensitively, otherwise exactly one account
+  with `default = true` is required (a config with no `accounts` table uses
+  the global value). `~` and `$VAR`/`${VAR}` expand, `%VAR%` and any remaining
+  `$`/`%` are rejected, the result must be absolute and canonical, and a
+  `\\`-prefixed/UNC value is unprovable (`None`); on Windows `\\?\` is added
+  only for an existing path. No account segment is synthesized and there is no
+  OS downloads fallback. The resolver is total and runs exactly once per
+  non-empty successful inventory inside the opt-in branch; it never runs when
+  `allow_eml_details=False`;
 - Message-ID: one raw value with a legal bracket shape, non-generated; the raw
   and normalized forms are returned.
 
-The evidence basis is a **model** (synthetic golden pairs), not a live reference:
-the original boku-user reference found 0/7 hits on the strict class and 1/6 full
-field parity on the extended class. The extended reference left the attachment
-preview line unproven (M02/M13 +180/+186 chars), a trailing-newline difference
-(M09 +1), the display-name-less address form, the `References` bracket list and
-a latent `Date` reformat; this round addresses 2–5 and excludes attachments for
-1 (production effect 0). The parity of the fixed class still has to be proven by
-a repeated real reference; no live claim is made. Every other input returns
-`None` and the existing CLI read runs **without a new export**. `full_body=True`
+The evidence basis is a **model** (synthetic golden pairs), not a live
+reference. P1 accepts the closed single named file class (real disposition,
+explicit non-octet-stream `Content-Type`, `filename == original_filename`,
+proven `downloads-dir`), inserts the modelled CLI line before the
+terminator/`preview_lines` cut, and keeps multiple attachments, inline images,
+octet-stream and unprovable config as `None`. Only PDF and DOCX are evidenced
+end-to-end; other non-excluded file types use the same structural template as a
+model, and no live claim is made. P1 remains **inactive** with production effect
+0 until the owner activates it; the parity of the fixed class still has to be
+proven by a repeated real reference. Every other input returns `None` and
+the existing CLI read runs **without a new export**. `full_body=True`
 is never replaced; `has_attachment is False` still starts no export, so P1 is
 structurally unreachable for those items (documented limit; the branch is only
 attempted after an export that already ran). `allow_eml_details` defaults to
