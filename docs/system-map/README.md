@@ -871,11 +871,15 @@ Vermischung, regulärer Export+Read. `balanced` behält die heutige Sequenz
 (genau ein `get_single_email_details` pro Item, keine Probe). Beide
 Scan-Schleifen und die Zähler bleiben unverändert; P1 aktiv (Draft-Default
 `True`), P2-Full-Text
-gegated, Evaluation-Reuse aktiv. Netto gegen `balanced`: bekannte Lücke mit
-`has_attachment is not False` −1 Start, `has_attachment is False` ±0,
-unbekannt mit Inventar ±0 ohne zweiten Read, Drift-Worst-Case 4 statt 2
-Starts, leere Preview-ID: 1 Start ohne Anhang, sonst regulärer Export + Read
-(3 Starts).
+gegated, Evaluation-Reuse aktiv. Netto gegen `balanced`: die historischen
+−1/±0-Zahlen galten vor der Aktivierung mit P1 aus bzw. auf einem P1-Miss. Mit
+aktivem P1 ist `balanced` bei einem Klassentreffer export-only (1 Start):
+bekannte Lücke `has_attachment is not False` ±0 gegen den Treffer/−1 gegen den
+Miss, `has_attachment is False` ±0, unbekannt mit Inventar +1 gegen den
+Treffer/±0 gegen den Miss (Preview + genau ein Export). Drift: 3 Starts gegen
+den Treffer, 4 gegen den Miss (mit P1 aus 4 statt 2). Leere Preview-ID ohne
+Anhang: 1 Start, ±0; sonst Preview + regulärer Pfad = 2 gegen den Treffer,
+3 gegen den Miss.
 
 **Pacing und transienter Backoff (P5, 2026-11-23):** `transport_pacing_ms`
 (Default 0) hält zwischen zwei realen, nicht-Payload Starts der aktiven

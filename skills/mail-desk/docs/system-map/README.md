@@ -2653,7 +2653,7 @@ Stand. Nur Zwecknamen und Ganzzahlen, keine argv/Header/Message-IDs; der
 Review-Payload und der Review-Hash bleiben unverändert. Ausdrücklich **nicht**
 Teil dieses Teilschritts: `scan_counts`, 10054-Zähler und Spitzenrate.
 
-**#103 D1/P1 zweiter Teilschritt: EML-Preview statt Doppel-Read (Draft-Opt-in, aktiv seit 2026-11-25):**
+**#103 D1/P1 zweiter Teilschritt: EML-Preview statt Doppel-Read (Draft-Default `True`, aktiv seit 2026-11-25):**
 Im Draft (`allow_eml_details`, Config-Schlüssel, Default `True` seit der
 Owner-Freigabe 2026-11-25, validiert vor jedem Mailboxzugriff) darf ein
 abgeschlossener `scan_inventory`-Export den Preview-Read ersetzen, wenn
@@ -2794,11 +2794,15 @@ bestehenden Sink an den `ScanSourceContext` (Bind mit der Preview-ID, P2-Budget-
 und Identitätsprüfung). Beide Scan-Schleifen, `inspected_eids`, Target/Abbruch
 und die aggregierten Zähler bleiben unverändert; `balanced` ruft genau ein
 `get_single_email_details` pro Item auf (keine Probe). Netto gegen `balanced`:
-bekannte Lücke mit `has_attachment is not False` −1 Start, `has_attachment is
-False` ±0 (1 Preview statt 1 Read), unbekannt mit Inventar ±0 ohne zweiten
-Read; Drift-Worst-Case 4 statt 2 Starts; leere Preview-ID: 1 Start ohne
-Anhang, sonst direkt regulärer Export + Read (3 Starts). P1 ist aktiv
-(Draft-Default `True`), P2-Full-Text bleibt gegated, Evaluation-Reuse bleibt aktiv. Tests:
+die historischen −1/±0-Zahlen galten vor der Aktivierung mit P1 aus bzw. auf
+einem P1-Miss. Mit aktivem P1 ist `balanced` bei einem Klassentreffer
+export-only (1 Start): bekannte Lücke `has_attachment is not False` ±0 gegen den
+Treffer/−1 gegen den Miss, `has_attachment is False` ±0, unbekannt mit Inventar
++1 gegen den Treffer/±0 gegen den Miss (Preview + genau ein Export). Drift: 3
+Starts gegen den Treffer, 4 gegen den Miss (mit P1 aus 4 statt 2). Leere
+Preview-ID ohne Anhang: 1 Start, ±0; sonst Preview + regulärer Pfad = 2 gegen
+den Treffer, 3 gegen den Miss. P2-Full-Text bleibt gegated, Evaluation-Reuse
+bleibt aktiv. Tests:
 `tests/test_issue103_p3_preview_first.py` (13 Fälle).
 
 **P5 — Pacing/Backoff (explizit, Defaults unverändert):**

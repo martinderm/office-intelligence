@@ -250,15 +250,14 @@ die Vorschau behalten und nur bei Anhangbedarf mit genau einem Inventar-Export
 ergänzt (kein zweiter Read; Identitätsdrift → regulärer Export + Read, keine
 Vermischung). `balanced` ruft weiterhin genau ein
 `get_single_email_details` pro Item auf (keine Probe, kein `preview_only`).
-Netto-Effekt gegen `balanced`: bekannte Lücke mit `has_attachment is not False`
-−1 Start (1 Preview statt Export + Read); bei `has_attachment is False` ±0
-(1 Preview statt 1 Read); unbekannt mit Inventar ±0 (Preview + Export statt
-Export + Read) ohne zweiten Read. Drift-Worst-Case 4 Starts (Preview +
-driftender Export + regulärer Export + Read) statt 2; kein „+1“ gegen
-`balanced` — ein +1 gilt nur gegen den früheren Export-only-/P1-Pfad.
-Leere Preview-ID: bei `has_attachment is False` bleibt die Preview das Ergebnis
-(1 Start, ±0); sonst direkt regulärer Export + Read (3 Starts, keine
-Export-Probe). P1 aktiv (Draft-Default `True`), P2 unverändert.
+Netto-Effekt gegen `balanced`: die historischen −1/±0-Zahlen galten vor der
+Aktivierung mit P1 aus bzw. auf einem P1-Miss. Mit aktivem P1 ist `balanced` bei
+einem Klassentreffer export-only (1 Start): bekannte Lücke `has_attachment is
+not False` ±0 gegen den Treffer/−1 gegen den Miss, `has_attachment is False`
+±0, unbekannt mit Inventar +1 gegen den Treffer/±0 gegen den Miss (Preview +
+genau ein Export). Drift: 3 Starts gegen den Treffer, 4 gegen den Miss (mit P1
+aus 4 statt 2). Leere Preview-ID ohne Anhang: 1 Start, ±0; sonst Preview +
+regulärer Pfad = 2 gegen den Treffer, 3 gegen den Miss. P2 unverändert.
 
 **P5 — Pacing/Backoff (explizit, Defaults unverändert):** `transport_pacing_ms`
 (Default `0`) hält zwischen zwei **realen, nicht-Payload** Starts in der aktiven
