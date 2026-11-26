@@ -290,6 +290,20 @@ budget, so an oversized message still gets its normal attachment inventory. The
 appear in the returned result dict, the manifest, `batch-inspected.json`,
 progress, index, journal, evidence or logs.
 
+**Full body from the own export (`allow_full_body_from_export`, Issue #103 P2).**
+`get_single_email_details(..., allow_full_body_from_export=False)` is the
+keyword-only, bool-validated opt-in behind the draft gate
+`allow_scan_source_full_text`. After a successful inventory export and **before**
+the CLI read, the same export supplies the `full_body` record only when the bytes
+belong to the modelled parity class (`eml_full_text_parity`) **and** the export's
+own Message-ID (`eml_own_message_id`) equals the normalized
+`fallback_envelope["message_id"]`. The record is produced by
+`_details_from_raw_eml` — the single derivation the existing `raw_eml` branch also
+uses — with `read_level: "full_body"` and starts no process. A missing or
+deviating identity, a parity rejection, an incomplete inventory or any exception
+keeps the unchanged CLI read; a transport block is re-raised, never swallowed.
+The default `False` leaves every path byte-identical.
+
 **Closed full-text parity class (`eml_full_text_parity`, Issue #103 P2).** A held
 scan source may supply the full text only under this **modelled, not
 live-proven** structural class and only when the draft gate

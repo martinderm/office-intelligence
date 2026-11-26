@@ -230,16 +230,17 @@ Re-Export, `has_attachment=False` bei genau einem Read (dort ist der P1-Zweig
 strukturell unerreichbar).
 
 **P2 — Quellen-Reuse im frischen Draft-Scan:** Der Draft hält die Scan-EML-Bytes
-eines frischen Scans privat im Speicher und nutzt sie nur bei exakter
-Identität inkl. EML-eigener Message-ID. Der Scan-Export bleibt unbeschränkt
-(Inventur unverändert); der Kontext verwirft >10 MiB/Budget ohne Truncation.
-Die Evaluation bleibt aktiv (alle Bestandsprüfungen). Der Full-Text
-ist **modelliert, nicht live-belegt**: eigenes Draft-Opt-in
-`allow_scan_source_full_text` (Default `False`), nur bei `True` mit modellierter
-Paritätsklasse und Barrier-Bewertung, sonst regulärer Full-Read. Hit
-(nur `True`): `full_inventory`/`full_read`/`evaluation_raw` 0; sonst ggf.
-`full_*` > 0. `finally` löscht alles; P1 aktiv. Injizierte
-`get_unprocessed_emails` akzeptieren `source_context` und `scan_profile`.
+eines frischen Scans im Speicher, identisch gebunden (EML-eigene
+Message-ID); >10 MiB/Budget verworfen; Scan-Export unbeschränkt.
+Evaluation-Reuse bleibt aktiv. **E1 (Default):** der Full-Read bindet seinen
+eigenen Export nach dem Aufruf (nur bei Message-ID ohne gehaltene Identität;
+Sink-/Bind-Fehler ändern nichts); `evaluation_raw` entfällt. **E2 (Gate
+`allow_scan_source_full_text`, Default `False`):** ohne gehaltene Quelle liefert
+derselbe Export `full_body` ohne CLI-Read bei `eml_full_text_parity` und
+passender EML-Message-ID; eine gehaltene Quelle verlangt Parität plus saubere
+Barrier-Bewertung, sonst Read (modelliert). Hit: `full_inventory` 1,
+`full_read`/`evaluation_raw` 0. `finally` löscht alles; P1 aktiv;
+`get_unprocessed_emails` akzeptiert `source_context`/`scan_profile`.
 
 **P3 — Preview-first für bekannte Lücken (`scan_profile`):** Das Draft-Opt-in
 `scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`, validiert vor

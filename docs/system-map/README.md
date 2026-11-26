@@ -859,6 +859,27 @@ MIME-/Policy-/Lease-/Hash-/Handoff-Prüfungen unverändert aus. P1 ist im Draft
 aktiv (Default `True`) und bleibt ungekoppelt; keine EML in Manifest,
 `batch-inspected.json`, Progress, Index, Journal, Evidence oder Logs.
 
+**P2 E1 (Default, gateunabhängig):** `run_draft_mode` legt für jeden frischen
+Scan einen inneren Bind-Wrapper um den Full-Reader: bei `full_body=True` hängt
+er den bestehenden `raw_eml_sink` an, sammelt die Exportbytes und bindet sie
+nach dem Aufruf (`ScanSourceContext.bind`) nur bei nichtleerer Message-ID und
+ohne bereits gehaltene Identität — kein Doppel-Bind, keine Poisoning-Kaskade;
+Sink-/Bind-Fehler ändern kein Ergebnis, Preview-Aufrufe unberührt. Der aktive
+`source_lookup` der Evaluation findet diese Bytes, sodass `evaluation_raw` bei
+unverändertem `full_read`/`full_inventory` entfällt.
+
+**P2 E2 (nur Gate `True`):** Der äußere Full-Text-Wrapper setzt
+`allow_full_body_from_export=True` nur für `full_body=True` und nur ohne
+gehaltene Scan-Quelle; eine abgelehnte gehaltene Quelle (Parität,
+Injection-Barrier, Ableitung) hält den Export-Reuse aus, weil ihre Bytes
+dasselbe Urteil tragen. Nach erfolgreichem Inventar-Export und vor dem CLI-Read
+liefert dann derselbe Export den Full-Body über die gemeinsame
+`raw_eml`-Ableitung (`_details_from_raw_eml`, `read_level: "full_body"`), wenn
+die Paritätsklasse gilt und die EML-eigene Message-ID exakt der normalisierten
+`fallback_envelope["message_id"]` entspricht; jede Abweichung fällt fail-closed
+auf den unveränderten Read zurück (Transport-Block re-raised). Reihenfolge:
+Bind-Wrapper innen, Full-Text-Wrapper außen.
+
 **Preview-first für bekannte Lücken (`scan_profile`, P3, 2026-11-23):** Das
 Draft-Opt-in `scan_profile` (Default `balanced`; nur `balanced`/`known_heavy`,
 validiert vor jedem Mailboxzugriff) wählt die Scan-Sequenz; keine automatische

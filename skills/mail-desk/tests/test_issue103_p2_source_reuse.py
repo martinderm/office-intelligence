@@ -100,13 +100,33 @@ def _cli_read_text(eml: bytes) -> str:
     return header_block + (separator + body if separator else "")
 
 
-def _envelope(envelope_id: str = "61") -> dict:
-    return {
+def _envelope(envelope_id: str = "61", *, has_attachment: bool | None = None) -> dict:
+    envelope = {
         "id": envelope_id,
         "subject": "Kurzfrage zum Vorgang",
         "from": {"name": "Sender", "addr": "sender@example.test"},
         "date": "2026-01-01",
     }
+    if has_attachment is not None:
+        envelope["has_attachment"] = has_attachment
+    return envelope
+
+
+# Fields the owned-export reuse must reproduce exactly against the regular full read.
+_DETAIL_COMPARISON_FIELDS = (
+    "subject",
+    "from",
+    "to",
+    "cc",
+    "date",
+    "in_reply_to",
+    "references",
+    "preview",
+    "attachments",
+    "attachment_status",
+    "attachment_error",
+    "read_level",
+)
 
 
 class ScanSourceContextTests(unittest.TestCase):
@@ -448,7 +468,7 @@ class _NullTracker:
 
 
 class DraftFullTextReuseTests(HermeticProcessTestCase):
-    """Point 1 and 4: full text from the held source, barrier-gated."""
+    """Points 1, 2, 4 and 6: full text from the held source or the own export."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -466,11 +486,13 @@ class DraftFullTextReuseTests(HermeticProcessTestCase):
         allow_scan_source_full_text: bool | None = True,
         evaluation_triggers: bool = False,
         evaluation_sink: dict | None = None,
+        has_attachment: bool | None = None,
+        detail_sink: list[dict] | None = None,
     ):
         calls: list[str] = []
         data_dir = Path(temporary) / "data" / "mail-desk"
         data_dir.mkdir(parents=True, exist_ok=True)
-        envelope = _envelope()
+        envelope = _envelope(has_attachment=has_attachment)
         read_text = _cli_read_text(eml)
         captured: dict[str, object] = {}
 
@@ -510,6 +532,8 @@ class DraftFullTextReuseTests(HermeticProcessTestCase):
                     },
                     full_body=True,
                 )
+                if detail_sink is not None:
+                    detail_sink.append(details)
                 if source_sink is not None:
                     source_sink(details)
                 items.append(
@@ -537,6 +561,9 @@ class DraftFullTextReuseTests(HermeticProcessTestCase):
         def evaluate(**kwargs):
             if evaluation_sink is not None:
                 evaluation_sink["raw_eml"] = kwargs["raw_eml"]
+                context = captured.get("context")
+                if context is not None:
+                    evaluation_sink["held_count"] = context.held_count
             return {
                 "attachment_evaluation": {
                     "status": "failed",
@@ -625,6 +652,159 @@ class DraftFullTextReuseTests(HermeticProcessTestCase):
         self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
         self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
         self.assertEqual(0, snapshot["starts_by_purpose"]["evaluation_raw"])
+        self.assertEqual(eml, sink["raw_eml"])
+
+    def test_default_off_evaluation_reuses_the_own_full_read_export(self) -> None:
+        """Point 1 (E1): the full read's own export feeds the evaluation by default."""
+        eml = _eml(["Erste Zeile.", "Zweite Zeile."])
+        sink: dict[str, object] = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            result, calls, snapshot, _context = self._run(
+                temporary,
+                eml=eml,
+                has_attachment=False,
+                allow_scan_source_full_text=False,
+                evaluation_triggers=True,
+                evaluation_sink=sink,
+            )
+        self.assertEqual(["thread", "list", "read", "export", "read"], calls)
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_preview"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["evaluation_raw"])
+        self.assertEqual(eml, sink["raw_eml"])
+        self.assertEqual("full_body", result["draft"]["items"][0]["read_level"])
+
+    def test_gate_on_parity_case_reuses_the_own_full_read_export(self) -> None:
+        """Point 2 (E2): a parity-class EML supplies the body without a CLI read."""
+        eml = _eml(["Erste Zeile.", "Zweite Zeile."])
+        reused_details: list[dict] = []
+        with tempfile.TemporaryDirectory() as temporary:
+            result, calls, snapshot, _context = self._run(
+                temporary,
+                eml=eml,
+                has_attachment=False,
+                allow_scan_source_full_text=True,
+                evaluation_triggers=True,
+                detail_sink=reused_details,
+            )
+        self.assertEqual(["thread", "list", "read", "export"], calls)
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_preview"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["full_read"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["evaluation_raw"])
+        self.assertEqual("full_body", reused_details[0]["read_level"])
+        self.assertEqual("full_body", result["draft"]["items"][0]["read_level"])
+
+        reference_details: list[dict] = []
+        with tempfile.TemporaryDirectory() as temporary:
+            _result, _calls, reference_snapshot, _context = self._run(
+                temporary,
+                eml=eml,
+                has_attachment=False,
+                allow_scan_source_full_text=False,
+                evaluation_triggers=True,
+                detail_sink=reference_details,
+            )
+        self.assertEqual(1, reference_snapshot["starts_by_purpose"]["full_read"])
+        for field in _DETAIL_COMPARISON_FIELDS:
+            with self.subTest(field=field):
+                self.assertEqual(
+                    reference_details[0].get(field), reused_details[0].get(field)
+                )
+
+    def test_gate_on_parity_rejection_keeps_the_regular_full_read(self) -> None:
+        """Point 3: an EML outside the parity class keeps the CLI read, without error."""
+        multipart_alternative = [
+            "--b1",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "Teil.",
+            "--b1--",
+        ]
+        cases = {
+            "html_only": _eml(["<p>HTML</p>"], content_type="text/html; charset=utf-8"),
+            "multipart_alternative": _eml(
+                multipart_alternative,
+                content_type='multipart/alternative; boundary="b1"',
+            ),
+        }
+        for name, eml in cases.items():
+            with self.subTest(case=name):
+                details: list[dict] = []
+                with tempfile.TemporaryDirectory() as temporary:
+                    _result, _calls, snapshot, _context = self._run(
+                        temporary,
+                        eml=eml,
+                        has_attachment=False,
+                        allow_scan_source_full_text=True,
+                        detail_sink=details,
+                    )
+                self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
+                self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
+                self.assertIsNone(details[0]["error"])
+                self.assertEqual("full_body", details[0]["read_level"])
+
+    def test_gate_on_missing_or_deviating_message_id_keeps_the_full_read(self) -> None:
+        """Point 4: an unprovable identity falls back fail-closed to the CLI read."""
+        eml = _eml(["Body."])
+        cases = {"missing": "", "deviating": "other@example.test"}
+        for name, fallback_message_id in cases.items():
+            with self.subTest(case=name):
+                details: list[dict] = []
+                with tempfile.TemporaryDirectory() as temporary:
+                    _result, _calls, snapshot, _context = self._run(
+                        temporary,
+                        eml=eml,
+                        has_attachment=False,
+                        allow_scan_source_full_text=True,
+                        fallback_message_id=fallback_message_id,
+                        detail_sink=details,
+                    )
+                self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
+                self.assertIsNone(details[0]["error"])
+                self.assertEqual("full_body", details[0]["read_level"])
+
+    def test_held_scan_source_is_not_poisoned_by_the_own_full_read_bind(self) -> None:
+        """Point 5: a repeated identity is not re-bound and keeps its held source."""
+        eml = _eml(["Erste Zeile.", "Zweite Zeile."])
+        sink: dict[str, object] = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            _result, calls, snapshot, _context = self._run(
+                temporary,
+                eml=eml,
+                allow_scan_source_full_text=False,
+                evaluation_triggers=True,
+                evaluation_sink=sink,
+            )
+        self.assertEqual(["thread", "list", "export", "read", "export", "read"], calls)
+        self.assertEqual(1, snapshot["starts_by_purpose"]["scan_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["evaluation_raw"])
+        self.assertEqual(1, sink["held_count"])
+        self.assertEqual(eml, sink["raw_eml"])
+
+    def test_gate_off_with_a_held_scan_source_keeps_the_unchanged_p2_sequence(self) -> None:
+        """Point 6: the default path keeps the full read and the evaluation reuse."""
+        eml = _eml(["Erste Zeile.", "Zweite Zeile."])
+        sink: dict[str, object] = {}
+        with tempfile.TemporaryDirectory() as temporary:
+            result, calls, snapshot, _context = self._run(
+                temporary,
+                eml=eml,
+                allow_scan_source_full_text=None,
+                evaluation_triggers=True,
+                evaluation_sink=sink,
+            )
+        self.assertEqual("completed", result["status"])
+        self.assertEqual(["thread", "list", "export", "read", "export", "read"], calls)
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_read"])
+        self.assertEqual(1, snapshot["starts_by_purpose"]["full_inventory"])
+        self.assertEqual(0, snapshot["starts_by_purpose"]["evaluation_raw"])
+        self.assertEqual("Erste Zeile.\nZweite Zeile.", result["draft"]["items"][0]["preview"])
         self.assertEqual(eml, sink["raw_eml"])
 
     def test_non_boolean_gate_is_rejected_before_any_process(self) -> None:

@@ -8,6 +8,49 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-25 - Issue #103: P2-Full-Text-Reuse aus dem eigenen Export (E1 Default, E2 gegated)
+
+#### Changed
+
+- **E1 (Default, gateunabhängig):** `core/modes/draft.py` installiert für jeden
+  frischen Scan (`source_context is not None`) einen inneren Bind-Wrapper um den
+  Full-Reader. Bei `full_body=True` hängt er den bestehenden `raw_eml_sink` an,
+  sammelt die Exportbytes und bindet sie nach dem Aufruf über
+  `ScanSourceContext.bind(...)` — nur bei nichtleerer `message_id` und nur, wenn
+  `lookup(...)` für dieselbe Identität noch nichts hält (kein Doppel-Bind, keine
+  Poisoning-Kaskade). Sink-/Bind-Fehler ändern das Leseergebnis nie, Preview-
+  Aufrufe bleiben unberührt. Wirkung: der aktive `source_lookup` der Evaluation
+  findet die Bytes des eigenen Full-Read-Exports, `evaluation_raw` entfällt
+  (projiziert aus der A-Diagnose: −3 Starts, Default bleibt 33; keine erneute
+  Live-Messung).
+- **E2 (nur Gate `allow_scan_source_full_text=True`):**
+  `get_single_email_details` erhält keyword-only
+  `allow_full_body_from_export: bool = False` (bool-validiert). Nach
+  erfolgreichem Inventar-Export und vor dem CLI-Read liefert derselbe Export den
+  `full_body`-Datensatz genau dann, wenn `eml_full_text_parity(eml_data)` gilt
+  **und** die EML-eigene Message-ID (`eml_own_message_id`) exakt der
+  normalisierten `fallback_envelope["message_id"]` entspricht; sonst bleibt der
+  unveränderte CLI-Read (fehlende/abweichende ID, Paritäts-Ablehnung, fehlende
+  Inventur, Ausnahme). Der Gate-Wrapper setzt das Flag nur für `full_body=True`
+  und nur, wenn für dieses Item keine gehaltene Scan-Quelle vorliegt; eine
+  abgelehnte gehaltene Quelle (Parität, Injection-Barrier, Ableitung) hält den
+  Export-Reuse aus, weil ihre Bytes identisch wären.
+- **Gemeinsame Ableitung:** Die `raw_eml`-Feldableitung liegt jetzt in
+  `_details_from_raw_eml` und wird unverändert vom bestehenden `raw_eml`-Zweig
+  und von E2 genutzt (`read_level: "full_body"`); keine duplizierte Logik, kein
+  neuer Prozessstart.
+- **Unverändert:** `allow_eml_details` (P1) bleibt aktiv (Default `True`) und der
+  P1-Zweig (`not full_body`) unberührt; `allow_scan_source_full_text` bleibt
+  Default `False`; `scan_profile` bleibt `balanced`; P5-Pacing 0/2.0. Keine
+  neuen Persistenz-, Log- oder Manifestfelder, keine Mailinhalte/-IDs in
+  Artefakten. Die Live-Referenz läuft separat in boku-user.
+- **Tests/Doku:** `skills/mail-desk/tests/test_issue103_p2_source_reuse.py`
+  (49 Fälle: E1-Default-Reuse, E2-Paritätsfall feldgleich zum CLI-Read,
+  Paritäts-Ablehnung, fehlende/abweichende ID, kein Doppel-Bind, unveränderte
+  P2-Sequenz); P1 168, P3 13 und die P5-Suite unverändert grün.
+  `references/backends/himalaya.md`, `references/batch-runner.md`,
+  L1/L2-System-Map, `objects.md`.
+
 ### 2026-11-25 - Issue #103: P1 aktiv (Draft-Default `True`)
 
 #### Changed
