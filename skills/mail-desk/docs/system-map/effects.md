@@ -188,8 +188,9 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   ein reguläres Handle mit Identitäts-/Wachstumsprüfung) begrenzt nicht die vorgelagerte
   Backend-Übertragung oder Plattengröße. Bei Replace (auch bei ausgelassener Anhangsliste) erst nach
   verifizierter neuer Mail `flag add deleted` + `folder expunge` auf die per Message-ID neu aufgelöste
-  alte Envelope. Unter dem expliziten v3-Profil startet statt `message save` das übersetzte
-  `message add --mailbox <f> --flag draft` (ohne `-o plain`); der Replace bricht dort vor jedem
+  alte Envelope. Unter dem aufgelösten v3-Profil startet statt `message save` das übersetzte
+  `message add --mailbox <f> --flag draft` (ohne `-o plain`/`--json`), wobei der v1-CRLF-
+  Kompensator vor dem Child byte-exakt entfernt wird; der Replace bricht dort vor jedem
   Write mit `himalaya_expunge_unsupported` ab. Kein SMTP, kein `message send`.
 * **Fehlerklassen:** eindeutig gescheitert (`draft_save_failed`), unklarer Ausgang
   (`draft_append_outcome_unknown`: Timeout, transient, Launch, Pipe, fremde Exception), nicht

@@ -426,15 +426,18 @@ Entwurf in den Drafts-Ordner legt.
 - **Löschen ohne UID MOVE:** `\Deleted` wird direkt am Envelope gesetzt und die
   markierte Nachricht danach per `folder expunge` entfernt; ein `message delete`
   (das eine Nicht-Trash-Nachricht in den Trash-Ordner verschiebt) wird bewusst
-  nicht verwendet. Unter dem expliziten v3-Profil gibt es keinen In-Place-Expunge:
+  nicht verwendet. Unter dem aufgelösten v3-Profil gibt es keinen In-Place-Expunge:
   `delete-draft` und der Pflicht-Löschschritt von `replace-draft` brechen **vor
   jedem Write** mit `himalaya_expunge_unsupported` ab; ein Move-to-Trash ist kein
-  Ersatz. Die Kommandos kommen aus der zentralen Versionsmatrix (`1.2.x` → v1
+  Ersatz. Das Profil stammt aus derselben begrenzten, gecachten `--version`-Probe
+  wie der Kommando-Builder (keine Mailbox-Aktion). Die Kommandos kommen aus der
+  zentralen Versionsmatrix (`1.2.x` → v1
   byte-identisch, `3.x` → u. a. `mailbox list`, `envelope list/search -m`,
   `message read --json`, `message add --mailbox --flag draft`, `message copy
-  -f/-t`, `message delete -m`, `flag add ... -m`); unbekannte Versionen stoppen
-  fail-closed vor jedem Mailbox-Kommando. Der stdin-Payload ist unter v3 derselbe,
-  das übersetzte `message add` trägt kein `-o plain`.
+  -f/-t`, `message delete -m`, `flag add --flag <flag> -m`); unbekannte Versionen
+  stoppen fail-closed vor jedem Mailbox-Kommando. Unter v3 geht die kanonische
+  Rohmail ohne den v1-CRLF-Kompensator an `message add` (kein `-o plain`, kein
+  `--json` im übersetzten Kommando).
 - **Ersetzen:** neu zuerst, alt danach (`replace_envelope_id`); das dokumentierte
   Crash-Fenster (beide Entwürfe beobachtbar) und beide Envelope-IDs landen im
   Draft-Journal.

@@ -1192,6 +1192,7 @@ def run_diagnostic_save_draft(
             timeout=effective_timeout,
             max_retries=1,
             stdin_bytes=stdin_payload,
+            stdin_v1_terminator=_STDIN_TRANSPORT_TERMINATOR,
             diagnostic_capture=capture,
         )
     except Exception as exc:  # noqa: BLE001 - classified fail-closed boundary

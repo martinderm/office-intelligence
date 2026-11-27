@@ -208,19 +208,16 @@ def load_envelope_thread_map(
 ) -> dict[str, EnvelopeThreadEntry]:
     """Run exactly one bounded listing/thread process and build the map.
 
-    v1 reads one ``envelope thread -o json`` graph.  v3 derives the same map from
-    one ``envelope list --json`` because the CLI has no thread command.  A
-    non-zero exit, timeout, malformed JSON or invalid structure discards the
-    whole map (F1).  A ``mailbox_transport_blocked`` abort is never swallowed:
-    it ends the scan without another process start (F6).
+    v1 reads one ``envelope thread -o json`` graph.  v3 has no thread command;
+    the central map translates the *same logical request* into one bounded
+    ``envelope list --json`` page (``-s 500``), and the profile carried by the
+    returned output (:class:`core.himalaya.HimalayaOutput`) selects the v3
+    derivation.  No pre-command probe is started here: the producing command is
+    the authority.  A non-zero exit, timeout, malformed JSON or invalid structure
+    discards the whole map (F1).  A ``mailbox_transport_blocked`` abort is never
+    swallowed: it ends the scan without another process start (F6).
     """
-    resolved = _himalaya.resolve_himalaya_profile_or_none()
-    is_v3 = resolved is not None and resolved.name == _himalaya.PROFILE_V3
-    args = (
-        ["--json", "envelope", "list", "-m", folder]
-        if is_v3
-        else ["envelope", "thread", "-f", folder, "-o", "json"]
-    )
+    args = ["envelope", "thread", "-f", folder, "-o", "json"]
     try:
         raw = run_himalaya_fn(
             args,
@@ -235,7 +232,7 @@ def load_envelope_thread_map(
         return {}
     except Exception:  # noqa: BLE001 - any map failure only disables the accelerator
         return {}
-    if is_v3 or _himalaya.profile_of(raw) == _himalaya.PROFILE_V3:
+    if _himalaya.profile_of(raw) == _himalaya.PROFILE_V3:
         return _thread_map_from_v3_listing(raw)
     if not isinstance(raw, str):
         return {}

@@ -196,8 +196,12 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    (`core/himalaya_normalize.py`: Live-Array mit Pflichtkey `messageId`
    `string|null` oder Schema-Objekt `{envelopes,nextPage,total,errors}`) tragen
    alle Aufrufstellen; v3 hat kein `envelope thread` (Map aus der Liste) und keinen
-   In-Place-Expunge (`delete_draft`/`replace_draft` → `himalaya_expunge_unsupported`
-   vor jedem Write). Der Adapter ist hermetisch getestet, ohne Live-Mailbox-Nachweis.
+   In-Place-Expunge (`delete_draft`/`replace_draft` lösen das Profil über die
+   gecachte Probe auf und verweigern mit `himalaya_expunge_unsupported` vor jedem
+   Write). Der v3-Read bildet das typisierte `headers`-Objekt ab (inkl. `cc`/
+   `references`), v3-Suchwerte werden pimdir-konform gequotet (`subject:"…"`), und
+   der v1-CRLF-Kompensator des stdin-APPEND entfällt unter v3. Der Adapter ist
+   hermetisch getestet, ohne Live-Mailbox-Nachweis.
    Detail: L2-Map §47.
  - **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
    Evidence-Fallback (FR-17/MD-R7).

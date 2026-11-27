@@ -18,40 +18,57 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   v1-argv; `3.x` (`>=3.0.0`, `<4.0.0`) nutzt die zentrale Abbildung in
   `core/himalaya_profile.py` (`mailbox list`, `envelope list/search -m --json`,
   `-p/--page`, `--sort oldest-first|newest-first`, `message read --json`/`--raw`,
-  `message add --mailbox --flag draft`, `message copy -f/-t`, `message delete -m`,
-  `flag add ... -m`). Unbekannte, fehlende, unparsebare oder nicht startbare
-  Versionen stoppen vor jedem Mailbox-Kommando als `himalaya_version_unsupported`
-  bzw. `himalaya_unavailable`; kein stiller Profilwechsel und kein v3-Rückfall.
+  `message add --mailbox --flag draft` ohne `--json`,
+  `message copy -f/-t`, `message delete -m`,
+  `flag add --flag <flag> -m`; `deleted` ist kein v3-Flag und wird als
+  `himalaya_flag_unsupported` verweigert). Mehrwortige Suchwerte werden
+  pimdir-konform gequotet (`subject:"Rechnung Q4"`). Unbekannte, fehlende,
+  unparsebare oder nicht startbare Versionen stoppen vor jedem Mailbox-Kommando
+  als `himalaya_version_unsupported` bzw. `himalaya_unavailable`; kein stiller
+  Profilwechsel und kein v3-Rückfall.
 - **Strikte v3-JSON-Grenze:** `core/himalaya_normalize.py` validiert die belegte
   Live-Arrayform (Pflichtkey `messageId` `string|null`) und die
   Schema-Objektform `{envelopes,nextPage,total,errors}` und normalisiert beide in
   die interne v1-kompatible Envelope-Form. v1-Arrays ohne `messageId`,
   snake_case-only `message_id`, fehlende/falsch typisierte Keys, widersprüchliche
   Duplikate, nicht-uint `total`, nichtleere `errors` und nicht fortschreitendes
-  Paging sind fail-closed; `mailbox list` wird aus `{mailboxes,errors}` gelesen.
+  Paging sind fail-closed; schema-gültige Nulls (`Address.name`, `Flag.iana`)
+  werden akzeptiert, `mailbox list` wird aus `{mailboxes,errors}` gelesen
+  (`role: "drafts"` löst den Drafts-Ordner). `message read --json` bildet das
+  typisierte `headers`-Objekt ab; `cc` und `references` bleiben in den
+  Detailfeldern erhalten, `headers_complete` ist nur bei vollständigem Objekt wahr.
 - **Alle Aufrufstellen über die Matrix:** Client, Sent-Indexer, `readiness`,
-  `mailbox_preflight`, `modes/execute`, Batch-Runner und
+  `mailbox_preflight`, `modes/execute`, `modes/inspect`, Batch-Runner und
   `mail_desk_move_and_patch`; v3-Read nutzt die JSON-View (kein v1-Headertext),
   jeder v3-Mailbox-Listenpfad den profilrichtigen Decoder. Sent-Indexer mappt
   `--page P` auf `-p P` und `date D`/`order by date asc|desc` auf
   `date:D`/`--sort`. Kein rohes `-o json`/`-f`/`--page`/`order by` außerhalb der
   Versionsmodule.
 - **v3-Expunge-Limit:** v3 hat keinen In-Place-Expunge. `delete_draft` und der
-  Pflicht-Löschschritt von `replace_draft` prüfen das explizite Profil und werfen
-  `himalaya_expunge_unsupported` **vor** jedem Save/Append/Flag/Delete/Expunge;
-  kein Move-to-Trash, kein Ersatz-Append. `save_draft`/`save_raw_draft` behalten
-  den v3-`message add`-Pfad mit stdin (ohne `-o plain` im übersetzten Kommando).
-- **Thread-Map:** `envelope thread` bleibt v1-only; unter v3 wird die
-  `id → Message-ID`-Map aus einer begrenzten `envelope list`-Seite
-  (`messageId`/`inReplyTo`) abgeleitet, ein Fehler deaktiviert nur den Accelerator.
+  Pflicht-Löschschritt von `replace_draft` lösen das Profil über dieselbe
+  begrenzte, gecachte `--version`-Probe wie der Kommando-Builder auf (keine
+  Mailbox-Aktion) und werfen `himalaya_expunge_unsupported` **vor** jedem
+  Save/Append/Flag/Delete/Expunge; kein Move-to-Trash, kein Ersatz-Append.
+  `save_draft`/`save_raw_draft` senden die kanonische Rohmail ohne den
+  v1-CRLF-Kompensator an `message add` (ohne `-o plain`/`--json`).
+- **Thread-Map:** `envelope thread` bleibt v1-only. Der Loader sendet die
+  logische v1-Anfrage; unter v3 übersetzt die zentrale Abbildung sie in eine
+  begrenzte `envelope list`-Seite (`messageId`/`inReplyTo`, `-s 500`), und das
+  Profil des Outputs wählt den v3-Decoder. Ein Fehler deaktiviert nur den
+  Accelerator.
+- **Suche fail-closed:** `himalaya_search_query_unsupported` und
+  `himalaya_json_incompatible` werden aus dem Folder-Sweep (seriell und threaded)
+  re-raised statt als leeres Ergebnis zu enden; der v3-Freitextfall wird nach der
+  ersten (lesenden) Listung verweigert.
 
 #### Tests/Doku
 
 - Neue hermetische Module `skills/mail-desk/tests/himalaya_v3_fixtures.py`,
-  `test_himalaya_v3_cli_profile.py` (14), `test_himalaya_v3_json_adapter.py` (22)
-  und `test_himalaya_v3_callsites.py` (15); beide Transportschienen
+  `test_himalaya_v3_cli_profile.py`, `test_himalaya_v3_json_adapter.py` und
+  `test_himalaya_v3_callsites.py`; beide Transportschienen
   (`subprocess.run`, `_POPEN`) gescriptet, kein echter Himalaya-Prozess, keine
-  Mailbox, kein Netzwerk, keine Credentials. Der Adapter hat **keinen
+  Mailbox, kein Netzwerk, keine Credentials. Die Pre-Write-Guards laufen ohne
+  Hint-Patch über die echte, gecachte Profilprobe; der Adapter hat **keinen
   Live-Nachweis**; die v3.0.0-Feldwerte sind externe read-only Referenzevidenz.
 - Synchronisiert: `references/backends/himalaya.md` (Versionsmatrix, v3-JSON,
   Paging/Suche, Expunge-Limit), `references/cli-operations.md`, `SKILL.md`,

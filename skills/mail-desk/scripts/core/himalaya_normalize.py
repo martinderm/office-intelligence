@@ -64,6 +64,10 @@ def _typed_address_list(value: object, *, field: str) -> list[dict[str, Any]]:
             raise _fail(f"'{field}' entries must be address objects.")
         name = item.get("name", "")
         email = item.get("email", "")
+        # ``Address.name`` is ``string|null`` in the v3 schema: a nameless sender
+        # is valid and normalizes to the empty display name.
+        if name is None:
+            name = ""
         if not isinstance(name, str) or not isinstance(email, str):
             raise _fail(f"'{field}' entries must carry string name/email values.")
         addresses.append({"name": name, "email": email})
@@ -79,6 +83,9 @@ def _typed_flags(value: object) -> list[str]:
             raise _fail("'flags' entries must be objects.")
         raw = item.get("raw")
         iana = item.get("iana", "")
+        # ``Flag.iana`` is ``IanaFlag|null``: a custom keyword carries no IANA tag.
+        if iana is None:
+            iana = ""
         if not isinstance(raw, str) or not isinstance(iana, str):
             raise _fail("'flags' entries must carry string raw/iana values.")
         raw_flags.append(raw)
@@ -136,7 +143,11 @@ def _bracketed_message_ids(values: Iterable[str]) -> str:
 def _first_address(value: object) -> dict[str, str]:
     if isinstance(value, list) and value and isinstance(value[0], dict):
         first = value[0]
-        return {"name": str(first.get("name", "")), "addr": str(first.get("email", ""))}
+        name = first.get("name")
+        return {
+            "name": "" if name is None else str(name),
+            "addr": str(first.get("email", "")),
+        }
     return {"name": "", "addr": ""}
 
 

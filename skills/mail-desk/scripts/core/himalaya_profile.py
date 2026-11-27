@@ -12,7 +12,7 @@ Supported profiles (fail-closed for everything else):
 * ``3.x``   -> ``v3``: ``--json``, ``-m/--mailbox``, ``mailbox list``,
   ``envelope search`` (paging ``-p/--page``), ``message read --json``/``--raw --json``,
   ``message add`` with stdin, ``message copy -f/-t``, ``message delete -m`` and
-  ``flag add ... -m``.
+  ``flag add --flag <FLAG> -m`` (the v1-only ``deleted`` value fails closed).
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ UNAVAILABLE_REASON = "himalaya_unavailable"
 EXPUNGE_UNSUPPORTED_REASON = "himalaya_expunge_unsupported"
 COMMAND_UNSUPPORTED_REASON = "himalaya_command_unsupported"
 SEARCH_QUERY_UNSUPPORTED_REASON = "himalaya_search_query_unsupported"
+FLAG_UNSUPPORTED_REASON = "himalaya_flag_unsupported"
 
 #: ``himalaya v3.0.0 +gmail ... build: ...`` carries trailing build tokens that
 #: must be ignored; an optional leading ``v`` is the only variant seen live.
@@ -187,6 +188,40 @@ def _split_composed_sort(token: str) -> tuple[str, str] | None:
     return None
 
 
+def _quote_query_value(field: str, value: str) -> str:
+    """Render one pimdir query value, quoting only when the language requires it.
+
+    ``subject``/``from``/``to``/``mid`` are words or phrases: a value with
+    whitespace, a quote, a backslash or a reserved leading ``~``/``/``/``{`` is
+    emitted as one double-quoted, backslash-escaped phrase
+    (``subject:"Rechnung Q4"``).  The structured ``date``/``is`` values take a
+    single token and are never phrase-quoted; whitespace there is invalid.
+    """
+    text = value.strip()
+    if not text:
+        raise ProfileError(
+            SEARCH_QUERY_UNSUPPORTED_REASON,
+            "The v3 adapter refuses an empty query value; the query was not sent.",
+        )
+    if field in ("date", "is"):
+        if any(character.isspace() for character in text):
+            raise ProfileError(
+                SEARCH_QUERY_UNSUPPORTED_REASON,
+                "The v3 adapter accepts only a single-token date/is value; the query was not sent.",
+            )
+        return text
+    needs_quoting = (
+        any(character.isspace() for character in text)
+        or '"' in text
+        or "\\" in text
+        or text.startswith(("~", "/", "{"))
+    )
+    if not needs_quoting:
+        return text
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 def _translate_query(positionals: Sequence[str]) -> tuple[list[str], str | None]:
     """Translate the documented v1 query forms into v3 ``envelope search`` tokens.
 
@@ -226,17 +261,20 @@ def _translate_query(positionals: Sequence[str]) -> tuple[list[str], str | None]
             )
         field, separator, value = token.partition(":")
         if separator and field.strip().lower() in _SEARCH_FIELDS:
-            search.append(f"{field.strip().lower()}:{value}")
+            field = field.strip().lower()
+            search.append(f"{field}:{_quote_query_value(field, value)}")
             index += 1
             continue
         if " " in token:
             head, _, tail = token.partition(" ")
             if head.strip().lower() in _SEARCH_FIELDS and tail.strip():
-                search.append(f"{head.strip().lower()}:{tail.strip()}")
+                field = head.strip().lower()
+                search.append(f"{field}:{_quote_query_value(field, tail)}")
                 index += 1
                 continue
         if token.strip().lower() in _SEARCH_FIELDS and index + 1 < len(tokens):
-            search.append(f"{token.strip().lower()}:{tokens[index + 1]}")
+            field = token.strip().lower()
+            search.append(f"{field}:{_quote_query_value(field, tokens[index + 1])}")
             index += 2
             continue
         raise ProfileError(
@@ -262,7 +300,7 @@ def _translate_envelope(tokens: list[str]) -> list[str]:
     subcommand = tokens[1] if len(tokens) > 1 else ""
     if subcommand == "thread":
         folder, _rest = _pop_option(tokens, _FOLDER_FLAGS)
-        return ["--json", "envelope", "list", "-m", folder or "INBOX"]
+        return ["--json", "envelope", "list", "-m", folder or "INBOX", "-s", "500"]
     if subcommand != "list":
         raise ProfileError(COMMAND_UNSUPPORTED_REASON, "This 'envelope' command has no v3 mapping.")
 
@@ -319,7 +357,11 @@ def _translate_message(tokens: list[str]) -> list[str]:
         return ["--json", "message", "read", envelope_ids[0], "-m", folder or "INBOX", "--raw"]
     if subcommand == "save":
         folder, _rest = _pop_option(tokens[2:], _FOLDER_FLAGS)
-        return ["--json", "message", "add", "--mailbox", folder or "INBOX", "--flag", "draft"]
+        # No ``--json`` here: ``message add`` reads the piped message on stdin and
+        # the save only needs its exit status.  ``--json`` is unproven for the
+        # stdin branch (the v1 ``message save`` JSON branch bypassed stdin), so the
+        # adapter never adds it and keeps the raw payload on stdin.
+        return ["message", "add", "--mailbox", folder or "INBOX", "--flag", "draft"]
     if subcommand == "copy":
         rest = tokens[2:]
         source, rest = _pop_option(rest, _FOLDER_FLAGS)
@@ -343,6 +385,9 @@ def _translate_message(tokens: list[str]) -> list[str]:
     raise ProfileError(COMMAND_UNSUPPORTED_REASON, "This 'message' command has no v3 mapping.")
 
 
+_V3_FLAG_VALUES = frozenset({"seen", "answered", "flagged", "draft", "important", "junk"})
+
+
 def _translate_flag(tokens: list[str]) -> list[str]:
     if len(tokens) < 4 or tokens[1] != "add":
         raise ProfileError(COMMAND_UNSUPPORTED_REASON, "Only 'flag add' has a v3 mapping.")
@@ -351,7 +396,23 @@ def _translate_flag(tokens: list[str]) -> list[str]:
     positionals = _positionals(rest, value_flags=())
     if len(positionals) < 2:
         raise ProfileError(COMMAND_UNSUPPORTED_REASON, "A v3 'flag add' needs a flag and an id.")
-    return ["--json", "flag", "add", positionals[0], positionals[1], "-m", folder or "INBOX"]
+    flag = positionals[0].strip().lower()
+    if flag not in _V3_FLAG_VALUES:
+        raise ProfileError(
+            FLAG_UNSUPPORTED_REASON,
+            "Himalaya v3 'flag add' accepts only seen/answered/flagged/draft/important/junk; "
+            f"'{flag}' has no v3 flag and no command was sent.",
+        )
+    return [
+        "--json",
+        "flag",
+        "add",
+        "--flag",
+        flag,
+        "-m",
+        folder or "INBOX",
+        *positionals[1:],
+    ]
 
 
 _TRANSFER_VALUE_FLAGS = ("-t", "--target", "-f", "--folder")

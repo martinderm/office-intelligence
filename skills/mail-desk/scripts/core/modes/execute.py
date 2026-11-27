@@ -43,10 +43,10 @@ def _dependency(
 def _v3_read_message_id(output: object) -> str | None:
     """Return the Message-ID of one v3 ``message read --json`` view.
 
-    v3 answers the documented JSON view (``messageId`` plus a ``headers`` map),
-    not the v1 header text block.  A payload that is not the documented view
-    yields ``None`` so the caller keeps its bounded failure path; no partial text
-    is parsed.
+    v3 answers the documented JSON view (``messageId`` plus the typed
+    ``headers`` object whose ``messageId`` is ``string|null``), not the v1 header
+    text block.  A payload that is not the documented view yields ``None`` so the
+    caller keeps its bounded failure path; no partial text is parsed.
     """
     try:
         payload = json.loads(str(output))
@@ -59,9 +59,9 @@ def _v3_read_message_id(output: object) -> str | None:
         return message_id
     headers = payload.get("headers")
     if isinstance(headers, dict):
-        for name, value in headers.items():
-            if str(name).lower() == "message-id" and isinstance(value, str) and value.strip():
-                return value
+        header_id = headers.get("messageId")
+        if isinstance(header_id, str) and header_id.strip():
+            return header_id
     return None
 
 

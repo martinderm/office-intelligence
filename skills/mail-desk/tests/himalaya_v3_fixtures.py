@@ -172,21 +172,25 @@ def v3_envelope(
     *,
     message_id: str | None = None,
     subject: str = "",
-    from_name: str = "Ada Lovelace",
+    from_name: str | None = "Ada Lovelace",
     from_email: str = "ada@example.org",
     to: Iterable[tuple[str, str]] = (("Grace Hopper", "grace@example.org"),),
     date: str = "2026-11-27T09:00:00Z",
-    flags: Iterable[tuple[str, str]] = (("Seen", "\\Seen"),),
+    flags: Iterable[tuple[str, str | None]] = (("Seen", "\\Seen"),),
     size: int | None = 1024,
     has_attachment: bool | None = False,
     in_reply_to: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """One v3 ``envelope list --json`` entry with the documented camelCase keys."""
+    """One v3 ``envelope list --json`` entry with the documented camelCase keys.
+
+    ``from_name`` and ``iana`` accept ``None`` because the v3 schema types them
+    ``string|null``/``IanaFlag|null`` (a nameless sender, a custom keyword).
+    """
     return {
         "id": str(envelope_id),
         "messageId": message_id,
         "inReplyTo": [str(value) for value in in_reply_to],
-        "flags": [{"raw": str(raw), "iana": str(iana)} for raw, iana in flags],
+        "flags": [{"raw": str(raw), "iana": iana} for raw, iana in flags],
         "subject": subject,
         "from": [{"name": from_name, "email": from_email}] if from_name or from_email else [],
         "to": [{"name": name, "email": address} for name, address in to],
@@ -232,27 +236,60 @@ def v3_message_view(
     *,
     message_id: str = "old@example.org",
     subject: str = "Alt",
-    from_name: str = "Ada Lovelace",
+    from_name: str | None = "Ada Lovelace",
     from_email: str = "ada@example.org",
     to: Iterable[tuple[str, str]] = (("Grace Hopper", "grace@example.org"),),
+    cc: Iterable[tuple[str, str]] = (),
+    references: Iterable[str] = (),
     date: str = "2026-11-27T09:00:00Z",
     text: str = "Zeile 1\nZeile 2\nZeile 3\n",
     in_reply_to: Iterable[str] = (),
 ) -> dict[str, Any]:
-    """The v3 ``message read --json`` view for one envelope."""
+    """The v3 ``message read --json`` view, with the real typed ``headers`` object.
+
+    ``headers`` mirrors ``himalaya json-schema himalaya-message-read``: address
+    arrays (``name`` may be ``null``), bracket-less id arrays (`references`,
+    ``inReplyTo``) and ``subject``/``date``/``messageId`` strings.
+    """
+    reply_to = [str(value) for value in in_reply_to]
+    reference_ids = [str(value) for value in references]
     return {
         "id": str(envelope_id),
         "messageId": message_id,
-        "inReplyTo": [str(value) for value in in_reply_to],
-        "flags": [{"raw": "Seen", "iana": "\\Seen"}],
+        "inReplyTo": list(reply_to),
+        "flags": [{"raw": "Seen", "iana": "seen"}],
         "subject": subject,
         "from": [{"name": from_name, "email": from_email}],
         "to": [{"name": name, "email": address} for name, address in to],
         "date": date,
         "size": 128,
         "hasAttachment": False,
-        "etag": "etag-1",
-        "headers": {"Message-Id": f"<{message_id}>", "Subject": subject},
+        "etag": None,
+        "headers": {
+            "from": [{"name": from_name, "email": from_email}],
+            "to": [{"name": name, "email": address} for name, address in to],
+            "cc": [{"name": name, "email": address} for name, address in cc],
+            "bcc": [],
+            "replyTo": [],
+            "sender": [],
+            "subject": subject,
+            "date": date,
+            "messageId": message_id,
+            "inReplyTo": list(reply_to),
+            "references": list(reference_ids),
+            "listId": None,
+            "listUnsubscribe": None,
+            "precedence": None,
+            "autoSubmitted": None,
+            "invalid": {
+                "to": [],
+                "cc": [],
+                "bcc": [],
+                "replyTo": [],
+                "from": [],
+                "sender": [],
+            },
+        },
         "text": text,
         "html": None,
         "parts": [],
@@ -395,6 +432,28 @@ class HimalayaTransport:
         return [kwargs["input"] for _argv, kwargs in self.calls if kwargs.get("input") is not None]
 
 
+def unquote_query_value(value: str) -> str:
+    """Return one pimdir query value with surrounding phrases unquoted.
+
+    Mirrors the adapter's quoting: a value wrapped in double quotes is a phrase
+    and backslash escapes the next character.  Unquoted values stay verbatim.
+    """
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return value
+    inner = value[1:-1]
+    unescaped: list[str] = []
+    index = 0
+    while index < len(inner):
+        character = inner[index]
+        if character == "\\" and index + 1 < len(inner):
+            unescaped.append(inner[index + 1])
+            index += 2
+            continue
+        unescaped.append(character)
+        index += 1
+    return "".join(unescaped)
+
+
 class V3MailboxTransport(HimalayaTransport):
     """A stateful, hermetic v3.0.0 CLI: list/search/read/raw/add/copy/delete.
 
@@ -504,6 +563,7 @@ class V3MailboxTransport(HimalayaTransport):
         queries = [token for token in command.positionals if token]
         for query in queries:
             prefix, _, value = query.partition(":")
+            value = unquote_query_value(value)
             if prefix == "subject":
                 entries = [entry for entry in entries if value.lower() in str(entry.get("subject") or "").lower()]
             elif prefix == "from":
@@ -540,11 +600,22 @@ class V3MailboxTransport(HimalayaTransport):
         folder = command.option("-m", "--mailbox") or ""
         for entry in self.state.get(folder, []):
             if str(entry.get("id")) == envelope_id:
+                to_pairs = [
+                    (str(item.get("name") or ""), str(item.get("email") or ""))
+                    for item in entry.get("to") or []
+                    if isinstance(item, dict)
+                ]
                 return json.dumps(
                     v3_message_view(
                         envelope_id,
                         message_id=str(entry.get("messageId") or ""),
                         subject=str(entry.get("subject") or ""),
+                        from_name=(entry.get("from") or [{}])[0].get("name")
+                        if entry.get("from")
+                        else None,
+                        from_email=str((entry.get("from") or [{}])[0].get("email") or ""),
+                        to=tuple(to_pairs),
+                        date=str(entry.get("date") or ""),
                     )
                 )
         raise AssertionError(f"no envelope {envelope_id!r} in mailbox {folder!r}")
@@ -592,10 +663,16 @@ class V3MailboxTransport(HimalayaTransport):
 
     def _h_flag_add(self, command: Command) -> str:
         folder = command.option("-m", "--mailbox") or ""
+        flag = command.option("--flag", "-f")
+        if not flag:
+            raise ForbiddenV1Command(
+                f"v3 flag add requires --flag <FLAG>: {command.argv!r}"
+            )
         envelope_id = command.positionals[-1] if command.positionals else ""
         for entry in self.state.get(folder, []):
             if str(entry.get("id")) == envelope_id:
-                entry.setdefault("flags", []).append({"raw": "Deleted", "iana": "\\Deleted"})
+                iana = flag if flag in {"seen", "answered", "flagged", "draft", "important", "junk"} else None
+                entry.setdefault("flags", []).append({"raw": flag, "iana": iana})
         return ""
 
 
@@ -651,15 +728,12 @@ def patched_himalaya(transport: HimalayaTransport, *, executable_exists: bool = 
 
     Yields ``(himalaya_module, config_path, executable_path)``.  The temporary
     executable path is unique per ``with`` block, so a per-executable version
-    cache can never leak a version from a previous test.
+    cache can never leak a version from a previous test.  The adapter's
+    pre-command profile lookup is *not* patched: it resolves the same executable
+    and answers through the scripted ``--version`` seam, so the real guard path
+    is exercised.
     """
     from core import himalaya  # imported lazily: the caller owns sys.path
-    from core.himalaya_profile import parse_version_output
-
-    # The scripted ``--version`` output is also the authoritative answer for the
-    # adapter's *pre-command* profile lookup, so no test helper has to start a
-    # probe of its own.
-    scripted_profile = parse_version_output(getattr(transport, "version_output", ""))
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -671,8 +745,6 @@ def patched_himalaya(transport: HimalayaTransport, *, executable_exists: bool = 
             himalaya.shutil, "which", return_value=str(executable) if executable_exists else None
         ), patch.object(himalaya.subprocess, "run", transport), patch.object(
             himalaya, "_POPEN", PopenAdapter(transport)
-        ), patch.object(
-            himalaya, "resolve_himalaya_profile_or_none", return_value=scripted_profile
         ):
             yield himalaya, config, executable
 

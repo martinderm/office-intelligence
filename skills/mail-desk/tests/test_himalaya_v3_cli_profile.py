@@ -27,6 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 
 MAIL_DESK_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
@@ -164,6 +165,31 @@ class VersionMatrixTests(unittest.TestCase):
         self.assertEqual("himalaya_unavailable", raised.exception.reason_code)
         self.assertEqual([], transport.calls)
 
+    def test_undecodable_probe_output_fails_closed(self) -> None:
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        transport = HimalayaTransport(V3_VERSION_OUTPUT, version_error=error)
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_list_folders()
+        self.assertEqual("himalaya_version_unsupported", raised.exception.reason_code)
+        self.assertEqual([], transport.mailbox_calls)
+
+    def test_non_missing_stat_error_is_unavailable(self) -> None:
+        transport = HimalayaTransport(V3_VERSION_OUTPUT)
+        with patched_himalaya(transport) as (module, _config, executable):
+            real_stat = module.os.stat
+
+            def stat_for_executable(path, *args, **kwargs):
+                if str(path) == str(executable):
+                    raise PermissionError("denied")
+                return real_stat(path, *args, **kwargs)
+
+            with patch.object(module.os, "stat", side_effect=stat_for_executable):
+                with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                    himalaya.build_himalaya_command(["folder", "list", "-o", "json"], None)
+        self.assertEqual("himalaya_unavailable", raised.exception.reason_code)
+        self.assertEqual([], transport.calls)
+
 
 class VersionProbeTests(unittest.TestCase):
     """One bounded, account-free, unaccounted probe per executable."""
@@ -201,6 +227,15 @@ class VersionProbeTests(unittest.TestCase):
         self.assertIn("timeout", probe_kwargs, "the version probe must carry a short subprocess timeout")
         self.assertGreater(float(probe_kwargs["timeout"]), 0)
         self.assertLessEqual(float(probe_kwargs["timeout"]), 10)
+
+    def test_pre_command_lookup_shares_the_cached_probe(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            profile = himalaya.resolve_himalaya_profile_or_none()
+            client.op_list_folders()
+        self.assertIsNotNone(profile)
+        self.assertEqual("v3", profile.name)
+        self.assertEqual(1, len(transport.version_calls))
 
     def test_probe_is_excluded_from_transport_stats(self) -> None:
         transport = V3MailboxTransport()

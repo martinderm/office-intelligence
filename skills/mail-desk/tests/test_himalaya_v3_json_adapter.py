@@ -140,6 +140,51 @@ class V3LiveArrayTests(_V3ListCase):
         self.assertEqual("Ohne ID", result[0]["subject"])
         self.assertNotIn("message_id", result[0])
 
+    def test_nameless_sender_is_schema_valid_and_normalizes_to_empty(self) -> None:
+        entry = v3_envelope(
+            "41", message_id="a@example.org", from_name=None, from_email="ada@example.org"
+        )
+        self.assertIsNone(entry["from"][0]["name"])
+        result = self.expect_accepted([entry])
+        self.assertEqual({"name": "", "addr": "ada@example.org"}, result[0]["from"])
+
+    def test_custom_keyword_with_null_iana_is_accepted(self) -> None:
+        entry = v3_envelope(
+            "41", message_id="a@example.org", flags=(("$label", None), ("Seen", "seen"))
+        )
+        self.assertIsNone(entry["flags"][0]["iana"])
+        result = self.expect_accepted([entry])
+        self.assertEqual(["$label", "Seen"], result[0]["flags"])
+
+    def test_invalid_typed_fields_fail_closed(self) -> None:
+        cases = {
+            "date as integer": {**LIVE_ENVELOPE, "date": 20261127},
+            "size as string": {**LIVE_ENVELOPE, "size": "2048"},
+            "size as bool": {**LIVE_ENVELOPE, "size": True},
+            "size negative": {**LIVE_ENVELOPE, "size": -1},
+            "subject as integer": {**LIVE_ENVELOPE, "subject": 4711},
+            "from entry as string": {**LIVE_ENVELOPE, "from": ["ada@example.org"]},
+            "from name as integer": {
+                **LIVE_ENVELOPE,
+                "from": [{"name": 4711, "email": "ada@example.org"}],
+            },
+            "from email as null": {
+                **LIVE_ENVELOPE,
+                "from": [{"name": "Ada", "email": None}],
+            },
+            "to entry as string": {
+                **LIVE_ENVELOPE,
+                "to": ["grace@example.org"],
+            },
+            "flag entry as string": {**LIVE_ENVELOPE, "flags": ["Seen"]},
+            "flag without raw": {**LIVE_ENVELOPE, "flags": [{"iana": "seen"}]},
+            "flag raw as integer": {**LIVE_ENVELOPE, "flags": [{"raw": 1, "iana": "seen"}]},
+            "flag iana as integer": {**LIVE_ENVELOPE, "flags": [{"raw": "Seen", "iana": 1}]},
+        }
+        for label, entry in cases.items():
+            with self.subTest(label):
+                self.assert_incompatible([entry])
+
     def test_missing_message_id_key_fails_closed(self) -> None:
         self.assert_incompatible([_payload_without(LIVE_ENVELOPE, "messageId")])
 

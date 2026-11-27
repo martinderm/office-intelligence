@@ -40,6 +40,7 @@ from __future__ import annotations
 import email
 import email.policy
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 import tempfile
@@ -61,6 +62,23 @@ from himalaya_fixtures import DraftRunner, drafts_case  # noqa: E402
 UTF8_SUBJECT = "Prüfung – Kärnten \U0001F3AF"
 UTF8_TO = "Empfänger Öztürk <a@example.org>"
 UTF8_BODY = "Grüße aus Wien – 100 % – \U0001F3AF"
+
+
+@contextmanager
+def pinned_v1_profile():
+    """Pin the pre-command profile lookup to the pinned legacy invocation.
+
+    The delete/replace tests fake ``run_himalaya`` wholesale.  The real pre-write
+    guard would probe the host installation; a virtual executable path that does
+    not exist is the documented pinned v1 invocation, so the byte-identical v1
+    argv under test is unchanged and the suite stays hermetic.
+    """
+    with patch.object(
+        himalaya,
+        "resolve_himalaya_invocation",
+        return_value=("himalaya", Path("fake-config.toml")),
+    ):
+        yield
 
 
 class TargetDraftsFolderResolutionTests(unittest.TestCase):
@@ -223,7 +241,7 @@ class TargetDeleteDraftTests(unittest.TestCase):
         runner = drafts_case(folders=["INBOX", "Drafts"])
         runner.add_envelope("Drafts", id="41", subject="Alt", message_id="old@example.org")
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(himalaya, "run_himalaya", runner):
+            with pinned_v1_profile(), patch.object(himalaya, "run_himalaya", runner):
                 result = client.op_delete_draft(
                     envelope_id="41",
                     folder="Drafts",
@@ -307,7 +325,7 @@ class TargetReplaceDraftTests(unittest.TestCase):
         runner = drafts_case(folders=["INBOX", "Drafts"])
         runner.add_envelope("Drafts", id="41", subject="Alt", message_id="old@example.org")
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(himalaya, "run_himalaya", runner):
+            with pinned_v1_profile(), patch.object(himalaya, "run_himalaya", runner):
                 result = client.op_replace_draft(
                     old_envelope_id="41",
                     to="a@example.org",
@@ -340,7 +358,7 @@ class TargetReplaceDraftTests(unittest.TestCase):
         runner.add_envelope("Drafts", id="41", subject="Alt", message_id="old@example.org")
         with tempfile.TemporaryDirectory() as tmp:
             journal = drafts.DraftJournal(Path(tmp), "run-replace")
-            with patch.object(himalaya, "run_himalaya", runner):
+            with pinned_v1_profile(), patch.object(himalaya, "run_himalaya", runner):
                 result = client.op_replace_draft(
                     old_envelope_id="41",
                     to=UTF8_TO,
@@ -374,7 +392,7 @@ class TargetReplaceDraftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             journal = drafts.DraftJournal(Path(tmp), "run-replace-order")
             runner.journal_path = Path(tmp) / drafts.DRAFT_JOURNAL_FILENAME
-            with patch.object(himalaya, "run_himalaya", runner):
+            with pinned_v1_profile(), patch.object(himalaya, "run_himalaya", runner):
                 client.op_replace_draft(
                     old_envelope_id="41",
                     to="a@example.org",
@@ -491,7 +509,7 @@ class DraftCliSurfaceTests(unittest.TestCase):
             )
             with patch.object(himalaya, "run_himalaya", runner), patch.object(
                 client, "resolve_data_dir", lambda *args, **kwargs: Path(tmp)
-            ):
+            ), pinned_v1_profile():
                 result = client.execute_manifest(manifest_path, account="demo")
             journal = json.loads(
                 (Path(tmp) / drafts.DRAFT_JOURNAL_FILENAME).read_text(encoding="utf-8")

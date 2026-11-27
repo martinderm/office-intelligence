@@ -46,6 +46,7 @@ from himalaya_v3_fixtures import (  # noqa: E402
     V3MailboxTransport,
     V3_VERSION_OUTPUT,
     HimalayaTransport,
+    UNSUPPORTED_VERSION_OUTPUT,
     assert_no_v1_tokens,
     assert_v3_command,
     minimal_eml,
@@ -53,6 +54,7 @@ from himalaya_v3_fixtures import (  # noqa: E402
     patched_himalaya,
     strip_global_prefix,
     v3_envelope,
+    v3_message_view,
 )
 
 
@@ -105,7 +107,7 @@ class V3ListSeamsTests(unittest.TestCase):
         argv = mailbox_commands(transport)[0]
         command = parse_command(argv)
         self.assertEqual("envelope search", command.name)
-        self.assertIn("subject:Rechnung Q4", command.positionals)
+        self.assertIn('subject:"Rechnung Q4"', command.positionals)
         self.assertNotIn("subject", command.positionals, "the v1 positional query form must not survive")
         self.assertEqual("INBOX", command.option("-m", "--mailbox"))
         self.assertIn("--json", argv)
@@ -132,7 +134,8 @@ class V3ListSeamsTests(unittest.TestCase):
             with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
                 client.op_search(query="invoice 2026", folders=["INBOX"])
         self.assertEqual("himalaya_search_query_unsupported", raised.exception.reason_code)
-        self.assertEqual([], mailbox_commands(transport))
+        names = [parse_command(argv).name for argv in mailbox_commands(transport)]
+        self.assertNotIn("message read", names, "no per-envelope read after the refusal")
 
 
 class V3ReadSeamsTests(unittest.TestCase):
@@ -195,6 +198,39 @@ class V3DraftSeamsTests(unittest.TestCase):
         self.assertEqual("draft-1@example.org", envelope["message_id"])
         self.assertEqual("Drafts", envelope["folder"])
 
+    def test_save_payload_is_the_canonical_raw_without_the_v1_terminator(self) -> None:
+        transport = V3MailboxTransport()
+        date = "Thu, 27 Nov 2026 09:00:00 +0000"
+        with patched_himalaya(transport):
+            drafts.save_draft(
+                "Betreff",
+                "grace@example.org",
+                "Textkörper",
+                folder="Drafts",
+                account="demo",
+                date=date,
+                message_id="Draft-1@Example.org",
+            )
+        add_calls = [argv for argv in mailbox_commands(transport) if parse_command(argv).name == "message add"]
+        self.assertEqual(1, len(add_calls))
+        argv = add_calls[0]
+        self.assertNotIn("--json", argv, "message add must not request JSON for the stdin save")
+        expected, _mid, _date = drafts.build_draft_message(
+            "Betreff",
+            "grace@example.org",
+            "Textkörper",
+            date=date,
+            message_id="Draft-1@Example.org",
+        )
+        payload = transport.stdin_payloads[-1]
+        self.assertEqual(
+            expected.encode("utf-8"),
+            payload,
+            "v3 message add stores stdin as given, so the v1 CRLF compensator must be removed",
+        )
+        self.assertTrue(payload.endswith(b"\r\n"))
+        self.assertFalse(payload.endswith(b"\r\n\r\n"), "no extra empty line from the v1 terminator")
+
     def test_delete_draft_fails_closed_without_any_write(self) -> None:
         transport = V3MailboxTransport()
         with patched_himalaya(transport), tempfile.TemporaryDirectory() as temporary:
@@ -204,6 +240,10 @@ class V3DraftSeamsTests(unittest.TestCase):
                 )
         self.assertEqual("himalaya_expunge_unsupported", raised.exception.reason_code)
         self.assertEqual([], mailbox_commands(transport), "the refusal must precede every mailbox command")
+        self.assertTrue(
+            transport.version_calls,
+            "the guard must resolve the real profile through the bounded --version probe",
+        )
 
     def test_replace_draft_fails_closed_before_any_write(self) -> None:
         transport = V3MailboxTransport()
@@ -233,6 +273,21 @@ class V3DraftSeamsTests(unittest.TestCase):
             }
         ]
         self.assertEqual([], write_shaped, "no append, flag, delete or expunge may start before the refusal")
+
+
+class StdinTerminatorTests(unittest.TestCase):
+    """The v1 CRLF compensator is declared, so v3 can remove exactly that suffix."""
+
+    def test_a_declared_suffix_that_does_not_end_the_payload_is_refused(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            with self.assertRaises(ValueError):
+                himalaya.run_himalaya(
+                    ["message", "save", "-o", "plain", "-f", "Drafts"],
+                    stdin_bytes=b"Subject: Alt\r\n\r\nText\r\n",
+                    stdin_v1_terminator=b"\n\n",
+                )
+        self.assertEqual([], transport.calls, "the payload must be refused before any child starts")
 
 
 class V3MoveSeamsTests(unittest.TestCase):
@@ -273,12 +328,9 @@ class V3ThreadMapTests(unittest.TestCase):
     """The skip accelerator is derived from the listing and never fails the scan."""
 
     def test_thread_map_is_derived_from_the_listing(self) -> None:
-        recorded: list[list[str]] = []
-
-        def runner(args, account=None, timeout=35, max_retries=5, **kwargs: object) -> str:
-            recorded.append(list(args))
-            return json.dumps(
-                [
+        transport = V3MailboxTransport(
+            envelopes={
+                "INBOX": [
                     v3_envelope(
                         "41",
                         message_id="child@example.org",
@@ -287,22 +339,21 @@ class V3ThreadMapTests(unittest.TestCase):
                     ),
                     v3_envelope("42", message_id="parent@example.org", subject="Original"),
                 ]
-            )
-
-        transport = HimalayaTransport(V3_VERSION_OUTPUT)
+            }
+        )
         with patched_himalaya(transport):
             mapping = known_skip.load_envelope_thread_map(
-                "INBOX", account="demo", run_himalaya_fn=runner
+                "INBOX", account="demo", run_himalaya_fn=himalaya.run_himalaya
             )
-        self.assertEqual(1, len(recorded))
-        argv = recorded[0]
-        command = parse_command(argv)
-        self.assertNotEqual("envelope thread", command.name, "v3 has no envelope thread command")
-        self.assertIn(command.name, {"envelope list", "envelope search"})
-        self.assertEqual("INBOX", command.option("-m", "--mailbox"))
-        self.assertIn("--json", argv)
         self.assertEqual("child@example.org", mapping["41"].message_id)
         self.assertEqual("Original", mapping["42"].subject)
+        argv = mailbox_commands(transport)[0]
+        command = parse_command(argv)
+        self.assertEqual("envelope list", command.name)
+        self.assertNotEqual("envelope thread", command.name, "v3 has no envelope thread command")
+        self.assertEqual("INBOX", command.option("-m", "--mailbox"))
+        self.assertEqual("500", command.option("-s", "--page-size"))
+        self.assertIn("--json", argv)
 
     def test_thread_map_failure_only_disables_the_accelerator(self) -> None:
         def failing(args, **kwargs: object) -> str:
@@ -325,6 +376,272 @@ class V3ThreadMapTests(unittest.TestCase):
                             "INBOX", account="demo", run_himalaya_fn=runner
                         ),
                     )
+
+
+class V3PreCommandGuardTests(unittest.TestCase):
+    """The pre-write guard resolves the real profile and fails closed."""
+
+    def test_delete_guard_fails_closed_on_an_unsupported_version(self) -> None:
+        transport = HimalayaTransport(UNSUPPORTED_VERSION_OUTPUT)
+        with patched_himalaya(transport), tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_delete_draft(
+                    "41", folder="Drafts", account="demo", data_dir=Path(temporary)
+                )
+        self.assertEqual("himalaya_version_unsupported", raised.exception.reason_code)
+        self.assertEqual([], mailbox_commands(transport))
+
+    def test_replace_guard_fails_closed_on_an_unsupported_version(self) -> None:
+        transport = HimalayaTransport(UNSUPPORTED_VERSION_OUTPUT)
+        with patched_himalaya(transport), tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_replace_draft(
+                    "41",
+                    "Neu",
+                    "grace@example.org",
+                    "Textkörper",
+                    folder="Drafts",
+                    account="demo",
+                    data_dir=Path(temporary),
+                )
+        self.assertEqual("himalaya_version_unsupported", raised.exception.reason_code)
+        self.assertEqual([], mailbox_commands(transport))
+
+    def test_missing_executable_still_fails_closed_before_any_write(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport, executable_exists=False), tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_delete_draft(
+                    "41", folder="Drafts", account="demo", data_dir=Path(temporary)
+                )
+        self.assertEqual("himalaya_unavailable", raised.exception.reason_code)
+        self.assertEqual([], mailbox_commands(transport))
+
+
+class V3SearchRefusalTests(unittest.TestCase):
+    """A refused v3 search escapes instead of degrading to an empty result."""
+
+    def test_free_text_query_escapes_the_serial_sweep(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.search_mailbox(query="invoice 2026", folders=["INBOX"], threads=1)
+        self.assertEqual("himalaya_search_query_unsupported", raised.exception.reason_code)
+        names = [parse_command(argv).name for argv in mailbox_commands(transport)]
+        self.assertNotIn("message read", names)
+        self.assertNotIn("envelope search", names)
+
+    def test_free_text_query_escapes_the_threaded_sweep(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.search_mailbox(query="invoice", folders=["INBOX"], threads=2)
+        self.assertEqual("himalaya_search_query_unsupported", raised.exception.reason_code)
+
+    def test_incompatible_v3_page_escapes_instead_of_returning_empty(self) -> None:
+        transport = V3MailboxTransport()
+        transport.on("envelope list", lambda command: json.dumps({"unexpected": []}))
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.search_mailbox(message_ids=["a@example.org"], folders=["INBOX"], threads=1)
+        self.assertEqual("himalaya_json_incompatible", raised.exception.reason_code)
+
+
+class V3FlagCommandTests(unittest.TestCase):
+    """``flag add`` uses the mandatory ``--flag`` option; ``deleted`` fails closed."""
+
+    def test_flag_add_uses_the_flag_option_and_mailbox(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            argv = himalaya.build_himalaya_command(
+                ["flag", "add", "seen", "41", "-f", "Drafts"], "demo"
+            )
+        assert_v3_command(self, argv, ["flag", "add", "--flag", "seen", "-m", "Drafts", "41"])
+        self.assertEqual([], mailbox_commands(transport))
+
+    def test_deleted_is_not_a_v3_flag_and_fails_closed(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.build_himalaya_command(
+                    ["flag", "add", "deleted", "41", "-f", "Drafts"], "demo"
+                )
+        self.assertEqual("himalaya_flag_unsupported", raised.exception.reason_code)
+        self.assertEqual([], mailbox_commands(transport))
+
+
+class V3DraftsFolderTests(unittest.TestCase):
+    """v3 ``mailbox list`` roles resolve the Drafts folder without an explicit one."""
+
+    def test_v3_role_drafts_resolves_without_an_explicit_folder(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport):
+            resolved = drafts.resolve_drafts_folder(account="demo")
+        self.assertEqual("Drafts", resolved)
+        assert_v3_command(self, mailbox_commands(transport)[0], ["mailbox", "list"], require_json=True)
+
+    def test_an_unknown_role_never_resolves_the_folder(self) -> None:
+        transport = V3MailboxTransport()
+        transport.on(
+            "mailbox list",
+            lambda command: json.dumps(
+                {
+                    "mailboxes": [
+                        {"id": "1", "name": "INBOX", "role": None, "total": 0, "unread": 0},
+                        {"id": "2", "name": "Entwürfe", "role": "sent", "total": 0, "unread": 0},
+                    ],
+                    "errors": [],
+                }
+            ),
+        )
+        with patched_himalaya(transport):
+            with self.assertRaises(drafts.DraftsFolderUnresolvedError):
+                drafts.resolve_drafts_folder(account="demo")
+
+
+class V3ReadHeaderTests(unittest.TestCase):
+    """Typed v3 ``headers`` preserve cc/references in the detail fields."""
+
+    def test_cc_and_references_survive_into_the_sent_indexer_fields(self) -> None:
+        transport = V3MailboxTransport()
+        transport.add_envelope("INBOX", v3_envelope("41", message_id="old@example.org", subject="Alt"))
+        view = v3_message_view(
+            "41",
+            message_id="old@example.org",
+            subject="Alt",
+            cc=(("Cc Person", "cc@example.org"),),
+            references=("root@example.org", "mid@example.org"),
+            in_reply_to=("parent@example.org",),
+        )
+        transport.on("message read", lambda command: json.dumps(view))
+        with patched_himalaya(transport):
+            result = himalaya.get_single_email_details(
+                "41", folder="INBOX", preview_lines=2, inspect_attachments=False
+            )
+        self.assertEqual("Cc Person <cc@example.org>", result["cc"])
+        self.assertEqual(
+            "<root@example.org> <mid@example.org>",
+            result["references"],
+            "the Sent indexer splits references on whitespace and re-brackets them",
+        )
+        self.assertEqual("<parent@example.org>", result["in_reply_to"])
+        self.assertTrue(result["headers_complete"])
+        self.assertEqual("old@example.org", result["message_id"])
+        self.assertEqual("2026-11-27T09:00:00Z", result["date"])
+        self.assertIn("grace@example.org", result["to"])
+
+    def test_a_string_header_map_is_not_headers_complete(self) -> None:
+        payload = {
+            "id": "41",
+            "messageId": "old@example.org",
+            "subject": "Alt",
+            "text": "Zeile\n",
+            "headers": {"Message-Id": "<old@example.org>", "Subject": "Alt"},
+        }
+        result = himalaya._details_from_v3_view(
+            "41",
+            "INBOX",
+            payload,
+            preview_lines=2,
+            full_body=False,
+            fallback_envelope=None,
+            attachments_list=[],
+            attachment_status="none",
+            attachment_error=None,
+        )
+        self.assertFalse(result["headers_complete"])
+        self.assertEqual("", result["references"])
+        self.assertEqual("", result["cc"])
+
+
+class V3ExecuteReadIdTests(unittest.TestCase):
+    """``modes.execute`` reads the typed v3 header Message-ID, not a string map."""
+
+    def test_typed_headers_message_id_is_read(self) -> None:
+        from core.modes.execute import _v3_read_message_id
+
+        view = v3_message_view("41", message_id="old@example.org")
+        self.assertEqual("old@example.org", _v3_read_message_id(json.dumps(view)))
+
+    def test_the_invented_string_header_map_is_not_accepted(self) -> None:
+        from core.modes.execute import _v3_read_message_id
+
+        legacy = {"messageId": None, "headers": {"Message-Id": "<old@example.org>"}}
+        self.assertIsNone(_v3_read_message_id(json.dumps(legacy)))
+
+
+class V3InspectModeTests(unittest.TestCase):
+    """``modes.inspect`` uses the profile-aware v3 decoder."""
+
+    def test_v3_envelope_list_is_decoded_not_sliced(self) -> None:
+        from core.himalaya import HimalayaOutput
+        from core.modes import inspect as inspect_mode
+
+        entry = v3_envelope("41", message_id="old@example.org", subject="Alt")
+        calls: list[dict] = []
+
+        class Transport:
+            def __call__(self, args, account=None, timeout=35, **kwargs):
+                calls.append({"args": list(args)})
+                return HimalayaOutput(json.dumps([entry]), "v3")
+
+        def get_details(envelope_id, folder, account, preview_lines, **kwargs):
+            calls.append({"envelope_id": envelope_id, "fallback": kwargs.get("fallback_envelope")})
+            return {
+                "envelope_id": str(envelope_id),
+                "folder": folder,
+                "subject": "Alt",
+                "from": "",
+                "to": "",
+                "preview": "",
+                "attachments": [],
+                "message_id": "old@example.org",
+            }
+
+        with tempfile.TemporaryDirectory() as temporary:
+            result = inspect_mode.run_inspect_mode(
+                {
+                    "folder": "INBOX",
+                    "count": 5,
+                    "order": "oldest",
+                    "check_known": False,
+                    "skip_known": False,
+                },
+                account="demo",
+                data_dir=Path(temporary),
+                dependencies={
+                    "run_himalaya": Transport(),
+                    "get_oldest_envelopes": lambda *args, **kwargs: [],
+                    "get_single_email_details": get_details,
+                    "sleep": lambda seconds: None,
+                },
+            )
+        self.assertEqual(1, result["total_inspected"])
+        fallback = [call["fallback"] for call in calls if "fallback" in call][0]
+        self.assertEqual("41", fallback["id"])
+        self.assertEqual("old@example.org", fallback["message_id"])
+
+    def test_incompatible_v3_page_fails_closed(self) -> None:
+        from core.himalaya import HimalayaInvocationError, HimalayaOutput
+        from core.modes import inspect as inspect_mode
+
+        def transport(args, account=None, timeout=35, **kwargs):
+            return HimalayaOutput(json.dumps({"unexpected": []}), "v3")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(HimalayaInvocationError) as raised:
+                inspect_mode.run_inspect_mode(
+                    {"folder": "INBOX", "count": 5, "order": "oldest", "check_known": False},
+                    account="demo",
+                    data_dir=Path(temporary),
+                    dependencies={
+                        "run_himalaya": transport,
+                        "get_oldest_envelopes": lambda *args, **kwargs: [],
+                        "get_single_email_details": lambda *args, **kwargs: {},
+                        "sleep": lambda seconds: None,
+                    },
+                )
+        self.assertEqual("himalaya_json_incompatible", raised.exception.reason_code)
 
 
 class V1SeamParityTests(unittest.TestCase):

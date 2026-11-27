@@ -23,11 +23,15 @@ from ..classifier import classify_email, draft_manifest
 from ..common import atomic_write_json, resolve_data_dir, resolve_final_index_path
 from ..context_consultation import add_context_consultation_metadata
 from ..himalaya import (
+    PROFILE_V3,
+    decode_v3_envelope_output,
     fetch_raw_message_eml,
     get_single_email_details,
+    profile_of,
     raise_if_transport_blocked,
     run_himalaya,
 )
+from ..himalaya_normalize import JSON_INCOMPATIBLE_REASON
 from ..index import load_final_index
 from ..injection_barrier import (
     annotate_email_for_output,
@@ -170,11 +174,21 @@ def run_inspect_mode(
                     account=account,
                     timeout=30,
                 )
-                if "[" in output:
-                    output = output[output.find("["):]
-                oldest_envelopes = json.loads(output)
+                if profile_of(output) == PROFILE_V3:
+                    # The v3 profile answers with the live array or the schema
+                    # object; both are validated and normalized here, never
+                    # parsed with the v1 bracket slice.
+                    oldest_envelopes, _next_page = decode_v3_envelope_output(output)
+                else:
+                    if "[" in output:
+                        output = output[output.find("["):]
+                    oldest_envelopes = json.loads(output)
             except Exception as exc:
                 raise_if_transport_blocked(exc)
+                if getattr(exc, "reason_code", None) == JSON_INCOMPATIBLE_REASON:
+                    # A malformed v3 page is fail-closed; it must not look like
+                    # an empty mailbox.
+                    raise
                 oldest_envelopes = []
 
         envelope_map = {str(envelope.get("id")): envelope for envelope in oldest_envelopes}

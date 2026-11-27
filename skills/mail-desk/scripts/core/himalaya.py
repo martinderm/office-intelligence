@@ -149,12 +149,32 @@ def profile_of(output: object) -> str | None:
 
 #: Bounded profile cache keyed by ``(executable, mtime_ns, size)``.
 _PROFILE_CACHE: dict[tuple[str, int, int], HimalayaProfile] = {}
+_PROFILE_CACHE_LOCK = threading.Lock()
 _MAX_PROFILE_CACHE_ENTRIES = 64
 
 #: The profile selected by the most recent ``build_himalaya_command`` call in
 #: this thread.  It is reset by ``run_himalaya`` before every build, so a patched
 #: builder can never leak a stale profile into a later command.
 _PROFILE_LOCAL = threading.local()
+
+
+def _profile_cache_key(executable: str) -> tuple[str, int, int] | None:
+    """Return the cache key of one executable, or ``None`` for a virtual path.
+
+    Only ``FileNotFoundError``/``NotADirectoryError`` prove the documented
+    injected/virtual invocation; any other ``stat`` failure is unprovable and
+    fails closed as ``himalaya_unavailable``.
+    """
+    try:
+        info = os.stat(executable)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        raise HimalayaInvocationError(
+            UNAVAILABLE_REASON,
+            "The Himalaya executable could not be inspected; no mailbox command was sent.",
+        ) from exc
+    return (str(executable), int(info.st_mtime_ns), int(info.st_size))
 
 
 def _profile_for_executable(executable: str) -> HimalayaProfile:
@@ -164,63 +184,77 @@ def _profile_for_executable(executable: str) -> HimalayaProfile:
     ``-c``/account/mailbox and a short timeout; it never passes through
     ``run_himalaya`` and is therefore excluded from ``TransportStats``.  The
     result is cached per ``(executable, mtime, size)`` so one process probes one
-    installation exactly once.
+    installation exactly once, even when threads race on the first use.
 
-    An executable that is not an existing file is the pinned legacy invocation
-    (an injected or virtual command path, as used by the bootstrap seams): it is
+    An executable that does not exist is the pinned legacy invocation (an
+    injected or virtual command path, as used by the bootstrap seams): it is
     never probed and keeps the byte-identical v1 argv.  Every real installation
-    resolved through ``shutil.which`` exists and is probed fail-closed.
+    resolved through ``shutil.which`` is probed fail-closed.
     """
-    try:
-        info = os.stat(executable)
-    except OSError:
+    key = _profile_cache_key(executable)
+    if key is None:
         return V1_PROFILE
-    key = (str(executable), int(info.st_mtime_ns), int(info.st_size))
-    cached = _PROFILE_CACHE.get(key)
-    if cached is not None:
-        return cached
-    try:
-        completed = subprocess.run(
-            [str(executable), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=PROBE_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HimalayaInvocationError(
-            UNAVAILABLE_REASON,
-            "The Himalaya version probe could not be started; no mailbox command was sent.",
-        ) from exc
-    if completed.returncode != 0:
-        raise HimalayaInvocationError(
-            VERSION_UNSUPPORTED_REASON,
-            "The Himalaya version probe failed; no mailbox command was sent.",
-        )
-    profile = parse_version_output(completed.stdout)
-    if profile is None:
-        raise HimalayaInvocationError(
-            VERSION_UNSUPPORTED_REASON,
-            "The installed Himalaya version is not a supported profile; no mailbox command was sent.",
-        )
-    if len(_PROFILE_CACHE) >= _MAX_PROFILE_CACHE_ENTRIES:
-        _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)), None)
-    _PROFILE_CACHE[key] = profile
-    return profile
+    with _PROFILE_CACHE_LOCK:
+        cached = _PROFILE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        try:
+            completed = subprocess.run(
+                [str(executable), "--version"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=PROBE_TIMEOUT_SECONDS,
+            )
+        except UnicodeDecodeError as exc:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The Himalaya version probe output was not decodable; no mailbox command was sent.",
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HimalayaInvocationError(
+                UNAVAILABLE_REASON,
+                "The Himalaya version probe could not be started; no mailbox command was sent.",
+            ) from exc
+        if completed.returncode != 0:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The Himalaya version probe failed; no mailbox command was sent.",
+            )
+        profile = parse_version_output(completed.stdout)
+        if profile is None:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The installed Himalaya version is not a supported profile; no mailbox command was sent.",
+            )
+        if len(_PROFILE_CACHE) >= _MAX_PROFILE_CACHE_ENTRIES:
+            _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)), None)
+        _PROFILE_CACHE[key] = profile
+        return profile
 
 
 def resolve_himalaya_profile_or_none() -> HimalayaProfile | None:
-    """Return an explicitly proven profile hint, else ``None``.
+    """Resolve the executable's profile for a decision that precedes any write.
 
-    This is the *pre-command* lookup for the two seams that must choose a
-    command shape before any child starts (the v3 search allow-list and the v3
-    thread map).  It deliberately starts no process and reads no ambient cache:
-    without an explicit hint the caller keeps the pinned v1 request, the strict
-    ``build_himalaya_command`` translates it for the resolved profile, and the
-    returned output carries the profile that actually produced it
-    (:class:`HimalayaOutput`).  A hermetic harness can answer the hint together
-    with the scripted ``--version`` output.
+    The pre-write expunge guard needs the profile before any command can produce
+    output.  This resolves the same executable as a real command and runs the
+    same bounded, cached ``--version`` probe; the probe is not a mailbox command
+    and never reaches ``TransportStats``/``process_starts``.  An unknown,
+    unparseable or unstartable version fails closed
+    (``himalaya_version_unsupported``/``himalaya_unavailable``).  It returns
+    ``None`` only when no CLI invocation exists at all (missing config, missing
+    executable, invalid override); in that case the later command resolution
+    raises before a child starts, so no write can happen either.
+
+    Read-only seams do not call this: they read the profile that produced their
+    own output (:class:`HimalayaOutput`), which is authoritative and starts no
+    extra probe.
     """
-    return None
+    try:
+        executable, _config_path = resolve_himalaya_invocation()
+    except HimalayaInvocationError:
+        return None
+    return _profile_for_executable(executable)
 
 
 def resolve_himalaya_downloads_dir(
@@ -1403,6 +1437,7 @@ def run_himalaya(
     max_retries: int = 5,
     *,
     stdin_bytes: bytes | None = None,
+    stdin_v1_terminator: bytes | None = None,
     diagnostic_capture: Any | None = None,
     purpose: str = "other",
 ) -> str:
@@ -1419,6 +1454,15 @@ def run_himalaya(
     exactly once (an APPEND must never be retried).  Launch/communication
     ``OSError`` becomes ``himalaya_launch_failed`` for both the payload and the
     non-payload path; its outcome may be unknown and it is never retried.
+
+    ``stdin_v1_terminator`` (keyword-only, default ``None``) marks the trailing
+    bytes a caller appended for the pinned v1 ``message save`` transport: v1
+    reads stdin with ``lines()`` and drops the final line terminator, so one
+    extra CRLF compensates it.  A v3 ``message add`` stores the piped message as
+    given and makes its line endings CRLF, so the same compensator would add an
+    empty line.  Under the v3 profile exactly this suffix is removed before the
+    child starts; the v1 payload stays byte-identical.  The declared suffix must
+    actually end the payload or the call fails closed with ``ValueError``.
 
     ``diagnostic_capture`` is an optional, typed, keyword-only internal object
     (see ``core.diagnostics``) that switches a payload command onto the bounded
@@ -1438,6 +1482,10 @@ def run_himalaya(
     if stdin_bytes is not None:
         if not isinstance(stdin_bytes, bytes) or not stdin_bytes:
             raise ValueError("stdin_bytes must be a non-empty bytes object.")
+        if stdin_v1_terminator is not None and (
+            not isinstance(stdin_v1_terminator, bytes) or not stdin_v1_terminator
+        ):
+            raise ValueError("stdin_v1_terminator must be a non-empty bytes object.")
         # Himalaya 1.2.0 reads stdin with ``lines().map_while(Result::ok)`` and
         # would silently truncate at the first invalid byte, so the payload must
         # be validated as strict UTF-8 before any executable/config resolution
@@ -1448,14 +1496,29 @@ def run_himalaya(
             raise ValueError(
                 "stdin_bytes must be valid UTF-8; the payload was not sent."
             ) from exc
+        if stdin_v1_terminator is not None and not stdin_bytes.endswith(stdin_v1_terminator):
+            raise ValueError(
+                "stdin_v1_terminator must end the payload; the payload was not sent."
+            )
         if not _explicit_plain_output_requested(args):
             raise ValueError(
                 "stdin_bytes requires exactly one explicit '-o plain' output format; "
                 "JSON output would bypass stdin."
             )
+    elif stdin_v1_terminator is not None:
+        raise ValueError("stdin_v1_terminator requires a stdin_bytes payload.")
     _PROFILE_LOCAL.profile = None
     cmd = build_himalaya_command(args, account)
     profile_name = getattr(_PROFILE_LOCAL, "profile", None)
+    if (
+        stdin_bytes is not None
+        and stdin_v1_terminator is not None
+        and profile_name == PROFILE_V3
+    ):
+        # v3 ``message add`` keeps the piped message as given (line endings made
+        # CRLF) and has no ``lines()``/join step, so the v1 compensator would add
+        # an empty line.  Remove exactly the declared suffix.
+        stdin_bytes = stdin_bytes[: -len(stdin_v1_terminator)]
     command_class = classify_himalaya_command(args)
     envelope_id = item_envelope_id(args)
     item_scoped = envelope_id is not None
@@ -3011,7 +3074,7 @@ def _v3_address_string(value: object) -> str:
 
 
 def _v3_reply_reference(value: object) -> str:
-    """Render one v3 ``inReplyTo`` array as the v1 bracketed In-Reply-To string."""
+    """Render one v3 ``inReplyTo``/``references`` array as the v1 bracketed string."""
     if not isinstance(value, list):
         return ""
     parts: list[str] = []
@@ -3022,6 +3085,49 @@ def _v3_reply_reference(value: object) -> str:
         if normalized:
             parts.append(f"<{normalized}>")
     return " ".join(parts)
+
+
+#: Required typed fields of the v3 ``message read --json`` ``headers`` object.
+_V3_HEADER_ADDRESS_FIELDS = ("from", "to", "cc", "bcc", "replyTo", "sender")
+_V3_HEADER_ID_LIST_FIELDS = ("references", "inReplyTo")
+_V3_HEADER_TEXT_FIELDS = ("subject", "date", "messageId")
+
+
+def _v3_headers_typed(headers: object) -> bool:
+    """Whether ``headers`` is the complete, typed v3 ``MessageHeaders`` object.
+
+    The schema requires every address list (``from``/``to``/``cc``/``bcc``/
+    ``replyTo``/``sender``) as ``{name:string|null,email:string}[]``, both id
+    lists (``references``/``inReplyTo``) as ``string[]`` and ``subject``/``date``/
+    ``messageId`` as ``string|null``.  Only this shape justifies
+    ``headers_complete``; a string map or a partial object is not the v3
+    contract.
+    """
+    if not isinstance(headers, dict):
+        return False
+    for field in _V3_HEADER_ADDRESS_FIELDS:
+        value = headers.get(field)
+        if not isinstance(value, list):
+            return False
+        for item in value:
+            if not isinstance(item, dict):
+                return False
+            name = item.get("name")
+            if name is not None and not isinstance(name, str):
+                return False
+            if not isinstance(item.get("email"), str):
+                return False
+    for field in _V3_HEADER_ID_LIST_FIELDS:
+        value = headers.get(field)
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return False
+    for field in _V3_HEADER_TEXT_FIELDS:
+        if field not in headers:
+            return False
+        value = headers[field]
+        if value is not None and not isinstance(value, str):
+            return False
+    return True
 
 
 def _details_from_v3_view(
@@ -3036,37 +3142,51 @@ def _details_from_v3_view(
     attachment_status: str,
     attachment_error: str | None,
 ) -> dict[str, Any]:
-    """Map one v3 ``message read --json`` view onto the existing detail fields."""
+    """Map one v3 ``message read --json`` view onto the existing detail fields.
+
+    ``headers`` is the typed v3 ``MessageHeaders`` object, not a header-name map:
+    ``from``/``to``/``cc`` are address arrays, ``references``/``inReplyTo`` are
+    bracket-less id arrays and ``subject``/``date``/``messageId`` are strings.
+    ``cc`` and ``references`` therefore survive into the existing detail fields
+    (the Sent indexer and the handoff consume them), and ``headers_complete`` is
+    true only for that complete, typed shape.
+    """
     fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
     headers = payload.get("headers")
-    header_map: dict[str, str] = {}
-    if isinstance(headers, dict):
-        for key, value in headers.items():
-            if isinstance(key, str) and isinstance(value, (str, int)):
-                header_map[key.strip().lower()] = str(value)
-    raw_mid = ""
-    message_id_value = payload.get("messageId")
-    if isinstance(message_id_value, str) and message_id_value.strip():
-        raw_mid = message_id_value
-    elif header_map.get("message-id"):
-        raw_mid = header_map["message-id"]
+    header_map = headers if isinstance(headers, dict) else {}
+    headers_complete = _v3_headers_typed(headers)
+
+    def _header_text(field: str) -> str:
+        value = header_map.get(field)
+        return value if isinstance(value, str) else ""
+
+    raw_mid = payload.get("messageId")
+    if not (isinstance(raw_mid, str) and raw_mid.strip()):
+        raw_mid = _header_text("messageId")
     norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
     text = payload.get("text")
     body_text = text if isinstance(text, str) else ""
     body_lines = body_text.splitlines()
+    subject = payload.get("subject") if isinstance(payload.get("subject"), str) else ""
+    date = payload.get("date") if isinstance(payload.get("date"), str) else ""
     return {
         "envelope_id": str(env_id),
         "folder": folder,
         "message_id": norm_mid,
         "raw_message_id": f"<{norm_mid}>" if norm_mid else "",
-        "subject": payload.get("subject") if isinstance(payload.get("subject"), str) else fb_subj,
-        "from": _v3_address_string(payload.get("from")) or fb_from,
-        "to": _v3_address_string(payload.get("to")) or fb_to,
-        "cc": header_map.get("cc", ""),
-        "headers_complete": bool(header_map),
-        "date": payload.get("date") if isinstance(payload.get("date"), str) else fb_date,
-        "in_reply_to": _v3_reply_reference(payload.get("inReplyTo")),
-        "references": header_map.get("references", ""),
+        "subject": subject or _header_text("subject") or fb_subj,
+        "from": _v3_address_string(payload.get("from"))
+        or _v3_address_string(header_map.get("from"))
+        or fb_from,
+        "to": _v3_address_string(payload.get("to"))
+        or _v3_address_string(header_map.get("to"))
+        or fb_to,
+        "cc": _v3_address_string(header_map.get("cc")),
+        "headers_complete": headers_complete,
+        "date": date or _header_text("date") or fb_date,
+        "in_reply_to": _v3_reply_reference(payload.get("inReplyTo"))
+        or _v3_reply_reference(header_map.get("inReplyTo")),
+        "references": _v3_reply_reference(header_map.get("references")),
         "preview": "\n".join(body_lines if full_body else body_lines[:preview_lines]),
         "attachments": attachments_list,
         "attachment_status": attachment_status,
@@ -3651,17 +3771,6 @@ def search_mailbox(
         if deadline_exhausted():
             raise HimalayaInvocationError("himalaya_timeout", SEARCH_DEADLINE_REASON)
 
-    if query_str:
-        # v3 has no documented free-text translation.  Refuse before any
-        # mailbox command instead of silently dropping the query; the v1
-        # contract keeps its substring search unchanged.
-        query_profile = resolve_himalaya_profile_or_none()
-        if query_profile is not None and query_profile.is_v3:
-            raise HimalayaInvocationError(
-                SEARCH_QUERY_UNSUPPORTED_REASON,
-                "The v3 adapter has no documented translation for a free-text search; it was not sent.",
-            )
-
     if not folders:
         try:
             f_out = run_himalaya(["folder", "list", "-o", "json"], account=account, timeout=30)
@@ -3771,7 +3880,14 @@ def search_mailbox(
                 out = out[out.find("["):]
             envelopes = json.loads(out)
         except HimalayaInvocationError as exc:
-            if exc.reason_code == "himalaya_timeout":
+            if exc.reason_code in (
+                "himalaya_timeout",
+                SEARCH_QUERY_UNSUPPORTED_REASON,
+                himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+            ):
+                # The overall deadline, a refused v3 query and an incompatible
+                # v3 page are fail-closed refusals, never an empty partial
+                # result.  Everything else keeps the established containment.
                 raise
             return found_in_folder
         except Exception:
