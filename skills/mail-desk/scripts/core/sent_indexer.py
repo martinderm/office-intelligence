@@ -12,7 +12,10 @@ from typing import Any
 from .common import atomic_rewrite_jsonl, atomic_write_json, normalize_message_id, utc_now_iso, resolve_data_dir
 from .himalaya import (
     HimalayaInvocationError,
+    PROFILE_V3,
+    decode_v3_envelope_output,
     get_single_email_details,
+    profile_of,
     raise_if_transport_blocked,
     run_himalaya,
 )
@@ -414,7 +417,8 @@ def _collect_date_candidates(
 
     # Date query via Himalaya (fast single-day filter).  Pages are fetched until a
     # short/empty page: this is the adapter convention `envelope list --page N`
-    # with `--page-size`.  Any page error is fail-closed, never a silent partial.
+    # with `--page-size`; the central profile map turns it into v3 `-p N` and
+    # `date:D`.  Any page error is fail-closed, never a silent partial.
     pages = 0
     envs_by_id: dict[str, dict[str, Any]] = {}
     try:
@@ -426,11 +430,16 @@ def _collect_date_candidates(
                 account=account,
                 timeout=30,
             )
-            if "[" in out:
-                out = out[out.find("["):]
-            page_envs = json.loads(out)
-            if not isinstance(page_envs, list):
-                raise RuntimeError("Himalaya returned a non-list envelope payload.")
+            if profile_of(out) == PROFILE_V3:
+                # v3 answers the camelCase live array or the schema object; both
+                # are validated strictly and normalized before the id/date logic.
+                page_envs, _next_page = decode_v3_envelope_output(out)
+            else:
+                if "[" in out:
+                    out = out[out.find("["):]
+                page_envs = json.loads(out)
+                if not isinstance(page_envs, list):
+                    raise RuntimeError("Himalaya returned a non-list envelope payload.")
             new_envs = 0
             for env in page_envs:
                 eid = str(env.get("id"))

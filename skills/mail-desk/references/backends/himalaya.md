@@ -6,7 +6,7 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 
 - Read the local `HIMALAYA.md`, if present, before concrete commands; it owns command syntax and installation-specific constraints. The machine-enforced account binding for batch operations is instead the credentials-free workspace file `.agents/mail-desk-backend.json`; it contains exactly `{"schema_version": 1, "backend": "himalaya", "account": "<configured-name-or-null>"}`. `null` explicitly selects the local Himalaya default account. It contains no credentials.
 - The batch runner never derives its backend from available apps/connectors and does not accept `--account` as an override for mailbox modes. A manifest account may be review evidence, but must exactly equal the workspace-bound account.
-- Before `execute` and explicit autonomous `pipeline`, the runner performs one bounded, read-only `envelope list -s 1` on the configured source folder (10 seconds). A timeout, unavailable adapter, account mismatch, malformed configuration, or non-list JSON response is a canonical `mailbox_readiness` failure and occurs before any local or mailbox mutation.
+- Before `execute` and explicit autonomous `pipeline`, the runner performs one bounded, read-only `envelope list -s 1` on the configured source folder (10 seconds). The central version map sends the byte-identical v1 argv or the documented v3 argv (`envelope list -m <folder> -s 1 --json`); the preflight decodes the v1 array or the v3 array/schema object with the profile-specific strict decoder, never with the other shape's parser. A timeout, unavailable adapter, account mismatch, malformed configuration, or non-list/incompatible JSON response is a canonical `mailbox_readiness` failure and occurs before any local or mailbox mutation.
 - Use the mailbox-specific skill for listing, reading, copying, and verifying messages.
 - Begin with the smallest suitable folder listing or preview, then read only the message material required by the core flow.
 - Run `python3 scripts/mailbox_preflight.py` before routing when the catalog changed; use `--always` or `--force` when required. It validates catalog target folders.
@@ -55,6 +55,134 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
 
+### Version profile and command matrix (1.2.x / 3.x)
+
+The adapter is version-aware and fail-closed. Exactly one `himalaya --version`
+probe per executable and process (no `-c`/account/mailbox, short timeout,
+excluded from `TransportStats` and `process_starts`) selects the profile:
+
+| Installed version | Profile | Meaning |
+| :--- | :--- | :--- |
+| `1.2.x` | v1 | pinned, byte-identical legacy argv |
+| `3.x` (`>=3.0.0`, `<4.0.0`) | v3 | documented v3 argv and v3 JSON |
+| anything else | none | `himalaya_version_unsupported` |
+
+A missing executable is `himalaya_unavailable`. Both refusals happen **before**
+any mailbox command: there is no silent profile switch and no fallback to v3.
+The version is cached per `(executable, mtime, size)`, so one process probes one
+installation exactly once.
+
+The central map lives in [`scripts/core/himalaya_profile.py`](../../scripts/core/himalaya_profile.py);
+[`scripts/core/himalaya.py`](../../scripts/core/himalaya.py) owns the probe, the
+cache and the global `-a` placement (`-c <path>`, then `-a <name>`, then the
+subcommand).
+
+| Purpose | 1.2.x (logical argv) | 3.x argv |
+| :--- | :--- | :--- |
+| Folder/mailbox list | `folder list -o json` | `--json mailbox list` |
+| Envelope list | `envelope list -f <f> -s <n> -o json` | `--json envelope list -m <f> -s <n>` |
+| Paging | `-s <n>` only | `-p/--page <n>`, `--page-token <nextPage>` |
+| Search | `envelope list ... <query>` | `--json envelope search <query> -m <f> [--sort oldest-first\|newest-first]` |
+| Envelope thread | `envelope thread -f <f> -o json` | **no thread command**; derive from `envelope list/search` |
+| Message read/preview | `message read --preview -H <h> -f <f> <id>` | `--json message read <id> -m <f>` |
+| Raw EML | `message export <id> -f <f> -F -d <path>` | `--json message read <id> -m <f> --raw` (base64 `data`) |
+| Draft save | `message save -o plain -f <f>` + stdin | `message add --mailbox <f> --flag draft` + stdin (no `--json`) |
+| Copy | `message copy <target> <id> -f <source>` | `--json message copy -f <source> -t <target> <id>` |
+| Delete | `message delete <id> -f <f>` | `--json message delete -m <f> <id>` (moves to Trash; in Trash it is final) |
+| Flag add | `flag add <flag> <id> -f <f>` | `--json flag add --flag <flag> -m <f> <id>` (`--flag` is mandatory; only seen/answered/flagged/draft/important/junk) |
+| Expunge | `folder expunge <f>` | **no expunge** (see the draft limit below) |
+
+The v1 profile keeps the byte-identical legacy argv for every caller, including
+`-o json`/`-f`/`--preview`/`-H`/`-F`/`-d` and the `-a` placement. The v3 profile
+translates the same logical request; the account, `-c` config token, timeouts
+and the Scoop shim (`shutil.which`) do not change per profile.
+`HIMALAYA_CONFIG` stays the only config override.
+
+The logical search forms are translated, not invented: `subject <q>` becomes
+`subject:<q>`, `date <D>` becomes `date:D`, `mid|from|to|is <value>` becomes
+`<field>:<value>`, and `order by date asc|desc` (separate tokens, one token or a
+trailing phrase of a composed query) becomes `--sort oldest-first|newest-first`.
+Values follow the pimdir query language: a value with whitespace, a quote, a
+backslash or a reserved leading `~`/`/`/`{` becomes one double-quoted,
+backslash-escaped phrase (`subject:"Rechnung Q4"`, `from:"Ada Lovelace"`); the
+structured `date`/`is` values stay single tokens, and an empty value is refused.
+`--page <n>` becomes `-p <n>`. Any other query shape fails closed with
+`himalaya_search_query_unsupported`; nothing is silently dropped. A free-text
+query has no documented v3 translation: the folder listing runs first (a read,
+not a write), its producing profile proves v3, and the refusal then escapes every
+serial and threaded sweep path instead of ending as an empty result.
+
+#### v3 JSON boundary (live array and schema object)
+
+The installed v3.0.0 binary is authoritative for its **live** output:
+`himalaya envelope list --json -m INBOX -s 10` returned exit 0, no stderr, no
+write action, and a **top-level array** of 10 envelopes. `messageId`
+(camelCase) was present and non-null 10/10 times with zero duplicates;
+`message_id` (snake_case) was absent, and `inReplyTo`/`hasAttachment` were the
+other camelCase keys. That observation is external, read-only host evidence; it
+is not produced by this adapter and no value, id, subject line or body was
+persisted.
+
+`himalaya json-schema himalaya-envelope-list` additionally documents the
+forward-compatible **object** shape
+`{"envelopes": [...], "nextPage": "string|null", "total": "uint|null", "errors": [...]}`
+with a required `messageId` (`string|null`) per envelope.
+
+Both shapes are validated strictly and normalized to the internal v1-compatible
+envelope (`id`, `subject`, `from {name,addr}`, `to`, `date`, v1-style `flags`,
+`size`, `has_attachment`, additive `message_id`/`in_reply_to`):
+
+- the array form is one complete page; it never invents `nextPage`/`total`, and
+  completeness is proven by a short page or the hard page bound;
+- the object form is paged through `--page-token` until `nextPage` is `null` or
+  a hard bound is hit; a repeated/empty token, a non-uint `total`, a missing key
+  or a non-empty `errors` list is fail-closed (`himalaya_json_incompatible`,
+  `himalaya_paging_not_progressing`), never a silent partial success;
+- a v1 array without `messageId`, a snake_case-only `message_id`, a missing or
+  wrongly typed `messageId`, wrong types, and conflicting duplicate envelope ids
+  are fail-closed under v3. The tolerant v1 `messageId`/`message_id` handling
+  described below remains a v1-profile behaviour.
+- schema-valid nulls are accepted: `Address.name: null` normalizes to the empty
+  display name, `Flag.iana: null` (a custom keyword) keeps the raw flag.
+
+`mailbox list --json` is read as `{"mailboxes": [...], "errors": [...]}`;
+missing keys or item errors are fail-closed; a `role: "drafts"` entry resolves
+the Drafts folder. `message read --json` supplies the view used for preview/body
+and identity. Its `headers` member is the **typed** v3 `MessageHeaders` object,
+not a header-name map: `from`/`to`/`cc`/`bcc`/`replyTo`/`sender` are
+`{name:string|null,email:string}[]`, `references`/`inReplyTo` are bracket-less
+id arrays and `subject`/`date`/`messageId` are `string|null`. The adapter renders
+`from`/`to`/`cc` as the v1 header strings, `references`/`inReplyTo` as the v1
+bracketed strings (single-ID `references` keeps its `<…>` form); `cc` and
+`references` therefore reach the Sent indexer and the handoff unchanged.
+`headers_complete` is true only for that complete, typed object; a string map or
+a partial object yields `false` with empty `cc`/`references`. `message read
+--raw --json` supplies `{data, mime, size}` and the base64 is decoded under the
+existing size/regular-file bounds. `envelope search` returns the same envelope
+shape as `envelope list` (`total` is `null`).
+
+**Test basis and limit:** the v1 and v3 mappings are exercised hermetically
+(scripted version output and scripted JSON at both transport seams; no real
+Himalaya process, no mailbox, no network, no credentials). This adapter has
+**no live mailbox proof**: the v3.0.0 values above are external read-only field
+evidence, not an adapter run, and no live send or mailbox mutation is claimed.
+
+#### v3 expunge limit (drafts)
+
+Himalaya v3 has **no in-place expunge**, and `message delete` moves a message to
+the trash folder. Deleting an unsent draft therefore remains unsupported under
+v3: `delete_draft` and the mandatory delete step of `replace_draft` resolve the
+profile through the same bounded cached `--version` probe the command builder
+uses (a version probe is not a mailbox command) and raise
+`himalaya_expunge_unsupported` **before** any save/append/flag/delete/expunge.
+An unknown or unstartable version fails closed before the write
+(`himalaya_version_unsupported`/`himalaya_unavailable`). They never degrade to a
+move-to-Trash, and `replace_draft` starts no replacement append.
+`save_draft`/`save_raw_draft` keep the v3
+`message add --mailbox <folder> --flag draft` + stdin mapping (no `-o plain`, no
+`--json` on the translated command); the v1 `message save -o plain` + stdin path
+is unchanged.
+
 ### Envelope `messageId` (version-tolerant)
 
 The bundled local Himalaya 1.2.0 emits no `messageId` in
@@ -82,6 +210,15 @@ snake_case `message_id` variant of the same value:
 ### Batch known-envelope skip over `envelope thread`
 
 The batch scan uses one additional CLI operation to reduce per-envelope logins.
+Under the v1 profile `envelope thread` is used; v3 has no thread command, so the
+same map is derived from one bounded `envelope list` page: `messageId` and
+`inReplyTo` per envelope form the `envelope id -> Message-ID` mapping. The
+loader sends the logical v1 `envelope thread -f <f> -o json`; under v3 the
+central map translates exactly this request into `--json envelope list -m <f>
+-s 500`, and the profile carried by the returned output selects the v3 decoder
+(no extra pre-command probe). A malformed array, a schema `errors` entry or a
+paging refusal disables only this accelerator (`{}`); the scan then reads every
+envelope individually.
 With `skip_known` enabled, exactly one
 `himalaya envelope thread -f <folder> -o json` runs per scan (60 s, no retry).
 Its output is a JSON array of
@@ -403,7 +540,11 @@ journal.
   characters, also fails with `WinError 206` on Windows. The explicit `-o plain`
   keeps the JSON branch from bypassing stdin, and one extra transport CRLF
   compensates the `lines()`/join normalization so the appended message equals
-  the canonical builder raw byte for byte. The payload is validated as strict
+  the canonical builder raw byte for byte. That CRLF is declared to the transport
+  as the v1 compensator and is removed byte-exactly under the v3 profile: v3
+  `message add` stores the piped message as given and makes its line endings
+  CRLF, so the canonical raw is appended once without an empty line. The payload
+  is validated as strict
   UTF-8 before any executable/config resolution or subprocess (an invalid byte
   would otherwise be silently truncated by upstream `lines()`); a bounded
   `ValueError` without payload content is raised. Non-ASCII subject, recipients
@@ -412,12 +553,18 @@ journal.
   journal item, no argv fallback, no retry `max_retries=1`); other errors
   propagate. An `OSError` (launch or communication, payload and non-payload
   path) becomes `himalaya_launch_failed` with an unknown outcome and is not
-  retried. The result carries `{envelope_id, folder, subject, to, date}`.
+  retried. The result carries `{envelope_id, folder, subject, to, date}`. Under
+  the v3 profile the same canonical message bytes (without the v1 compensator)
+  and the same once-only rule go to `message add --mailbox <folder> --flag
+  draft`; the translated command carries no `-o plain` and no `--json`.
 - **Delete without UID MOVE:** `delete-draft` runs
   `flag add deleted <envelope_id> -f <folder>` and then
   `folder expunge <folder>`. `message delete` is deliberately not used: Himalaya
   documents that it "moves it to the trash folder" for a non-trash folder, which is
-  exactly the forbidden UID MOVE.
+  exactly the forbidden UID MOVE. Under the resolved v3 profile both
+  `delete-draft` and `replace-draft` refuse before any write with
+  `himalaya_expunge_unsupported`, because v3 has no in-place expunge and
+  `message delete` would move to Trash.
 - **Replace (new-then-delete):** `replace-draft` appends the replacement draft first
   and deletes the old one afterwards. A crash between the two steps leaves both
   drafts observable (documented crash window); the draft journal records both

@@ -188,6 +188,21 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    `classifier_revision`-Rotation ist dokumentiert.
  - **DNR-gegatete Sibling-Kohärenz** (FR-17/MD-R2).
  - **Begrenzte Client-Deadlines** für mehrordrige Himalaya-Operationen (FR-17/MD-R6).
+ - **Versionsbewusster Himalaya-Adapter (1.2.x / 3.x):** genau eine
+   `himalaya --version`-Probe pro Executable wählt das Profil (`1.2.x` → v1
+   byte-identische argv, `3.x` → dokumentierte v3-argv/JSON); unbekannte/fehlende
+   Versionen stoppen fail-closed vor jedem Mailbox-Kommando. Die zentrale Abbildung
+   (`core/himalaya_profile.py`) und die strikte v3-JSON-Grenze
+   (`core/himalaya_normalize.py`: Live-Array mit Pflichtkey `messageId`
+   `string|null` oder Schema-Objekt `{envelopes,nextPage,total,errors}`) tragen
+   alle Aufrufstellen; v3 hat kein `envelope thread` (Map aus der Liste) und keinen
+   In-Place-Expunge (`delete_draft`/`replace_draft` lösen das Profil über die
+   gecachte Probe auf und verweigern mit `himalaya_expunge_unsupported` vor jedem
+   Write). Der v3-Read bildet das typisierte `headers`-Objekt ab (inkl. `cc`/
+   `references`), v3-Suchwerte werden pimdir-konform gequotet (`subject:"…"`), und
+   der v1-CRLF-Kompensator des stdin-APPEND entfällt unter v3. Der Adapter ist
+   hermetisch getestet, ohne Live-Mailbox-Nachweis.
+   Detail: L2-Map §47.
  - **Teilmengenfähiger Verify-Scope** mit Runner-Provenienz und kanonischem
    Evidence-Fallback (FR-17/MD-R7).
  - **Deterministische MIME-Inventarkette** mit Feldkonsistenz-Gate (FR-17/MD-R3).
@@ -780,7 +795,9 @@ Message-ID`. Ein Envelope aus `envelope list` wird ohne Einzel-Read
 eindeutig einer Message-ID aus `final-location-index.json` zuordnet. Alles
 andere läuft unverändert über `get_single_email_details`. Kein `imaplib`, keine
 Credentials, kein `UIDVALIDITY`, kein Cache über den Scan hinaus; PR #101 bleibt
-unberührt.
+unberührt. `envelope thread` ist **v1-only**: unter dem v3-Profil wird dieselbe
+Map aus einer begrenzten `envelope list`-Seite (`messageId`/`inReplyTo`) abgeleitet
+(L2-Map §47); ein Fehler deaktiviert weiterhin nur den Accelerator.
 
 **Fail-closed:** F1 Map nur aus genau einem erfolgreichen Prozess mit gültigem
 JSON-Array aus `[source, target, weight]`-Tripeln (Himalaya

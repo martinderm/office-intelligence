@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 from contextlib import contextmanager
 from contextvars import ContextVar
+import base64
 import datetime
 import email
 import email.header
@@ -29,6 +30,19 @@ from .attachments import (
     validate_attachment_candidate_metadata,
 )
 from .common import normalize_message_id
+from . import himalaya_normalize
+from .himalaya_profile import (
+    PROBE_TIMEOUT_SECONDS,
+    PROFILE_V3,
+    SEARCH_QUERY_UNSUPPORTED_REASON,
+    UNAVAILABLE_REASON,
+    V1_PROFILE,
+    VERSION_UNSUPPORTED_REASON,
+    HimalayaProfile,
+    ProfileError,
+    parse_version_output,
+    translate_v3_arguments,
+)
 
 
 class HimalayaInvocationError(RuntimeError):
@@ -109,6 +123,138 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
             "himalaya_unavailable", "Himalaya executable is unavailable; no mailbox command was started."
         )
     return executable, config_path
+
+
+class HimalayaOutput(str):
+    """A CLI text result that carries the profile which produced it.
+
+    Subclassing ``str`` keeps every existing caller, comparison and JSON parse
+    unchanged; call sites that must interpret v3 JSON can read ``profile``
+    without a second version resolution (and a test double that answers with a
+    plain ``str`` keeps the pinned v1 interpretation).
+    """
+
+    __slots__ = ("profile",)
+
+    def __new__(cls, text: str, profile: str | None = None) -> "HimalayaOutput":
+        instance = super().__new__(cls, text)
+        instance.profile = profile
+        return instance
+
+
+def profile_of(output: object) -> str | None:
+    """Return the producing profile name of one CLI output, if it carries one."""
+    return getattr(output, "profile", None)
+
+
+#: Bounded profile cache keyed by ``(executable, mtime_ns, size)``.
+_PROFILE_CACHE: dict[tuple[str, int, int], HimalayaProfile] = {}
+_PROFILE_CACHE_LOCK = threading.Lock()
+_MAX_PROFILE_CACHE_ENTRIES = 64
+
+#: The profile selected by the most recent ``build_himalaya_command`` call in
+#: this thread.  It is reset by ``run_himalaya`` before every build, so a patched
+#: builder can never leak a stale profile into a later command.
+_PROFILE_LOCAL = threading.local()
+
+
+def _profile_cache_key(executable: str) -> tuple[str, int, int] | None:
+    """Return the cache key of one executable, or ``None`` for a virtual path.
+
+    Only ``FileNotFoundError``/``NotADirectoryError`` prove the documented
+    injected/virtual invocation; any other ``stat`` failure is unprovable and
+    fails closed as ``himalaya_unavailable``.
+    """
+    try:
+        info = os.stat(executable)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError as exc:
+        raise HimalayaInvocationError(
+            UNAVAILABLE_REASON,
+            "The Himalaya executable could not be inspected; no mailbox command was sent.",
+        ) from exc
+    return (str(executable), int(info.st_mtime_ns), int(info.st_size))
+
+
+def _profile_for_executable(executable: str) -> HimalayaProfile:
+    """Resolve the profile of one executable through at most one bound probe.
+
+    The probe is a direct ``subprocess.run([exe, "--version"])`` with no
+    ``-c``/account/mailbox and a short timeout; it never passes through
+    ``run_himalaya`` and is therefore excluded from ``TransportStats``.  The
+    result is cached per ``(executable, mtime, size)`` so one process probes one
+    installation exactly once, even when threads race on the first use.
+
+    An executable that does not exist is the pinned legacy invocation (an
+    injected or virtual command path, as used by the bootstrap seams): it is
+    never probed and keeps the byte-identical v1 argv.  Every real installation
+    resolved through ``shutil.which`` is probed fail-closed.
+    """
+    key = _profile_cache_key(executable)
+    if key is None:
+        return V1_PROFILE
+    with _PROFILE_CACHE_LOCK:
+        cached = _PROFILE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        try:
+            completed = subprocess.run(
+                [str(executable), "--version"],
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=PROBE_TIMEOUT_SECONDS,
+            )
+        except UnicodeDecodeError as exc:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The Himalaya version probe output was not decodable; no mailbox command was sent.",
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise HimalayaInvocationError(
+                UNAVAILABLE_REASON,
+                "The Himalaya version probe could not be started; no mailbox command was sent.",
+            ) from exc
+        if completed.returncode != 0:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The Himalaya version probe failed; no mailbox command was sent.",
+            )
+        profile = parse_version_output(completed.stdout)
+        if profile is None:
+            raise HimalayaInvocationError(
+                VERSION_UNSUPPORTED_REASON,
+                "The installed Himalaya version is not a supported profile; no mailbox command was sent.",
+            )
+        if len(_PROFILE_CACHE) >= _MAX_PROFILE_CACHE_ENTRIES:
+            _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)), None)
+        _PROFILE_CACHE[key] = profile
+        return profile
+
+
+def resolve_himalaya_profile_or_none() -> HimalayaProfile | None:
+    """Resolve the executable's profile for a decision that precedes any write.
+
+    The pre-write expunge guard needs the profile before any command can produce
+    output.  This resolves the same executable as a real command and runs the
+    same bounded, cached ``--version`` probe; the probe is not a mailbox command
+    and never reaches ``TransportStats``/``process_starts``.  An unknown,
+    unparseable or unstartable version fails closed
+    (``himalaya_version_unsupported``/``himalaya_unavailable``).  It returns
+    ``None`` only when no CLI invocation exists at all (missing config, missing
+    executable, invalid override); in that case the later command resolution
+    raises before a child starts, so no write can happen either.
+
+    Read-only seams do not call this: they read the profile that produced their
+    own output (:class:`HimalayaOutput`), which is authoritative and starts no
+    extra probe.
+    """
+    try:
+        executable, _config_path = resolve_himalaya_invocation()
+    except HimalayaInvocationError:
+        return None
+    return _profile_for_executable(executable)
 
 
 def resolve_himalaya_downloads_dir(
@@ -237,10 +383,26 @@ def _resolve_himalaya_downloads_dir(
 
 
 def build_himalaya_command(args: list[str], account: str | None = None) -> list[str]:
-    """Build a shell-free CLI command after fail-fast bootstrap validation."""
+    """Build a shell-free CLI command for the resolved, versioned profile.
+
+    The v1 profile keeps the byte-identical legacy argv and ``-a`` placement.
+    The v3 profile translates the same logical request into the documented v3
+    argv and places the global ``-a`` after ``-c <path>`` and before the
+    subcommand.  The selected profile is recorded for the caller's output
+    interpretation (see :class:`HimalayaOutput`).
+    """
     if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in args):
         raise ValueError("Himalaya arguments must be a non-empty list of non-empty text tokens.")
     executable, config_path = resolve_himalaya_invocation()
+    profile = _profile_for_executable(executable)
+    _PROFILE_LOCAL.profile = profile.name
+    if profile.name == PROFILE_V3:
+        try:
+            translated = translate_v3_arguments(args)
+        except ProfileError as exc:
+            raise HimalayaInvocationError(exc.reason_code, str(exc)) from None
+        account_args = ["-a", account] if account else []
+        return [executable, "-c", str(config_path)] + account_args + translated
     return [executable, "-c", str(config_path)] + _insert_account_arg(args, account)
 
 
@@ -1275,6 +1437,7 @@ def run_himalaya(
     max_retries: int = 5,
     *,
     stdin_bytes: bytes | None = None,
+    stdin_v1_terminator: bytes | None = None,
     diagnostic_capture: Any | None = None,
     purpose: str = "other",
 ) -> str:
@@ -1291,6 +1454,15 @@ def run_himalaya(
     exactly once (an APPEND must never be retried).  Launch/communication
     ``OSError`` becomes ``himalaya_launch_failed`` for both the payload and the
     non-payload path; its outcome may be unknown and it is never retried.
+
+    ``stdin_v1_terminator`` (keyword-only, default ``None``) marks the trailing
+    bytes a caller appended for the pinned v1 ``message save`` transport: v1
+    reads stdin with ``lines()`` and drops the final line terminator, so one
+    extra CRLF compensates it.  A v3 ``message add`` stores the piped message as
+    given and makes its line endings CRLF, so the same compensator would add an
+    empty line.  Under the v3 profile exactly this suffix is removed before the
+    child starts; the v1 payload stays byte-identical.  The declared suffix must
+    actually end the payload or the call fails closed with ``ValueError``.
 
     ``diagnostic_capture`` is an optional, typed, keyword-only internal object
     (see ``core.diagnostics``) that switches a payload command onto the bounded
@@ -1310,6 +1482,10 @@ def run_himalaya(
     if stdin_bytes is not None:
         if not isinstance(stdin_bytes, bytes) or not stdin_bytes:
             raise ValueError("stdin_bytes must be a non-empty bytes object.")
+        if stdin_v1_terminator is not None and (
+            not isinstance(stdin_v1_terminator, bytes) or not stdin_v1_terminator
+        ):
+            raise ValueError("stdin_v1_terminator must be a non-empty bytes object.")
         # Himalaya 1.2.0 reads stdin with ``lines().map_while(Result::ok)`` and
         # would silently truncate at the first invalid byte, so the payload must
         # be validated as strict UTF-8 before any executable/config resolution
@@ -1320,12 +1496,29 @@ def run_himalaya(
             raise ValueError(
                 "stdin_bytes must be valid UTF-8; the payload was not sent."
             ) from exc
+        if stdin_v1_terminator is not None and not stdin_bytes.endswith(stdin_v1_terminator):
+            raise ValueError(
+                "stdin_v1_terminator must end the payload; the payload was not sent."
+            )
         if not _explicit_plain_output_requested(args):
             raise ValueError(
                 "stdin_bytes requires exactly one explicit '-o plain' output format; "
                 "JSON output would bypass stdin."
             )
+    elif stdin_v1_terminator is not None:
+        raise ValueError("stdin_v1_terminator requires a stdin_bytes payload.")
+    _PROFILE_LOCAL.profile = None
     cmd = build_himalaya_command(args, account)
+    profile_name = getattr(_PROFILE_LOCAL, "profile", None)
+    if (
+        stdin_bytes is not None
+        and stdin_v1_terminator is not None
+        and profile_name == PROFILE_V3
+    ):
+        # v3 ``message add`` keeps the piped message as given (line endings made
+        # CRLF) and has no ``lines()``/join step, so the v1 compensator would add
+        # an empty line.  Remove exactly the declared suffix.
+        stdin_bytes = stdin_bytes[: -len(stdin_v1_terminator)]
     command_class = classify_himalaya_command(args)
     envelope_id = item_envelope_id(args)
     item_scoped = envelope_id is not None
@@ -1369,7 +1562,7 @@ def run_himalaya(
                 command_class=command_class,
                 duration_ms=int((time.monotonic() - started) * 1000),
             )
-        return output
+        return HimalayaOutput(output, profile_name)
     env_vars = os.environ.copy()
     env_vars["PAGER"] = "cat"
 
@@ -1433,7 +1626,7 @@ def run_himalaya(
                     duration_ms=duration_ms,
                     exit_code=res.returncode,
                 )
-            return _decode_process_stream(res.stdout)
+            return HimalayaOutput(_decode_process_stream(res.stdout), profile_name)
         except subprocess.TimeoutExpired as te:
             duration_ms = int((time.monotonic() - started) * 1000)
             if stats is not None and stats.record_error(
@@ -1508,6 +1701,72 @@ def _is_transient_himalaya_error(stderr: str) -> bool:
     )
 
 
+def _decode_v3_json(output: object) -> object:
+    try:
+        return json.loads(str(output))
+    except (TypeError, ValueError):
+        raise HimalayaInvocationError(
+            himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+            "The v3 JSON payload is not valid JSON; no partial result was returned.",
+        ) from None
+
+
+def decode_v3_envelope_output(output: object) -> tuple[list[dict[str, Any]], str | None]:
+    """Decode one v3 envelope page into normalized entries plus ``nextPage``."""
+    payload = _decode_v3_json(output)
+    try:
+        return himalaya_normalize.decode_envelope_page(payload)
+    except himalaya_normalize.JsonIncompatible as exc:
+        raise HimalayaInvocationError(exc.reason_code, str(exc)) from None
+
+
+def decode_v3_mailbox_output(output: object) -> list[dict[str, Any]]:
+    """Decode one ``mailbox list --json`` payload into its mailbox dicts."""
+    payload = _decode_v3_json(output)
+    try:
+        return himalaya_normalize.decode_mailbox_list(payload)
+    except himalaya_normalize.JsonIncompatible as exc:
+        raise HimalayaInvocationError(exc.reason_code, str(exc)) from None
+
+
+def collect_v3_envelope_pages(
+    entries: list[dict[str, Any]],
+    next_page: str | None,
+    fetch: Callable[[str], object],
+) -> list[dict[str, Any]]:
+    """Follow ``nextPage`` through ``--page-token`` with a hard, fail-closed bound.
+
+    A repeated token, an empty token or an exhausted page bound is a bounded
+    ``himalaya_*`` refusal; a malformed page is ``himalaya_json_incompatible``.
+    The live array form carries no token and returns after the first page.
+    """
+    collected = list(entries)
+    seen: set[str] = set()
+    pages = 0
+    token = next_page
+    while token is not None:
+        if not isinstance(token, str) or not token.strip():
+            raise HimalayaInvocationError(
+                himalaya_normalize.PAGE_TOKEN_INVALID_REASON,
+                "The v3 nextPage token is empty or invalid; paging stopped.",
+            )
+        if token in seen:
+            raise HimalayaInvocationError(
+                himalaya_normalize.PAGING_NOT_PROGRESSING_REASON,
+                "The v3 nextPage token repeated without progress; paging stopped.",
+            )
+        if pages >= himalaya_normalize.MAX_V3_PAGES:
+            raise HimalayaInvocationError(
+                himalaya_normalize.PAGING_NOT_PROGRESSING_REASON,
+                "The v3 listing exceeded the hard page bound; paging stopped.",
+            )
+        seen.add(token)
+        pages += 1
+        collected_page, token = decode_v3_envelope_output(fetch(token))
+        collected.extend(collected_page)
+    return collected
+
+
 def fetch_raw_message_eml(
     env_id: str | int,
     folder: str = "INBOX",
@@ -1519,10 +1778,11 @@ def fetch_raw_message_eml(
 ) -> bytes:
     """Fetch raw RFC 822 .eml bytes via himalaya message export -F.
 
-    ``max_bytes`` (default ``None``: unchanged unbounded behaviour) makes the read
-    bounded: an exported file larger than the bound is rejected from its file size
-    before any of it is loaded (``HimalayaInvocationError`` /
-    ``himalaya_export_too_large``).
+    The v3 profile reads ``message read --raw --json`` and decodes the base64
+    payload instead of an exported file.  ``max_bytes`` (default ``None``:
+    unchanged unbounded behaviour) makes the read bounded: an exported file or a
+    decoded payload larger than the bound is rejected before it is used
+    (``HimalayaInvocationError`` / ``himalaya_export_too_large``).
 
     ``purpose`` is the additive start label of this export (Issue #103, D1).
     """
@@ -1534,7 +1794,39 @@ def fetch_raw_message_eml(
             "-F",
             "-d", str(dest_eml),
         ]
-        run_himalaya(args, account=account, timeout=timeout, max_retries=2, purpose=purpose)
+        output = run_himalaya(args, account=account, timeout=timeout, max_retries=2, purpose=purpose)
+        if profile_of(output) == PROFILE_V3:
+            payload = _decode_v3_json(output)
+            if not isinstance(payload, dict):
+                raise HimalayaInvocationError(
+                    himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+                    "The v3 raw message payload is not an object.",
+                )
+            data = payload.get("data")
+            size = payload.get("size")
+            if not isinstance(data, str) or isinstance(size, bool) or not isinstance(size, int):
+                raise HimalayaInvocationError(
+                    himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+                    "The v3 raw message payload is missing data/size.",
+                )
+            try:
+                decoded = base64.b64decode(data.encode("ascii"), validate=True)
+            except (UnicodeEncodeError, ValueError):
+                raise HimalayaInvocationError(
+                    himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+                    "The v3 raw message payload is not valid base64.",
+                ) from None
+            if len(decoded) != size:
+                raise HimalayaInvocationError(
+                    himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+                    "The v3 raw message size does not match the decoded payload.",
+                )
+            if max_bytes is not None and len(decoded) > max_bytes:
+                raise HimalayaInvocationError(
+                    "himalaya_export_too_large",
+                    "The exported message exceeds the bounded read-back size; it was not loaded.",
+                )
+            return decoded
         if max_bytes is not None:
             return _read_export_bounded(dest_eml, max_bytes)
         if not dest_eml.exists() or dest_eml.stat().st_size == 0:
@@ -1632,6 +1924,21 @@ def find_envelopes_by_message_id(
         ["-o", "json", "envelope", "list", "-f", folder, "-s", str(UNIQUE_LOOKUP_ENVELOPE_WINDOW)],
         account=account, timeout=30, max_retries=2,
     )
+    if profile_of(out) == PROFILE_V3:
+        # v3 publishes the Message-ID as the listing's ``messageId``: no
+        # per-envelope header reads are needed (or started) here.
+        entries, next_page = decode_v3_envelope_output(out)
+        complete = (
+            next_page is None
+            and len(entries) < UNIQUE_LOOKUP_ENVELOPE_WINDOW
+            and len(entries) + reserve <= UNIQUE_LOOKUP_MAX_HEADER_READS
+        )
+        matches = [
+            str(entry["id"])
+            for entry in entries[:UNIQUE_LOOKUP_MAX_HEADER_READS]
+            if entry.get("message_id") == wanted
+        ]
+        return matches, complete
     if "[" in out:
         out = out[out.find("["):]
     envelopes = json.loads(out)
@@ -2747,6 +3054,149 @@ def eml_full_text_parity(raw_eml: bytes) -> bool:
         return False
 
 
+def _v3_address_string(value: object) -> str:
+    """Render one v3 ``{name,email}[]`` address list as the v1 header string."""
+    if not isinstance(value, list):
+        return ""
+    rendered: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        email = str(item.get("email") or "")
+        if name and email:
+            rendered.append(f"{name} <{email}>")
+        elif email:
+            rendered.append(email)
+        elif name:
+            rendered.append(name)
+    return ", ".join(rendered)
+
+
+def _v3_reply_reference(value: object) -> str:
+    """Render one v3 ``inReplyTo``/``references`` array as the v1 bracketed string."""
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = normalize_message_id(item)
+        if normalized:
+            parts.append(f"<{normalized}>")
+    return " ".join(parts)
+
+
+#: Required typed fields of the v3 ``message read --json`` ``headers`` object.
+_V3_HEADER_ADDRESS_FIELDS = ("from", "to", "cc", "bcc", "replyTo", "sender")
+_V3_HEADER_ID_LIST_FIELDS = ("references", "inReplyTo")
+_V3_HEADER_TEXT_FIELDS = ("subject", "date", "messageId")
+
+
+def _v3_headers_typed(headers: object) -> bool:
+    """Whether ``headers`` is the complete, typed v3 ``MessageHeaders`` object.
+
+    The schema requires every address list (``from``/``to``/``cc``/``bcc``/
+    ``replyTo``/``sender``) as ``{name:string|null,email:string}[]``, both id
+    lists (``references``/``inReplyTo``) as ``string[]`` and ``subject``/``date``/
+    ``messageId`` as ``string|null``.  Only this shape justifies
+    ``headers_complete``; a string map or a partial object is not the v3
+    contract.
+    """
+    if not isinstance(headers, dict):
+        return False
+    for field in _V3_HEADER_ADDRESS_FIELDS:
+        value = headers.get(field)
+        if not isinstance(value, list):
+            return False
+        for item in value:
+            if not isinstance(item, dict):
+                return False
+            name = item.get("name")
+            if name is not None and not isinstance(name, str):
+                return False
+            if not isinstance(item.get("email"), str):
+                return False
+    for field in _V3_HEADER_ID_LIST_FIELDS:
+        value = headers.get(field)
+        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+            return False
+    for field in _V3_HEADER_TEXT_FIELDS:
+        if field not in headers:
+            return False
+        value = headers[field]
+        if value is not None and not isinstance(value, str):
+            return False
+    return True
+
+
+def _details_from_v3_view(
+    env_id: str | int,
+    folder: str,
+    payload: dict[str, Any],
+    *,
+    preview_lines: int,
+    full_body: bool,
+    fallback_envelope: dict[str, Any] | None,
+    attachments_list: list[dict[str, Any]],
+    attachment_status: str,
+    attachment_error: str | None,
+) -> dict[str, Any]:
+    """Map one v3 ``message read --json`` view onto the existing detail fields.
+
+    ``headers`` is the typed v3 ``MessageHeaders`` object, not a header-name map:
+    ``from``/``to``/``cc`` are address arrays, ``references``/``inReplyTo`` are
+    bracket-less id arrays and ``subject``/``date``/``messageId`` are strings.
+    ``cc`` and ``references`` therefore survive into the existing detail fields
+    (the Sent indexer and the handoff consume them), and ``headers_complete`` is
+    true only for that complete, typed shape.
+    """
+    fb_subj, fb_from, fb_to, fb_date = _fallback_display_fields(fallback_envelope)
+    headers = payload.get("headers")
+    header_map = headers if isinstance(headers, dict) else {}
+    headers_complete = _v3_headers_typed(headers)
+
+    def _header_text(field: str) -> str:
+        value = header_map.get(field)
+        return value if isinstance(value, str) else ""
+
+    raw_mid = payload.get("messageId")
+    if not (isinstance(raw_mid, str) and raw_mid.strip()):
+        raw_mid = _header_text("messageId")
+    norm_mid = normalize_message_id(raw_mid) if raw_mid else ""
+    text = payload.get("text")
+    body_text = text if isinstance(text, str) else ""
+    body_lines = body_text.splitlines()
+    subject = payload.get("subject") if isinstance(payload.get("subject"), str) else ""
+    date = payload.get("date") if isinstance(payload.get("date"), str) else ""
+    return {
+        "envelope_id": str(env_id),
+        "folder": folder,
+        "message_id": norm_mid,
+        "raw_message_id": f"<{norm_mid}>" if norm_mid else "",
+        "subject": subject or _header_text("subject") or fb_subj,
+        "from": _v3_address_string(payload.get("from"))
+        or _v3_address_string(header_map.get("from"))
+        or fb_from,
+        "to": _v3_address_string(payload.get("to"))
+        or _v3_address_string(header_map.get("to"))
+        or fb_to,
+        "cc": _v3_address_string(header_map.get("cc")),
+        "headers_complete": headers_complete,
+        "date": date or _header_text("date") or fb_date,
+        "in_reply_to": _v3_reply_reference(payload.get("inReplyTo"))
+        or _v3_reply_reference(header_map.get("inReplyTo")),
+        "references": _v3_reply_reference(header_map.get("references")),
+        "preview": "\n".join(body_lines if full_body else body_lines[:preview_lines]),
+        "attachments": attachments_list,
+        "attachment_status": attachment_status,
+        "attachment_error": attachment_error,
+        "error": None,
+        "read_error_reason": None,
+        "read_level": "full_body" if full_body else "preview",
+    }
+
+
 def get_single_email_details(
     env_id: str | int,
     folder: str = "INBOX",
@@ -2986,10 +3436,15 @@ def get_single_email_details(
         raw_mid = ""
         try:
             mid_out = run_himalaya(["message", "read", "-H", "Message-Id", "-f", folder, str(env_id)], account=account, timeout=10, purpose="id_fallback")
-            for line in mid_out.splitlines():
-                if line.lower().startswith("message-id:"):
-                    raw_mid = line.split(":", 1)[1].strip()
-                    break
+            if profile_of(mid_out) == PROFILE_V3:
+                mid_payload = _decode_v3_json(mid_out)
+                if isinstance(mid_payload, dict) and isinstance(mid_payload.get("messageId"), str):
+                    raw_mid = mid_payload["messageId"]
+            else:
+                for line in mid_out.splitlines():
+                    if line.lower().startswith("message-id:"):
+                        raw_mid = line.split(":", 1)[1].strip()
+                        break
         except Exception as exc:
             raise_if_transport_blocked(exc)
 
@@ -3015,6 +3470,25 @@ def get_single_email_details(
             "read_error_reason": _read_failure_reason(last_err),
             "read_level": "preview",
         }
+
+    if profile_of(stdout) == PROFILE_V3:
+        payload = _decode_v3_json(stdout)
+        if not isinstance(payload, dict):
+            raise HimalayaInvocationError(
+                himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+                "The v3 message view is not an object; no partial result was returned.",
+            )
+        return _details_from_v3_view(
+            env_id,
+            folder,
+            payload,
+            preview_lines=preview_lines,
+            full_body=full_body,
+            fallback_envelope=fallback_envelope,
+            attachments_list=attachments_list,
+            attachment_status=attachment_status,
+            attachment_error=attachment_error,
+        )
 
     try:
         headers: dict[str, str] = {}
@@ -3122,12 +3596,21 @@ def verify_in_target_folder(
                 account=account, timeout=10, max_retries=1,
             )
             outcome = "missing_message_id"
-            for line in h_out.splitlines():
-                if line.lower().startswith("message-id:"):
+            if profile_of(h_out) == PROFILE_V3:
+                payload = _decode_v3_json(h_out)
+                value = payload.get("messageId") if isinstance(payload, dict) else None
+                if isinstance(value, str) and value.strip():
                     outcome = "mismatch"
-                    if normalize_message_id(line.split(":", 1)[1]) == norm_target:
+                    if normalize_message_id(value) == norm_target:
                         outcome = "match"
                         return True
+            else:
+                for line in h_out.splitlines():
+                    if line.lower().startswith("message-id:"):
+                        outcome = "mismatch"
+                        if normalize_message_id(line.split(":", 1)[1]) == norm_target:
+                            outcome = "match"
+                            return True
         except Exception as exc:
             # The same failures were previously swallowed at each call site.
             # Classify only known timeouts; never serialize untrusted messages.
@@ -3158,6 +3641,15 @@ def verify_in_target_folder(
 
     try:
         out = run_himalaya(["-o", "json", "envelope", "list", "-f", target_folder, "-s", "150"], account=account, timeout=30, max_retries=2)
+        if profile_of(out) == PROFILE_V3:
+            entries, _next_page = decode_v3_envelope_output(out)
+            for entry in entries:
+                if entry.get("message_id") != norm_target:
+                    continue
+                if subject and str(entry.get("subject") or "").strip().lower() != subject.strip().lower():
+                    continue
+                return str(entry["id"])
+            return None
         if "[" in out:
             out = out[out.find("["):]
         envelopes = json.loads(out)
@@ -3282,11 +3774,18 @@ def search_mailbox(
     if not folders:
         try:
             f_out = run_himalaya(["folder", "list", "-o", "json"], account=account, timeout=30)
-            if "[" in f_out:
-                f_out = f_out[f_out.find("["):]
-            folders = [f["name"] for f in json.loads(f_out)]
         except Exception:
             folders = ["INBOX", "Junk", "Trash", "Newsletter"]
+        else:
+            if profile_of(f_out) == PROFILE_V3:
+                folders = [mailbox["name"] for mailbox in decode_v3_mailbox_output(f_out)]
+            else:
+                try:
+                    if "[" in f_out:
+                        f_out = f_out[f_out.find("["):]
+                    folders = [f["name"] for f in json.loads(f_out)]
+                except Exception:
+                    folders = ["INBOX", "Junk", "Trash", "Newsletter"]
 
     matches: list[dict[str, Any]] = []
 
@@ -3339,11 +3838,56 @@ def search_mailbox(
         ensure_within_deadline()
         try:
             out = run_himalaya(["-o", "json", "envelope", "list", "-f", fld, "-s", str(page_size)], account=account, timeout=30)
+            if profile_of(out) == PROFILE_V3:
+                # v3 answers with the Message-ID in the listing.  The ID lookup
+                # is one server-side ``envelope search mid:<id>`` per folder;
+                # no per-envelope header read starts.
+                decode_v3_envelope_output(out)  # fail closed on an invalid page
+                if not target_mids:
+                    if query_str:
+                        raise HimalayaInvocationError(
+                            SEARCH_QUERY_UNSUPPORTED_REASON,
+                            "The v3 adapter has no documented translation for a free-text search; the sweep stopped.",
+                        )
+                    return found_in_folder
+                for wanted_mid in sorted(target_mids):
+                    ensure_within_deadline()
+                    search_out = run_himalaya(
+                        ["-o", "json", "envelope", "list", "-f", fld, "-s", str(page_size), "mid", wanted_mid],
+                        account=account,
+                        timeout=30,
+                    )
+                    entries, _next_page = decode_v3_envelope_output(search_out)
+                    for env in entries:
+                        from_info = env.get("from")
+                        from_str = (
+                            f"{str(from_info.get('name') or '')} {str(from_info.get('addr') or '')}"
+                            if isinstance(from_info, dict)
+                            else ""
+                        )
+                        found_in_folder.append(
+                            {
+                                "folder": fld,
+                                "envelope_id": str(env.get("id", "")),
+                                "message_id": str(env.get("message_id") or ""),
+                                "subject": str(env.get("subject") or ""),
+                                "from": from_str.strip(),
+                                "date": str(env.get("date") or ""),
+                            }
+                        )
+                return found_in_folder
             if "[" in out:
                 out = out[out.find("["):]
             envelopes = json.loads(out)
         except HimalayaInvocationError as exc:
-            if exc.reason_code == "himalaya_timeout":
+            if exc.reason_code in (
+                "himalaya_timeout",
+                SEARCH_QUERY_UNSUPPORTED_REASON,
+                himalaya_normalize.JSON_INCOMPATIBLE_REASON,
+            ):
+                # The overall deadline, a refused v3 query and an incompatible
+                # v3 page are fail-closed refusals, never an empty partial
+                # result.  Everything else keeps the established containment.
                 raise
             return found_in_folder
         except Exception:

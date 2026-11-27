@@ -39,6 +39,7 @@ Himalaya interpretiert Doppelpunkte (`:`) in `-c <config>` auf Windows fälschli
 * **Geltungsbereich:** `resolve_himalaya_invocation()` normalisiert **beide** Pfadquellen vor jeder Existenzprüfung (`is_file`) und vor der `-c`-Tokenerzeugung identisch: einen expliziten `HIMALAYA_CONFIG`-Override ebenso wie den plattformspezifischen Default aus `_default_himalaya_config_path()` (`%APPDATA%\himalaya\config.toml` unter Windows, sonst `~/.config/himalaya/config.toml`).
 * **Effekt:** Lokale Laufwerkspfade (z. B. `C:\Users\...` oder `D:/...`) werden deterministisch in lokale UNC-Admin-Share-Pfade umgewandelt (`\\localhost\C$\...` bzw. `\\localhost\D$\...`). Relative Overrides bleiben unverändert und stoppen fail-closed als `himalaya_config_invalid`.
 * **Betriebliche Voraussetzung (Caveat):** Die Konvertierung setzt voraus, dass die lokale administrative Freigabe `\\localhost\<drive>$` erreichbar ist. Ist sie deaktiviert oder nicht erreichbar, liefert `is_file()` auf dem konvertierten Pfad `False`; der Bootstrap stoppt dann vor jedem Prozessstart fail-closed als nicht verfügbare Konfiguration (`himalaya_config_missing`). Eine Ende-zu-Ende-Unterstützung ohne erreichbare Admin-Freigabe wird nicht behauptet.
+* **Geltung für beide Profile:** Die Normalisierung bleibt für v1 und v3 identisch und läuft vor Profilprobe und `-c`-Tokenerzeugung. Das v3-Verhalten dieser Windows-Konvertierung ist **nicht live geprüft** und bleibt eine dokumentierte Restgrenze (§47).
 
 ### 1.3 Atomarer Austausch & begrenzter Windows-Sharing-Retry (Issue #70)
 `core.common.atomic_write_text` (und damit `atomic_write_json`/`atomic_rewrite_jsonl`, u. a. `BatchRecoveryJournal._save`) schreibt in ein Sibling-Tempfile, `fsync`t und ersetzt dann das Ziel über `replace_with_retry()` statt über ein nacktes `os.replace`.
@@ -141,6 +142,7 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
 
 * **Kein interaktiver Setup-Wizard:** Fehlt `config.toml`, wirft `resolve_himalaya_invocation()` sofort `HimalayaInvocationError("himalaya_config_missing")`. Ein interaktives Blockieren des Prozesses ist ausgeschlossen.
 * **Timeout-Abbruch:** Hängt die IMAP-Verbindung, greift der Subprozess-Timeout. Ein Timeout führt zu `himalaya_timeout` und wird **nicht** wiederholt (kein Retry-Loop bei hängenden Prozessen).
+* **Versionsprofil-Gate:** Vor dem ersten Mailbox-Kommando läuft genau eine `himalaya --version`-Probe (kein `-c`/Account/Mailbox, kurzer Timeout, nicht in `TransportStats`). Nur `1.2.x` (v1) und `3.x` (v3) sind unterstützt; unbekannte/fehlende/nicht startbare Versionen stoppen fail-closed (`himalaya_version_unsupported`/`himalaya_unavailable`). Die v3-argv/JSON-Grenze und das Expunge-Limit stehen in §47; der Adapter ist hermetisch getestet, **ohne Live-Mailbox-Nachweis** (die v3-Feldwerte sind externe read-only Referenzevidenz).
 
 ### 5.1 Gebundene Draft-Diagnose (Issue #19, opt-in, Default aus)
 
@@ -186,7 +188,10 @@ Der Mail-Desk repariert Diskrepanzen **niemals still oder automatisch**:
   ein reguläres Handle mit Identitäts-/Wachstumsprüfung) begrenzt nicht die vorgelagerte
   Backend-Übertragung oder Plattengröße. Bei Replace (auch bei ausgelassener Anhangsliste) erst nach
   verifizierter neuer Mail `flag add deleted` + `folder expunge` auf die per Message-ID neu aufgelöste
-  alte Envelope. Kein SMTP, kein `message send`.
+  alte Envelope. Unter dem aufgelösten v3-Profil startet statt `message save` das übersetzte
+  `message add --mailbox <f> --flag draft` (ohne `-o plain`/`--json`), wobei der v1-CRLF-
+  Kompensator vor dem Child byte-exakt entfernt wird; der Replace bricht dort vor jedem
+  Write mit `himalaya_expunge_unsupported` ab. Kein SMTP, kein `message send`.
 * **Fehlerklassen:** eindeutig gescheitert (`draft_save_failed`), unklarer Ausgang
   (`draft_append_outcome_unknown`: Timeout, transient, Launch, Pipe, fremde Exception), nicht
   verifizierbar (`draft_verification_failed`), Teilausgang (`draft_replace_old_not_deleted`,

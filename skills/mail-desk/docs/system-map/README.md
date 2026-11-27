@@ -279,8 +279,8 @@ sichert Paketstruktur, Owner-Vollständigkeit und die Cloud-Atlas-Discovery vom 
 Verzeichnislevel. Vollständige Suite 804/804 grün. **MD-M2 ist abgenommen; FR-13 ist
 geschlossen.**
 | **MD-E2 Draft-Integration (FR-15/MD-E2-T01/T02)** | [`scripts/core/attachment_reclassification.py`](../../scripts/core/attachment_reclassification.py) | Standardmäßig aktive `draft`-Auswertung: nur unklare Items rufen `attachment_evaluate`, der validierte `ready`-Handoff wird genau einmal als getrenntes `untrusted_external` reklassifiziert, und jedes Draft-Item erhält genau ein additives finales `attachment_evaluation`; `classifier_revision` bindet den Classifier-Regel-AST, Kataloge und konsumierte Hashes. Fail-closed-Härtung: bounded Outcome-Matrix in Review/`INBOX`, kanonische Handoff-Revalidierung, fail-loud `AttachmentReclassificationContractError`, deterministische `already_fetched`-Idempotenz. Keine zweite Fetch-/MIME-/Hash-Validierung. |
-| **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py)<br>[`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard. |
-| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE**, Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
+| **Mailbox-Adapter** | [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py)<br>[`scripts/core/himalaya_profile.py`](../../scripts/core/himalaya_profile.py)<br>[`scripts/core/himalaya_normalize.py`](../../scripts/core/himalaya_normalize.py)<br>[`scripts/mail_desk_himalaya_client.py`](../../scripts/mail_desk_himalaya_client.py) | Subprozess-Isolation, Windows-UNC-Drive-Workaround, Preflight, Fail-Fast ohne interaktiven Wizard; versionsbewusste Profilprobe (1.2.x/v3) mit zentraler argv-Abbildung und strikter v3-JSON-Grenze (§47). |
+| **Standalone-Draft-API (ungesendet)** | [`scripts/core/drafts.py`](../../scripts/core/drafts.py) | Erzeugt, ersetzt und löscht ungesendete Entwürfe — ohne Approval-Gate, ohne Batch-Modus, Senden out of scope: deterministische Drafts-Ordner-Auflösung (RFC-6154-`\Drafts`-Attribut → konventioneller Name `Drafts` → GroupWise `Work In Progress`, sonst fail-loud), UTF-8-APPEND über die **binäre stdin-Pipe** (`message save -o plain`, v3 `message add --mailbox --flag draft`; jeder Größe, kein argv; §33), Löschen per `\Deleted` + `folder expunge` **ohne UID MOVE** (v3: `himalaya_expunge_unsupported` vor jedem Write, §47), Replace neu-erst-dann-lösch mit dokumentiertem Crash-Fenster und eigenem `draft-journal.json` (Details: §29). |
 | **Klassifikation & Triage** | [`scripts/core/classifier.py`](../../scripts/core/classifier.py)<br>[`scripts/core/matching/date_parser.py`](../../scripts/core/matching/date_parser.py)<br>[`scripts/core/matching/ambiguity.py`](../../scripts/core/matching/ambiguity.py)<br>[`scripts/core/matching/project_matching.py`](../../scripts/core/matching/project_matching.py)<br>[`scripts/core/matching/topic_matching.py`](../../scripts/core/matching/topic_matching.py)<br>[`scripts/core/quarantine/attachment_policy.py`](../../scripts/core/quarantine/attachment_policy.py) | `classifier.py` bleibt die kompatible Facade für Katalog-Matching und Signalanalyse; die kanonischen Owner `matching/date_parser.py` (Datums-Parsing), `matching/ambiguity.py` (Ranking/Unique-Choice, Cross-Kind-Conflict, Fallback), `matching/project_matching.py` (Artefakt-Primitive, Projekt-/Workpackage-/Task-/Deliverable-/Milestone-Auflösung, Projekt-Evidenz und der Root-Match-Owner `select_project_match`) und `matching/topic_matching.py` (Topic-/Subtopic-/Operation-/Event-Auflösung, -Validierung, -Evidenz, Safe-Targets sowie die Owner `select_topic_match` und `materialize_topic_details`) sind per Objektidentität an die Facade gebunden (FR-13/MD-M1-T01–T04). Seit **MD-M1-T04** liegen zusätzlich die Thread-Ordner-Inheritance (`match_thread_project_inheritance`, `match_thread_topic_inheritance`) und der Full-Read-Evidenz-Rebuild (`resolve_full_read_project_evidence`, `resolve_full_read_topic_evidence`) bei diesen Ownern; `classifier.py` behält Referenzparsing, Final-Index-Parent-Lookup, Full-Reader-I/O und Zwei-Pass-Orchestrierung. |
 | **Injection-Barrier (Issue #62)** | [`scripts/core/injection_barrier.py`](../../scripts/core/injection_barrier.py) | Lokaler, deterministischer Pre-Filter vor dem Agent-Context: feste `<untrusted_mail_content>`-Fences, Scan auf instruction-ähnliche Phrasen/Rollenmarker/URLs/Anhänge/Steuerzeichen/Homoglyphen, additive Workspace-Signaturen, Quarantäne-Evidence unter `data/mail-desk/injection-quarantine/`, hash-gebundener `injection_barrier`-Manifestblock und `injection_quarantine_present`-Gate. Kein Netzwerk, keine Modellabhängigkeit, kein `classifier.py`-Eingriff. Details: [§39](#39-issue-62--lokale-injection-barrier). |
 | **Dossier & Synthese** | [`scripts/core/modes/dossier*.py`](../../scripts/core/modes/)<br>[`scripts/core/synthesis_handoff.py`](../../scripts/core/synthesis_handoff.py)<br>[`scripts/core/context_consultation.py`](../../scripts/core/context_consultation.py) | Strukturierte Fallakten, Übergabe von Action Candidates an den Task-Desk; `context_consultation.py` (Issue #64) hängt nach der Klassifikation bounded, rein lesende `artifact_candidates.events`/`.cloud_storage`-Hinweise an (Vertrag: [`synthesis.md`](../../references/synthesis.md), §40). |
@@ -2539,7 +2539,10 @@ IMAP-Transport: bekannte Envelopes sollen ohne Einzel-Read übersprungen werden.
 Ein einmaliger `himalaya envelope thread -f <folder> -o json`-Prozess pro Scan
 liefert die dazu nötige `id → message-id`-Map. **Kein** `imaplib`, keine
 Credentials, kein `UIDVALIDITY`, kein Cache über den Scan hinaus; PR #101 und
-die MIME-/Anhangsstrecke bleiben unberührt.
+die MIME-/Anhangsstrecke bleiben unberührt. `envelope thread` ist **v1-only**;
+unter dem v3-Profil leitet dieselbe Map aus einer begrenzten
+`envelope list`-Seite (`messageId`/`inReplyTo`) ab (§47), und ein Fehler
+deaktiviert weiterhin nur den Accelerator.
 
 **Module und Verträge:**
 - [`scripts/core/known_skip.py`](../../scripts/core/known_skip.py) (neu):
@@ -3133,3 +3136,91 @@ stellt dafür keinen Writer bereit. Verbindlich:
 [`references/cli-operations.md`](../../references/cli-operations.md#konsum-adapter-pendingrecordconsumecrash-check-issue-88).
 
 L1: [Paket-System-Map §17](../../../../docs/system-map/README.md#17-issue-88--pending-ledger-konsum-adapter).
+
+---
+
+## 47. Himalaya-Versionsmatrix (1.2.x / 3.x), v3-JSON-Grenze und Expunge-Limit
+
+**Ziel:** Der Produktionsadapter spricht Himalaya versioniert und fail-closed,
+statt still eine falsche Flag-/JSON-Annahme zu verwenden. Der v1.2.0-Pfad bleibt
+byte-identisch; der v3-Pfad ist vollständig und hermetisch getestet.
+
+**Version und Probe:** [`scripts/core/himalaya_profile.py`](../../scripts/core/himalaya_profile.py)
+parst `himalaya --version` (`v<major>.<minor>.<patch>`); unterstützt sind
+`1.2.x` (v1) und `3.x` (`>=3.0.0`, `<4.0.0`, v3). Unbekannte, fehlende,
+unparsebare oder nicht startbare Versionen enden vor jedem Mailbox-Kommando als
+`himalaya_version_unsupported` bzw. `himalaya_unavailable`; kein stiller
+Profilwechsel, kein Rückfall auf v3. [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py)
+führt genau eine `subprocess`-Probe pro `(Executable, mtime, size)` aus (kein
+`-c`/Account/Mailbox, kurzer Timeout, nicht in `TransportStats`/`process_starts`)
+und platziert `-a` global nach `-c`.
+
+**Zentrale Abbildung:** `translate_v3_arguments` erzeugt aus derselben logischen
+(v1-förmigen) Anfrage die dokumentierte v3-argv: `mailbox list`;
+`envelope list/search -m <f> --json` (Paging `-p`, `--page-token`; Suche
+`subject:`/`date:`/`mid:`/`from:`/`to:`/`is:` mit pimdir-Quoting für mehrwortige
+Werte, z. B. `subject:"Rechnung Q4"`, und `--sort oldest-first|newest-first`);
+`message read <id> -m <f> --json` bzw. `--raw`; `message add --mailbox <f> --flag draft`
+(ohne `--json`; stdin bleibt der Payload-Kanal);
+`message copy -f <src> -t <tgt> <id>`; `message delete -m <f> <id>`;
+`flag add --flag <flag> -m <f> <id>` (das Flag ist Pflicht; nur
+seen/answered/flagged/draft/important/junk, `deleted` wird als
+`himalaya_flag_unsupported` verweigert). `folder expunge` und `envelope thread`
+haben keine v3-Abbildung und werden begrenzt verweigert bzw. auf die Liste
+abgebildet.
+
+**v3-JSON-Grenze:** [`scripts/core/himalaya_normalize.py`](../../scripts/core/himalaya_normalize.py)
+validiert beide belegten v3-Formen strikt: die **Live-Arrayform** (Top-Level-Array;
+jede Envelope mit `id` und dem Pflichtkey `messageId` `string|null`; `inReplyTo`,
+`flags {raw,iana}`, `from`/`to {name,email}`, `date`, `size`, `hasAttachment`
+typgeprüft) und die **Schema-Objektform**
+`{envelopes,nextPage,total,errors}`. Alte v1-Arrays ohne `messageId`,
+snake_case-only `message_id`, fehlende/falsch typisierte Keys, widersprüchliche
+Duplikate, nicht-uint `total`, nichtleere `errors`, leere/wiederholte
+`nextPage`-Tokens und die harte Seitengrenze sind fail-closed
+(`himalaya_json_incompatible`, `himalaya_paging_not_progressing`). Die
+Normalisierung erzeugt die interne v1-kompatible Envelope-Form `id`, `subject`,
+`from {name,addr}`, `to`, `date`, v1-`flags`, `size`, `has_attachment` plus
+additiv `message_id`/`in_reply_to`; schema-gültige Nulls sind akzeptiert
+(`Address.name: null` → leerer Anzeigename, `Flag.iana: null` → Custom-Keyword),
+`mailbox list` wird aus `{mailboxes,errors}` gelesen (`role: "drafts"` löst den
+Drafts-Ordner), und `message read --json` wird über das **typisierte**
+`headers`-Objekt (`from/to/cc/bcc/replyTo/sender` als Address-Arrays,
+`references/inReplyTo` als String-Arrays, `subject/date/messageId` als Strings)
+auf die bestehenden Detailfelder abgebildet; `cc` und `references` bleiben
+erhalten, `headers_complete` ist nur bei diesem vollständigen Objekt wahr.
+Feld-Evidenz (externer, read-only Referenzlauf v3.0.0, 2026-11-27): Top-Level-Array,
+`messageId` 10/10 vorhanden/nicht-null, `message_id` abwesend — keine Werte
+persistiert. **Kein Live-Nachweis des Adapters:** alle Pfade sind hermetisch
+getestet, ohne echten Himalaya-Prozess, Mailbox, Netz oder Credentials.
+
+**Thread-Map und Aufrufstellen:** `known_skip.load_envelope_thread_map` nutzt
+unter v1 den einen `envelope thread`-Prozess; v3 hat kein Thread-Kommando. Der
+Loader sendet die logische v1-Anfrage, die zentrale Abbildung übersetzt sie unter
+v3 in eine begrenzte `envelope list`-Seite (`-s 500`), und das Profil des
+zurückgegebenen Outputs wählt den Decoder (keine zusätzliche Vorab-Probe). Ein
+Fehler deaktiviert nur den Accelerator (`{}`), der Scan bleibt fail-closed.
+Sent-Indexer, `mailbox_preflight`, Readiness, `modes/execute`, `modes/inspect`, Client,
+Batch-Runner und `mail_desk_move_and_patch` verwenden die zentrale Abbildung und
+den profilrichtigen Decoder; v3-Read nutzt die JSON-View, nicht den v1-Headertext.
+Kein rohes `-o json`/`-f`/`--page`/`order by` entsteht außerhalb der Versionsmodule.
+
+**Expunge-Limit:** v3 hat keinen In-Place-Expunge und `message delete` verschiebt
+in den Trash. `delete_draft` und der Pflicht-Löschschritt von `replace_draft`
+lösen das Profil über dieselbe begrenzte, gecachte `--version`-Probe wie der
+Kommando-Builder auf (keine Mailbox-Aktion, kein `TransportStats`-Start) und
+werfen `himalaya_expunge_unsupported` **vor** jedem
+Save/Append/Flag/Delete/Expunge; unbekannte/nicht startbare Versionen stoppen
+ebenso fail-closed. Kein Move-to-Trash, kein Append eines Ersatzentwurfs.
+`save_draft`/`save_raw_draft` senden die kanonische Rohmail ohne den v1-CRLF-
+Kompensator an `message add --mailbox --flag draft` (ohne `-o plain`/`--json`
+im übersetzten Kommando); der v1-Pfad bleibt byte-identisch.
+
+**Tests:** `tests/himalaya_v3_fixtures.py` (Fixture-Modul),
+`tests/test_himalaya_v3_cli_profile.py`, `tests/test_himalaya_v3_json_adapter.py`,
+`tests/test_himalaya_v3_callsites.py` — hermetisch über beide Transportschienen
+(`subprocess.run`, `_POPEN`); die Ablösung des Hint-Patches durch die echte Probe
+und die echten Header-/Flag-/Payload-Formen sind Teil der Evidenz.
+
+**Vertrag:** [`references/backends/himalaya.md`](../../references/backends/himalaya.md#version-profile-and-command-matrix-12x--3x),
+[`references/cli-operations.md`](../../references/cli-operations.md#ungesendete-entwürfe-save-draft-delete-draft-replace-draft).

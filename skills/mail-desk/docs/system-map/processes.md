@@ -365,10 +365,20 @@ Implementiert in [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
    - Fehlt die Binärdatei → Abbruch mit `himalaya_unavailable`.
 2. **Kommando-Konstruktion (`build_himalaya_command`):**
    - Erzeugt tokenisierte Argumentliste ohne Shell (`shell=False`).
-   - Fügt Account-Parameter `-a <account>` an vordefinierter Position ein.
+   - Wählt zuerst das Profil aus genau einer versionsfreien `himalaya --version`-Probe
+     pro `(Executable, mtime, size)` (kurzer Timeout, kein `-c`/Account/Mailbox, nicht in
+     `TransportStats`/`process_starts`): `1.2.x` → v1, `3.x` → v3; alles andere stoppt
+     fail-closed vor jedem Mailbox-Kommando (`himalaya_version_unsupported`/`himalaya_unavailable`).
+   - v1: fügt Account-Parameter `-a <account>` an vordefinierter Position ein und behält die
+     byte-identische Legacy-argv. v3: `translate_v3_arguments` bildet dieselbe logische Anfrage
+     auf die dokumentierte v3-argv ab (`--json`, `mailbox list`, `envelope list/search -m`,
+     `message read --json`/`--raw`, `message add --mailbox --flag draft` ohne `--json`,
+     `message copy -f/-t`, `message delete -m`, `flag add --flag <flag> -m`) und platziert das
+     globale `-a` nach `-c` und vor dem Subkommando; `folder expunge`/`envelope thread` haben
+     keine Abbildung bzw. werden auf die Liste abgebildet (§47).
 3. **Ausführung mit Timeout:**
    - Führt den Subprozess aus; bei Überschreiten des Timeouts erfolgt sofortiger harter Abbruch ohne Retries (`himalaya_timeout`).
-   - **Optionaler binärer Payload-Seam (Issue #11):** `run_himalaya(..., stdin_bytes=<bytes>)` validiert den Puffer strict als UTF-8 **vor** Executable-/Config-Auflösung und Subprozess (ungültige Bytes → begrenzter `ValueError` ohne Payload-Inhalt; sonst würde Himalaya 1.2.0 an `lines().map_while(Result::ok)` still abschneiden), verlangt bei gesetztem Payload genau ein explizites `-o plain` (sonst `ValueError`), schreibt exakte Bytes in die stdin-Pipe (`subprocess.run(input=...)`, kein `text=True`, keine Newline-Transformation) und führt Payload-Kommandos genau einmal aus (kein APPEND-Retry). `OSError` (Start **oder** Kommunikation) wird auf **beiden** Pfaden als `himalaya_launch_failed` klassifiziert — Wortlaut „outcome may be unknown, not retried" —, `BrokenPipeError` als `himalaya_stdin_failed`, jeweils ohne Payload-Leak. Ohne Payload bleiben `stdin=DEVNULL`, `text=True` sowie Timeout-/Retry-Defaults unverändert.
+   - **Optionaler binärer Payload-Seam (Issue #11):** `run_himalaya(..., stdin_bytes=<bytes>)` validiert den Puffer strict als UTF-8 **vor** Executable-/Config-Auflösung und Subprozess (ungültige Bytes → begrenzter `ValueError` ohne Payload-Inhalt; sonst würde Himalaya 1.2.0 an `lines().map_while(Result::ok)` still abschneiden), verlangt bei gesetztem Payload genau ein explizites `-o plain` (sonst `ValueError`), schreibt exakte Bytes in die stdin-Pipe (`subprocess.run(input=...)`, kein `text=True`, keine Newline-Transformation) und führt Payload-Kommandos genau einmal aus (kein APPEND-Retry). Der deklarierte v1-Kompensator (`stdin_v1_terminator`) wird unter dem v3-Profil byte-exakt entfernt, weil v3 `message add` stdin „as given" speichert; v1 bleibt unverändert. `OSError` (Start **oder** Kommunikation) wird auf **beiden** Pfaden als `himalaya_launch_failed` klassifiziert — Wortlaut „outcome may be unknown, not retried" —, `BrokenPipeError` als `himalaya_stdin_failed`, jeweils ohne Payload-Leak. Ohne Payload bleiben `stdin=DEVNULL`, `text=True` sowie Timeout-/Retry-Defaults unverändert.
 
 ### 6.1 Ungesendete Draft-Operationen (Client, ohne Approval-Gate)
 
@@ -402,13 +412,19 @@ bleibt unberührt.
 3. **Entwurf löschen (`delete_draft`, ohne UID MOVE):** `flag add deleted <id> -f <folder>`
    setzt `\Deleted` direkt am Envelope, `folder expunge <folder>` entfernt die markierte
    Nachricht. `message delete` wird bewusst nicht verwendet, weil es eine Nachricht
-   außerhalb des Trash-Ordners in den Trash verschiebt (UID MOVE).
+   außerhalb des Trash-Ordners in den Trash verschiebt (UID MOVE). Unter dem aufgelösten
+   v3-Profil löst `_raise_if_expunge_unsupported` das Profil über dieselbe begrenzte,
+   gecachte `--version`-Probe wie der Builder (keine Mailbox-Aktion) und bricht **vor jedem
+   Write** mit `himalaya_expunge_unsupported` ab (kein Move-to-Trash); unbekannte/nicht
+   startbare Versionen stoppen ebenso fail-closed.
 4. **Entwurf ersetzen (`replace_draft`):** neu zuerst (`message save`), alt danach
    (`flag add deleted` + `folder expunge`). Mit Journal wird der Eintrag mit beiden
    Envelope-IDs **vor** dem Löschschritt geschrieben, sodass das Crash-Fenster
    dazwischen reconcile-sichtbar ist: beide Entwürfe sind sichtbar, weil der neue
    bereits durabel angehängt ist. Einziges Restfenster bleibt ein Crash nach dem
    APPEND, aber vor dem Journal-Schreibvorgang (angehängter Entwurf ohne Eintrag).
+   Unter v3 bricht bereits der Start des Replace ab (`himalaya_expunge_unsupported`),
+   sodass kein Ersatzentwurf angehängt wird.
 5. **Journal:** Jede Operation schreibt atomar einen Eintrag in
    `data/mail-desk/draft-journal.json` (Schema 1, siehe [`objects.md`](objects.md) §5.4):
    `envelope_id`, `folder`, `subject`, `to`, `date`, `action`, beim Ersetzen zusätzlich

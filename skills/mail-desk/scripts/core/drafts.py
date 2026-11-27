@@ -42,7 +42,10 @@ no silent fallback to a hard-coded folder name.
 Deletion never performs a UID MOVE: it marks the message ``\\Deleted`` in place
 (``flag add deleted`` -- Himalaya 1.2.0's ``message delete`` would *move* a
 non-trash message to the trash folder) and then expunges the folder
-(``folder expunge``).  ``replace_draft`` appends the replacement draft first and
+(``folder expunge``).  Himalaya v3 has **no in-place expunge**, so under the
+resolved v3 profile ``delete_draft`` and ``replace_draft`` refuse before any
+write-shaped command with ``himalaya_expunge_unsupported`` (they never degrade to
+``message delete``/move-to-Trash).  ``replace_draft`` appends the replacement draft first and
 only then deletes the old one; the crash window between the two steps (both
 drafts observable, since ``message save`` already committed the new draft before
 the delete ran) is documented by ``REPLACE_CRASH_WINDOW``.  With a journal the
@@ -65,6 +68,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from . import himalaya
 from .common import atomic_write_json, normalize_message_id, utc_now_iso
+from .himalaya_profile import EXPUNGE_UNSUPPORTED_REASON, PROFILE_V3
 
 #: RFC 6154 special-use attribute that marks the drafts mailbox.
 DRAFTS_SPECIAL_USE_ATTRIBUTE = "\\Drafts"
@@ -98,8 +102,10 @@ DRAFT_SAVE_FAILED_REASON = "draft_save_failed"
 #: SMTPUTF8 policy with canonical CRLF line endings for the wire/APPEND bytes.
 SMTPUTF8_CRLF = SMTPUTF8.clone(linesep="\r\n")
 
-#: One transport CRLF compensates Himalaya's ``lines()``/CRLF-join path, which
-#: drops the final line terminator of the canonical raw message.
+#: One transport CRLF compensates Himalaya 1.2.0's ``lines()``/CRLF-join path,
+#: which drops the final line terminator of the canonical raw message.  It is
+#: passed to ``run_himalaya`` as the declared v1 suffix and removed byte-exactly
+#: under the v3 profile, whose ``message add`` stores the piped message as given.
 _STDIN_TRANSPORT_TERMINATOR = b"\r\n"
 
 #: Documented crash window of the new-then-delete replace order.
@@ -180,8 +186,39 @@ _UNKNOWN_APPEND_REASONS = frozenset(
 ATTACHMENTS_UNSPECIFIED: Any = object()
 
 
+def _raise_if_expunge_unsupported() -> None:
+    """Fail closed before any write when the resolved profile is Himalaya v3.
+
+    v3 has no in-place expunge (``folder expunge`` is gone; ``message delete``
+    in the trash folder removes a message permanently).  The profile is resolved
+    here through the same bounded, cached ``himalaya --version`` probe the
+    command builder uses; a version probe is not a mailbox command and never
+    reaches ``TransportStats``/``process_starts``.  An unknown or unstartable
+    version fails closed (``himalaya_version_unsupported``/
+    ``himalaya_unavailable``) before any write; ``None`` means no CLI invocation
+    is resolvable at all, where the later command resolution fails closed before
+    a child starts.  Reads are still allowed; the refusal precedes every
+    save/append/flag/delete/expunge and never degrades to a move-to-Trash.
+    """
+    resolved = himalaya.resolve_himalaya_profile_or_none()
+    if resolved is not None and getattr(resolved, "name", None) == PROFILE_V3:
+        raise DraftError(
+            EXPUNGE_UNSUPPORTED_REASON,
+            "Himalaya v3 has no in-place expunge; deleting a draft is unsupported and no mailbox "
+            "write was started.",
+        )
+
+
 def _parse_folder_list(raw: str) -> list[Any]:
-    """Parse a ``folder list -o json`` payload, tolerating a leading log line."""
+    """Parse a ``folder list``/``mailbox list`` payload for the producing profile.
+
+    Under v3 the central map turns the logical ``folder list -o json`` into
+    ``mailbox list --json``, whose ``{mailboxes,errors}`` object is decoded by the
+    profile-aware decoder (missing keys and item errors fail closed).  The
+    tolerant leading-log-line slice remains v1-only.
+    """
+    if himalaya.profile_of(raw) == PROFILE_V3:
+        return himalaya.decode_v3_mailbox_output(raw)
     text = raw
     if "[" in text:
         text = text[text.find("["):]
@@ -217,6 +254,24 @@ def _special_use_tokens(entry: Any) -> list[str]:
     return [token for token in tokens if token]
 
 
+def _marks_drafts(entry: Any) -> bool:
+    """Whether one catalog entry identifies the drafts mailbox.
+
+    Two proven spellings count: the RFC 6154 ``\\Drafts`` special-use token of the
+    v1 catalog, and the v3 ``mailbox list`` ``role`` value ``drafts``.  A role is
+    exact: any other role name never resolves the folder.
+    """
+    if not isinstance(entry, dict):
+        return False
+    role = entry.get("role")
+    if isinstance(role, str) and role.strip().lower() == "drafts":
+        return True
+    return any(
+        token.strip().lower() == DRAFTS_SPECIAL_USE_ATTRIBUTE.lower()
+        for token in _special_use_tokens(entry)
+    )
+
+
 def resolve_drafts_folder(
     account: str | None = None,
     *,
@@ -225,9 +280,11 @@ def resolve_drafts_folder(
     """Resolve the Drafts folder from the live catalog, or fail loudly.
 
     ``folders`` may be passed to reuse an already-fetched catalog; otherwise the
-    live ``folder list -o json`` catalog is queried.  The deterministic chain is
-    the ``\\Drafts`` special-use attribute, then the conventional ``Drafts`` name,
-    then the GroupWise ``Work In Progress`` name.  An unresolvable mailbox raises
+    live catalog is queried through the profile-aware command map (v1
+    ``folder list -o json`` or v3 ``mailbox list --json``).  The deterministic
+    chain is the ``\\Drafts`` special-use attribute (or the v3 ``role: "drafts"``),
+    then the conventional ``Drafts`` name, then the GroupWise
+    ``Work In Progress`` name.  An unresolvable mailbox raises
     ``DraftsFolderUnresolvedError``; no folder name is ever hard-coded.
     """
     if folders is None:
@@ -248,9 +305,8 @@ def resolve_drafts_folder(
         name = _folder_name(entry)
         if not name:
             continue
-        for token in _special_use_tokens(entry):
-            if token.strip().lower() == DRAFTS_SPECIAL_USE_ATTRIBUTE.lower():
-                return name
+        if _marks_drafts(entry):
+            return name
 
     # Tier 2/3: the documented, conventional name fallback chain.
     by_lower_name = {_folder_name(entry).strip().lower(): _folder_name(entry) for entry in catalog if _folder_name(entry)}
@@ -523,6 +579,7 @@ def _append_and_verify(
             ["message", "save", "-o", "plain", "-f", folder],
             account=account,
             stdin_bytes=stdin_payload,
+            stdin_v1_terminator=_STDIN_TRANSPORT_TERMINATOR,
             max_retries=1,
         )
     except himalaya.HimalayaInvocationError as exc:
@@ -762,6 +819,7 @@ def save_draft(
             ["message", "save", "-o", "plain", "-f", target_folder],
             account=account,
             stdin_bytes=stdin_payload,
+            stdin_v1_terminator=_STDIN_TRANSPORT_TERMINATOR,
             max_retries=1,
         )
     except himalaya.HimalayaInvocationError as exc:
@@ -874,7 +932,12 @@ def delete_draft(
     following ``folder expunge`` removes the message.  ``message delete`` is
     deliberately not used: for a non-trash folder Himalaya would move the message
     to the trash folder, which is exactly the forbidden UID MOVE.
+
+    Under the resolved Himalaya v3 profile the operation is refused before any
+    mailbox command with ``himalaya_expunge_unsupported``: v3 has no in-place
+    expunge, and a ``message delete``/move-to-Trash is never substituted.
     """
+    _raise_if_expunge_unsupported()
     target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
     env_id = str(envelope_id)
     himalaya.run_himalaya(
@@ -1158,7 +1221,13 @@ def replace_draft(
       size limits, semantic read-back of exactly one stored message), ``old_message_id`` is
       required, and the old draft is deleted only after the new mail was verified and the old
       draft was re-resolved by its Message-ID.
+
+    Under the resolved Himalaya v3 profile the whole replace is refused before
+    any write with ``himalaya_expunge_unsupported``: the mandatory delete step
+    has no v3 expunge, so no replacement draft is appended and no mailbox write
+    starts.
     """
+    _raise_if_expunge_unsupported()
     if attachments is not ATTACHMENTS_UNSPECIFIED and attachments is not None:
         return _replace_with_explicit_attachments(
             old_envelope_id,
