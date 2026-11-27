@@ -40,6 +40,7 @@ sys.path.insert(0, str(MAIL_DESK_ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core import himalaya  # noqa: E402
+from core.himalaya_profile import V3_PROFILE  # noqa: E402
 from himalaya_v3_fixtures import (  # noqa: E402
     V1MailboxTransport,
     V1_VERSION_OUTPUT,
@@ -97,8 +98,8 @@ class _TimeoutTransport(HimalayaTransport):
     def __init__(
         self,
         *,
-        partial_stdout: str | None = None,
-        partial_stderr: str | None = None,
+        partial_stdout: str | bytes | None = None,
+        partial_stderr: str | bytes | None = None,
         version_output: str = V3_VERSION_OUTPUT,
     ) -> None:
         super().__init__(version_output)
@@ -151,6 +152,41 @@ class NativeConfigTokenTests(unittest.TestCase):
             "v3 must not receive the local admin-share spelling it hung on live",
         )
         self.assertEqual(str(config), argv[2])
+
+    def test_v3_leaves_a_real_remote_unc_config_unchanged(self) -> None:
+        """A remote UNC path has no native equivalent and must stay verbatim.
+
+        No executable probe or network: both resolution seams are patched, so the
+        test only exercises the token selection.
+        """
+        remote = Path("\\\\fileserver\\share\\config.toml")
+        with patch.object(
+            himalaya, "resolve_himalaya_invocation", return_value=("himalaya", remote)
+        ), patch.object(himalaya, "_profile_for_executable", return_value=V3_PROFILE):
+            argv = himalaya.build_himalaya_command(["folder", "list"])
+        self.assertEqual("-c", argv[1])
+        self.assertEqual(str(remote), argv[2])
+        self.assertTrue(argv[2].startswith("\\\\fileserver\\"), argv[2])
+
+    @unittest.skipUnless(os.name == "nt", "the admin-share/native split is a Windows behavior")
+    def test_v3_denormalizes_a_case_and_slash_tolerant_admin_share_spelling(self) -> None:
+        transport = V3MailboxTransport()
+        with patched_himalaya(transport) as (module, config, _executable):
+            drive, _separator, rest = str(config).partition(":")
+            override = (
+                "\\\\LOCALHOST\\"
+                + drive.lower()
+                + "$/"
+                + rest.lstrip("\\/").replace("\\", "/")
+            )
+            with patch.dict(os.environ, {"HIMALAYA_CONFIG": override}, clear=False):
+                argv = module.build_himalaya_command(["folder", "list"])
+        self.assertEqual(
+            os.path.normcase(str(config)),
+            os.path.normcase(argv[2]),
+            "a case/slash-tolerant local admin share must map to the native path",
+        )
+        self.assertNotIn("$", argv[2])
 
     def test_v1_keeps_the_normalized_unc_token_byte_identically(self) -> None:
         transport = V1MailboxTransport()
@@ -260,6 +296,76 @@ class V3ErrorChannelTests(unittest.TestCase):
         self.assertEqual(500, len(bounded))
         self.assertTrue(long_message.startswith(bounded))
 
+    def test_v3_deeply_nested_stdout_falls_back_to_stderr(self) -> None:
+        """A pathological nesting depth must not escape as a raw ``RecursionError``."""
+        transport = _ScriptedFailureTransport(stdout="[" * 65536, stderr="Error: boom")
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.run_himalaya(["folder", "list"])
+        error = raised.exception
+        self.assertEqual("himalaya_command_failed", error.reason_code)
+        self.assertEqual("Himalaya failed: Error: boom", str(error))
+        self.assertNotIn("himalaya_error_code", error.details)
+        self.assertNotIn("himalaya_error_message", error.details)
+
+    def test_v3_details_collapse_whitespace(self) -> None:
+        transport = _ScriptedFailureTransport(
+            stdout=json.dumps(
+                {"code": "  account-missing  ", "error": " Account \n not   found "}
+            ),
+            stderr="",
+        )
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.run_himalaya(["folder", "list"])
+        error = raised.exception
+        self.assertEqual("account-missing", error.details["himalaya_error_code"])
+        self.assertEqual("Account not found", error.details["himalaya_error_message"])
+        self.assertEqual(
+            "Himalaya failed: account-missing: Account not found", str(error)
+        )
+
+    def test_v3_transient_stdout_error_retries_with_bounded_details(self) -> None:
+        transport = _ScriptedFailureTransport(
+            stdout=json.dumps(
+                {"code": "connection-reset", "error": "connection reset by peer"}
+            ),
+            stderr="",
+        )
+        with patched_himalaya(transport), patch.object(himalaya.time, "sleep") as sleep:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.run_himalaya(["folder", "list"], max_retries=2)
+        error = raised.exception
+        self.assertEqual("himalaya_transient", error.reason_code)
+        self.assertEqual(2, len(transport.mailbox_calls), "one retry only")
+        sleep.assert_called_once_with(2.0)
+        self.assertEqual("connection-reset", error.details["himalaya_error_code"])
+        self.assertEqual(
+            "connection reset by peer", error.details["himalaya_error_message"]
+        )
+        self.assertEqual(1, error.details["exit_code"])
+
+    def test_v3_transient_stdout_error_on_the_payload_path_stays_single_attempt(self) -> None:
+        transport = _ScriptedFailureTransport(
+            stdout=json.dumps(
+                {"code": "connection-reset", "error": "connection reset by peer"}
+            ),
+            stderr="",
+        )
+        with patched_himalaya(transport), patch.object(himalaya.time, "sleep") as sleep:
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.run_himalaya(
+                    ["message", "save", "-o", "plain", "-f", "INBOX"],
+                    stdin_bytes=b"Subject: draft\r\n\r\nBody\r\n\r\n",
+                    stdin_v1_terminator=b"\r\n",
+                )
+        error = raised.exception
+        self.assertEqual("himalaya_transient", error.reason_code)
+        self.assertEqual(1, len(transport.mailbox_calls), "a payload APPEND is never retried")
+        sleep.assert_not_called()
+        self.assertEqual("connection-reset", error.details["himalaya_error_code"])
+        self.assertEqual(1, error.details["exit_code"])
+
 
 class TimeoutDetailTests(unittest.TestCase):
     """``himalaya_timeout`` distinguishes no output from partial output."""
@@ -301,6 +407,36 @@ class TimeoutDetailTests(unittest.TestCase):
         self.assertEqual(9, details["timeout_seconds"])
         self.assertEqual(0, details["stdout_chars"])
         self.assertEqual(0, details["stderr_chars"])
+
+    def test_timeout_lengths_use_the_decoded_text_for_byte_pipes(self) -> None:
+        transport = _TimeoutTransport(
+            partial_stdout="grüße".encode("utf-8"), partial_stderr=b"err"
+        )
+        with patched_himalaya(transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                himalaya.run_himalaya(["folder", "list"], timeout=11)
+        error = raised.exception
+        self.assertEqual("himalaya_timeout", error.reason_code)
+        details = error.details
+        self.assertEqual(11, details["timeout_seconds"])
+        self.assertEqual(len("grüße"), details["stdout_chars"], "chars, not UTF-8 bytes")
+        self.assertEqual(len("err"), details["stderr_chars"])
+        serialized = json.dumps(details, sort_keys=True, default=str)
+        self.assertNotIn("grüße", serialized, "no partial content in details")
+
+
+class ProfileGuardTests(unittest.TestCase):
+    """The pre-write guard keeps the patchable seam and validates the raw path."""
+
+    def test_guard_falls_back_to_the_raw_config_path(self) -> None:
+        transport = V3MailboxTransport()
+        missing = himalaya.HimalayaInvocationError("himalaya_config_missing", "missing")
+        with patched_himalaya(transport) as (module, _config, _executable):
+            with patch.object(module, "resolve_himalaya_invocation", side_effect=missing):
+                profile = module.resolve_himalaya_profile_or_none()
+        self.assertIsNotNone(profile, "the raw config path must still resolve the profile")
+        self.assertEqual(V3_PROFILE.name, profile.name)
+        self.assertTrue(transport.version_calls, "the bounded --version probe must run")
 
 
 if __name__ == "__main__":  # pragma: no cover - manual invocation only

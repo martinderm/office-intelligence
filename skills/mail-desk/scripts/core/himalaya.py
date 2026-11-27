@@ -540,18 +540,25 @@ def _parse_v3_stdout_error(stream: bytes | str | None) -> tuple[str, str] | None
     """Parse the bounded v3 non-zero error object from child stdout.
 
     The v3 CLI writes ``{code, error, sources, backtrace}`` as JSON on stdout and
-    leaves stderr empty.  At most 64 KiB are sliced before decoding (the payload
-    path may hand over bytes); anything invalid, oversized, non-object or without
-    a string ``code``/``error`` is ignored so the caller keeps the stderr
-    fallback.  Only ``code``/``error`` survive, whitespace-collapsed and bounded;
+    leaves stderr empty.  At most 64 KiB of the UTF-8 byte representation are
+    sliced before decoding (the payload path may hand over bytes; text is encoded
+    with replacement first), so the bound applies to bytes for both stream kinds.
+    Anything invalid, oversized, non-object or without a string ``code``/``error``
+    is ignored so the caller keeps the stderr fallback; a pathological nesting
+    depth (``RecursionError`` from the JSON scanner) is ignored the same way.
+    Only ``code``/``error`` survive, whitespace-collapsed and bounded;
     ``sources``/``backtrace`` and the raw JSON are never returned or stored.
     """
-    if not isinstance(stream, (bytes, str)):
+    if isinstance(stream, bytes):
+        raw = stream
+    elif isinstance(stream, str):
+        raw = stream.encode("utf-8", errors="replace")
+    else:
         return None
-    text = _decode_process_stream(stream[:_V3_ERROR_STDOUT_LIMIT_BYTES])
+    text = _decode_process_stream(raw[:_V3_ERROR_STDOUT_LIMIT_BYTES])
     try:
         payload = json.loads(text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return None
     if not isinstance(payload, dict):
         return None

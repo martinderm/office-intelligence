@@ -72,6 +72,10 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   `sources`/`backtrace`, Mail- und Konfigurationsinhalt werden nie gespeichert.
   Das v1-Profil parst stdout nicht und behält die unveränderte Meldung
   `Himalaya failed: <stderr>` mit leeren `details`.
+- **Transient-Text (v3):** Trifft der so gewonnene v3-Fehlertext eines der
+  bestehenden Transient-Token (z. B. `connection reset`, `timed out`), greift für
+  Nicht-Payload-Kommandos der unveränderte Transient-Retry mit unverändertem
+  Backoff; Payload-Kommandos (APPEND) bleiben genau ein Versuch.
 - **Timeout-Details:** `himalaya_timeout` trägt `timeout_seconds` (der
   konfigurierte Timeout des Aufrufs), `duration_ms` und die Längen
   `stdout_chars`/`stderr_chars` der Partial-Pipes (`None` zählt als 0). Kein
