@@ -1198,7 +1198,11 @@ class MultiDateAndOverflowTests(_Base):
         day = "2026-09-22"
         empty = _Mailbox()
         run, read = empty.patches()
-        with run, read:
+        # Frozen at the requested day: against the real clock the point date would
+        # be an old day, which the barrier may advance over.
+        with run, read, patch.object(
+            sent_indexer, "datetime", _frozen_datetime((2026, 9, 22)),
+        ):
             report = sent_indexer.sync_sent_items_by_dates_report(
                 [day], account="ACC", data_dir=self.dd, include_next_day=False,
             )

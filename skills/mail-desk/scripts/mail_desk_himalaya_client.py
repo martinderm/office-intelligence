@@ -40,7 +40,12 @@ import sys
 from typing import Any
 
 from core.envelope import build_error, build_success, emit_json
-from core.common import get_iso_week_folder, normalize_message_id, resolve_data_dir
+from core.common import (
+    get_iso_week_folder,
+    normalize_envelope_message_id,
+    normalize_message_id,
+    resolve_data_dir,
+)
 from core import diagnostics
 from core import drafts
 from core.attachments import (
@@ -352,6 +357,69 @@ def op_list_folders(account: str | None = None) -> list[dict[str, Any]]:
     return json.loads(out)
 
 
+def _envelope_list_identity(entry: dict[str, Any]) -> str | int | None:
+    """Return the raw envelope id used only to group duplicate list entries.
+
+    The JSON value is kept verbatim; a missing or non-scalar id leaves the
+    entry ungrouped, so it never participates in duplicate resolution.
+    """
+    raw = entry.get("id")
+    if isinstance(raw, bool) or not isinstance(raw, (str, int)):
+        return None
+    return raw
+
+
+def _envelopes_with_normalized_message_ids(payload: Any) -> Any:
+    """Add a normalized ``message_id`` to envelope-list entries that carry one.
+
+    Additive and non-destructive (issue #103): only a list root is considered;
+    every other root and every non-dict entry passes through unchanged, and an
+    entry without a usable value keeps its identity.  A new or corrected
+    ``message_id`` is written into a shallow copy, so the parsed source objects
+    are never mutated and the 1.2.0 output (no such field) stays byte-identical,
+    key order included.  Duplicate envelope ids keep the value only when every
+    occurrence carries the identical usable value; any unusable occurrence or a
+    conflict drops it from all occurrences.
+    """
+    if not isinstance(payload, list):
+        return payload
+    duplicate_values: dict[str | int, set[str]] = {}
+    unusable_identities: set[str | int] = set()
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        identity = _envelope_list_identity(entry)
+        value = normalize_envelope_message_id(entry)
+        if value is None:
+            if identity is not None:
+                unusable_identities.add(identity)
+            continue
+        if identity is not None:
+            duplicate_values.setdefault(identity, set()).add(value)
+    transformed: list[Any] = []
+    changed = False
+    for entry in payload:
+        if not isinstance(entry, dict):
+            transformed.append(entry)
+            continue
+        value = normalize_envelope_message_id(entry)
+        identity = _envelope_list_identity(entry)
+        if value is not None and identity is not None:
+            if identity in unusable_identities or len(duplicate_values[identity]) > 1:
+                value = None
+        if value is None:
+            transformed.append(entry)
+            continue
+        updated = dict(entry)
+        updated["message_id"] = value
+        if updated == entry:
+            transformed.append(entry)
+            continue
+        transformed.append(updated)
+        changed = True
+    return transformed if changed else payload
+
+
 def op_list_envelopes(
     folder: str = "INBOX",
     page_size: int = 50,
@@ -364,7 +432,7 @@ def op_list_envelopes(
     out = run_himalaya(cmd, account=account)
     if "[" in out:
         out = out[out.find("["):]
-    return json.loads(out)
+    return _envelopes_with_normalized_message_ids(json.loads(out))
 
 
 def op_read_message(

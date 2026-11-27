@@ -2908,6 +2908,25 @@ und Legacy-Zustand bleiben unverändert).
 Raw-MIME-Blocked-Fehler nicht als `fetch_failed` endet und kein Manifest
 geschrieben wird.
 
+**Feldkontrakt `messageId` im `envelope list` (versionstolerant, additiv):**
+Der gebündelte lokale Himalaya 1.2.0 emittiert kein `messageId`; Upstream-master
+exponiert `Envelope.message_id: Option<String>` als camelCase-JSON-Feld
+`messageId`. `op_list_envelopes` liest `messageId`, toleriert die Snake-Case-
+Variante `message_id` und ergänzt je Eintrag genau dann ein normalisiertes
+`message_id` (klein, ohne spitze Klammern, über `normalize_message_id`, wohlgeformt
+nach `is_well_formed_message_id`), wenn ein brauchbarer Wert vorliegt. Fehlend,
+`null`, leer, ungültig, nicht-string oder widersprüchlich (beide Schreibweisen
+abweichend, doppelte Envelope-ID mit Konflikt oder einer unbrauchbaren
+Occurrence) erzeugt kein Feld; ein vorhandenes Snake-Case-`message_id` wird nur
+kanonisiert, alle anderen Schlüssel und ihre Reihenfolge bleiben unverändert,
+Nicht-Listen-Wurzeln und Nicht-Dict-Einträge gehen unverändert durch. Ohne
+brauchbaren Wert bleibt der bestehende Identitätspfad (`envelope thread`-Map,
+sonst `message read`) fail-closed; das Feld ist abgeleitete Bequemlichkeit, nie
+dauerhafte Identität, Envelope-IDs bleiben Locator, Skip-Entscheidungen und
+Windows-/CLI-Eigenheiten unverändert.
+Prädikat-Owner ist `core.common.is_well_formed_message_id` (aus
+`core.known_skip` re-importiert, identisches Verhalten).
+
 L1: [Paket-System-Map §15](../../../../docs/system-map/README.md#15-issue-103-cli-batch-skip-über-envelope-thread-und-transportzähler).
 
 ---

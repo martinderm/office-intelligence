@@ -8,6 +8,46 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-27 - Issue #103: Versionstoleranter `messageId` im Envelope-Listing
+
+#### Changed
+
+- **Additiv, fail-closed:** `op_list_envelopes` liest das von Upstream-master als
+  camelCase `messageId` serialisierte `Envelope.message_id` und toleriert die
+  Snake-Case-Variante `message_id`. Nur ein brauchbarer, wohlgeformter Wert
+  ergänzt je Eintrag genau ein normalisiertes `message_id` in einer flachen
+  Kopie; ein vorhandenes `message_id` wird kanonisiert, alle anderen Schlüssel,
+  Werte und ihre Reihenfolge bleiben unverändert. Fehlend, `null`, leer,
+  ungültig, nicht-string oder widersprüchlich (abweichende Doppelschreibweise,
+  doppelte Envelope-ID mit Konflikt oder einer unbrauchbaren Occurrence) erzeugt
+  kein Feld; Nicht-Listen-Wurzeln und
+  Nicht-Dict-Einträge gehen unverändert durch. Ohne brauchbaren Wert bleibt der
+  bestehende `envelope thread`-/`message read`-Identitätspfad fail-closed.
+- **Prädikat-Owner:** `is_well_formed_message_id` liegt jetzt in
+  `core.common`; `core.known_skip` re-importiert es unverändert (kein Fork,
+  keine Zyklus-Abhängigkeit). Der lokale Himalaya 1.2.0 emittiert das Feld
+  weiterhin nicht; keine neue Versionsabhängigkeit, keine Änderung an
+  `get_envelopes_list`, `get_oldest_envelopes`, `_scan_unprocessed_emails`,
+  Skip-Entscheidungen, `core/himalaya.py`, `core/modes/*` oder den
+  E2/P1/P2/P3/P5-Defaults.
+
+#### Tests/Doku
+
+- Neues Modul `skills/mail-desk/tests/test_himalaya_message_id_envelope.py`
+  (16 Fälle, hermetisch) grün, inklusive der fail-closed-Regel für eine doppelte
+  Envelope-ID mit einer unbrauchbaren Occurrence (beide Listenreihenfolgen);
+  mail-desk-Gesamtsuite grün (2881 Tests, 9 Skips, 346 s).
+- **Dokumentierte Test-Korrektur (test-correction, kein Produktdefekt):** Der
+  vorbestehende, uhrzeitabhängige Fall
+  `test_sent_handoff.MultiDateAndOverflowTests.test_empty_explicit_day_rewinds_the_barrier_so_later_mail_is_seen`
+  fror seinen ersten `sync_sent_items_by_dates_report([...])`-Aufruf nicht ein
+  und schlug deshalb am realen Datum fehl; genau dieser Aufruf ist jetzt über das
+  vorhandene `_frozen_datetime`-Muster auf den angefragten Tag fixiert. Keine
+  Produktionsänderung in `core/sent_indexer.py`, keine Assertion abgeschwächt.
+- Synchronisiert: [`references/backends/himalaya.md`](skills/mail-desk/references/backends/himalaya.md),
+  [`references/cli-operations.md`](skills/mail-desk/references/cli-operations.md),
+  L1-System-Map §2.1, L2-System-Map §44 und `objects.md` §6.
+
 ### 2026-11-25 - Issue #103: P2-Full-Text-Reuse aus dem eigenen Export (E1 Default, E2 gegated)
 
 #### Changed
