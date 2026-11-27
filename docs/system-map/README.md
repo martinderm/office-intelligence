@@ -203,8 +203,9 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    `himalaya_timeout` trägt Timeout, Dauer und die beiden Partial-Pipe-Längen.
    Die zentrale Abbildung
    (`core/himalaya_profile.py`) und die strikte v3-JSON-Grenze
-   (`core/himalaya_normalize.py`: Live-Array mit Pflichtkey `messageId`
-   `string|null` oder Schema-Objekt `{envelopes,nextPage,total,errors}`) tragen
+   (`core/himalaya_normalize.py`: Live-Objektform `{envelopes,errors,nextPage,total}`
+   von 2026-11-27 mit Pflichtkey `messageId` `string|null`; die Top-Level-Arrayform
+   bleibt als Kompatibilitätsform akzeptiert) tragen
    alle Aufrufstellen; v3 hat kein `envelope thread` (Map aus der Liste) und keinen
    In-Place-Expunge (`delete_draft`/`replace_draft` lösen das Profil über die
    gecachte Probe auf und verweigern mit `himalaya_expunge_unsupported` vor jedem

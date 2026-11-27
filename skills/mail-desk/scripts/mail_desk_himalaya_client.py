@@ -67,6 +67,7 @@ from core.himalaya import (
     profile_of,
     run_himalaya,
     search_mailbox,
+    validate_v3_max_pages,
     verify_in_target_folder,
 )
 
@@ -434,19 +435,22 @@ def op_list_envelopes(
     page_size: int = 50,
     query: str | None = None,
     account: str | None = None,
+    max_pages: int = 1,
 ) -> list[dict[str, Any]]:
+    validate_v3_max_pages(max_pages)
     cmd = ["-o", "json", "envelope", "list", "-f", folder, "-s", str(page_size)]
     if query:
         cmd.extend(["subject", query])
     out = run_himalaya(cmd, account=account)
     if profile_of(out) == PROFILE_V3:
-        # The live v3 array is one page; the schema object's ``nextPage`` is
-        # followed with ``--page-token`` under a hard, fail-closed page bound.
+        # Exactly one page by default: ``page_size`` is that page's size, and
+        # ``nextPage`` is followed only through an explicit ``max_pages`` bound.
         entries, next_page = decode_v3_envelope_output(out)
         return collect_v3_envelope_pages(
             entries,
             next_page,
             lambda token: run_himalaya(cmd + ["--page-token", token], account=account),
+            max_pages=max_pages,
         )
     if "[" in out:
         out = out[out.find("["):]

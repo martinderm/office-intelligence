@@ -3192,29 +3192,38 @@ haben keine v3-Abbildung und werden begrenzt verweigert bzw. auf die Liste
 abgebildet.
 
 **v3-JSON-Grenze:** [`scripts/core/himalaya_normalize.py`](../../scripts/core/himalaya_normalize.py)
-validiert beide belegten v3-Formen strikt: die **Live-Arrayform** (Top-Level-Array;
-jede Envelope mit `id` und dem Pflichtkey `messageId` `string|null`; `inReplyTo`,
-`flags {raw,iana}`, `from`/`to {name,email}`, `date`, `size`, `hasAttachment`
-typgeprüft) und die **Schema-Objektform**
-`{envelopes,nextPage,total,errors}`. Alte v1-Arrays ohne `messageId`,
+validiert beide belegten v3-Formen strikt: die **Live-Objektform** (Schema-Objekt
+`{envelopes,errors,nextPage,total}`, Top-Level-Objekt; jede Envelope mit `id` und
+dem Pflichtkey `messageId` `string|null`; `inReplyTo`, `flags {raw,iana}`,
+`from`/`to {name,email}`, `date`, `size`, `hasAttachment` typgeprüft) und die
+weiterhin akzeptierte **Top-Level-Arrayform** als Kompatibilitätsform früherer
+v3-Builds. Alte v1-Arrays ohne `messageId`,
 snake_case-only `message_id`, fehlende/falsch typisierte Keys, widersprüchliche
 Duplikate, nicht-uint `total`, nichtleere `errors`, leere/wiederholte
 `nextPage`-Tokens und die harte Seitengrenze sind fail-closed
-(`himalaya_json_incompatible`, `himalaya_paging_not_progressing`). Die
-Normalisierung erzeugt die interne v1-kompatible Envelope-Form `id`, `subject`,
-`from {name,addr}`, `to`, `date`, v1-`flags`, `size`, `has_attachment` plus
-additiv `message_id`/`in_reply_to`; schema-gültige Nulls sind akzeptiert
-(`Address.name: null` → leerer Anzeigename, `Flag.iana: null` → Custom-Keyword),
-`mailbox list` wird aus `{mailboxes,errors}` gelesen (`role: "drafts"` löst den
-Drafts-Ordner), und `message read --json` wird über das **typisierte**
-`headers`-Objekt (`from/to/cc/bcc/replyTo/sender` als Address-Arrays,
-`references/inReplyTo` als String-Arrays, `subject/date/messageId` als Strings)
-auf die bestehenden Detailfelder abgebildet; `cc` und `references` bleiben
-erhalten, `headers_complete` ist nur bei diesem vollständigen Objekt wahr.
-Feld-Evidenz (externer, read-only Referenzlauf v3.0.0, 2026-11-27): Top-Level-Array,
-`messageId` 10/10 vorhanden/nicht-null, `message_id` abwesend — keine Werte
-persistiert. **Kein Live-Nachweis des Adapters:** alle Pfade sind hermetisch
-getestet, ohne echten Himalaya-Prozess, Mailbox, Netz oder Credentials.
+(`himalaya_json_incompatible`, `himalaya_paging_not_progressing`). Paging:
+`-s <n>` ist die Größe **einer** Seite; `op_list_envelopes` liefert per Default
+genau eine Seite und verfolgt `nextPage` nicht, `max_pages` ist die explizite
+Python-Grenze (Gesamtseiten inkl. erster, Default 1, int 1..100, `bool`
+ausgeschlossen, Validierung vor jedem Kind); explizite Grenzen unter 100 enden
+sauber mit weiterhin vorhandenem Token, die harte 100-Seiten-Grenze bleibt
+fail-closed, und Batch-/Full-Listing-Pfade behalten ihren begrenzten Sweep-
+Default. Die Normalisierung erzeugt die interne v1-kompatible Envelope-Form `id`,
+`subject`, `from {name,addr}`, `to`, `date`, v1-`flags`, `size`,
+`has_attachment` plus additiv `message_id`/`in_reply_to`; schema-gültige Nulls
+sind akzeptiert (`Address.name: null` → leerer Anzeigename, `Flag.iana: null` →
+Custom-Keyword), `mailbox list` wird aus `{mailboxes,errors}` gelesen
+(`role: "drafts"` löst den Drafts-Ordner), und `message read --json` wird über
+das **typisierte** `headers`-Objekt (`from/to/cc/bcc/replyTo/sender` als
+Address-Arrays, `references/inReplyTo` als String-Arrays,
+`subject/date/messageId` als Strings) auf die bestehenden Detailfelder
+abgebildet; `cc` und `references` bleiben erhalten, `headers_complete` ist nur
+bei diesem vollständigen Objekt wahr. Feld-Evidenz (externer, read-only
+Referenzlauf v3.0.0, 2026-11-27): Live-Schema-Objekt, eine Seite mit 5 Envelopes,
+`messageId` 5/5 vorhanden/nicht-null, Folge-Seite über `--page-token` ebenfalls
+5/5 (0.95 s), exakte Adapter-argv 1.38 s — keine Werte persistiert. **Kein
+Live-Nachweis des Adapters:** alle Pfade sind hermetisch getestet, ohne echten
+Himalaya-Prozess, Mailbox, Netz oder Credentials.
 
 **Thread-Map und Aufrufstellen:** `known_skip.load_envelope_thread_map` nutzt
 unter v1 den einen `envelope thread`-Prozess; v3 hat kein Thread-Kommando. Der

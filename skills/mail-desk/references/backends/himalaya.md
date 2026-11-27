@@ -149,32 +149,45 @@ query has no documented v3 translation: the folder listing runs first (a read,
 not a write), its producing profile proves v3, and the refusal then escapes every
 serial and threaded sweep path instead of ending as an empty result.
 
-#### v3 JSON boundary (live array and schema object)
+#### v3 JSON boundary (live schema object and accepted array)
 
-The installed v3.0.0 binary is authoritative for its **live** output:
-`himalaya envelope list --json -m INBOX -s 10` returned exit 0, no stderr, no
-write action, and a **top-level array** of 10 envelopes. `messageId`
-(camelCase) was present and non-null 10/10 times with zero duplicates;
-`message_id` (snake_case) was absent, and `inReplyTo`/`hasAttachment` were the
-other camelCase keys. That observation is external, read-only host evidence; it
-is not produced by this adapter and no value, id, subject line or body was
-persisted.
+The installed v3.0.0 binary is authoritative for its **live** output: on
+2026-11-27 a read-only `himalaya envelope list --json -m INBOX -s 5` returned
+exit 0, no stderr, no write action, and the **schema object**
+`{"envelopes": [...], "errors": [...], "nextPage": "string|null",
+"total": "uint|null"}` — one page of 5 envelopes, `messageId` (camelCase)
+present and non-null 5/5 times, in 1.0–1.4 s. A follow page through
+`--page-token <nextPage>` returned another 5 envelopes, again 5/5 `messageId`,
+in 0.95 s; the exact adapter argv took 1.38 s. That observation is external,
+read-only host evidence; it is not produced by this adapter and no value, id,
+subject line or body was persisted.
 
-`himalaya json-schema himalaya-envelope-list` additionally documents the
-forward-compatible **object** shape
-`{"envelopes": [...], "nextPage": "string|null", "total": "uint|null", "errors": [...]}`
-with a required `messageId` (`string|null`) per envelope.
+The **top-level array** remains accepted for compatibility with earlier v3
+builds, but it is no longer the live shape. Both shapes are validated strictly
+and normalized to the internal v1-compatible envelope (`id`, `subject`,
+`from {name,addr}`, `to`, `date`, v1-style `flags`, `size`, `has_attachment`,
+additive `message_id`/`in_reply_to`):
 
-Both shapes are validated strictly and normalized to the internal v1-compatible
-envelope (`id`, `subject`, `from {name,addr}`, `to`, `date`, v1-style `flags`,
-`size`, `has_attachment`, additive `message_id`/`in_reply_to`):
-
-- the array form is one complete page; it never invents `nextPage`/`total`, and
-  completeness is proven by a short page or the hard page bound;
-- the object form is paged through `--page-token` until `nextPage` is `null` or
-  a hard bound is hit; a repeated/empty token, a non-uint `total`, a missing key
-  or a non-empty `errors` list is fail-closed (`himalaya_json_incompatible`,
-  `himalaya_paging_not_progressing`), never a silent partial success;
+- `-s <n>` is the size of **one** page, never a sweep target. The array form is
+  exactly that one page; it never invents `nextPage`/`total`, and no completeness
+  claim is derived from a short page.
+- `page_size` is passed straight through as `-s <n>`, and `list_envelopes`
+  (`op_list_envelopes`) returns **exactly one page by default**: the schema
+  object's `nextPage` is not followed and no `--page-token` child is issued.
+  `nextPage`/`total` are validated but never returned in the list result.
+- `max_pages` is the explicit Python follow seam (not a CLI flag): the total
+  number of pages one call may read, including the first page, plain `int`
+  only (`bool` excluded), default `1`, hard maximum `100`
+  (`himalaya_normalize.MAX_V3_PAGES`). An invalid value raises `ValueError`
+  before any Himalaya child starts. Explicit bounds below the maximum stop
+  cleanly when a `nextPage` token is still present and return the pages read so
+  far; the hard 100-page bound itself stays fail-closed.
+- Batch and other full-listing paths keep their bounded sweep: they call the
+  collector without an explicit bound and therefore retain the hard page bound.
+- A repeated or empty token, a malformed page, a missing schema key, a non-uint
+  `total` or a non-empty `errors` list is fail-closed
+  (`himalaya_json_incompatible`, `himalaya_paging_not_progressing`), never a
+  silent partial success.
 - a v1 array without `messageId`, a snake_case-only `message_id`, a missing or
   wrongly typed `messageId`, wrong types, and conflicting duplicate envelope ids
   are fail-closed under v3. The tolerant v1 `messageId`/`message_id` handling
