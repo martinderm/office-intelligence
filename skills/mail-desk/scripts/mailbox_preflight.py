@@ -19,6 +19,7 @@ if str(_script_dir) not in sys.path:
 
 from core import build_error, build_success, emit_json, run_himalaya, utc_now_iso
 from core.common import replace_with_retry
+from core.himalaya import PROFILE_V3, decode_v3_mailbox_output, profile_of
 
 
 ACTION = "mailbox_preflight"
@@ -31,6 +32,10 @@ def load_json(path: Path):
 
 def list_imap_folders(account: str | None = None) -> set[str]:
     raw = run_himalaya(["-o", "json", "folder", "list"], account=account)
+    if profile_of(raw) == PROFILE_V3:
+        # v3 answers ``{mailboxes, errors}``; the strict decoder never feeds that
+        # object into the v1 array parser.
+        return {entry["name"] for entry in decode_v3_mailbox_output(raw)}
     if "[" in raw:
         raw = raw[raw.find("["):]
     folders = json.loads(raw)

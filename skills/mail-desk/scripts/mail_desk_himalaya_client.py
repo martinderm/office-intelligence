@@ -58,8 +58,13 @@ from core.attachments import (
 )
 from core.himalaya import (
     DEFAULT_SEARCH_OVERALL_DEADLINE_SECONDS,
+    PROFILE_V3,
+    collect_v3_envelope_pages,
+    decode_v3_envelope_output,
+    decode_v3_mailbox_output,
     fetch_raw_message_eml,
     get_single_email_details,
+    profile_of,
     run_himalaya,
     search_mailbox,
     verify_in_target_folder,
@@ -352,6 +357,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def op_list_folders(account: str | None = None) -> list[dict[str, Any]]:
     out = run_himalaya(["folder", "list", "-o", "json"], account=account)
+    if profile_of(out) == PROFILE_V3:
+        # v3 answers the documented ``{mailboxes, errors}`` envelope; the
+        # adapter returns the mailbox objects (name, role, totals).
+        return decode_v3_mailbox_output(out)
     if "[" in out:
         out = out[out.find("["):]
     return json.loads(out)
@@ -430,6 +439,15 @@ def op_list_envelopes(
     if query:
         cmd.extend(["subject", query])
     out = run_himalaya(cmd, account=account)
+    if profile_of(out) == PROFILE_V3:
+        # The live v3 array is one page; the schema object's ``nextPage`` is
+        # followed with ``--page-token`` under a hard, fail-closed page bound.
+        entries, next_page = decode_v3_envelope_output(out)
+        return collect_v3_envelope_pages(
+            entries,
+            next_page,
+            lambda token: run_himalaya(cmd + ["--page-token", token], account=account),
+        )
     if "[" in out:
         out = out[out.find("["):]
     return _envelopes_with_normalized_message_ids(json.loads(out))

@@ -658,6 +658,19 @@ python3 scripts/mail_desk_himalaya_client.py replace-draft 41 -t a@example.org -
   (`flag add deleted`) und entfernt die markierte Nachricht danach mit
   `folder expunge`. `message delete` wird bewusst nicht verwendet: für einen
   Nicht-Trash-Ordner verschiebt Himalaya die Nachricht in den Trash-Ordner.
+  Unter dem expliziten v3-Profil gibt es keinen In-Place-Expunge: `delete-draft`
+  und der Pflicht-Löschschritt von `replace-draft` brechen **vor jedem Write**
+  mit `himalaya_expunge_unsupported` ab; ein Move-to-Trash als Ersatz ist
+  ausgeschlossen. Die verwendeten Kommandos stammen aus der zentralen
+  Versionsmatrix (v1 unverändert; v3 u. a. `mailbox list`, `envelope list/search`
+  mit `-m`, `message read --json`, `message add --mailbox --flag draft`,
+  `message copy -f/-t`, `message delete -m`, `flag add ... -m`).
+- **Version und Payload:** Die versionsbewusste Abbildung wählt pro Executable
+  genau ein Profil (`1.2.x` → v1, `3.x` → v3); unbekannte/fehlende Versionen
+  stoppen fail-closed vor jedem Mailbox-Kommando. Unter v3 geht derselbe
+  stdin-Payload an `message add --mailbox <folder> --flag draft` (ohne `-o plain`
+  im übersetzten Kommando); der v1-Pfad `message save -o plain` bleibt
+  byte-identisch.
 - **Ersetzen (neu-erst-dann-löschen):** `replace-draft` hängt zuerst den neuen
   Entwurf an und löscht erst danach den alten (`replace_envelope_id`). Das
   Crash-Fenster zwischen beiden Schritten ist dokumentiert: bricht der Lauf

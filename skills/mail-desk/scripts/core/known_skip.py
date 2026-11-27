@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .common import is_well_formed_message_id, normalize_message_id
+from . import himalaya as _himalaya
 from .himalaya import TRANSPORT_BLOCKED_REASON, HimalayaInvocationError
+from . import himalaya_normalize
 
 #: One process per scan; the observed Gate-0 duration was well below this bound.
 THREAD_MAP_TIMEOUT_SECONDS = 60
@@ -156,6 +158,47 @@ def parse_envelope_thread_map(payload: Any) -> dict[str, EnvelopeThreadEntry]:
     return mapping
 
 
+def _thread_map_from_v3_listing(raw: object) -> dict[str, EnvelopeThreadEntry]:
+    """Derive the skip map from one v3 ``envelope list --json`` payload.
+
+    v3 has no ``envelope thread`` command; ``messageId``/``inReplyTo`` travel
+    with every listed envelope.  Any structural failure discards the whole map
+    (``{}``) and only disables the accelerator.
+    """
+    if not isinstance(raw, str):
+        return {}
+    try:
+        payload = json.loads(raw.strip())
+        entries, _next_page = himalaya_normalize.decode_envelope_page(payload)
+    except Exception:  # noqa: BLE001 - a map failure only disables the accelerator
+        return {}
+    mapping: dict[str, EnvelopeThreadEntry] = {}
+    seen: dict[str, EnvelopeThreadEntry | None] = {}
+    for entry in entries:
+        envelope_id = canonical_envelope_id(entry.get("id"))
+        if envelope_id is None:
+            continue
+        message_id = str(entry.get("message_id") or "")
+        subject = entry.get("subject")
+        valid = (
+            isinstance(subject, str)
+            and bool(message_id)
+            and is_well_formed_message_id(f"<{message_id}>")
+        )
+        candidate = (
+            EnvelopeThreadEntry(normalize_message_id(message_id), subject) if valid else None
+        )
+        if envelope_id not in seen:
+            seen[envelope_id] = candidate
+            if candidate is not None:
+                mapping[envelope_id] = candidate
+            continue
+        if seen[envelope_id] != candidate or candidate is None:
+            seen[envelope_id] = None
+            mapping.pop(envelope_id, None)
+    return mapping
+
+
 def load_envelope_thread_map(
     folder: str,
     *,
@@ -163,15 +206,24 @@ def load_envelope_thread_map(
     run_himalaya_fn: Callable[..., str],
     timeout: int = THREAD_MAP_TIMEOUT_SECONDS,
 ) -> dict[str, EnvelopeThreadEntry]:
-    """Run exactly one bounded ``envelope thread`` process and build the map.
+    """Run exactly one bounded listing/thread process and build the map.
 
-    A non-zero exit, timeout, malformed JSON or invalid structure discards the
+    v1 reads one ``envelope thread -o json`` graph.  v3 derives the same map from
+    one ``envelope list --json`` because the CLI has no thread command.  A
+    non-zero exit, timeout, malformed JSON or invalid structure discards the
     whole map (F1).  A ``mailbox_transport_blocked`` abort is never swallowed:
     it ends the scan without another process start (F6).
     """
+    resolved = _himalaya.resolve_himalaya_profile_or_none()
+    is_v3 = resolved is not None and resolved.name == _himalaya.PROFILE_V3
+    args = (
+        ["--json", "envelope", "list", "-m", folder]
+        if is_v3
+        else ["envelope", "thread", "-f", folder, "-o", "json"]
+    )
     try:
         raw = run_himalaya_fn(
-            ["envelope", "thread", "-f", folder, "-o", "json"],
+            args,
             account=account,
             timeout=timeout,
             max_retries=1,
@@ -183,6 +235,8 @@ def load_envelope_thread_map(
         return {}
     except Exception:  # noqa: BLE001 - any map failure only disables the accelerator
         return {}
+    if is_v3 or _himalaya.profile_of(raw) == _himalaya.PROFILE_V3:
+        return _thread_map_from_v3_listing(raw)
     if not isinstance(raw, str):
         return {}
     try:
