@@ -360,8 +360,8 @@ Implementiert in [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
 
 1. **Fail-Fast Bootstrap (`resolve_himalaya_invocation`):**
    - Wählt den Konfigurationspfad: expliziter `HIMALAYA_CONFIG`-Override (mit `expanduser`) oder, wenn nicht gesetzt, der plattformspezifische Default (`%APPDATA%\himalaya\config.toml` unter Windows, sonst `~/.config/himalaya/config.toml`).
-   - Normalisiert **beide** Pfadquellen über `normalize_himalaya_config_path()` **vor** der Existenzprüfung und der Kommando-Konstruktion; Windows-Laufwerkspfade werden zu UNC (`C:\...` → `\\localhost\C$\...`). Relative Overrides bleiben unverändert.
-   - Fehlt die Konfigurationsdatei → Sofortiger Abbruch mit Stopcode `himalaya_config_missing` (verhindert den interaktiven Setup-Wizard). Das umfasst auch den Fall, dass die vorausgesetzte lokale Admin-Freigabe `\\localhost\<drive>$` nicht erreichbar ist.
+   - Normalisiert **beide** Pfadquellen über `normalize_himalaya_config_path()` **vor** der Existenzprüfung; Windows-Laufwerkspfade werden dabei zum v1-Token (`C:\...` → `\\localhost\C$\...`). Relative Overrides bleiben unverändert.
+   - Fehlt die Konfigurationsdatei → Sofortiger Abbruch mit Stopcode `himalaya_config_missing` (verhindert den interaktiven Setup-Wizard). Das umfasst auch den Fall, dass die vorausgesetzte lokale Admin-Freigabe `\\localhost\<drive>$` nicht erreichbar ist; v3 ändert nur die Schreibweise des `-c`-Tokens, nicht diesen Bootstrap-Check. Der Pre-Write-Expunge-Guard (`resolve_himalaya_profile_or_none()`) validiert bei fehlgeschlagenem normalisiertem Check den rohen, expandierten Pfad und hängt damit nicht an der Admin-Freigabe.
    - Fehlt die Binärdatei → Abbruch mit `himalaya_unavailable`.
 2. **Kommando-Konstruktion (`build_himalaya_command`):**
    - Erzeugt tokenisierte Argumentliste ohne Shell (`shell=False`).
@@ -369,6 +369,13 @@ Implementiert in [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
      pro `(Executable, mtime, size)` (kurzer Timeout, kein `-c`/Account/Mailbox, nicht in
      `TransportStats`/`process_starts`): `1.2.x` → v1, `3.x` → v3; alles andere stoppt
      fail-closed vor jedem Mailbox-Kommando (`himalaya_version_unsupported`/`himalaya_unavailable`).
+   - **Profilabhängiger `-c`-Token:** v1 erhält die byte-identische, normalisierte
+     UNC-Admin-Share-Schreibweise; v3 erhält dieselbe Datei nativ — ein nativer
+     Laufwerkspfad bleibt nativ, eine lokale Admin-Share-Angabe
+     `\\localhost\<drive>$\<rest>` wird zu `<drive>:\<rest>` zurückgeführt
+     (Host/Laufwerk case-insensitiv, slash-tolerant), ein echter Remote-UNC-Pfad
+     bleibt unverändert. Der Token wird aus dem aufgelösten Pfad abgeleitet;
+     `HIMALAYA_CONFIG` wird im Builder nicht erneut gelesen.
    - v1: fügt Account-Parameter `-a <account>` an vordefinierter Position ein und behält die
      byte-identische Legacy-argv. v3: `translate_v3_arguments` bildet dieselbe logische Anfrage
      auf die dokumentierte v3-argv ab (`--json`, `mailbox list`, `envelope list/search -m`,
@@ -377,7 +384,8 @@ Implementiert in [`scripts/core/himalaya.py`](../../scripts/core/himalaya.py):
      globale `-a` nach `-c` und vor dem Subkommando; `folder expunge`/`envelope thread` haben
      keine Abbildung bzw. werden auf die Liste abgebildet (§47).
 3. **Ausführung mit Timeout:**
-   - Führt den Subprozess aus; bei Überschreiten des Timeouts erfolgt sofortiger harter Abbruch ohne Retries (`himalaya_timeout`).
+   - Führt den Subprozess aus; bei Überschreiten des Timeouts erfolgt sofortiger harter Abbruch ohne Retries (`himalaya_timeout`) mit den Details `timeout_seconds`, `duration_ms` und den Längen `stdout_chars`/`stderr_chars` der Partial-Pipes (`None` = 0, kein Partial-Inhalt gespeichert); der Vorrang von `stats.blocked_error` bleibt unverändert.
+   - **v3-Fehlerkanal:** Bei Non-Zero unter dem v3-Profil parst der Adapter höchstens 64 KiB von `stdout` als JSON-Objekt und übernimmt nur die whitespace-kollabierten, auf 500 Zeichen begrenzten Werte `details["himalaya_error_code"]`/`details["himalaya_error_message"]` plus `details["exit_code"]`; Meldung und Transient-Klassifikation nutzen `code: error`, stderr bleibt der Fallback. Ungültiges, übergroßes oder nicht-objektförmiges stdout wird ignoriert; rohes stdout/stderr, `sources`/`backtrace`, Mail- und Konfigurationsinhalt werden nie gespeichert. v1 parst stdout nicht und behält `Himalaya failed: <stderr>` mit leeren `details`. Trifft der so gewonnene v3-Fehlertext eines der bestehenden Transient-Token, greift für Nicht-Payload-Kommandos der unveränderte Transient-Retry/Backoff; Payload-Kommandos (APPEND) bleiben genau ein Versuch.
    - **Optionaler binärer Payload-Seam (Issue #11):** `run_himalaya(..., stdin_bytes=<bytes>)` validiert den Puffer strict als UTF-8 **vor** Executable-/Config-Auflösung und Subprozess (ungültige Bytes → begrenzter `ValueError` ohne Payload-Inhalt; sonst würde Himalaya 1.2.0 an `lines().map_while(Result::ok)` still abschneiden), verlangt bei gesetztem Payload genau ein explizites `-o plain` (sonst `ValueError`), schreibt exakte Bytes in die stdin-Pipe (`subprocess.run(input=...)`, kein `text=True`, keine Newline-Transformation) und führt Payload-Kommandos genau einmal aus (kein APPEND-Retry). Der deklarierte v1-Kompensator (`stdin_v1_terminator`) wird unter dem v3-Profil byte-exakt entfernt, weil v3 `message add` stdin „as given" speichert; v1 bleibt unverändert. `OSError` (Start **oder** Kommunikation) wird auf **beiden** Pfaden als `himalaya_launch_failed` klassifiziert — Wortlaut „outcome may be unknown, not retried" —, `BrokenPipeError` als `himalaya_stdin_failed`, jeweils ohne Payload-Leak. Ohne Payload bleiben `stdin=DEVNULL`, `text=True` sowie Timeout-/Retry-Defaults unverändert.
 
 ### 6.1 Ungesendete Draft-Operationen (Client, ohne Approval-Gate)

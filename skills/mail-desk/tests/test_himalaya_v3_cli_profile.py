@@ -14,8 +14,8 @@ Contract encoded here (binding decisions of the HV3-1 dispatch):
   missing, malformed or unstartable version raises ``HimalayaInvocationError``
   *before* any mailbox command (no silent profile switch);
 * the representative v1 argv of every existing call family stays byte-identical;
-* ``-c``/``HIMALAYA_CONFIG`` and the per-command timeouts do not change per
-  profile.
+* ``HIMALAYA_CONFIG`` and the per-command timeouts do not change per profile,
+  while the ``-c`` token is v1-normalized and v3-native.
 
 The version probe is exercised only through the public seams that need it
 (``build_himalaya_command``, the client and the batch runner), never by
@@ -265,9 +265,10 @@ class V1ArgvParityTests(unittest.TestCase):
 
 
 class ProfileInvariantTests(unittest.TestCase):
-    """Config token, account placement and timeouts do not change per profile."""
+    """Account placement and timeouts do not change per profile; the config token is
+    profile-specific (v1 normalized admin share, v3 native)."""
 
-    def test_config_token_and_timeout_are_identical_across_profiles(self) -> None:
+    def test_config_token_is_profile_specific_and_timeout_is_shared(self) -> None:
         v1 = V1MailboxTransport()
         with patched_himalaya(v1) as (module, v1_config, _executable):
             client.op_list_folders()
@@ -280,7 +281,7 @@ class ProfileInvariantTests(unittest.TestCase):
         self.assertEqual(v1_argv[1], "-c")
         self.assertEqual(v3_argv[1], "-c")
         self.assertEqual(str(module.normalize_himalaya_config_path(v1_config)), v1_argv[2])
-        self.assertEqual(str(module.normalize_himalaya_config_path(v3_config)), v3_argv[2])
+        self.assertEqual(str(v3_config), v3_argv[2])
         self.assertEqual(v1_kwargs.get("timeout"), v3_kwargs.get("timeout"))
 
     def test_v3_global_account_precedes_the_subcommand(self) -> None:

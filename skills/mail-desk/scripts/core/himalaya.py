@@ -88,6 +88,29 @@ def normalize_himalaya_config_path(config_path: str | Path) -> Path:
     return Path(config_path)
 
 
+_LOCAL_ADMIN_SHARE_UNC_REGEX = re.compile(
+    r"^\\\\localhost\\([A-Za-z])\$(?:[\\/](.*))?$", re.IGNORECASE
+)
+
+
+def _native_himalaya_config_path(config_path: str | Path) -> Path:
+    """Return the native spelling of one resolved config path for Himalaya v3.
+
+    The v1 profile passes the deterministic local admin-share spelling
+    (``\\\\localhost\\<drive>$\\<rest>``) that Himalaya 1.2.0 needs.  The v3
+    profile receives the same file under its native spelling instead: a native
+    drive path stays native, and only a local admin-share path is mapped back to
+    ``<drive>:\\<rest>`` (case-insensitive host/drive, slash-tolerant).  A real
+    remote UNC path has no native equivalent and is preserved unchanged.
+    """
+    raw_str = str(config_path).strip()
+    match = _LOCAL_ADMIN_SHARE_UNC_REGEX.match(raw_str)
+    if match is None:
+        return Path(config_path)
+    rest = (match.group(2) or "").replace("/", "\\")
+    return Path(f"{match.group(1)}:\\{rest}")
+
+
 def _default_himalaya_config_path() -> Path:
     """Return the platform's non-interactive Himalaya config location."""
     appdata = os.environ.get("APPDATA")
@@ -96,8 +119,8 @@ def _default_himalaya_config_path() -> Path:
     return Path.home() / ".config" / "himalaya" / "config.toml"
 
 
-def resolve_himalaya_invocation() -> tuple[str, Path]:
-    """Resolve an installed CLI and a readable config without invoking either.
+def _himalaya_config_candidate() -> Path:
+    """Return the raw, expanduser-expanded config path before normalization.
 
     ``HIMALAYA_CONFIG`` is the only supported override.  It is intentionally a
     config *path*, not an arbitrary command hook: accepting a command string
@@ -105,10 +128,16 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
     """
     configured = os.environ.get("HIMALAYA_CONFIG")
     if configured:
-        candidate = Path(configured).expanduser()
-    else:
-        candidate = _default_himalaya_config_path()
-    config_path = normalize_himalaya_config_path(candidate)
+        return Path(configured).expanduser()
+    return _default_himalaya_config_path()
+
+
+def _validate_himalaya_config_path(config_path: Path) -> None:
+    """Fail closed unless one config path is absolute and an existing file.
+
+    Only existence is checked; the file is never opened, so no configuration
+    content is read, logged or returned.
+    """
     if not config_path.is_absolute():
         raise HimalayaInvocationError(
             "himalaya_config_invalid", "HIMALAYA_CONFIG must be an absolute configuration file path."
@@ -117,12 +146,30 @@ def resolve_himalaya_invocation() -> tuple[str, Path]:
         raise HimalayaInvocationError(
             "himalaya_config_missing", "Himalaya configuration is missing; refusing interactive setup."
         )
+
+
+def _resolve_himalaya_executable() -> str:
+    """Return the installed CLI path without invoking it."""
     executable = shutil.which("himalaya")
     if not executable:
         raise HimalayaInvocationError(
             "himalaya_unavailable", "Himalaya executable is unavailable; no mailbox command was started."
         )
-    return executable, config_path
+    return executable
+
+
+def resolve_himalaya_invocation() -> tuple[str, Path]:
+    """Resolve an installed CLI and a readable config without invoking either.
+
+    The config check runs on the normalized file (the deterministic v1
+    admin-share spelling), exactly as before; the v3 command builder derives its
+    native token from that resolved path instead of re-reading
+    ``HIMALAYA_CONFIG``.
+    """
+    raw_config_path = _himalaya_config_candidate()
+    config_path = normalize_himalaya_config_path(raw_config_path)
+    _validate_himalaya_config_path(config_path)
+    return _resolve_himalaya_executable(), config_path
 
 
 class HimalayaOutput(str):
@@ -239,12 +286,14 @@ def resolve_himalaya_profile_or_none() -> HimalayaProfile | None:
     The pre-write expunge guard needs the profile before any command can produce
     output.  This resolves the same executable as a real command and runs the
     same bounded, cached ``--version`` probe; the probe is not a mailbox command
-    and never reaches ``TransportStats``/``process_starts``.  An unknown,
-    unparseable or unstartable version fails closed
-    (``himalaya_version_unsupported``/``himalaya_unavailable``).  It returns
-    ``None`` only when no CLI invocation exists at all (missing config, missing
-    executable, invalid override); in that case the later command resolution
-    raises before a child starts, so no write can happen either.
+    and never reaches ``TransportStats``/``process_starts``.  When the v1
+    normalized path check fails, the raw, expanduser-expanded config path is
+    validated instead, so a reachable native spelling does not depend on
+    admin-share reachability.  An unknown, unparseable or unstartable version
+    fails closed (``himalaya_version_unsupported``/``himalaya_unavailable``).  It
+    returns ``None`` only when no CLI invocation exists at all (missing config,
+    missing executable, invalid override); in that case the later command
+    resolution raises before a child starts, so no write can happen either.
 
     Read-only seams do not call this: they read the profile that produced their
     own output (:class:`HimalayaOutput`), which is authoritative and starts no
@@ -253,7 +302,13 @@ def resolve_himalaya_profile_or_none() -> HimalayaProfile | None:
     try:
         executable, _config_path = resolve_himalaya_invocation()
     except HimalayaInvocationError:
-        return None
+        # The v1 normalization is only an admin-share spelling of the same file.
+        # Validate the raw path instead; the unchanged failure semantics apply.
+        try:
+            _validate_himalaya_config_path(_himalaya_config_candidate())
+            executable = _resolve_himalaya_executable()
+        except HimalayaInvocationError:
+            return None
     return _profile_for_executable(executable)
 
 
@@ -385,11 +440,15 @@ def _resolve_himalaya_downloads_dir(
 def build_himalaya_command(args: list[str], account: str | None = None) -> list[str]:
     """Build a shell-free CLI command for the resolved, versioned profile.
 
-    The v1 profile keeps the byte-identical legacy argv and ``-a`` placement.
-    The v3 profile translates the same logical request into the documented v3
-    argv and places the global ``-a`` after ``-c <path>`` and before the
-    subcommand.  The selected profile is recorded for the caller's output
-    interpretation (see :class:`HimalayaOutput`).
+    The v1 profile keeps the byte-identical legacy argv and ``-a`` placement,
+    including the normalized admin-share ``-c`` token.  The v3 profile translates
+    the same logical request into the documented v3 argv, places the global
+    ``-a`` after ``-c <path>`` and before the subcommand, and passes the same
+    config file under its native spelling (:func:`_native_himalaya_config_path`),
+    because v3 does not need the v1 admin-share workaround.  The token is derived
+    from the resolved path; ``HIMALAYA_CONFIG`` is never re-read here.  The
+    selected profile is recorded for the caller's output interpretation (see
+    :class:`HimalayaOutput`).
     """
     if not isinstance(args, list) or not args or any(not isinstance(arg, str) or not arg or "\x00" in arg for arg in args):
         raise ValueError("Himalaya arguments must be a non-empty list of non-empty text tokens.")
@@ -402,7 +461,8 @@ def build_himalaya_command(args: list[str], account: str | None = None) -> list[
         except ProfileError as exc:
             raise HimalayaInvocationError(exc.reason_code, str(exc)) from None
         account_args = ["-a", account] if account else []
-        return [executable, "-c", str(config_path)] + account_args + translated
+        native_config = str(_native_himalaya_config_path(config_path))
+        return [executable, "-c", native_config] + account_args + translated
     return [executable, "-c", str(config_path)] + _insert_account_arg(args, account)
 
 
@@ -461,6 +521,52 @@ def _decode_process_stream(value: bytes | str | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value or ""
+
+
+#: Upper bound on the v3 stdout error object that is parsed and kept.
+_V3_ERROR_STDOUT_LIMIT_BYTES = 64 * 1024
+#: Upper bound on each stored v3 error detail value.
+_V3_ERROR_DETAIL_MAX_CHARS = 500
+
+
+def _collapse_bounded_text(value: object) -> str:
+    """Collapse whitespace and bound one detail value; non-strings become empty."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value).strip()[:_V3_ERROR_DETAIL_MAX_CHARS]
+
+
+def _parse_v3_stdout_error(stream: bytes | str | None) -> tuple[str, str] | None:
+    """Parse the bounded v3 non-zero error object from child stdout.
+
+    The v3 CLI writes ``{code, error, sources, backtrace}`` as JSON on stdout and
+    leaves stderr empty.  At most 64 KiB of the UTF-8 byte representation are
+    sliced before decoding (the payload path may hand over bytes; text is encoded
+    with replacement first), so the bound applies to bytes for both stream kinds.
+    Anything invalid, oversized, non-object or without a string ``code``/``error``
+    is ignored so the caller keeps the stderr fallback; a pathological nesting
+    depth (``RecursionError`` from the JSON scanner) is ignored the same way.
+    Only ``code``/``error`` survive, whitespace-collapsed and bounded;
+    ``sources``/``backtrace`` and the raw JSON are never returned or stored.
+    """
+    if isinstance(stream, bytes):
+        raw = stream
+    elif isinstance(stream, str):
+        raw = stream.encode("utf-8", errors="replace")
+    else:
+        return None
+    text = _decode_process_stream(raw[:_V3_ERROR_STDOUT_LIMIT_BYTES])
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = _collapse_bounded_text(payload.get("code"))
+    message = _collapse_bounded_text(payload.get("error"))
+    if not code and not message:
+        return None
+    return code, message
 
 
 #: Reasons raised by the bounded diagnostic capture branch of ``run_himalaya``.
@@ -1586,6 +1692,19 @@ def run_himalaya(
             duration_ms = int((time.monotonic() - started) * 1000)
             if res.returncode != 0:
                 err_msg = _decode_process_stream(res.stderr).strip()
+                failure_details: dict[str, Any] = {}
+                if profile_name == PROFILE_V3:
+                    # v3 writes its structured error as JSON on stdout and leaves
+                    # stderr empty; only the bounded code/error survive.
+                    v3_error = _parse_v3_stdout_error(res.stdout)
+                    if v3_error is not None:
+                        v3_code, v3_message = v3_error
+                        if v3_code:
+                            failure_details["himalaya_error_code"] = v3_code
+                        if v3_message:
+                            failure_details["himalaya_error_message"] = v3_message
+                        failure_details["exit_code"] = res.returncode
+                        err_msg = ": ".join(part for part in (v3_code, v3_message) if part)
                 # Check for transient connection errors
                 if _is_transient_himalaya_error(err_msg):
                     if stats is not None and stats.record_error(
@@ -1599,7 +1718,11 @@ def run_himalaya(
                         # The abort-triggering failure is the structured abort
                         # itself; retry/no retry cannot swallow it.
                         raise stats.blocked_error(command_class)
-                    last_err = HimalayaInvocationError("himalaya_transient", f"Himalaya transient error: {err_msg}")
+                    last_err = HimalayaInvocationError(
+                        "himalaya_transient",
+                        f"Himalaya transient error: {err_msg}",
+                        failure_details or None,
+                    )
                     if attempt < attempts - 1:
                         # Issue #103 P5: the configured first transient backoff;
                         # the default 2.0 keeps the unchanged timing, and the
@@ -1619,7 +1742,11 @@ def run_himalaya(
                         item_scoped=item_scoped,
                         envelope_id=envelope_id,
                     )
-                raise HimalayaInvocationError("himalaya_command_failed", f"Himalaya failed: {err_msg}")
+                raise HimalayaInvocationError(
+                    "himalaya_command_failed",
+                    f"Himalaya failed: {err_msg}",
+                    failure_details or None,
+                )
             if stats is not None:
                 stats.record_success(
                     command_class=command_class,
@@ -1638,7 +1765,14 @@ def run_himalaya(
             ):
                 raise stats.blocked_error(command_class) from te
             raise HimalayaInvocationError(
-                "himalaya_timeout", "Himalaya timed out; refusing to retry the mailbox command."
+                "himalaya_timeout",
+                "Himalaya timed out; refusing to retry the mailbox command.",
+                {
+                    "timeout_seconds": timeout,
+                    "duration_ms": duration_ms,
+                    "stdout_chars": len(_decode_process_stream(te.stdout)),
+                    "stderr_chars": len(_decode_process_stream(te.stderr)),
+                },
             ) from te
         except BrokenPipeError as bp:
             duration_ms = int((time.monotonic() - started) * 1000)

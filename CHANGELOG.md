@@ -8,6 +8,37 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-27 - Himalaya v3 Live-Fix: nativer `-c`-Token, stdout-Fehlerkanal, Timeout-Details
+
+#### Fixed
+
+- **Profilabhängiger `-c`-Config-Token:** `build_himalaya_command()` leitet den
+  Token aus dem aufgelösten Pfad ab (kein erneutes Lesen von `HIMALAYA_CONFIG`)
+  und übergibt dem v3-Profil die native Schreibweise — ein nativer Laufwerkspfad
+  bleibt nativ, eine lokale Admin-Share-Angabe `\\localhost\<drive>$\<rest>` wird
+  zu `<drive>:\<rest>` (Host/Laufwerk case-insensitiv, slash-tolerant), ein echter
+  Remote-UNC-Pfad bleibt unverändert. Das v1-Profil behält die byte-identische
+  normalisierte UNC-Form. `resolve_himalaya_profile_or_none()` validiert bei
+  fehlgeschlagenem normalisiertem Check den rohen, expandierten Pfad und hängt
+  damit nicht an der Admin-Freigabe; der
+  Bootstrap-Existenzcheck und der Diagnose-Precheck laufen unverändert auf dem
+  aufgelösten Pfad. Kein Konfigurationsinhalt wird gelesen oder geloggt.
+- **v3-Fehlerkanal:** Ein Non-Zero-v3-Kind schreibt seinen JSON-Fehler
+  (`{code,error,sources,backtrace}`) auf stdout. Der Adapter parst höchstens
+  64 KiB und speichert nur `himalaya_error_code`/`himalaya_error_message`
+  (whitespace-kollabiert, max. 500 Zeichen) plus `exit_code`; Meldung und
+  Transient-Klassifikation nutzen `code: error`, stderr bleibt der Fallback.
+  Ungültiges, übergroßes oder nicht-objektförmiges stdout wird ignoriert; rohes
+  stdout/stderr, `sources`/`backtrace` und Mailinhalt werden nie gespeichert.
+  v1 parst stdout nicht und behält `Himalaya failed: <stderr>` mit leeren
+  `details`. Retry-Zahlen, Backoff und P1/P2/P3/P5-Defaults bleiben unverändert.
+- **Timeout-Details:** `himalaya_timeout` trägt `timeout_seconds`, `duration_ms`,
+  `stdout_chars` und `stderr_chars` der Partial-Pipes (`None` = 0, kein
+  Partial-Inhalt); der Vorrang von `stats.blocked_error` bleibt unverändert.
+- Synchronisiert: `references/backends/himalaya.md`, L2-System-Map (`README` §47,
+  `processes.md` §6, `effects.md` §1.2/§5, `objects.md` §6) und L1-System-Map
+  §2.1; neue hermetische Regression `tests/test_himalaya_v3_live_fix.py`.
+
 ### 2026-11-27 - Himalaya v3 CLI: Versionsmatrix, v3-JSON-Grenze und Expunge-Limit
 
 #### Changed

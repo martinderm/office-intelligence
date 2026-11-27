@@ -191,7 +191,17 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
  - **Versionsbewusster Himalaya-Adapter (1.2.x / 3.x):** genau eine
    `himalaya --version`-Probe pro Executable wählt das Profil (`1.2.x` → v1
    byte-identische argv, `3.x` → dokumentierte v3-argv/JSON); unbekannte/fehlende
-   Versionen stoppen fail-closed vor jedem Mailbox-Kommando. Die zentrale Abbildung
+   Versionen stoppen fail-closed vor jedem Mailbox-Kommando. Der `-c`-Config-Token
+   ist profilabhängig und wird aus dem aufgelösten Pfad abgeleitet (kein erneutes
+   Lesen von `HIMALAYA_CONFIG`): v1 erhält die normalisierte UNC-Admin-Share-Form,
+   v3 die native Schreibweise (lokale Admin-Share-Angabe → `<drive>:\...`, echter
+   Remote-UNC bleibt unverändert); der Bootstrap-Existenzcheck läuft weiterhin auf
+   dem aufgelösten Pfad. Ein Non-Zero-v3-Kind liefert seinen JSON-Fehler auf
+   stdout; der Adapter speichert nur begrenzte `himalaya_error_code`/
+   `himalaya_error_message` (max. 500 Zeichen) plus `exit_code` und nutzt
+   `code: error` für Meldung und Transient-Klassifikation, sonst stderr;
+   `himalaya_timeout` trägt Timeout, Dauer und die beiden Partial-Pipe-Längen.
+   Die zentrale Abbildung
    (`core/himalaya_profile.py`) und die strikte v3-JSON-Grenze
    (`core/himalaya_normalize.py`: Live-Array mit Pflichtkey `messageId`
    `string|null` oder Schema-Objekt `{envelopes,nextPage,total,errors}`) tragen

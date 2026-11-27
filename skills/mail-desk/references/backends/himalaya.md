@@ -27,16 +27,31 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   platform default (`%APPDATA%\\himalaya\\config.toml` on Windows,
   `~/.config/himalaya/config.toml` elsewhere). The adapter supplies it as
   `-c <path>`. The explicit override and the platform default both pass through the
-  same `normalize_himalaya_config_path()` step before existence validation and
-  before the `-c` token is built.
+  same `normalize_himalaya_config_path()` step before existence validation; that
+  normalized form remains the bootstrap's only existence check.
   Himalaya 1.2.0 interpretiert Windows-Drive-Doppelpunkte in `-c` als Pfadlistentrenner;
   der Adapter konvertiert deshalb lokale Windows-Drive-Pfade deterministisch auf
-  `\\localhost\<drive>$\...`.
-- UNC conversion depends on the local administrative share `\\localhost\<drive>$`
-  being reachable. If it is disabled or unreachable, the existence validation fails
-  and the adapter stops before any process start as a missing configuration
-  (`himalaya_config_missing`); no end-to-end support is claimed without a reachable
-  admin share.
+  `\\localhost\<drive>$\...` — ausschließlich für das v1-Profil.
+- **Profilabhängiger `-c`-Token:** Das v1-Profil erhält unverändert die
+  normalisierte Admin-Share-Schreibweise (`C:\...` → `\\localhost\C$\...`). Das
+  v3-Profil erhält dieselbe Datei in nativer Schreibweise: ein nativer
+  Laufwerkspfad bleibt nativ, eine lokale Admin-Share-Angabe
+  `\\localhost\<drive>$\<rest>` wird zu `<drive>:\<rest>` zurückgeführt
+  (Host/Laufwerk case-insensitiv, Slash-tolerant); ein echter Remote-UNC-Pfad
+  bleibt unverändert, weil es keine native Entsprechung gibt. Der Token wird aus
+  dem aufgelösten Pfad abgeleitet; `HIMALAYA_CONFIG` wird im Kommando-Builder
+  nicht erneut gelesen.
+- Der Bootstrap-Existenzcheck (`is_file`) und der Diagnose-Precheck laufen
+  weiterhin auf dem aufgelösten (normalisierten) Pfad und setzen damit eine
+  erreichbare Konfiguration voraus — für ein Laufwerks-Override inklusive der
+  lokalen administrativen Freigabe `\\localhost\<drive>$`. Ist sie deaktiviert
+  oder nicht erreichbar, stoppt der Bootstrap vor jedem Prozessstart als
+  `himalaya_config_missing` (ein relativer Override als
+  `himalaya_config_invalid`); v3 ändert nur die Schreibweise des `-c`-Tokens,
+  nicht diesen Check. Der Pre-Write-Expunge-Guard
+  (`resolve_himalaya_profile_or_none()`) validiert bei fehlgeschlagenem
+  normalisiertem Check den rohen, expandierten Pfad; damit hängt der Guard nicht
+  an der Admin-Freigabe.
 - `HIMALAYA_COMMAND` is deliberately unsupported. Command strings, shells and
   interactive setup are never configuration interfaces for this adapter.
 - Before starting a mailbox process, the adapter verifies executable and config.
@@ -46,6 +61,26 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
 - A timeout stops immediately. Only bounded transport/TLS failures are retried.
   Config, account, authentication, syntax and other command failures are returned
   immediately.
+- **v3-Fehlerkanal (stdout):** Schreibt ein v3-Kind bei Non-Zero seinen
+  strukturierten Fehler als JSON-Objekt `{code, error, sources, backtrace}` auf
+  **stdout** (stderr bleibt leer), liest der Adapter höchstens 64 KiB davon und
+  übernimmt ausschließlich die whitespace-kollabierten, auf 500 Zeichen
+  begrenzten Werte `details["himalaya_error_code"]`/`details["himalaya_error_message"]`
+  plus `details["exit_code"]`. Exception-Meldung und Transient-Klassifikation
+  nutzen dann `code: error`; stderr bleibt der Fallback. Ungültiges, übergroßes
+  oder nicht-objektförmiges stdout wird ignoriert; rohes stdout/stderr,
+  `sources`/`backtrace`, Mail- und Konfigurationsinhalt werden nie gespeichert.
+  Das v1-Profil parst stdout nicht und behält die unveränderte Meldung
+  `Himalaya failed: <stderr>` mit leeren `details`.
+- **Transient-Text (v3):** Trifft der so gewonnene v3-Fehlertext eines der
+  bestehenden Transient-Token (z. B. `connection reset`, `timed out`), greift für
+  Nicht-Payload-Kommandos der unveränderte Transient-Retry mit unverändertem
+  Backoff; Payload-Kommandos (APPEND) bleiben genau ein Versuch.
+- **Timeout-Details:** `himalaya_timeout` trägt `timeout_seconds` (der
+  konfigurierte Timeout des Aufrufs), `duration_ms` und die Längen
+  `stdout_chars`/`stderr_chars` der Partial-Pipes (`None` zählt als 0). Kein
+  Partial-Inhalt wird gespeichert; Retry-Verhalten und der Vorrang von
+  `stats.blocked_error` bleiben unverändert.
 
 - `scripts/mail_desk_himalaya_client.py` performs Himalaya/IMAP listing, reading, read-only RFC-822 MIME attachment inspection, copying, moving, deleting, searching, and folder checks with structured JSON envelopes and automatic socket/TLS-10054 error handling.
 - Use its search operation with a normalized `Message-ID` and the relevant folders when a backend lookup is needed; that search result remains locator evidence, not durable identity.
@@ -93,9 +128,11 @@ subcommand).
 | Expunge | `folder expunge <f>` | **no expunge** (see the draft limit below) |
 
 The v1 profile keeps the byte-identical legacy argv for every caller, including
-`-o json`/`-f`/`--preview`/`-H`/`-F`/`-d` and the `-a` placement. The v3 profile
-translates the same logical request; the account, `-c` config token, timeouts
-and the Scoop shim (`shutil.which`) do not change per profile.
+`-o json`/`-f`/`--preview`/`-H`/`-F`/`-d`, the `-a` placement and the normalized
+admin-share `-c` token. The v3 profile translates the same logical request and
+passes the same config file under its native spelling (see the profile-specific
+`-c` token above); account placement, timeouts and the Scoop shim
+(`shutil.which`) do not change per profile.
 `HIMALAYA_CONFIG` stays the only config override.
 
 The logical search forms are translated, not invented: `subject <q>` becomes

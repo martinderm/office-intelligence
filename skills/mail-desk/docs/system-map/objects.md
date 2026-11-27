@@ -369,6 +369,11 @@ Jeder Eintrag unter `entries` erzwingt exakt folgende 17 Felder:
 
 ## 6. DTOs, Verträge und In-Memory-Strukturen
 
+* **`HimalayaInvocationError` & `details` (Adapter-DTO)** ([`scripts/core/himalaya.py`](../../scripts/core/himalaya.py)):
+  * `reason_code` und `message` klassifizieren den Fail-closed-Abbruch; `details` ist der optionale, JSON-sichere Metadatenkanal und trägt nie Mailinhalt, Header, rohes stdout/stderr, `sources`/`backtrace` oder Konfigurationsinhalt.
+  * v3-Non-Zero: `himalaya_error_code`/`himalaya_error_message` (whitespace-kollabiert, je max. 500 Zeichen) plus `exit_code`, gelesen aus höchstens 64 KiB stdout; Meldung und Transient-Klassifikation nutzen `code: error`, stderr bleibt der Fallback. v1 parst stdout nicht, behält `Himalaya failed: <stderr>` und leere `details`.
+  * `himalaya_timeout`: `timeout_seconds`, `duration_ms`, `stdout_chars`, `stderr_chars` (nur Längen der Partial-Pipes, kein Inhalt).
+
 * **`DraftManifest` & Review Contract** ([`scripts/core/batch_contract.py`](../../scripts/core/batch_contract.py)):
   * Bindende Parameter: `expected_count`, `allow_fewer`, `candidate_count`, `source_folder`, `account`, `skip_known`, `review`.
   * `canonical_execute_request_sha256()`: Berechnet Hash über das Request-Objekt unter bewusstem Ausschluss des Feldes `review`.
