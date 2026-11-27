@@ -1,23 +1,28 @@
-"""HV3-1 v3 JSON boundary: live array, schema object, fail-closed normalization.
+"""Himalaya v3 JSON boundary: live schema object, compatibility array, explicit paging.
 
 Evidence mode ``tdd``, risk tier ``medium``.  Everything is hermetic: the
 ``himalaya`` child is answered by an in-process transport script, no mailbox,
 network, credential or real configuration is involved.
 
-Contract encoded here (binding decisions of the HV3-1 dispatch):
+Contract encoded here (binding decisions of the paging dispatch):
 
-* the **live top-level array** of ``himalaya envelope list --json`` is the
-  primary v3.0.0 shape: every entry needs ``id`` and the camelCase
-  ``messageId`` key (nullable, ``string|null``); ``inReplyTo``,
-  ``hasAttachment`` and the other typed camelCase fields are checked;
-* the ``json-schema`` object ``{envelopes,nextPage,total,errors}`` is the second
-  forward-compatible v3 shape; ``nextPage`` is followed, ``total`` validated and
-  non-empty ``errors`` fail closed;
+* the **live v3.0.0 shape** of ``himalaya envelope list --json`` is the
+  ``json-schema`` object ``{envelopes,errors,nextPage,total}``: every entry needs
+  ``id`` and the camelCase ``messageId`` key (nullable, ``string|null``);
+  ``inReplyTo``, ``hasAttachment`` and the other typed camelCase fields are
+  checked; ``total`` is validated and non-empty ``errors`` fail closed;
+* the **top-level array** is a compatibility shape of the same command and no
+  longer the live shape; it invents no ``nextPage``/``total``;
+* the default client call reads **exactly one page** and does not follow
+  ``nextPage``: one ``envelope list`` child without ``--page-token``; an explicit
+  ``max_pages`` follows the page token under a hard bound, counts the first page
+  and stops without an error when the bound is reached;
+* a ``max_pages`` value outside the plain integers ``1..MAX_V3_PAGES`` raises
+  ``ValueError`` before any ``himalaya`` child starts;
 * a v1 array without ``messageId``, a snake_case-only ``message_id``, a missing
   or wrongly typed ``messageId`` and conflicting non-null duplicates are
   fail-closed under v3 (``himalaya_json_incompatible``); there is no snake_case
   fallback under v3 and the v1 fallback stays v1-only;
-* the array form invents no ``nextPage``/``total``;
 * normalization keeps ``id``/``subject``/``from``/``to``/``date``/``flags``/
   ``size``/``has_attachment`` and adds ``message_id``/``in_reply_to``;
 * ``mailbox list`` is read from ``{mailboxes,errors}``, ``message read --json``
@@ -40,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import mail_desk_himalaya_client as client  # noqa: E402
 from core import himalaya  # noqa: E402
+from core.himalaya_normalize import MAX_V3_PAGES  # noqa: E402
 from himalaya_v3_fixtures import (  # noqa: E402
     V1MailboxTransport,
     V3MailboxTransport,
@@ -55,7 +61,7 @@ from himalaya_v3_fixtures import (  # noqa: E402
 
 INCOMPATIBLE = "himalaya_json_incompatible"
 
-#: A complete, valid live-array entry used by several tests.
+#: A complete, valid compatibility-array entry used by several tests.
 LIVE_ENVELOPE = v3_envelope(
     "41",
     message_id="Thread@Example.org",
@@ -110,10 +116,10 @@ class _V3ListCase(unittest.TestCase):
         self.fail(f"the v3 boundary accepted an incompatible payload and returned {result!r}")
 
 
-class V3LiveArrayTests(_V3ListCase):
-    """The live top-level array is accepted and normalized to the v1 shape."""
+class V3ArrayCompatibilityTests(_V3ListCase):
+    """The top-level array compatibility shape is accepted and normalized to the v1 shape."""
 
-    def test_live_array_is_accepted_and_normalized(self) -> None:
+    def test_top_level_array_is_accepted_and_normalized(self) -> None:
         result = self.expect_accepted([LIVE_ENVELOPE])
         self.assertEqual(1, len(result))
         entry = result[0]
@@ -264,14 +270,38 @@ class V3SchemaObjectTests(_V3ListCase):
         )
         self.assert_incompatible(payload)
 
-    def test_next_page_is_followed_with_the_page_token(self) -> None:
+    def test_default_call_reads_exactly_one_page_without_following_next_page(self) -> None:
+        page = [
+            v3_envelope(str(41 + index), message_id=f"msg-{41 + index}@example.org")
+            for index in range(5)
+        ]
+        self.transport.schema_pages = {
+            None: v3_schema_payload(page, next_page="tok-2", total=5),
+            # Present so a sweeping client cannot hide behind a missing token.
+            "tok-2": v3_schema_payload(
+                [v3_envelope("50", message_id="msg-50@example.org")], next_page=None, total=5
+            ),
+        }
+        with patched_himalaya(self.transport):
+            try:
+                result = client.op_list_envelopes("INBOX", 5)
+            except Exception as exc:  # noqa: BLE001 - the red must be a bounded assertion
+                self.fail(f"one-page v3 listing failed: {type(exc).__name__}: {exc}")
+        self.assertEqual(5, len(result), "the default call must not sweep past the first page")
+        self.assertEqual([str(41 + index) for index in range(5)], [entry["id"] for entry in result])
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(1, len(calls), "one page means exactly one envelope list child")
+        self.assertEqual("envelope list", parse_command(calls[0]).name)
+        self.assertIsNone(parse_command(calls[0]).option("--page-token"))
+
+    def test_explicit_max_pages_follows_the_page_token(self) -> None:
         self.transport.schema_pages = {
             None: v3_schema_payload([v3_envelope("41", message_id="a@example.org")], next_page="tok-2", total=2),
             "tok-2": v3_schema_payload([v3_envelope("42", message_id="b@example.org")], next_page=None, total=2),
         }
         with patched_himalaya(self.transport):
             try:
-                result = client.op_list_envelopes("INBOX", 1)
+                result = client.op_list_envelopes("INBOX", 1, max_pages=2)
             except Exception as exc:  # noqa: BLE001 - the red must be a bounded assertion
                 self.fail(f"paged v3 listing failed: {type(exc).__name__}: {exc}")
         self.assertEqual(["41", "42"], [entry["id"] for entry in result])
@@ -279,6 +309,48 @@ class V3SchemaObjectTests(_V3ListCase):
         self.assertEqual(2, len(calls))
         self.assertIsNone(parse_command(calls[0]).option("--page-token"))
         self.assertEqual("tok-2", parse_command(calls[1]).option("--page-token"))
+
+    def test_explicit_page_bound_stops_without_an_extra_call_or_error(self) -> None:
+        self.transport.schema_pages = {
+            None: v3_schema_payload(
+                [v3_envelope("41", message_id="a@example.org")], next_page="tok-2", total=3
+            ),
+            "tok-2": v3_schema_payload(
+                [v3_envelope("42", message_id="b@example.org")], next_page="tok-3", total=3
+            ),
+            "tok-3": v3_schema_payload(
+                [v3_envelope("43", message_id="c@example.org")], next_page=None, total=3
+            ),
+        }
+        with patched_himalaya(self.transport):
+            try:
+                result = client.op_list_envelopes("INBOX", 1, max_pages=2)
+            except Exception as exc:  # noqa: BLE001 - the red must be a bounded assertion
+                self.fail(
+                    "a still-present nextPage at the explicit bound must not raise: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+        self.assertEqual(["41", "42"], [entry["id"] for entry in result])
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(2, len(calls), "the explicit bound must not request a third page")
+        self.assertEqual(
+            [None, "tok-2"], [parse_command(command).option("--page-token") for command in calls]
+        )
+
+    def test_invalid_max_pages_is_refused_before_any_envelope_child(self) -> None:
+        invalid_values = (0, -1, True, 1.5, "2", None, MAX_V3_PAGES + 1)
+        for value in invalid_values:
+            with self.subTest(max_pages=value):
+                transport = V3MailboxTransport()
+                transport.schema_pages = {
+                    None: v3_schema_payload(
+                        [v3_envelope("41", message_id="a@example.org")], next_page=None, total=1
+                    ),
+                }
+                with patched_himalaya(transport):
+                    with self.assertRaises(ValueError):
+                        client.op_list_envelopes("INBOX", 1, max_pages=value)
+                self.assertEqual([], transport.mailbox_calls, f"max_pages={value!r} started a mailbox child")
 
     def test_non_progressing_page_token_fails_closed(self) -> None:
         requests = {"count": 0}
@@ -294,7 +366,7 @@ class V3SchemaObjectTests(_V3ListCase):
         self.transport.on("envelope list", responder)
         with patched_himalaya(self.transport):
             try:
-                client.op_list_envelopes("INBOX", 1)
+                client.op_list_envelopes("INBOX", 1, max_pages=2)
             except himalaya.HimalayaInvocationError as exc:
                 self.assertTrue(exc.reason_code.startswith("himalaya_"))
                 return
@@ -314,7 +386,7 @@ class V3SchemaObjectTests(_V3ListCase):
         }
         with patched_himalaya(self.transport):
             try:
-                client.op_list_envelopes("INBOX", 1)
+                client.op_list_envelopes("INBOX", 1, max_pages=2)
             except himalaya.HimalayaInvocationError as exc:
                 self.assertTrue(exc.reason_code.startswith("himalaya_"))
                 return
@@ -324,6 +396,43 @@ class V3SchemaObjectTests(_V3ListCase):
                     f"{type(exc).__name__} instead of a bounded fail-closed error: {exc}"
                 )
         self.fail("an invalid page token returned results instead of failing closed")
+
+    def test_empty_next_page_token_is_refused_before_following(self) -> None:
+        self.transport.schema_pages = {
+            None: v3_schema_payload(
+                [v3_envelope("41", message_id="a@example.org")], next_page="", total=2
+            ),
+        }
+        with patched_himalaya(self.transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_list_envelopes("INBOX", 1)
+        self.assertEqual(
+            "himalaya_page_token_invalid", raised.exception.reason_code
+        )
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(1, len(calls), "an empty token must not start a follow child")
+
+    def test_hard_page_bound_stays_fail_closed(self) -> None:
+        pages: dict[str | None, dict] = {}
+        token: str | None = None
+        for index in range(MAX_V3_PAGES):
+            pages[token] = v3_schema_payload(
+                [v3_envelope(str(1000 + index), message_id=f"page-{index}@example.org")],
+                next_page=f"tok-{index + 1}",
+                total=None,
+            )
+            token = f"tok-{index + 1}"
+        self.transport.schema_pages = pages
+        with patched_himalaya(self.transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_list_envelopes("INBOX", 1, max_pages=MAX_V3_PAGES)
+        self.assertEqual(
+            "himalaya_paging_not_progressing", raised.exception.reason_code
+        )
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(
+            MAX_V3_PAGES, len(calls), "the hard bound must stop before a further page"
+        )
 
 
 class V3MailboxListTests(unittest.TestCase):

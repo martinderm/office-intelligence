@@ -431,7 +431,7 @@ def _collect_date_candidates(
                 timeout=30,
             )
             if profile_of(out) == PROFILE_V3:
-                # v3 answers the camelCase live array or the schema object; both
+                # v3 answers the live schema object or the compatibility array; both
                 # are validated strictly and normalized before the id/date logic.
                 page_envs, _next_page = decode_v3_envelope_output(out)
             else:

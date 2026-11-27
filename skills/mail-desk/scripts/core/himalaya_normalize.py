@@ -3,17 +3,20 @@
 Two v3 shapes are supported (both documented in
 ``references/backends/himalaya.md``):
 
-* the **live array** of ``himalaya envelope list --json`` (every entry carries
-  the camelCase ``messageId`` key, nullable; ``inReplyTo``, ``flags``
-  ``{raw,iana}``, ``from``/``to`` ``{name,email}``, ``date``, ``size`` and
-  ``hasAttachment`` are typed);
-* the forward-compatible **schema object** ``{envelopes,nextPage,total,errors}``.
+* the **live schema object** of ``himalaya envelope list --json``
+  (``{envelopes,nextPage,total,errors}``; every entry carries the camelCase
+  ``messageId`` key, nullable; ``inReplyTo``, ``flags`` ``{raw,iana}``,
+  ``from``/``to`` ``{name,email}``, ``date``, ``size`` and ``hasAttachment``
+  are typed);
+* the accepted **top-level array** as a compatibility shape of earlier v3
+  builds.
 
 Everything else is ``himalaya_json_incompatible``: a v1 array without
 ``messageId``, a snake_case-only ``message_id``, a missing or wrongly typed
 ``messageId``, conflicting duplicate ids, a missing schema key, a non-uint
-``total`` and any non-empty ``errors``.  The array form never invents
-``nextPage``/``total``; the object form is paged with a hard bound.
+``total`` and any non-empty ``errors``.  The array form carries no
+``nextPage``/``total`` and invents neither; the object form is paged with a hard
+bound.
 
 The normalizer never mutates the parsed source objects: it builds a new
 internal, v1-compatible envelope (``id``, ``subject``, ``from {name,addr}``,
@@ -29,6 +32,9 @@ from .common import normalize_message_id
 
 #: Reason raised for every structurally incompatible v3 payload.
 JSON_INCOMPATIBLE_REASON = "himalaya_json_incompatible"
+
+#: Reason raised when a page token is empty or not a non-blank string.
+PAGE_TOKEN_INVALID_REASON = "himalaya_page_token_invalid"
 
 #: Reason raised when a page token repeats without making progress.
 PAGING_NOT_PROGRESSING_REASON = "himalaya_paging_not_progressing"

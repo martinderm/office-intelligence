@@ -8,6 +8,26 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
 
 ## [Unreleased]
 
+### 2026-11-27 - Himalaya v3: list_envelopes mit Ein-Seiten-Semantik
+
+#### Fixed
+
+- **Ein-Seiten-Semantik für `list_envelopes`:** `page_size` ist die Größe genau
+  einer Seite (`-s <n>`), und `op_list_envelopes` verfolgt `nextPage` nicht mehr
+  implizit — der Default liefert genau eine Seite. Die Live-Form ist das
+  v3.0.0-Schema-Objekt `{envelopes,errors,nextPage,total}` (2026-11-27, read-only:
+  eine Seite mit 5 Envelopes, 5/5 `messageId`, keine Werte persistiert); die
+  Top-Level-Arrayform bleibt als Kompatibilität akzeptiert. `max_pages` ist die
+  explizite Python-Follow-Grenze (Gesamtseiten inkl. erster, Default 1, Maximum
+  100, `bool` ausgeschlossen, Validierung vor jedem Kind); explizite Grenzen
+  unter 100 enden sauber; die harte Grenze der Batch-/Full-Listing-Pfade
+  beträgt 100 Seiten inklusive der ersten Seite und bleibt fail-closed. Keine
+  CLI-Flag-, Budget- oder Timeout-Änderung; v1-argv und Array-Verhalten bleiben
+  byte-identisch.
+- Synchronisiert: `references/backends/himalaya.md`,
+  `references/cli-operations.md`, L2-System-Map (`README` §47,
+  `objects.md`) und L1-System-Map (Live-Form-Phrase).
+
 ### 2026-11-27 - Himalaya v3 Live-Fix: nativer `-c`-Token, stdout-Fehlerkanal, Timeout-Details
 
 #### Fixed

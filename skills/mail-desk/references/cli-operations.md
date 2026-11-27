@@ -584,6 +584,11 @@ thread`, sonst `message read`) zurück. Das Feld ist abgeleitete Bequemlichkeit,
 keine dauerhafte Identität; Envelope-IDs bleiben Locator. Details:
 [`backends/himalaya.md`](backends/himalaya.md#envelope-messageid-version-tolerant).
 
+`list_envelopes` liest genau **eine** Seite: `page_size` ist die Seitengröße und
+kein Sweep-Ziel, und `nextPage` wird nicht automatisch verfolgt (explizite
+Python-Grenze `max_pages`, Default 1). Details:
+[`backends/himalaya.md`](backends/himalaya.md#v3-json-boundary-live-schema-object-and-accepted-array).
+
 `inspect_attachments` exportiert die Nachricht read-only als RFC-822-Quelle und
 liefert ausschließlich validierte, an Account, Message-ID, Folder, Envelope-ID und
 Part-Locator gebundene Kandidaten. Ein optionales `operations[].account` darf nur

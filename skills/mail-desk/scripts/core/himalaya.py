@@ -1863,20 +1863,49 @@ def decode_v3_mailbox_output(output: object) -> list[dict[str, Any]]:
         raise HimalayaInvocationError(exc.reason_code, str(exc)) from None
 
 
+def validate_v3_max_pages(max_pages: object) -> int:
+    """Return one valid v3 total-page bound or raise :class:`ValueError`.
+
+    Only a plain ``int`` (never ``bool``) in
+    ``1..himalaya_normalize.MAX_V3_PAGES`` is accepted.  The bound always counts
+    the first, already-decoded page, so ``1`` means "read exactly one page".
+    """
+    max_bound = himalaya_normalize.MAX_V3_PAGES
+    if (
+        isinstance(max_pages, bool)
+        or not isinstance(max_pages, int)
+        or not 1 <= max_pages <= max_bound
+    ):
+        raise ValueError(
+            "max_pages must be an integer between 1 and "
+            f"{max_bound} (total pages, including the first page)."
+        )
+    return max_pages
+
+
 def collect_v3_envelope_pages(
     entries: list[dict[str, Any]],
     next_page: str | None,
     fetch: Callable[[str], object],
+    *,
+    max_pages: int = himalaya_normalize.MAX_V3_PAGES,
 ) -> list[dict[str, Any]]:
-    """Follow ``nextPage`` through ``--page-token`` with a hard, fail-closed bound.
+    """Follow ``nextPage`` through ``--page-token`` up to an explicit page bound.
 
-    A repeated token, an empty token or an exhausted page bound is a bounded
-    ``himalaya_*`` refusal; a malformed page is ``himalaya_json_incompatible``.
-    The live array form carries no token and returns after the first page.
+    ``max_pages`` is the total number of pages this call may read, including the
+    already-decoded first page.  The default keeps the batch runner's bounded
+    full listing.  A repeated token, an empty token or an exhausted *hard* bound
+    is a bounded ``himalaya_*`` refusal; a malformed page is
+    ``himalaya_json_incompatible``.  An explicit bound below
+    ``MAX_V3_PAGES`` stops cleanly when a further ``nextPage`` token is still
+    present.  The compatibility array form carries no token and returns after the
+    first page.
     """
+    bound = validate_v3_max_pages(max_pages)
     collected = list(entries)
     seen: set[str] = set()
-    pages = 0
+    # The first page is already decoded by the caller.
+    pages = 1
     token = next_page
     while token is not None:
         if not isinstance(token, str) or not token.strip():
@@ -1889,11 +1918,13 @@ def collect_v3_envelope_pages(
                 himalaya_normalize.PAGING_NOT_PROGRESSING_REASON,
                 "The v3 nextPage token repeated without progress; paging stopped.",
             )
-        if pages >= himalaya_normalize.MAX_V3_PAGES:
-            raise HimalayaInvocationError(
-                himalaya_normalize.PAGING_NOT_PROGRESSING_REASON,
-                "The v3 listing exceeded the hard page bound; paging stopped.",
-            )
+        if pages >= bound:
+            if bound == himalaya_normalize.MAX_V3_PAGES:
+                raise HimalayaInvocationError(
+                    himalaya_normalize.PAGING_NOT_PROGRESSING_REASON,
+                    "The v3 listing exceeded the hard page bound; paging stopped.",
+                )
+            break
         seen.add(token)
         pages += 1
         collected_page, token = decode_v3_envelope_output(fetch(token))
