@@ -270,6 +270,20 @@ ausschließlich hier (Null-Informationsverlust, zitierfähige Anker).
    Matching und `classifier_revision` unangetastet; die separate
    Issue-#63-Regeländerung rotiert `classifier_revision` (siehe §8). Vollständiger Vertrag:
    [L2 §39](../../skills/mail-desk/docs/system-map/README.md#39-issue-62--lokale-injection-barrier).
+ - **Additiver normalisierter `message_id` in `list_envelopes` (Issue #103, versionstolerant):**
+   `op_list_envelopes` liest das von Upstream-master als camelCase `messageId`
+   serialisierte `Envelope.message_id` und toleriert die Snake-Case-Variante;
+   nur ein brauchbarer, wohlgeformter Wert ergänzt je Eintrag genau ein
+   normalisiertes `message_id` (flache Kopie, Reihenfolge sonst unverändert).
+   Fehlende, `null`-, leere, ungültige und widersprüchliche Werte erzeugen kein
+   Feld und fallen fail-closed auf den bestehenden `envelope thread`-/
+   `message read`-Identitätspfad zurück; eine doppelte Envelope-ID behält den
+   Wert nur bei durchgehend identischen, brauchbaren Occurrences. Der lokale
+   Himalaya 1.2.0 liefert das Feld nicht. Abgeleitete Bequemlichkeit, keine
+   dauerhafte Identität; Envelope-IDs bleiben Locator, Skip-Entscheidungen
+   unverändert. Detail:
+   [L2 §44](../../skills/mail-desk/docs/system-map/README.md#44-issue-103--cli-batch-skip-über-envelope-thread-und-transportzähler),
+   [Adapter](../../skills/mail-desk/references/backends/himalaya.md#envelope-messageid-version-tolerant).
  - **Verbindliche Kontext-Konsultation (Issue #64):** Vor Analyse und
    Post-Batch-Synthese wird für jedes berührte oder kandidierende Projekt/Topic der
    kanonisch deklarierte Kontext in fester Reihenfolge konsultiert (Event-Dossier;

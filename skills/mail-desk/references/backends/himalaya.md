@@ -55,6 +55,30 @@ Use this adapter only for workspaces that access mail through a mailbox-specific
   python3 scripts/mail_desk_himalaya_client.py --input data/mail-desk/himalaya-op.json
   ```
 
+### Envelope `messageId` (version-tolerant)
+
+The bundled local Himalaya 1.2.0 emits no `messageId` in
+`envelope list -o json` entries. Upstream master exposes
+`Envelope.message_id: Option<String>`, serialized as the camelCase JSON field
+`messageId`. The adapter therefore reads `messageId` and tolerates the
+snake_case `message_id` variant of the same value:
+
+- A usable value adds exactly one normalized `message_id` to the listed entry
+  (lowercase, no angle brackets, produced through `normalize_message_id` and
+  well formed: one `@`, no whitespace/control characters, non-empty local/domain
+  parts, no `@generated` domain). An existing snake_case `message_id` is
+  canonicalized in place; every other key and its order stays unchanged, and the
+  raw field is preserved.
+- Absent, `null`, empty/whitespace, non-string and invalid values add no field
+  and raise nothing. Two present spellings must agree after normalization; a
+  conflict adds no field. Duplicate envelope ids keep the value only when every
+  occurrence agrees and drop it from all occurrences otherwise.
+- Without a usable normalized value the adapter falls back fail-closed to the
+  existing identity path (`envelope thread` map, else `message read`). The field
+  is derived convenience only, never durable identity; envelope IDs remain CLI
+  locators, skip behavior is unchanged, and the Windows/CLI quirks above are
+  untouched.
+
 ### Batch known-envelope skip over `envelope thread`
 
 The batch scan uses one additional CLI operation to reduce per-envelope logins.

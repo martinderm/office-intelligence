@@ -576,6 +576,14 @@ Manifest-Shape:
 }
 ```
 
+`list_envelopes` liefert je Eintrag additiv ein normalisiertes `message_id`,
+wenn der Eintrag einen brauchbaren `messageId`- (oder `message_id`-)Wert trägt;
+fehlende, `null`-, leere, ungültige und widersprüchliche Werte erzeugen kein
+Feld und fallen fail-closed auf den bestehenden Identitätspfad (`envelope
+thread`, sonst `message read`) zurück. Das Feld ist abgeleitete Bequemlichkeit,
+keine dauerhafte Identität; Envelope-IDs bleiben Locator. Details:
+[`backends/himalaya.md`](backends/himalaya.md#envelope-messageid-version-tolerant).
+
 `inspect_attachments` exportiert die Nachricht read-only als RFC-822-Quelle und
 liefert ausschließlich validierte, an Account, Message-ID, Folder, Envelope-ID und
 Part-Locator gebundene Kandidaten. Ein optionales `operations[].account` darf nur

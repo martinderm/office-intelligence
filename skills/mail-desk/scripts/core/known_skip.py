@@ -28,11 +28,10 @@ from __future__ import annotations
 
 import json
 import re
-import unicodedata
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .common import normalize_message_id
+from .common import is_well_formed_message_id, normalize_message_id
 from .himalaya import TRANSPORT_BLOCKED_REASON, HimalayaInvocationError
 
 #: One process per scan; the observed Gate-0 duration was well below this bound.
@@ -51,30 +50,6 @@ class EnvelopeThreadEntry:
 
     message_id: str
     subject: str
-
-
-def is_well_formed_message_id(value: Any) -> bool:
-    """Return whether ``value`` is a well-formed Message-ID after normalization.
-
-    The check deliberately runs on the normalized form: ``message read`` emits
-    the header without angle brackets while ``envelope thread`` wraps it in
-    ``<...>``.  Both spellings are therefore accepted, and only the normalized
-    value must be well formed (issue #103 follow-up).
-    """
-    if not isinstance(value, str):
-        return False
-    normalized = normalize_message_id(value)
-    if not normalized or normalized.count("@") != 1:
-        return False
-    if any(
-        char in "<>" or char.isspace() or unicodedata.category(char).startswith("C")
-        for char in normalized
-    ):
-        return False
-    local, domain = normalized.split("@")
-    if not local or not domain:
-        return False
-    return domain != "generated"
 
 
 def canonical_envelope_id(value: Any) -> str | None:

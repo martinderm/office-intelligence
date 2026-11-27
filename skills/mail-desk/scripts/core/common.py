@@ -7,6 +7,8 @@ import json
 import sys
 import tempfile
 import time
+import unicodedata
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -131,6 +133,62 @@ def normalize_message_id(value: str) -> str:
     while s.startswith("<") and s.endswith(">") and len(s) >= 2:
         s = s[1:-1].strip()
     return s.lower()
+
+
+def is_well_formed_message_id(value: Any) -> bool:
+    """Return whether ``value`` is a well-formed Message-ID after normalization.
+
+    The check deliberately runs on the normalized form: ``message read`` emits
+    the header without angle brackets while ``envelope thread`` wraps it in
+    ``<...>``.  Both spellings are therefore accepted, and only the normalized
+    value must be well formed (issue #103 follow-up).
+    """
+    if not isinstance(value, str):
+        return False
+    normalized = normalize_message_id(value)
+    if not normalized or normalized.count("@") != 1:
+        return False
+    if any(
+        char in "<>" or char.isspace() or unicodedata.category(char).startswith("C")
+        for char in normalized
+    ):
+        return False
+    local, domain = normalized.split("@")
+    if not local or not domain:
+        return False
+    return domain != "generated"
+
+
+#: Envelope keys a newer Himalaya exposes the Message-ID under: the serialized
+#: camelCase field and the tolerated snake_case spelling of the same value.
+ENVELOPE_MESSAGE_ID_KEYS = ("messageId", "message_id")
+
+
+def normalize_envelope_message_id(envelope: Any) -> str | None:
+    """Return the normalized Message-ID an ``envelope list`` entry carries.
+
+    Total and side-effect free: a non-mapping input, a missing field and every
+    unusable value (absent, ``null``, empty, non-string, not well formed) yield
+    ``None`` instead of raising.  When both spellings are present they must be
+    usable and normalize to the same value; a conflict is unresolved and also
+    yields ``None``.  The result is derived convenience only, never durable
+    identity; envelope IDs remain locators (issue #103).
+    """
+    if not isinstance(envelope, Mapping):
+        return None
+    normalized: list[str] = []
+    for key in ENVELOPE_MESSAGE_ID_KEYS:
+        if key not in envelope:
+            continue
+        raw = envelope[key]
+        if not is_well_formed_message_id(raw):
+            return None
+        normalized.append(normalize_message_id(raw))
+    if not normalized:
+        return None
+    if len(normalized) == 2 and normalized[0] != normalized[1]:
+        return None
+    return normalized[0]
 
 
 def ensure_sentence_end(text: str) -> str:
