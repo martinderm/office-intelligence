@@ -42,7 +42,10 @@ no silent fallback to a hard-coded folder name.
 Deletion never performs a UID MOVE: it marks the message ``\\Deleted`` in place
 (``flag add deleted`` -- Himalaya 1.2.0's ``message delete`` would *move* a
 non-trash message to the trash folder) and then expunges the folder
-(``folder expunge``).  ``replace_draft`` appends the replacement draft first and
+(``folder expunge``).  Himalaya v3 has **no in-place expunge**, so under the
+explicit v3 profile ``delete_draft`` and ``replace_draft`` refuse before any
+write-shaped command with ``himalaya_expunge_unsupported`` (they never degrade to
+``message delete``/move-to-Trash).  ``replace_draft`` appends the replacement draft first and
 only then deletes the old one; the crash window between the two steps (both
 drafts observable, since ``message save`` already committed the new draft before
 the delete ran) is documented by ``REPLACE_CRASH_WINDOW``.  With a journal the
@@ -65,6 +68,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from . import himalaya
 from .common import atomic_write_json, normalize_message_id, utc_now_iso
+from .himalaya_profile import EXPUNGE_UNSUPPORTED_REASON, PROFILE_V3
 
 #: RFC 6154 special-use attribute that marks the drafts mailbox.
 DRAFTS_SPECIAL_USE_ATTRIBUTE = "\\Drafts"
@@ -178,6 +182,25 @@ _UNKNOWN_APPEND_REASONS = frozenset(
 
 #: Sentinel: the ``attachments`` argument of ``replace_draft`` was omitted (not "no attachments").
 ATTACHMENTS_UNSPECIFIED: Any = object()
+
+
+def _raise_if_expunge_unsupported() -> None:
+    """Fail closed before any write when the explicit profile is Himalaya v3.
+
+    v3 has no in-place expunge (``folder expunge`` is gone; ``message delete``
+    in the trash folder removes a message permanently).  Only an explicit v3
+    profile hint counts: without one the pinned v1 request is kept, so the v1
+    argv and behaviour stay byte-identical.  Reads are still allowed; the
+    refusal precedes every save/append/flag/delete/expunge and never degrades to
+    a move-to-Trash.
+    """
+    resolved = himalaya.resolve_himalaya_profile_or_none()
+    if resolved is not None and getattr(resolved, "name", None) == PROFILE_V3:
+        raise DraftError(
+            EXPUNGE_UNSUPPORTED_REASON,
+            "Himalaya v3 has no in-place expunge; deleting a draft is unsupported and no mailbox "
+            "write was started.",
+        )
 
 
 def _parse_folder_list(raw: str) -> list[Any]:
@@ -874,7 +897,12 @@ def delete_draft(
     following ``folder expunge`` removes the message.  ``message delete`` is
     deliberately not used: for a non-trash folder Himalaya would move the message
     to the trash folder, which is exactly the forbidden UID MOVE.
+
+    Under the explicit Himalaya v3 profile the operation is refused before any
+    mailbox command with ``himalaya_expunge_unsupported``: v3 has no in-place
+    expunge, and a ``message delete``/move-to-Trash is never substituted.
     """
+    _raise_if_expunge_unsupported()
     target_folder = folder or resolve_drafts_folder(account=account, folders=folders)
     env_id = str(envelope_id)
     himalaya.run_himalaya(
@@ -1158,7 +1186,13 @@ def replace_draft(
       size limits, semantic read-back of exactly one stored message), ``old_message_id`` is
       required, and the old draft is deleted only after the new mail was verified and the old
       draft was re-resolved by its Message-ID.
+
+    Under the explicit Himalaya v3 profile the whole replace is refused before
+    any write with ``himalaya_expunge_unsupported``: the mandatory delete step
+    has no v3 expunge, so no replacement draft is appended and no mailbox write
+    starts.
     """
+    _raise_if_expunge_unsupported()
     if attachments is not ATTACHMENTS_UNSPECIFIED and attachments is not None:
         return _replace_with_explicit_attachments(
             old_envelope_id,

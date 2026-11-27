@@ -12,7 +12,7 @@ from ..action_log import append_action_log_entry, append_replies_needed_entry
 from ..batch_contract import validate_execute_contract
 from ..common import normalize_message_id, resolve_data_dir, resolve_final_index_path, utc_now_iso
 from ..evidence import flush_batch_evidence
-from ..himalaya import run_himalaya, verify_in_target_folder
+from ..himalaya import PROFILE_V3, profile_of, run_himalaya, verify_in_target_folder
 from ..index import load_final_index, save_final_index_atomic
 from ..progress import BatchProgressTracker
 from ..recovery import BatchRecoveryJournal, cleanup_recovery_temp_files, has_completed_step, stable_batch_id
@@ -38,6 +38,31 @@ def _dependency(
     if dependencies and name in dependencies:
         return dependencies[name]
     return default
+
+
+def _v3_read_message_id(output: object) -> str | None:
+    """Return the Message-ID of one v3 ``message read --json`` view.
+
+    v3 answers the documented JSON view (``messageId`` plus a ``headers`` map),
+    not the v1 header text block.  A payload that is not the documented view
+    yields ``None`` so the caller keeps its bounded failure path; no partial text
+    is parsed.
+    """
+    try:
+        payload = json.loads(str(output))
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    message_id = payload.get("messageId")
+    if isinstance(message_id, str) and message_id.strip():
+        return message_id
+    headers = payload.get("headers")
+    if isinstance(headers, dict):
+        for name, value in headers.items():
+            if str(name).lower() == "message-id" and isinstance(value, str) and value.strip():
+                return value
+    return None
 
 
 def run_execute_mode(
@@ -291,12 +316,18 @@ def _execute_with_journal(
                 if not verified and env_id:
                     try:
                         h_out = run_mail(["message", "read", "--preview", "-H", "Message-Id", "-f", source, str(env_id)], account=account, timeout=10, max_retries=1)
-                        for line in h_out.splitlines():
-                            if line.lower().startswith("message-id:"):
-                                m_id = normalize_id(line.split(":", 1)[1])
-                                if m_id == normalize_id(message_id):
-                                    verified = str(env_id)
-                                    break
+                        if profile_of(h_out) == PROFILE_V3:
+                            # v3 answers the JSON view, never the v1 header text.
+                            m_id = _v3_read_message_id(h_out)
+                            if m_id and normalize_id(m_id) == normalize_id(message_id):
+                                verified = str(env_id)
+                        else:
+                            for line in h_out.splitlines():
+                                if line.lower().startswith("message-id:"):
+                                    m_id = normalize_id(line.split(":", 1)[1])
+                                    if m_id == normalize_id(message_id):
+                                        verified = str(env_id)
+                                        break
                     except Exception:
                         pass
                 if not verified:

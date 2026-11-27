@@ -361,7 +361,10 @@ lokalen Standardaccount). Verfügbare Apps, Connectoren, Umgebungslisten und
 `--account` sind kein Backend-Signal und dürfen diese Bindung nicht übersteuern.
 Nach gültigem Execute-Vertrag und vor dessen Handler sowie vor der lesenden `pipeline` läuft ein einzelner,
 maximal zehn Sekunden langer, read-only Envelope-List-Preflight (`-s 1`) für den
-gebundenen Account und Quellordner. Fehlende oder ungültige Workspace-Konfiguration,
+gebundenen Account und Quellordner; die zentrale Versionsmatrix erzeugt dafür das
+byte-identische v1- oder das dokumentierte v3-Kommando, und der profilrichtige
+Decoders liest die Antwort (kein v3-Objekt/Array durch den v1-Parser).
+Fehlende oder ungültige Workspace-Konfiguration,
 falscher Account, fehlender Adapter, Timeout und unparsebare Minimalantwort stoppen
 vor Progress-, Index-, Log-, Evidence- oder Mailbox-Mutation; ihr Ergebnis ist ein
 kanonisches `mailbox_readiness`-Envelope.
@@ -423,7 +426,15 @@ Entwurf in den Drafts-Ordner legt.
 - **Löschen ohne UID MOVE:** `\Deleted` wird direkt am Envelope gesetzt und die
   markierte Nachricht danach per `folder expunge` entfernt; ein `message delete`
   (das eine Nicht-Trash-Nachricht in den Trash-Ordner verschiebt) wird bewusst
-  nicht verwendet.
+  nicht verwendet. Unter dem expliziten v3-Profil gibt es keinen In-Place-Expunge:
+  `delete-draft` und der Pflicht-Löschschritt von `replace-draft` brechen **vor
+  jedem Write** mit `himalaya_expunge_unsupported` ab; ein Move-to-Trash ist kein
+  Ersatz. Die Kommandos kommen aus der zentralen Versionsmatrix (`1.2.x` → v1
+  byte-identisch, `3.x` → u. a. `mailbox list`, `envelope list/search -m`,
+  `message read --json`, `message add --mailbox --flag draft`, `message copy
+  -f/-t`, `message delete -m`, `flag add ... -m`); unbekannte Versionen stoppen
+  fail-closed vor jedem Mailbox-Kommando. Der stdin-Payload ist unter v3 derselbe,
+  das übersetzte `message add` trägt kein `-o plain`.
 - **Ersetzen:** neu zuerst, alt danach (`replace_envelope_id`); das dokumentierte
   Crash-Fenster (beide Entwürfe beobachtbar) und beide Envelope-IDs landen im
   Draft-Journal.

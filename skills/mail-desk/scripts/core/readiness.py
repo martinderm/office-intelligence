@@ -8,7 +8,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .envelope import build_error, build_success
-from .himalaya import HimalayaInvocationError, run_himalaya
+from .himalaya import (
+    HimalayaInvocationError,
+    PROFILE_V3,
+    decode_v3_envelope_output,
+    profile_of,
+    run_himalaya,
+)
 
 
 BACKEND_CONFIG_RELATIVE_PATH = Path(".agents") / "mail-desk-backend.json"
@@ -104,6 +110,11 @@ def binding_failure_envelope(binding: Mapping[str, Any]) -> dict[str, Any]:
 def _parse_minimal_envelope_list(output: object) -> list[dict[str, Any]]:
     if not isinstance(output, str):
         raise ValueError("Adapter returned a non-text minimal response.")
+    if profile_of(output) == PROFILE_V3:
+        # v3 answers the camelCase live array or the {envelopes,nextPage,total,errors}
+        # schema object; both are validated strictly and never fed to the v1 parser.
+        entries, _next_page = decode_v3_envelope_output(output)
+        return entries
     trimmed = output.strip()
     if "[" in trimmed:
         trimmed = trimmed[trimmed.find("[") :]

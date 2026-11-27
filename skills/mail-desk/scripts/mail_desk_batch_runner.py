@@ -66,11 +66,15 @@ from core import (
 from core.envelope import build_error, build_success, emit_json
 from core.himalaya import (
     MAX_TRANSPORT_PACING_MS,
+    PROFILE_V3,
     TRANSPORT_BLOCKED_REASON,
     HimalayaInvocationError,
     TransportStats,
+    collect_v3_envelope_pages,
     complete_scan_inventory,
+    decode_v3_envelope_output,
     last_transport_stats,
+    profile_of,
     reset_transport_stats,
     transport_stats_session,
 )
@@ -108,11 +112,32 @@ from core.modes.sync_sent import failure_envelope as _sync_sent_failure_envelope
 # Helper / Envelope Fetching Functions
 # ==============================================================================
 
+def _decode_envelope_pages(
+    out: Any,
+    args: list[str],
+    account: str | None,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    """Decode one v3 listing (live array or schema object) with bounded paging."""
+    entries, next_page = decode_v3_envelope_output(out)
+    return collect_v3_envelope_pages(
+        entries,
+        next_page,
+        lambda token: run_himalaya(args + ["--page-token", token], account=account, timeout=timeout),
+    )
+
+
 def get_envelopes_list(folder: str, account: str | None = None, max_size: int = 1000) -> list[dict[str, Any]]:
     """Fetch envelope list from a folder with resilient page sizing."""
     for test_size in [str(max_size), "500", "200", "100", "50"]:
         try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=30)
+            args = ["-o", "json", "envelope", "list", "-f", folder, "-s", test_size]
+            out = run_himalaya(args, account=account, timeout=30)
+            if profile_of(out) == PROFILE_V3:
+                envs = _decode_envelope_pages(out, args, account, 30)
+                if envs:
+                    return envs
+                continue
             if "[" in out:
                 out = out[out.find("["):]
             envs = json.loads(out)
@@ -130,18 +155,24 @@ def get_envelopes_list(folder: str, account: str | None = None, max_size: int = 
 def get_oldest_envelopes(folder: str, count: int, account: str | None = None) -> list[dict[str, Any]]:
     """Fetch the absolute oldest envelopes from a folder reliably using order by date asc."""
     try:
+        args = ["-o", "json", "envelope", "list", "-f", folder, "-s", str(count), "order", "by", "date", "asc"]
         out = run_himalaya(
-            ["-o", "json", "envelope", "list", "-f", folder, "-s", str(count), "order", "by", "date", "asc"],
+            args,
             account=account,
             timeout=90,
             max_retries=2,
             purpose="list",
         )
-        if "[" in out:
-            out = out[out.find("["):]
-        envs = json.loads(out)
-        if isinstance(envs, list) and envs:
-            return envs[:count]
+        if profile_of(out) == PROFILE_V3:
+            envs = _decode_envelope_pages(out, args, account, 90)
+            if envs:
+                return envs[:count]
+        else:
+            if "[" in out:
+                out = out[out.find("["):]
+            envs = json.loads(out)
+            if isinstance(envs, list) and envs:
+                return envs[:count]
     except HimalayaInvocationError as exc:
         if exc.reason_code == TRANSPORT_BLOCKED_REASON:
             raise
@@ -151,10 +182,14 @@ def get_oldest_envelopes(folder: str, count: int, account: str | None = None) ->
     # Fallback to window-based slicing if server-side sort is unavailable
     for test_size in [str(count), str(max(count, 150)), "200", "100"]:
         try:
-            out = run_himalaya(["-o", "json", "envelope", "list", "-f", folder, "-s", test_size], account=account, timeout=180, max_retries=2, purpose="list")
-            if "[" in out:
-                out = out[out.find("["):]
-            envs = json.loads(out)
+            args = ["-o", "json", "envelope", "list", "-f", folder, "-s", test_size]
+            out = run_himalaya(args, account=account, timeout=180, max_retries=2, purpose="list")
+            if profile_of(out) == PROFILE_V3:
+                envs = _decode_envelope_pages(out, args, account, 180)
+            else:
+                if "[" in out:
+                    out = out[out.find("["):]
+                envs = json.loads(out)
             if isinstance(envs, list) and envs:
                 slice_count = min(count, len(envs))
                 oldest = envs[-slice_count:]
@@ -528,16 +563,27 @@ def _scan_unprocessed_emails(
             max_retries=2,
             purpose="list",
         )
-        if "[" in out:
-            out = out[out.find("["):]
-        if not out.strip().startswith("["):
-            raise RuntimeError(f"Himalaya did not return a valid envelope list for '{search_arg}': {out.strip()[:300]}")
-        try:
-            candidate_envs = json.loads(out)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Himalaya returned invalid envelope JSON for '{search_arg}': {exc.msg}") from exc
-        if not isinstance(candidate_envs, list):
-            raise RuntimeError(f"Himalaya did not return an envelope list for '{search_arg}'")
+        if profile_of(out) == PROFILE_V3:
+            # v3 maps the same composed query to ``envelope search`` with
+            # ``date:D``/``--sort`` and answers the camelCase live array or the
+            # schema object; both are normalized before the date/id logic.
+            candidate_envs = _decode_envelope_pages(
+                out,
+                ["-o", "json", "envelope", "list", "-f", folder, "-s", str(max(target_count * 2, 50)), search_arg],
+                account,
+                45,
+            )
+        else:
+            if "[" in out:
+                out = out[out.find("["):]
+            if not out.strip().startswith("["):
+                raise RuntimeError(f"Himalaya did not return a valid envelope list for '{search_arg}': {out.strip()[:300]}")
+            try:
+                candidate_envs = json.loads(out)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(f"Himalaya returned invalid envelope JSON for '{search_arg}': {exc.msg}") from exc
+            if not isinstance(candidate_envs, list):
+                raise RuntimeError(f"Himalaya did not return an envelope list for '{search_arg}'")
 
         candidate_envs = _sort_envelopes_by_date(candidate_envs, order)
 
