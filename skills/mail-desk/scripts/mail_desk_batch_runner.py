@@ -118,7 +118,7 @@ def _decode_envelope_pages(
     account: str | None,
     timeout: int,
 ) -> list[dict[str, Any]]:
-    """Decode one v3 listing (live array or schema object) with bounded paging."""
+    """Decode one v3 listing (live schema object or compatibility array) with bounded paging."""
     entries, next_page = decode_v3_envelope_output(out)
     return collect_v3_envelope_pages(
         entries,
@@ -565,8 +565,9 @@ def _scan_unprocessed_emails(
         )
         if profile_of(out) == PROFILE_V3:
             # v3 maps the same composed query to ``envelope search`` with
-            # ``date:D``/``--sort`` and answers the camelCase live array or the
-            # schema object; both are normalized before the date/id logic.
+            # ``date:D``/``--sort``; the live shape is the schema object and the
+            # top-level array is the compatibility shape.  Both are normalized
+            # before the date/id logic.
             candidate_envs = _decode_envelope_pages(
                 out,
                 ["-o", "json", "envelope", "list", "-f", folder, "-s", str(max(target_count * 2, 50)), search_arg],

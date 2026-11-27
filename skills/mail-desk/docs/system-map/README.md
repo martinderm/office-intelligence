@@ -3201,7 +3201,8 @@ v3-Builds. Alte v1-Arrays ohne `messageId`,
 snake_case-only `message_id`, fehlende/falsch typisierte Keys, widersprüchliche
 Duplikate, nicht-uint `total`, nichtleere `errors`, leere/wiederholte
 `nextPage`-Tokens und die harte Seitengrenze sind fail-closed
-(`himalaya_json_incompatible`, `himalaya_paging_not_progressing`). Paging:
+(`himalaya_json_incompatible`, `himalaya_paging_not_progressing`,
+`himalaya_page_token_invalid`). Paging:
 `-s <n>` ist die Größe **einer** Seite; `op_list_envelopes` liefert per Default
 genau eine Seite und verfolgt `nextPage` nicht, `max_pages` ist die explizite
 Python-Grenze (Gesamtseiten inkl. erster, Default 1, int 1..100, `bool`

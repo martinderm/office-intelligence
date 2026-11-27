@@ -20,9 +20,10 @@ Archiv [`docs/features/_archive.md`](docs/features/_archive.md) und System Map
   Top-Level-Arrayform bleibt als Kompatibilität akzeptiert. `max_pages` ist die
   explizite Python-Follow-Grenze (Gesamtseiten inkl. erster, Default 1, Maximum
   100, `bool` ausgeschlossen, Validierung vor jedem Kind); explizite Grenzen
-  unter 100 enden sauber, die harte 100-Seiten-Grenze der Batch-/Full-Listing-
-  Pfade bleibt unverändert fail-closed. Keine CLI-Flag-, Budget- oder
-  Timeout-Änderung; v1-argv und Array-Verhalten bleiben byte-identisch.
+  unter 100 enden sauber; die harte Grenze der Batch-/Full-Listing-Pfade
+  beträgt 100 Seiten inklusive der ersten Seite und bleibt fail-closed. Keine
+  CLI-Flag-, Budget- oder Timeout-Änderung; v1-argv und Array-Verhalten bleiben
+  byte-identisch.
 - Synchronisiert: `references/backends/himalaya.md`,
   `references/cli-operations.md`, L2-System-Map (`README` §47,
   `objects.md`) und L1-System-Map (Live-Form-Phrase).

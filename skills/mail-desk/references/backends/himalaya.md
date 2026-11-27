@@ -186,8 +186,8 @@ additive `message_id`/`in_reply_to`):
   collector without an explicit bound and therefore retain the hard page bound.
 - A repeated or empty token, a malformed page, a missing schema key, a non-uint
   `total` or a non-empty `errors` list is fail-closed
-  (`himalaya_json_incompatible`, `himalaya_paging_not_progressing`), never a
-  silent partial success.
+  (`himalaya_json_incompatible`, `himalaya_paging_not_progressing`,
+  `himalaya_page_token_invalid`), never a silent partial success.
 - a v1 array without `messageId`, a snake_case-only `message_id`, a missing or
   wrongly typed `messageId`, wrong types, and conflicting duplicate envelope ids
   are fail-closed under v3. The tolerant v1 `messageId`/`message_id` handling

@@ -13,8 +13,9 @@ Provided fixtures
 * ``v3_envelope`` / ``v3_schema_payload`` / ``v3_mailbox_payload``
 * ``v3_message_view`` / ``v3_raw_payload`` / ``minimal_eml``
 * ``HimalayaTransport`` (version probe only)
-* ``V3MailboxTransport`` (v3.0.0 live array, schema object, paging, mailbox,
-  read view, raw base64, add/copy/delete; v1-only commands fail loudly)
+* ``V3MailboxTransport`` (v3.0.0 live schema object, top-level array
+  compatibility shape, paging, mailbox, read view, raw base64, add/copy/delete;
+  v1-only commands fail loudly)
 * ``PopenAdapter`` for the ``_POPEN`` seam
 * ``patched_himalaya`` for a hermetic config/executable/probe bootstrap
 
@@ -458,8 +459,9 @@ class V3MailboxTransport(HimalayaTransport):
     """A stateful, hermetic v3.0.0 CLI: list/search/read/raw/add/copy/delete.
 
     Folder state is kept as v3 camelCase envelopes.  The default ``envelope
-    list`` answer is the **live top-level array**; ``schema_pages`` switches the
-    same command to the forward-compatible object form keyed by ``--page-token``.
+    list`` answer is the **top-level array (compatibility shape)**;
+    ``schema_pages`` switches the same command to the **live schema object**
+    form keyed by ``--page-token``.
     Every v1-only command (``folder list``, ``folder expunge``, ``message save``,
     ``message export``, ``envelope thread``, ``envelope list -f ...``) raises
     ``ForbiddenV1Command``.

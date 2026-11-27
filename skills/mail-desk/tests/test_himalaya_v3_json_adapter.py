@@ -116,10 +116,10 @@ class _V3ListCase(unittest.TestCase):
         self.fail(f"the v3 boundary accepted an incompatible payload and returned {result!r}")
 
 
-class V3LiveArrayTests(_V3ListCase):
-    """The live top-level array is accepted and normalized to the v1 shape."""
+class V3ArrayCompatibilityTests(_V3ListCase):
+    """The top-level array compatibility shape is accepted and normalized to the v1 shape."""
 
-    def test_live_array_is_accepted_and_normalized(self) -> None:
+    def test_top_level_array_is_accepted_and_normalized(self) -> None:
         result = self.expect_accepted([LIVE_ENVELOPE])
         self.assertEqual(1, len(result))
         entry = result[0]
@@ -350,8 +350,7 @@ class V3SchemaObjectTests(_V3ListCase):
                 with patched_himalaya(transport):
                     with self.assertRaises(ValueError):
                         client.op_list_envelopes("INBOX", 1, max_pages=value)
-                envelope_calls = [command for command in transport.mailbox_calls if "envelope" in command]
-                self.assertEqual([], envelope_calls, f"max_pages={value!r} started an envelope child")
+                self.assertEqual([], transport.mailbox_calls, f"max_pages={value!r} started a mailbox child")
 
     def test_non_progressing_page_token_fails_closed(self) -> None:
         requests = {"count": 0}
@@ -397,6 +396,43 @@ class V3SchemaObjectTests(_V3ListCase):
                     f"{type(exc).__name__} instead of a bounded fail-closed error: {exc}"
                 )
         self.fail("an invalid page token returned results instead of failing closed")
+
+    def test_empty_next_page_token_is_refused_before_following(self) -> None:
+        self.transport.schema_pages = {
+            None: v3_schema_payload(
+                [v3_envelope("41", message_id="a@example.org")], next_page="", total=2
+            ),
+        }
+        with patched_himalaya(self.transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_list_envelopes("INBOX", 1)
+        self.assertEqual(
+            "himalaya_page_token_invalid", raised.exception.reason_code
+        )
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(1, len(calls), "an empty token must not start a follow child")
+
+    def test_hard_page_bound_stays_fail_closed(self) -> None:
+        pages: dict[str | None, dict] = {}
+        token: str | None = None
+        for index in range(MAX_V3_PAGES):
+            pages[token] = v3_schema_payload(
+                [v3_envelope(str(1000 + index), message_id=f"page-{index}@example.org")],
+                next_page=f"tok-{index + 1}",
+                total=None,
+            )
+            token = f"tok-{index + 1}"
+        self.transport.schema_pages = pages
+        with patched_himalaya(self.transport):
+            with self.assertRaises(himalaya.HimalayaInvocationError) as raised:
+                client.op_list_envelopes("INBOX", 1, max_pages=MAX_V3_PAGES)
+        self.assertEqual(
+            "himalaya_paging_not_progressing", raised.exception.reason_code
+        )
+        calls = [command for command in self.transport.mailbox_calls if "envelope" in command]
+        self.assertEqual(
+            MAX_V3_PAGES, len(calls), "the hard bound must stop before a further page"
+        )
 
 
 class V3MailboxListTests(unittest.TestCase):
