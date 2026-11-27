@@ -61,7 +61,7 @@ from himalaya_v3_fixtures import (  # noqa: E402
 
 INCOMPATIBLE = "himalaya_json_incompatible"
 
-#: A complete, valid live-array entry used by several tests.
+#: A complete, valid compatibility-array entry used by several tests.
 LIVE_ENVELOPE = v3_envelope(
     "41",
     message_id="Thread@Example.org",

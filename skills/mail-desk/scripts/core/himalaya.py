@@ -1898,8 +1898,8 @@ def collect_v3_envelope_pages(
     is a bounded ``himalaya_*`` refusal; a malformed page is
     ``himalaya_json_incompatible``.  An explicit bound below
     ``MAX_V3_PAGES`` stops cleanly when a further ``nextPage`` token is still
-    present.  The live array form carries no token and returns after the first
-    page.
+    present.  The compatibility array form carries no token and returns after the
+    first page.
     """
     bound = validate_v3_max_pages(max_pages)
     collected = list(entries)

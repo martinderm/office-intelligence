@@ -111,8 +111,8 @@ def _parse_minimal_envelope_list(output: object) -> list[dict[str, Any]]:
     if not isinstance(output, str):
         raise ValueError("Adapter returned a non-text minimal response.")
     if profile_of(output) == PROFILE_V3:
-        # v3 answers the camelCase live array or the {envelopes,nextPage,total,errors}
-        # schema object; both are validated strictly and never fed to the v1 parser.
+        # v3 answers the live {envelopes,nextPage,total,errors} schema object or the
+        # compatibility array; both are validated strictly and never fed to the v1 parser.
         entries, _next_page = decode_v3_envelope_output(output)
         return entries
     trimmed = output.strip()

@@ -164,7 +164,7 @@ def parse_command(argv: Sequence[str]) -> Command:
 
 
 # ---------------------------------------------------------------------------
-# v3 JSON payload builders (live array form and forward-compatible schema form)
+# v3 JSON payload builders (live schema form and compatibility array form)
 # ---------------------------------------------------------------------------
 
 

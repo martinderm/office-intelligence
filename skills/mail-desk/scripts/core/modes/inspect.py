@@ -175,9 +175,9 @@ def run_inspect_mode(
                     timeout=30,
                 )
                 if profile_of(output) == PROFILE_V3:
-                    # The v3 profile answers with the live array or the schema
-                    # object; both are validated and normalized here, never
-                    # parsed with the v1 bracket slice.
+                    # The v3 profile answers with the live schema object or the
+                    # compatibility array; both are validated and normalized here,
+                    # never parsed with the v1 bracket slice.
                     oldest_envelopes, _next_page = decode_v3_envelope_output(output)
                 else:
                     if "[" in output:
